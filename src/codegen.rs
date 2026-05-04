@@ -996,7 +996,8 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Extract the key type name string from a `Map[K, V]` type expression.
-    /// Returns the first segment of K's path, e.g. "i64", "String", "MyStruct".
+    /// Returns a canonical mangled name suitable for `karac_hash_<name>` —
+    /// path segment for named types, `tuple_T1_T2_…_Tn` for tuples (recursive).
     fn extract_map_key_name(te: &TypeExpr) -> Option<String> {
         if let TypeKind::Path(path) = &te.kind {
             if path.segments.first().map(|s| s.as_str()) != Some("Map") {
@@ -1004,12 +1005,32 @@ impl<'ctx> Codegen<'ctx> {
             }
             let args = path.generic_args.as_ref()?;
             if let Some(GenericArg::Type(k_te)) = args.first() {
-                if let TypeKind::Path(kpath) = &k_te.kind {
-                    return kpath.segments.first().cloned();
-                }
+                return Some(Self::mangled_type_name(k_te));
             }
         }
         None
+    }
+
+    /// Produce a canonical, deterministic name for a `TypeExpr` suitable for
+    /// use as a per-type function suffix (`karac_hash_<name>`, `karac_eq_<name>`).
+    /// Path types collapse to their head segment; tuples mangle recursively as
+    /// `tuple_T1_T2_…_Tn`. Unsupported shapes fall back to "unknown" — the
+    /// typechecker's `K: Hash + Eq` enforcement prevents codegen from ever
+    /// reaching such a key type.
+    fn mangled_type_name(te: &TypeExpr) -> String {
+        match &te.kind {
+            TypeKind::Path(p) => p
+                .segments
+                .first()
+                .cloned()
+                .unwrap_or_else(|| "unknown".to_string()),
+            TypeKind::Tuple(elems) if elems.is_empty() => "unit".to_string(),
+            TypeKind::Tuple(elems) => {
+                let parts: Vec<String> = elems.iter().map(Self::mangled_type_name).collect();
+                format!("tuple_{}", parts.join("_"))
+            }
+            _ => "unknown".to_string(),
+        }
     }
 
     /// Extract (K, V) LLVM types from a `Map[K, V]` type expression.
@@ -4749,6 +4770,186 @@ impl<'ctx> Codegen<'ctx> {
         eq_fn
     }
 
+    /// TypeExpr-aware hash-fn wrapper. Dispatches tuples to a recursive
+    /// composition (per-field hash + FNV tail-mix combine) and falls through
+    /// to the primitive `emit_hash_fn_for_type` path for everything else.
+    ///
+    /// Cache key is the mangled type name (`Self::mangled_type_name`), so a
+    /// `(String, i32)` tuple key emits `karac_hash_tuple_String_i32` once per
+    /// module and reuses it across all `Map[(String, i32), V]` / nested
+    /// occurrences.
+    fn emit_hash_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::mangled_type_name(te);
+        let fn_name = format!("karac_hash_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                self.emit_hash_fn_for_tuple(&type_name, elems)
+            }
+            _ => {
+                let key_ty = self.llvm_type_for_type_expr(te);
+                self.emit_hash_fn_for_type(&type_name, key_ty)
+            }
+        }
+    }
+
+    /// TypeExpr-aware eq-fn wrapper. Mirror of `emit_hash_fn_for_type_expr`.
+    fn emit_eq_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::mangled_type_name(te);
+        let fn_name = format!("karac_eq_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => {
+                self.emit_eq_fn_for_tuple(&type_name, elems)
+            }
+            _ => {
+                let key_ty = self.llvm_type_for_type_expr(te);
+                self.emit_eq_fn_for_type(&type_name, key_ty)
+            }
+        }
+    }
+
+    /// Emit a per-field-recursive hash function for an n-tuple. Each field's
+    /// hash is computed by recursing into `emit_hash_fn_for_type_expr` (so
+    /// `(String, i64)` correctly hashes the String contents, not the struct
+    /// bytes), then combined into a running state via the FNV tail-mix
+    /// `state = (state * FNV_PRIME) ^ field_hash`.
+    fn emit_hash_fn_for_tuple(
+        &mut self,
+        type_name: &str,
+        elems: &[TypeExpr],
+    ) -> FunctionValue<'ctx> {
+        let elems_owned: Vec<TypeExpr> = elems.to_vec();
+        let child_fns: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_hash_fn_for_type_expr(e))
+            .collect();
+        let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.llvm_type_for_type_expr(e))
+            .collect();
+        let tuple_ty = self.context.struct_type(&field_tys, false);
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_name = format!("karac_hash_{type_name}");
+
+        let saved_bb = self.builder.get_insert_block();
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn = self
+            .module
+            .add_function(&fn_name, hash_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        let fnv_basis = i64_t.const_int(14695981039346656037_u64, false);
+        let fnv_prime = i64_t.const_int(1099511628211_u64, false);
+        let mut state: IntValue<'ctx> = fnv_basis;
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let field_ptr = self
+                .builder
+                .build_struct_gep(tuple_ty, key_ptr, i as u32, &format!("t.f{i}.p"))
+                .unwrap();
+            let elem_hash = self
+                .builder
+                .build_call(*child_fn, &[field_ptr.into()], &format!("t.f{i}.h"))
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let mul = self
+                .builder
+                .build_int_mul(state, fnv_prime, &format!("t.f{i}.mul"))
+                .unwrap();
+            state = self
+                .builder
+                .build_xor(mul, elem_hash, &format!("t.f{i}.xor"))
+                .unwrap();
+        }
+        self.builder.build_return(Some(&state)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
+    /// Emit a per-field-recursive eq function for an n-tuple. Each field is
+    /// compared via the recursively-emitted per-field eq fn; the function
+    /// short-circuits to `false` on the first mismatch.
+    fn emit_eq_fn_for_tuple(&mut self, type_name: &str, elems: &[TypeExpr]) -> FunctionValue<'ctx> {
+        let elems_owned: Vec<TypeExpr> = elems.to_vec();
+        let child_fns: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_eq_fn_for_type_expr(e))
+            .collect();
+        let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.llvm_type_for_type_expr(e))
+            .collect();
+        let tuple_ty = self.context.struct_type(&field_tys, false);
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let fn_name = format!("karac_eq_{type_name}");
+
+        let saved_bb = self.builder.get_insert_block();
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let eq_fn = self
+            .module
+            .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let fa = self
+                .builder
+                .build_struct_gep(tuple_ty, a_ptr, i as u32, &format!("t.fa{i}"))
+                .unwrap();
+            let fb = self
+                .builder
+                .build_struct_gep(tuple_ty, b_ptr, i as u32, &format!("t.fb{i}"))
+                .unwrap();
+            let r = self
+                .builder
+                .build_call(*child_fn, &[fa.into(), fb.into()], &format!("t.eq{i}"))
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let next_bb = self
+                .context
+                .append_basic_block(eq_fn, &format!("eq.next{i}"));
+            self.builder
+                .build_conditional_branch(r, next_bb, neq_bb)
+                .unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
     /// Emit (or reuse) a module-level Display function for the given type.
     ///
     /// Signature: `void karac_display_<type_name>(*const T)`. The function
@@ -5160,13 +5361,27 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap_or_else(|| i64_t.const_int(8, false));
 
         // Emit (or reuse) hash/eq functions for the concrete key type.
-        let type_name = self
-            .map_key_type_names
-            .get(var_name)
-            .cloned()
-            .unwrap_or_else(|| "i64".to_string());
-        let hash_fn = self.emit_hash_fn_for_type(&type_name, key_ty);
-        let eq_fn = self.emit_eq_fn_for_type(&type_name, key_ty);
+        // Prefer the TypeExpr-aware path so compound key shapes (tuples, …)
+        // compose correctly via per-field recursion. The plain
+        // `emit_hash_fn_for_type` path is the fallback for code paths that
+        // never registered a `TypeExpr` for the variable.
+        let (hash_fn, eq_fn) = if let Some(key_te) = self.map_key_type_exprs.get(var_name).cloned()
+        {
+            (
+                self.emit_hash_fn_for_type_expr(&key_te),
+                self.emit_eq_fn_for_type_expr(&key_te),
+            )
+        } else {
+            let type_name = self
+                .map_key_type_names
+                .get(var_name)
+                .cloned()
+                .unwrap_or_else(|| "i64".to_string());
+            (
+                self.emit_hash_fn_for_type(&type_name, key_ty),
+                self.emit_eq_fn_for_type(&type_name, key_ty),
+            )
+        };
         let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
         let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
 

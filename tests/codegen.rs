@@ -3769,6 +3769,134 @@ fn main() {
         }
     }
 
+    // ── Compound-key Map (List 2, item 2) ────────────────────────
+    // `Map[(K1, K2, …), V]` — codegen emits per-field-recursive hash and
+    // eq functions so each tuple component is hashed/compared via its
+    // own per-type fn (String hashes contents, i64 hashes raw bytes, …).
+
+    #[test]
+    fn test_e2e_map_tuple_string_int_key() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[(String, i64), i64] = Map.new();
+    m.insert(("alice", 1_i64), 100_i64);
+    m.insert(("alice", 2_i64), 200_i64);
+    m.insert(("bob",   1_i64), 300_i64);
+    println(m.len());
+    let v1 = m.get(("alice", 1_i64));
+    match v1 {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+    let v2 = m.get(("bob", 1_i64));
+    match v2 {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+    let v3 = m.get(("alice", 9_i64));
+    match v3 {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "100", "300", "-1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_tuple_int_int_key() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[(i64, i64), i64] = Map.new();
+    m.insert((1_i64, 2_i64), 12_i64);
+    m.insert((3_i64, 4_i64), 34_i64);
+    m.insert((1_i64, 4_i64), 14_i64);
+    println(m.len());
+    println(m[(1_i64, 2_i64)]);
+    println(m[(3_i64, 4_i64)]);
+    println(m[(1_i64, 4_i64)]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "12", "34", "14"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_tuple_key_overwrite_returns_old() {
+        // Re-inserting under the same compound key returns the prior value —
+        // exercises the eq-fn path (the runtime must find the existing slot).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[(String, i64), i64] = Map.new();
+    let first = m.insert(("k", 1_i64), 10_i64);
+    match first {
+        Some(x) => { println(x); }
+        None => { println(0_i64); }
+    }
+    let second = m.insert(("k", 1_i64), 20_i64);
+    match second {
+        Some(x) => { println(x); }
+        None => { println(0_i64); }
+    }
+    println(m.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "10", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_nested_tuple_key() {
+        // `Map[(String, (i64, i64)), V]` — exercises the recursive emission
+        // path: the outer tuple-hash recurses into the inner tuple-hash, which
+        // recurses into the per-element primitive hash fns. Validates that
+        // `karac_hash_tuple_String_tuple_i64_i64` emits exactly once and works
+        // end-to-end.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[(String, (i64, i64)), i64] = Map.new();
+    m.insert(("p", (1_i64, 2_i64)), 12_i64);
+    m.insert(("p", (3_i64, 4_i64)), 34_i64);
+    m.insert(("q", (1_i64, 2_i64)), 99_i64);
+    println(m.len());
+    let v = m.get(("p", (1_i64, 2_i64)));
+    match v {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+    let v2 = m.get(("q", (1_i64, 2_i64)));
+    match v2 {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+    let v3 = m.get(("p", (9_i64, 9_i64)));
+    match v3 {
+        Some(x) => { println(x); }
+        None => { println(0_i64 - 1_i64); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "12", "99", "-1"]);
+        }
+    }
+
     #[test]
     fn test_e2e_map_keys_empty() {
         // Empty map → empty Vec; len=0, no iteration body runs.
