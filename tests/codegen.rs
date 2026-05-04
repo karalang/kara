@@ -3737,6 +3737,58 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_prefix_literal_string_keys() {
+        let out = run_program(
+            r#"
+fn main() {
+    let m: Map[String, i64] = Map["a": 1_i64, "b": 2_i64, "c": 3_i64];
+    println(m.len());
+    println(m["b"]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_prefix_literal_int_keys() {
+        let out = run_program(
+            r#"
+fn main() {
+    let m: Map[i64, i64] = Map[1_i64: 100_i64, 2_i64: 200_i64];
+    println(m.len());
+    println(m[2_i64]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "200"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_bare_literal_with_annotation() {
+        // Bare ["k": v] form with explicit Map type annotation.
+        let out = run_program(
+            r#"
+fn main() {
+    let m: Map[String, i64] = ["x": 10_i64, "y": 20_i64];
+    println(m.len());
+    println(m["x"]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "10"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_map_index_panics_on_missing() {
         // Indexing a Map with a missing key panics at runtime.
         let captured = run_program_capturing(

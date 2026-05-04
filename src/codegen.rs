@@ -2399,6 +2399,17 @@ impl<'ctx> Codegen<'ctx> {
                         return self.compile_map_new_stmt(&name);
                     }
                 }
+                // Map literal: `let m: Map[K, V] = ["k": v, ...]` (bare) or
+                // `Map[k: v, ...]` (prefix). Both lower to `ExprKind::MapLiteral`.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let ExprKind::MapLiteral(entries) = &value.kind {
+                        if self.map_key_types.contains_key(var_name.as_str()) {
+                            let name = var_name.clone();
+                            let entries = entries.clone();
+                            return self.compile_map_literal_stmt(&name, &entries);
+                        }
+                    }
+                }
                 // Prefer the explicit type annotation when present — it lets
                 // `let c: Cm = i.into();` (lowered to `Cm.from(i)`, which
                 // `type_name_of` can't classify) still register `c` as a
@@ -4667,6 +4678,73 @@ impl<'ctx> Codegen<'ctx> {
             },
         );
         self.track_map_var(slot_ptr);
+        Ok(())
+    }
+
+    /// Compile `let m: Map[K, V] = ["k1": v1, "k2": v2, ...]` (bare or prefix
+    /// `Map[k1: v1, ...]` form — both lower to `ExprKind::MapLiteral`). Calls
+    /// `compile_map_new_stmt` first to build the empty map + register the
+    /// binding + cleanup tracking, then inserts each entry via
+    /// `karac_map_insert_old` (discarding the previous-value out-slot since
+    /// every key is fresh on construction).
+    fn compile_map_literal_stmt(
+        &mut self,
+        var_name: &str,
+        entries: &[(Expr, Expr)],
+    ) -> Result<(), String> {
+        // Build the empty map first (registers slot + cleanup).
+        self.compile_map_new_stmt(var_name)?;
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("compile_map_literal_stmt: '{var_name}' not registered"))?;
+        let key_ty = self
+            .map_key_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        // Reuse a single set of allocas across all inserts in the literal —
+        // the storage is overwritten per iteration.
+        let key_slot = self.create_entry_alloca(fn_val, "map.lit.key", key_ty);
+        let val_slot = self.create_entry_alloca(fn_val, "map.lit.val", val_ty);
+        let old_slot = self.create_entry_alloca(fn_val, "map.lit.old", val_ty);
+
+        for (k_expr, v_expr) in entries {
+            let map_handle = self
+                .builder
+                .build_load(ptr_ty, slot.ptr, "map.lit.handle")
+                .unwrap()
+                .into_pointer_value();
+            let k_val = self.compile_expr(k_expr)?;
+            let v_val = self.compile_expr(v_expr)?;
+            self.builder.build_store(key_slot, k_val).unwrap();
+            self.builder.build_store(val_slot, v_val).unwrap();
+            self.builder
+                .build_call(
+                    self.karac_map_insert_old_fn,
+                    &[
+                        map_handle.into(),
+                        key_slot.into(),
+                        val_slot.into(),
+                        old_slot.into(),
+                    ],
+                    "map.lit.insert",
+                )
+                .unwrap();
+        }
+
         Ok(())
     }
 

@@ -4037,6 +4037,29 @@ impl Parser {
                     },
                 });
             }
+            // `Map[k: v, k2: v2, ...]` — prefix-literal map form. The first
+            // expression is a key, followed by `:`, then the value. Switch to
+            // key-value parsing and emit `MapLiteral` (the same AST shape the
+            // bare `["k": v]` form produces, so the existing typechecker case
+            // applies unchanged).
+            if name == "Map" && self.eat(&Token::Colon) {
+                let first_val = self.parse_expression()?;
+                let mut entries = vec![(first, first_val)];
+                while self.eat(&Token::Comma) {
+                    if self.check(&Token::RightBracket) {
+                        break;
+                    }
+                    let k = self.parse_expression()?;
+                    self.expect(&Token::Colon)?;
+                    let v = self.parse_expression()?;
+                    entries.push((k, v));
+                }
+                self.expect(&Token::RightBracket)?;
+                return Some(Expr {
+                    span: self.span_from(&start),
+                    kind: ExprKind::MapLiteral(entries),
+                });
+            }
             items.push(first);
             while self.eat(&Token::Comma) {
                 if self.check(&Token::RightBracket) {

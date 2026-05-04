@@ -3049,6 +3049,34 @@ fn test_map_merge() {
 }
 
 #[test]
+fn test_map_prefix_literal_string_keys() {
+    // Map["a": 1, "b": 2] prefix-literal form — parses + type-checks +
+    // produces a Map with the entries.
+    let output = run("fn main() {\n\
+             let m = Map[\"a\": 1_i64, \"b\": 2_i64, \"c\": 3_i64];\n\
+             println(m.len());\n\
+             match m.get(\"b\") {\n\
+                 Some(v) => println(v),\n\
+                 None => println(0_i64),\n\
+             }\n\
+         }");
+    assert_eq!(output, "3\n2\n");
+}
+
+#[test]
+fn test_map_prefix_literal_int_keys() {
+    let output = run("fn main() {\n\
+             let m = Map[1_i64: 100_i64, 2_i64: 200_i64];\n\
+             println(m.len());\n\
+             match m.get(2_i64) {\n\
+                 Some(v) => println(v),\n\
+                 None => println(0_i64),\n\
+             }\n\
+         }");
+    assert_eq!(output, "2\n200\n");
+}
+
+#[test]
 fn test_map_clear() {
     let output = run("fn main() {\n\
              let m: Map[String, i64] = Map.new();\n\
