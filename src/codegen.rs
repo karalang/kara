@@ -4663,6 +4663,79 @@ impl<'ctx> Codegen<'ctx> {
         Ok(())
     }
 
+    /// Compile `m[k]` indexing on a `Map[K, V]` variable. Panics at runtime if
+    /// the key is missing — matches the spec's `fn index(ref self, key: ref K)
+    /// -> ref V` semantics. The returned value is a bit-copy of the bucket's V,
+    /// not a borrow into the bucket; this matches the existing `Map.get`
+    /// codegen behavior. Proper `ref V` return semantics is a follow-up that
+    /// applies uniformly to both `[]` and `Map.get`.
+    fn compile_map_index(
+        &mut self,
+        name: &str,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let slot = self
+            .variables
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("unknown map variable '{name}' in index expression"))?;
+        let map_handle = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "map.idx.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let key_ty = self
+            .map_key_types
+            .get(name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        let key_val = self.compile_expr(index)?;
+        let fn_val = self.current_fn.unwrap();
+        let key_slot = self.create_entry_alloca(fn_val, "map.idx.key", key_ty);
+        let val_slot = self.create_entry_alloca(fn_val, "map.idx.val", val_ty);
+        self.builder.build_store(key_slot, key_val).unwrap();
+
+        let found = self
+            .builder
+            .build_call(
+                self.karac_map_get_fn,
+                &[map_handle.into(), key_slot.into(), val_slot.into()],
+                "map.idx.found",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let found_bb = self.context.append_basic_block(fn_val, "map.idx.found");
+        let notfound_bb = self.context.append_basic_block(fn_val, "map.idx.notfound");
+
+        self.builder
+            .build_conditional_branch(found, found_bb, notfound_bb)
+            .unwrap();
+
+        self.builder.position_at_end(notfound_bb);
+        self.emit_panic("Map index: key not present");
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(found_bb);
+        let elem_val = self
+            .builder
+            .build_load(val_ty, val_slot, "map.idx.val")
+            .unwrap();
+        Ok(elem_val)
+    }
+
     /// Compile a method call on a `Map[K,V]` variable.
     fn compile_map_method(
         &mut self,
@@ -5031,6 +5104,15 @@ impl<'ctx> Codegen<'ctx> {
         if let ExprKind::Identifier(name) = &object.kind {
             if self.slice_elem_types.contains_key(name.as_str()) {
                 return self.compile_slice_index(name, index);
+            }
+        }
+
+        // Map variable indexing: `m[k]` calls karac_map_get and panics on miss.
+        // The key is hashed via the per-K hash_fn registered at Map construction;
+        // it does NOT need to be an integer (unlike Array/Vec/Slice).
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.map_key_types.contains_key(name.as_str()) {
+                return self.compile_map_index(name, index);
             }
         }
 

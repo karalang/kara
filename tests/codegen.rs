@@ -3492,6 +3492,68 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_map_index_get_existing_i64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(7_i64, 42_i64);
+    println(m[7_i64]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_index_get_existing_string_key() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("hello", 100_i64);
+    m.insert("world", 200_i64);
+    println(m["world"]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "200");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_index_panics_on_missing() {
+        // Indexing a Map with a missing key panics at runtime.
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let m: Map[i64, i64] = Map.new();
+    let x = m[42_i64];
+    println(x);
+    println(99_i64);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            // Panic message printed to stdout (printf), then exit(1) — so
+            // the trailing prints never run.
+            assert!(
+                c.stdout.contains("panic: Map index: key not present"),
+                "expected panic message, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("99"),
+                "code after panicking index should not run"
+            );
+        }
+    }
+
     // ── Half-open range indexing ──────────────────────────────────────────────
 
     #[test]
