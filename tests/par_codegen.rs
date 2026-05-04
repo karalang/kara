@@ -303,18 +303,19 @@ fn main() {
         // A method whose body has no observable effects (no reads/writes/
         // sends/receives) should not emit a mid-branch cancel check at the
         // call site, mirroring the narrowing already in place for free
-        // functions and `Type.assoc` calls.
+        // functions and `Type.assoc` calls. (`pure` is a reserved keyword
+        // for future use, so the method is named `compute` here.)
         let ir = ir_for_with_pipeline(
             r#"
 struct Counter { n: i64 }
 impl Counter {
-    fn pure(ref self) -> i64 { self.n + 1 }
+    fn compute(ref self) -> i64 { self.n + 1 }
 }
 fn main() {
     let c = Counter { n: 1 };
     par {
-        let _ = c.pure();
-        let _ = c.pure();
+        let _ = c.compute();
+        let _ = c.compute();
     }
 }
 "#,
