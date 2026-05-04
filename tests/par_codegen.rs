@@ -102,7 +102,9 @@ mod par_codegen_tests {
     }
 
     /// Compile, link with the runtime, and run the program. Returns stdout
-    /// on success, None if any step fails (soft-skip).
+    /// on success, None if link/exec fails (legitimate soft-skip when the
+    /// runtime archive is missing). Parse and codegen failures panic — those
+    /// are programming bugs, not environment issues.
     fn run_program(src: &str) -> Option<String> {
         use karac::codegen::{compile_to_object, link_executable};
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,14 +115,20 @@ mod par_codegen_tests {
 
         let parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
-            return None;
+            let mut msg = String::from("test source failed to parse:\n");
+            for e in &parsed.errors {
+                msg.push_str(&format!("  {:?}\n", e));
+            }
+            panic!("{}", msg);
         }
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_par_e2e_{}_{}", std::process::id(), id);
 
-        compile_to_object(&parsed.program, &obj_path, None).ok()?;
+        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None) {
+            panic!("codegen failed for test program: {}", e);
+        }
         link_executable(&obj_path, &exe_path).ok()?;
 
         let output = std::process::Command::new(&exe_path).output().ok()?;

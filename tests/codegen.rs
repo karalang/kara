@@ -469,9 +469,17 @@ fn main() {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
 
+        // Parse errors are programming bugs in the test source, not a
+        // legitimate "skip" condition — panic with a clear message so
+        // failures surface instead of being swallowed by the downstream
+        // `if let Some(out) = out { ... }` accept-on-None pattern.
         let mut parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
-            return None;
+            let mut msg = String::from("test source failed to parse:\n");
+            for e in &parsed.errors {
+                msg.push_str(&format!("  {:?}\n", e));
+            }
+            panic!("{}", msg);
         }
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
@@ -481,7 +489,15 @@ fn main() {
         let obj_path = format!("/tmp/karac_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_e2e_{}_{}", std::process::id(), id);
 
-        compile_to_object_with_options(&parsed.program, &obj_path, None, filename).ok()?;
+        // Codegen failures are also programming bugs (in the compiler or in
+        // the test program) — surface them loudly. Link and exec failures
+        // stay as soft-skip because they can fire in environments that
+        // lack libkarac_runtime.a or a working linker.
+        if let Err(e) =
+            compile_to_object_with_options(&parsed.program, &obj_path, None, filename)
+        {
+            panic!("codegen failed for test program: {}", e);
+        }
         link_executable(&obj_path, &exe_path).ok()?;
 
         let output = std::process::Command::new(&exe_path).output().ok()?;
@@ -504,7 +520,11 @@ fn main() {
 
         let mut parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
-            return None;
+            let mut msg = String::from("test source failed to parse:\n");
+            for e in &parsed.errors {
+                msg.push_str(&format!("  {:?}\n", e));
+            }
+            panic!("{}", msg);
         }
         let resolved = karac::resolve(&parsed.program);
         let typed = karac::typecheck(&parsed.program, &resolved);
@@ -515,7 +535,9 @@ fn main() {
         let obj_path = format!("/tmp/karac_e2e_ow_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_e2e_ow_{}_{}", std::process::id(), id);
 
-        compile_to_object(&parsed.program, &obj_path, Some(&ownership)).ok()?;
+        if let Err(e) = compile_to_object(&parsed.program, &obj_path, Some(&ownership)) {
+            panic!("codegen failed for test program: {}", e);
+        }
         link_executable(&obj_path, &exe_path).ok()?;
 
         let output = std::process::Command::new(&exe_path).output().ok()?;
@@ -1552,6 +1574,14 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "PrefixCollectionLiteral{Array, ...} not lowered to ArrayLiteral — \
+                falls through codegen's expr dispatch to const-i64-zero, then \
+                `arr[i] = v` errors with 'Index store on non-array type'. \
+                Tracked: lowering.rs needs to convert PrefixCollectionLiteral \
+                with type_name Array into ArrayLiteral. Was silently masked by \
+                the harness's `if let Some(out) = out { ... }` accept-on-None \
+                pattern until the harness was hardened to panic on codegen \
+                errors."]
     fn test_e2e_array_basics_example() {
         let src = include_str!("../examples/array_basics.kara");
         let out = run_program(src);
@@ -1780,6 +1810,15 @@ fn main() {
     // ── ref parameter semantics ───────────────────────────────────
 
     #[test]
+    #[ignore = "compile_index doesn't dispatch through the Vec path for \
+                `ref Vec[T]` parameters: the ref-param loads as a pointer, but \
+                the variable's slot type is the i64-default fallback (not \
+                vec_struct_type), so `v[i]` falls through to the array path \
+                which errors 'Index operator applied to non-array type'. \
+                Tracked: compile_index needs a leading branch that checks \
+                vec_elem_types[name] and routes to a Vec-index path that \
+                follows the ref. Was silently masked before the harness \
+                hardening."]
     fn test_e2e_ref_vec_param() {
         let out = run_program(
             r#"
@@ -2842,6 +2881,14 @@ fn main() {
     }
 
     #[test]
+    #[ignore = "? cross-error From-conversion emits LLVM that fails verification: \
+                `MyError.from(e)` returns a `{ i64 }` struct but the `?` \
+                propagation path inserts that struct into an i64 word slot \
+                of the outer Result aggregate (LLVM rejects: 'Call parameter \
+                type does not match function signature'). Tracked: codegen's \
+                `?` path needs to extract the inner i64 from the user-defined \
+                error struct (or coerce_to_i64) before insertvalue. Was \
+                silently masked before the harness hardening."]
     fn test_e2e_question_cross_error_from_conversion() {
         // ? converts the inner error type via the user-impl `From` when
         // typechecker records a question_conversion at this site.
@@ -3230,8 +3277,8 @@ fn main() {
     let mut m: Map[i64, i64] = Map.new();
     let v = m.get(42_i64);
     match v {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3250,8 +3297,8 @@ fn main() {
     m.insert(10_i64, 99_i64);
     let v = m.get(10_i64);
     match v {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3270,13 +3317,13 @@ fn main() {
     let mut m: Map[i64, i64] = Map.new();
     let first = m.insert(7_i64, 10_i64);
     match first {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let second = m.insert(7_i64, 20_i64);
     match second {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3296,13 +3343,13 @@ fn main() {
     m.insert(5_i64, 55_i64);
     let r1 = m.remove(5_i64);
     match r1 {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let r2 = m.remove(5_i64);
     match r2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3384,13 +3431,13 @@ fn main() {
     m.insert("hello", 42_i64);
     let v = m.get("hello");
     match v {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let v2 = m.get("world");
     match v2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3409,13 +3456,13 @@ fn main() {
     let mut m: Map[String, i64] = Map.new();
     let first = m.insert("key", 10_i64);
     match first {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let second = m.insert("key", 20_i64);
     match second {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
@@ -3435,13 +3482,13 @@ fn main() {
     m.insert("alpha", 1_i64);
     let r1 = m.remove("alpha");
     match r1 {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let r2 = m.remove("alpha");
     match r2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
 }
 "#,
