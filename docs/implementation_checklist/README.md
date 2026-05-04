@@ -15,8 +15,8 @@ Sourced from open gaps identified during design review that don't require design
 ### List 1 — Active (serial, this session)
 
 - [~] **Display for collections (recursive codegen).** _(canonical: [phase-7-codegen.md](phase-7-codegen.md#phase-72-compiled-stdlib-types--layout-codegen), search `Display for collections (recursive codegen)`)_
-  - [ ] **1. Per-type Display function emission machinery** — `emit_display_fn_for_type` cached by type, parallel to `emit_hash_fn_for_type`
-  - [ ] **2. Primitive Display fns** — i8…i64 / u8…u64 / f32/f64 / bool / char / String
+  - [x] **1. Per-type Display function emission machinery** — `emit_display_fn_for_type` cached by type, parallel to `emit_hash_fn_for_type` (commit `8123a8e`)
+  - [x] **2. Primitive Display fns** — i8…i64 / u8…u64 / f32/f64 / bool / char / String (commit `8123a8e`)
   - [ ] **3. `Vec[T]` Display fn** — `[` + loop with recursive elem call + `]`
   - [ ] **4. `Map[K, V]` Display fn** — `{` + iterator loop with recursive K, V calls + `}`
   - [ ] **5. `Set[T]` Display fn** — depends on Set codegen landing; format aligned with interpreter
