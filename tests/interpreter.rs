@@ -4397,3 +4397,160 @@ fn main() {
     );
     assert_eq!(output, "a=1\nb=2\n");
 }
+
+#[test]
+fn test_iter_count_returns_element_count() {
+    // count() drains the iterator and returns the element count as i64.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40];
+    let n: i64 = v.iter().count();
+    println(n);
+}
+"#,
+    );
+    assert_eq!(output, "4\n");
+}
+
+#[test]
+fn test_iter_count_empty_returns_zero() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let n: i64 = v.iter().count();
+    println(n);
+}
+"#,
+    );
+    assert_eq!(output, "0\n");
+}
+
+#[test]
+fn test_iter_count_after_filter_counts_kept_elements() {
+    // count() composes with filter — only elements that pass the
+    // predicate contribute to the count.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let n: i64 = v.iter().filter(|x| x > 2).count();
+    println(n);
+}
+"#,
+    );
+    assert_eq!(output, "3\n");
+}
+
+#[test]
+fn test_iter_collect_yields_vec_in_order() {
+    // collect() v1 returns a Vec[T] preserving iterator order.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter().collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n3\n");
+}
+
+#[test]
+fn test_iter_collect_after_map_collects_mapped_values() {
+    // map then collect — closure runs once per element during collect's drain.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter().map(|x| x * 10).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_collect_after_filter_drops_rejected_elements() {
+    // filter then collect — only elements that pass the predicate land
+    // in the resulting Vec.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let xs: Vec[i64] = v.iter().filter(|x| x > 2).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n4\n5\n");
+}
+
+#[test]
+fn test_iter_fold_sums_elements() {
+    // Canonical fold use — sum a Vec[i64] starting from 0.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let s: i64 = v.iter().fold(0, |acc, x| acc + x);
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "15\n");
+}
+
+#[test]
+fn test_iter_fold_empty_returns_init_unchanged() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let s: i64 = v.iter().fold(42, |acc, x| acc + x);
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_iter_fold_threads_string_accumulator() {
+    // Accumulator type can differ from element type.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let s: String = v.iter().fold("", |acc, x| f"{acc}{x},");
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "1,2,3,\n");
+}
+
+#[test]
+fn test_iter_fold_after_filter_only_visits_kept_elements() {
+    // Adaptors fire during fold's drain — filter rejects 1 and 2,
+    // so the closure only runs for 3 + 4 + 5 = 12 (init 0).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let s: i64 = v.iter().filter(|x| x > 2).fold(0, |acc, x| acc + x);
+    println(s);
+}
+"#,
+    );
+    assert_eq!(output, "12\n");
+}

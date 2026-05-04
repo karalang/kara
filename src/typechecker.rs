@@ -2272,6 +2272,43 @@ impl<'a> TypeChecker<'a> {
             },
         );
 
+        // Prelude enum `Entry[K, V]` — view returned by `Map.entry(k)` for
+        // O(1) insert-or-modify without double-hashing. See design.md
+        // § Entry[K, V]. First stdlib type with `mut ref` payload fields.
+        self.env.enums.insert(
+            "Entry".to_string(),
+            EnumInfo {
+                generic_params: vec!["K".to_string(), "V".to_string()],
+                variants: vec![
+                    (
+                        "Occupied".to_string(),
+                        VariantTypeInfo::Struct(vec![(
+                            "value".to_string(),
+                            Type::MutRef(Box::new(Type::TypeParam("V".to_string()))),
+                        )]),
+                    ),
+                    (
+                        "Vacant".to_string(),
+                        VariantTypeInfo::Struct(vec![
+                            ("key".to_string(), Type::TypeParam("K".to_string())),
+                            (
+                                "map".to_string(),
+                                Type::MutRef(Box::new(Type::Named {
+                                    name: "Map".to_string(),
+                                    args: vec![
+                                        Type::TypeParam("K".to_string()),
+                                        Type::TypeParam("V".to_string()),
+                                    ],
+                                })),
+                            ),
+                        ]),
+                    ),
+                ],
+                derived_traits: HashSet::new(),
+                is_shared: false,
+            },
+        );
+
         // `VarError` — error type returned by `env.var(name)`. Resolved as
         // `std.env.VarError` per brainstorming v49 (Q2=B): not part of the
         // prelude (so it stays out of `PRELUDE_TYPES` / `PRELUDE_VARIANTS`),
@@ -8720,6 +8757,65 @@ impl<'a> TypeChecker<'a> {
                     name: "Iterator".to_string(),
                     args: vec![item.clone()],
                 }
+            }
+            "count" => {
+                // `count() -> i64` — terminal. Drains the iterator and
+                // returns the element count.
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.count() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Int(IntSize::I64)
+            }
+            "collect" => {
+                // `collect() -> Vec[T]` — terminal. v1 is Vec-only; full
+                // FromIterator (collect into Set / Map / Array / etc. via
+                // type-context inference) is a follow-up CR per
+                // wip-list2.md subtask 4.
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.collect() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "fold" => {
+                // `fold(init: A, f: Fn(A, T) -> A) -> A` — terminal. A is
+                // inferred from `init` (concrete after infer_expr); both
+                // closure params and return are then concrete so
+                // check_expr suffices for closure-pushdown.
+                if args.len() != 2 {
+                    self.type_error(
+                        format!("Iterator.fold() expects 2 arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                let acc_ty = self.infer_expr(&args[0].value);
+                let f_ty = Type::Function {
+                    params: vec![acc_ty.clone(), item.clone()],
+                    return_type: Box::new(acc_ty.clone()),
+                };
+                self.check_expr(&args[1].value, &f_ty);
+                acc_ty
             }
             _ => {
                 for arg in args {

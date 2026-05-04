@@ -97,10 +97,17 @@ reviewable in isolation.
   predicate rejection, arity errors, lazy step-by-step pulls, the
   empty-after-filter case, and `(K, V)` destructuring on `Map.iter().map(...)`.
 
-- [ ] **4. `collect()` + `fold(init, f)` + `count()`.** Three terminals.
-  `collect()` v1 lands as `Vec`-only via typed-context inference (full
-  `FromIterator` is a follow-up CR). `fold` walks via repeated `next()` with
-  closure reduction. `count` returns `i64`.
+- [x] **4. `collect()` + `fold(init, f)` + `count()`.** Three terminals,
+  all routed through `iterator_step` so adaptor chains fire during the
+  drain. `count()` walks the iterator and returns the element count as
+  `i64`. `collect()` v1 is `Vec`-only — drains into `Value::Array` with
+  typechecker return `Vec[T]`; `FromIterator`-driven dispatch into other
+  collections is a follow-up CR. `fold(init, f)` infers the accumulator
+  type `A` from `init`, then `check_expr`s the closure against
+  `Fn(A, T) -> A` (both params and return concrete, so plain check_expr
+  suffices). 10 typechecker tests + 10 interpreter tests cover plain
+  walks, empty-source cases, composition with filter / map adaptors,
+  String accumulator, type-mismatch on closure return, and arity errors.
 
 - [ ] **5. `any(pred)` + `all(pred)`.** Two short-circuit terminal predicates.
   Stop iteration on first `true` / first `false` respectively.

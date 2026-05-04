@@ -495,6 +495,36 @@ fn test_generic_enum_constructor_type_mismatch() {
     );
 }
 
+// ── Map.entry / Entry[K, V] prelude enum (canonical: phase-8-stdlib-floor.md
+//    "Map.entry(k) + Entry[K, V] enum") ────────────────────────────────────
+
+#[test]
+fn test_entry_kv_registered_as_prelude_type() {
+    // Ascribing `Entry[i64, String]` is sufficient to verify the enum is
+    // registered with two type params in the typechecker prelude. No
+    // construction yet — `Entry` values only come out of `Map.entry(k)`.
+    typecheck_ok(
+        "fn use_entry(_e: Entry[i64, String]) {}\n\
+         fn main() {}",
+    );
+}
+
+#[test]
+fn test_entry_kv_pattern_match_occupied() {
+    // The `Occupied { value: mut ref V }` variant carries `mut ref V` —
+    // pattern-matching binds the ref. Just typecheck — interpreter / codegen
+    // dispatch lands in later subtasks.
+    typecheck_ok(
+        "fn classify(e: Entry[i64, String]) -> bool {\n\
+             match e {\n\
+                 Occupied { value: _ } => true,\n\
+                 Vacant { key: _, map: _ } => false,\n\
+             }\n\
+         }\n\
+         fn main() {}",
+    );
+}
+
 // ── Category 8: Pattern Exhaustiveness ──────────────────────────
 
 #[test]
@@ -5810,6 +5840,141 @@ fn test_iter_map_wrong_arg_count_rejected() {
             .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
                 && e.message.contains("Iterator.map()")),
         "expected WrongNumberOfArgs for map() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_count_returns_i64() {
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _n: i64 = v.iter().count();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_count_after_filter_returns_i64() {
+    // count() composes with lazy adaptors — filter then count.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _n: i64 = v.iter().filter(|x| x > 0).count();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_count_with_arg_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _n = v.iter().count(1);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.count()")),
+        "expected WrongNumberOfArgs for count(arg), got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_collect_returns_vec_of_item() {
+    // collect() v1 returns Vec[T] where T is the iterator's item type.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _xs: Vec[i64] = v.iter().collect();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_collect_after_map_uses_mapped_item_type() {
+    // The Item type of a `map(...)` iterator is the closure return type;
+    // collect() picks that up.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _xs: Vec[String] = v.iter().map(|x| if x > 0 { "pos" } else { "neg" }).collect();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_collect_with_arg_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _xs = v.iter().collect(1);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.collect()")),
+        "expected WrongNumberOfArgs for collect(arg), got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_fold_returns_accumulator_type() {
+    // `fold(init, f)` returns init's type; the closure must thread A, T -> A.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _sum: i64 = v.iter().fold(0, |acc, x| acc + x);
+         }",
+    );
+}
+
+#[test]
+fn test_iter_fold_can_change_accumulator_type_from_item_type() {
+    // The accumulator can have a different type than the item type:
+    // walk Vec[i64] with a String accumulator.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _s: String = v.iter().fold(String.new(), |acc, _x| acc);
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_fold_closure_must_return_acc_type() {
+    // If the closure's body type doesn't match the accumulator type,
+    // the closure check fails with TypeMismatch.
+    let errs = typecheck_errors(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _r = v.iter().fold(0, |_acc, _x| "wrong");
+         }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on fold closure return, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_fold_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _r = v.iter().fold(0);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.fold()")),
+        "expected WrongNumberOfArgs for fold(init) only, got: {:?}",
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }

@@ -3446,6 +3446,57 @@ impl<'a> Interpreter<'a> {
                     };
                 }
             }
+            "count" => {
+                // Terminal — drain the iterator (firing all adaptor
+                // closures) and count yielded elements.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let mut iter_val = obj;
+                    let mut n: i64 = 0;
+                    while self.iterator_step(&mut iter_val).is_some() {
+                        n += 1;
+                    }
+                    return Value::Int(n);
+                }
+            }
+            "collect" => {
+                // Terminal v1 — drain the iterator into a Vec[T]
+                // (Value::Array). FromIterator-driven dispatch into other
+                // collections is a follow-up CR.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let mut iter_val = obj;
+                    let mut out = Vec::new();
+                    while let Some(v) = self.iterator_step(&mut iter_val) {
+                        out.push(v);
+                    }
+                    return Value::Array(out);
+                }
+            }
+            "fold" => {
+                // Terminal — `fold(init, f)`. Walk via repeated
+                // iterator_step pulls, threading the accumulator through
+                // the closure on each step.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if args.len() != 2 {
+                        return self.record_runtime_error(
+                            format!("Iterator.fold() expects 2 arguments, got {}", args.len()),
+                            span,
+                        );
+                    }
+                    let mut acc = self.eval_expr_inner(&args[0].value);
+                    let f = self.eval_expr_inner(&args[1].value);
+                    if !matches!(f, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.fold() expects a closure; got {}", f),
+                            span,
+                        );
+                    }
+                    let mut iter_val = obj;
+                    while let Some(item) = self.iterator_step(&mut iter_val) {
+                        acc = self.invoke_function_value(f.clone(), vec![acc, item]);
+                    }
+                    return acc;
+                }
+            }
             "as_slice" | "as_slice_mut" => {
                 // The tree-walk interpreter is type-erased; Slice[T] uses
                 // the same Value::Array representation as Vec/Array. Clone
