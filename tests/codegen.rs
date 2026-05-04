@@ -4648,6 +4648,269 @@ fn main() {
         }
     }
 
+    // ── Set[T] LLVM codegen ─────────────────────────────────────────
+    //
+    // Subtask 6 of the canonical Set codegen bullet (phase-8-stdlib-floor.md
+    // search `Set[T] LLVM codegen`). Set[T] lowers to Map[T, ()] at codegen
+    // and reuses karac_map_*; tests cover insert / contains / remove / len /
+    // is_empty / clear / for-loop iteration. The union / intersection /
+    // difference methods (subtask 5) are deferred — they need per-type
+    // clone fn infrastructure for non-Copy elements — so the matching
+    // tests (`test_e2e_set_union`, etc.) are not yet present.
+
+    #[test]
+    fn test_e2e_set_i64_insert_contains() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(1_i64);
+    s.insert(2_i64);
+    println(s.contains(1_i64));
+    println(s.contains(2_i64));
+    println(s.contains(99_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "true", "false"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_i64_insert_returns_bool() {
+        // Set.insert returns true on fresh insert, false when value already
+        // present (matches Rust HashSet::insert).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    let a = s.insert(1_i64);
+    let b = s.insert(1_i64);
+    println(a);
+    println(b);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "false"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_i64_remove() {
+        // Set.remove returns true when value existed, false otherwise.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    let r1 = s.remove(7_i64);
+    let r2 = s.remove(7_i64);
+    println(r1);
+    println(r2);
+    println(s.contains(7_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "false", "false"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_i64_len_is_empty() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    println(s.is_empty());
+    println(s.len());
+    s.insert(1_i64);
+    s.insert(2_i64);
+    s.insert(3_i64);
+    println(s.is_empty());
+    println(s.len());
+    s.insert(2_i64);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "0", "false", "3", "3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_i64_for_loop_sum() {
+        // for x in s — iteration order is unspecified, so test against the
+        // sum (which is order-independent).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(10_i64);
+    s.insert(20_i64);
+    s.insert(30_i64);
+    let mut sum: i64 = 0;
+    for x in s {
+        sum = sum + x;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "60");
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_string_insert_contains() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    println(s.contains("alice"));
+    println(s.contains("bob"));
+    println(s.contains("missing"));
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "true", "false", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_string_remove() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    let r = s.remove("alice");
+    println(r);
+    println(s.contains("alice"));
+    println(s.contains("bob"));
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "false", "true", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_string_for_loop_count() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    s.insert("alice");
+    let mut count: i64 = 0;
+    for _x in s {
+        count = count + 1_i64;
+    }
+    println(count);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // alice appears twice, but as a set only once → 2 elements.
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_set_i64_singleton() {
+        // Display subtask 5 of the canonical Display bullet (closed by Set
+        // codegen subtasks 1-4). Format `Set{...}` matches the interpreter
+        // at `src/interpreter.rs:292`. Single-entry set keeps the expected
+        // output deterministic — multi-entry iteration order is unspecified.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(42_i64);
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "Set{42}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_set_string_singleton() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "Set{alice}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_set_empty() {
+        let out = run_program(
+            r#"
+fn main() {
+    let s: Set[i64] = Set.new();
+    println(s);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "Set{}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_clear() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(1_i64);
+    s.insert(2_i64);
+    s.insert(3_i64);
+    println(s.len());
+    s.clear();
+    println(s.len());
+    println(s.is_empty());
+    s.insert(99_i64);
+    println(s.contains(99_i64));
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "0", "true", "true", "1"]);
+        }
+    }
+
     #[test]
     fn test_e2e_display_map_with_vec_value_singleton() {
         // Map[String, Vec[i64]] — the Map body recurses into Vec Display

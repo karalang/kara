@@ -470,6 +470,21 @@ struct Codegen<'ctx> {
     /// to register the per-iteration `k` binding when iterating with a tuple
     /// pattern `for (k, v) in m`.
     map_key_type_exprs: HashMap<String, TypeExpr>,
+    /// Per-variable Set element LLVM type (variable name → T LLVM type).
+    /// Mirrors `map_key_types` — `Set[T]` lowers to `Map[T, ()]` at codegen,
+    /// reusing the `karac_map_*` C runtime, but the surface type identity is
+    /// kept distinct so codegen can pick the right method dispatch and the
+    /// Display fn can pick the `Set{...}` brace style.
+    set_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Per-variable Set element type name string (e.g. `"i64"`, `"String"`)
+    /// for hash/eq fn selection. Mirrors `map_key_type_names`.
+    set_elem_type_names: HashMap<String, String>,
+    /// Per-variable Set element-`TypeExpr` side-table. Mirrors
+    /// `map_key_type_exprs` and is consulted alongside it by Set-aware paths
+    /// (`compile_for_set_var`, Set Display fn) so compound element types
+    /// (`Set[(i64, String)]`, `Set[Vec[T]]`) compose through the
+    /// TypeExpr-aware hash/eq/Display paths.
+    set_elem_type_exprs: HashMap<String, TypeExpr>,
     karac_map_new_fn: FunctionValue<'ctx>,
     karac_map_free_fn: FunctionValue<'ctx>,
     karac_map_insert_old_fn: FunctionValue<'ctx>,
@@ -730,6 +745,9 @@ impl<'ctx> Codegen<'ctx> {
             map_key_type_names: HashMap::new(),
             var_elem_type_exprs: HashMap::new(),
             map_key_type_exprs: HashMap::new(),
+            set_elem_types: HashMap::new(),
+            set_elem_type_names: HashMap::new(),
+            set_elem_type_exprs: HashMap::new(),
             karac_map_new_fn,
             karac_map_free_fn,
             karac_map_insert_old_fn,
@@ -1070,6 +1088,40 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// Extract the element LLVM type from a `Set[T]` type expression.
+    /// Mirror of `extract_map_kv_types` for the single-type-parameter Set.
+    fn extract_set_elem_type(&self, te: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        if let TypeKind::Path(path) = &te.kind {
+            if path.segments.first().map(|s| s.as_str()) != Some("Set") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if args.is_empty() {
+                return None;
+            }
+            if let GenericArg::Type(t) = &args[0] {
+                return Some(self.llvm_type_for_type_expr(t));
+            }
+        }
+        None
+    }
+
+    /// Extract the element shallow type-name (e.g. `"i64"`, `"String"`) from
+    /// a `Set[T]` type expression. Used to drive hash/eq fn selection.
+    /// Mirror of `extract_map_key_name`.
+    fn extract_set_elem_name(te: &TypeExpr) -> Option<String> {
+        if let TypeKind::Path(path) = &te.kind {
+            if path.segments.first().map(|s| s.as_str()) != Some("Set") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if let Some(GenericArg::Type(elem_te)) = args.first() {
+                return Some(Self::mangled_type_name(elem_te));
+            }
+        }
+        None
+    }
+
     /// Register a variable's collection-type metadata in the side-tables
     /// driven off a Kāra `TypeExpr`. Mirrors the let-statement site at
     /// `compile_stmt(StmtKind::Let)` so for-loop bindings can inherit the
@@ -1077,7 +1129,8 @@ impl<'ctx> Codegen<'ctx> {
     ///
     /// Populates whichever subset of `vec_elem_types` / `slice_elem_types` /
     /// `map_key_types` / `map_val_types` / `map_key_type_names` /
-    /// `var_elem_type_exprs` / `map_key_type_exprs` matches the `TypeExpr`
+    /// `var_elem_type_exprs` / `map_key_type_exprs` / `set_elem_types` /
+    /// `set_elem_type_names` / `set_elem_type_exprs` matches the `TypeExpr`
     /// shape; primitives (and other shapes we don't track) are no-ops.
     fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
@@ -1108,6 +1161,18 @@ impl<'ctx> Codegen<'ctx> {
             if let Some((k_te, v_te)) = map_kv_type_exprs(te) {
                 self.map_key_type_exprs.insert(var_name.to_string(), k_te);
                 self.var_elem_type_exprs.insert(var_name.to_string(), v_te);
+            }
+            return;
+        }
+        if let Some(elem_ty) = self.extract_set_elem_type(te) {
+            self.set_elem_types.insert(var_name.to_string(), elem_ty);
+            if let Some(elem_name) = Self::extract_set_elem_name(te) {
+                self.set_elem_type_names
+                    .insert(var_name.to_string(), elem_name);
+            }
+            if let Some(elem_te) = set_inner_type_expr(te) {
+                self.set_elem_type_exprs
+                    .insert(var_name.to_string(), elem_te);
             }
         }
     }
@@ -1148,6 +1213,15 @@ impl<'ctx> Codegen<'ctx> {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path(segs) = &callee.kind {
                 return segs.len() == 2 && segs[0] == "Map" && segs[1] == "new";
+            }
+        }
+        false
+    }
+
+    fn is_set_new_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path(segs) = &callee.kind {
+                return segs.len() == 2 && segs[0] == "Set" && segs[1] == "new";
             }
         }
         false
@@ -2534,6 +2608,18 @@ impl<'ctx> Codegen<'ctx> {
                             }
                             detected = true;
                         }
+                        if let Some(elem_ty) = self.extract_set_elem_type(te) {
+                            self.set_elem_types.insert(var_name.clone(), elem_ty);
+                            if let Some(elem_name) = Self::extract_set_elem_name(te) {
+                                self.set_elem_type_names
+                                    .insert(var_name.clone(), elem_name);
+                            }
+                            if let Some(elem_te) = set_inner_type_expr(te) {
+                                self.set_elem_type_exprs
+                                    .insert(var_name.clone(), elem_te);
+                            }
+                            detected = true;
+                        }
                     }
                     // Infer String from RHS: let s = "hello", let s = String::new(),
                     // or let s = a + b (string concat)
@@ -2570,6 +2656,17 @@ impl<'ctx> Codegen<'ctx> {
                     {
                         let name = var_name.clone();
                         return self.compile_map_new_stmt(&name);
+                    }
+                }
+                // Set.new(): emit karac_map_new with val_size = 0. Set[T]
+                // lowers to Map[T, ()] at codegen — the C runtime handles
+                // val_size = 0 correctly via `(key_size + val_size).max(1)`.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.is_set_new_call(value)
+                        && self.set_elem_types.contains_key(var_name.as_str())
+                    {
+                        let name = var_name.clone();
+                        return self.compile_set_new_stmt(&name);
                     }
                 }
                 // Map literal: `let m: Map[K, V] = ["k": v, ...]` (bare) or
@@ -2679,6 +2776,10 @@ impl<'ctx> Codegen<'ctx> {
                     }
                 }
                 Ok(())
+                // (`Set.new()` and `Map.new()` register their own
+                // `FreeMapHandle` cleanup inside `compile_set_new_stmt` /
+                // `compile_map_new_stmt` — those are early returns so
+                // they don't reach this fallback.)
             }
             StmtKind::Expr(expr) => {
                 self.compile_expr(expr)?;
@@ -3918,6 +4019,11 @@ impl<'ctx> Codegen<'ctx> {
                 if self.map_key_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     return self.compile_map_method(&name, method, args);
+                }
+                // Set methods
+                if self.set_elem_types.contains_key(name.as_str()) {
+                    let name = name.clone();
+                    return self.compile_set_method(&name, method, args);
                 }
             }
         }
@@ -5268,6 +5374,17 @@ impl<'ctx> Codegen<'ctx> {
                      emit_map_display_fn(key_te, val_te) (or emit_display_fn_for_type_expr)"
                 );
             }
+            other if other.starts_with("Set_") => {
+                // Set's element TypeExpr can't be unambiguously recovered
+                // from a mangled cache name once nested compound shapes are
+                // in play. Callers should hold the element `TypeExpr` and
+                // dispatch via `emit_display_fn_for_type_expr`, which
+                // routes Set to `emit_set_display_fn(elem_te)`.
+                panic!(
+                    "emit_display_fn_for_type: '{other}' must be emitted via \
+                     emit_set_display_fn(elem_te) (or emit_display_fn_for_type_expr)"
+                );
+            }
             other if other.starts_with("tuple_") => {
                 // n-tuples cannot recover their per-field TypeExprs from the
                 // mangled name alone. Callers that already hold the field
@@ -5641,6 +5758,180 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap();
     }
 
+    /// Emit (or reuse) a Display function for `Set[T]`. Typed entry point —
+    /// shape mirrors `emit_map_display_fn` minus the value-side Display
+    /// (Set lowers to `Map[T, ()]`; the iterator's value out-slot is sized
+    /// 0 and the contents are discarded).
+    ///
+    /// The emitted function is named `karac_display_Set_<elem>` (deeply
+    /// mangled via `display_mangle_te`) and shares the generic Display
+    /// cache. Format `Set{a, b, c}` with the literal `Set` prefix matches
+    /// the interpreter at `src/interpreter.rs:292`. Iteration order is
+    /// unspecified per `design.md` line 1588 — tests must not assert order.
+    fn emit_set_display_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("Set_{elem_name}");
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn =
+            self.module
+                .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        self.emit_set_display_body(display_fn, slot_ptr, elem_te);
+
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        display_fn
+    }
+
+    /// Body of the Set Display fn. Loads the opaque map handle (Set lowers
+    /// to `Map[T, ()]`), prints `Set{`, walks `karac_map_iter_*` printing
+    /// each element via the per-type Display fn with `, ` between, frees
+    /// the iterator, prints `}`. The val out-slot is sized 0 — a single
+    /// shared `i8` alloca — and its contents are discarded.
+    fn emit_set_display_body(
+        &mut self,
+        display_fn: FunctionValue<'ctx>,
+        slot_ptr: PointerValue<'ctx>,
+        elem_te: &TypeExpr,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+        let i8_t = self.context.i8_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+
+        // Print "Set{" — literal prefix matches the interpreter format at
+        // `src/interpreter.rs:292`.
+        let lb = self
+            .builder
+            .build_global_string_ptr("Set{", "sd.lb")
+            .unwrap();
+        self.builder
+            .build_call(self.printf_fn, &[lb.as_pointer_value().into()], "p")
+            .unwrap();
+
+        // Load the opaque set/map handle from slot_ptr.
+        let set_handle = self
+            .builder
+            .build_load(ptr_ty, slot_ptr, "sd.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let iter_slot = self.create_entry_alloca(display_fn, "sd.iter.slot", ptr_ty.into());
+        let first_slot = self.create_entry_alloca(display_fn, "sd.first", bool_t.into());
+        let out_elem = self.create_entry_alloca(display_fn, "sd.out_elem", elem_ty);
+        // val_size = 0 — a single shared i8 alloca for the discarded
+        // value out-slot. Runtime stores zero bytes regardless.
+        let dummy_val = self.create_entry_alloca(display_fn, "sd.dummy", i8_t.into());
+
+        let iter_ptr = self
+            .builder
+            .build_call(self.karac_map_iter_new_fn, &[set_handle.into()], "sd.iter")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(iter_slot, iter_ptr).unwrap();
+        self.builder
+            .build_store(first_slot, bool_t.const_int(1, false))
+            .unwrap();
+
+        let elem_disp = self.emit_display_fn_for_type_expr(elem_te);
+
+        let hdr_bb = self.context.append_basic_block(display_fn, "set.hdr");
+        let bdy_bb = self.context.append_basic_block(display_fn, "set.bdy");
+        let sep_bb = self.context.append_basic_block(display_fn, "set.sep");
+        let elem_bb = self.context.append_basic_block(display_fn, "set.elem");
+        let exit_bb = self.context.append_basic_block(display_fn, "set.exit");
+
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let iter_cur = self
+            .builder
+            .build_load(ptr_ty, iter_slot, "sd.iter.cur")
+            .unwrap()
+            .into_pointer_value();
+        let has_next = self
+            .builder
+            .build_call(
+                self.karac_map_iter_next_fn,
+                &[iter_cur.into(), out_elem.into(), dummy_val.into()],
+                "sd.next",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(has_next, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let f = self
+            .builder
+            .build_load(bool_t, first_slot, "sd.f")
+            .unwrap()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(f, elem_bb, sep_bb)
+            .unwrap();
+
+        self.builder.position_at_end(sep_bb);
+        let sep = self
+            .builder
+            .build_global_string_ptr(", ", "sd.sep")
+            .unwrap();
+        self.builder
+            .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
+            .unwrap();
+        self.builder.build_unconditional_branch(elem_bb).unwrap();
+
+        self.builder.position_at_end(elem_bb);
+        self.builder
+            .build_store(first_slot, bool_t.const_int(0, false))
+            .unwrap();
+        self.builder
+            .build_call(elem_disp, &[out_elem.into()], "sd.ed")
+            .unwrap();
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        let iter_final = self
+            .builder
+            .build_load(ptr_ty, iter_slot, "sd.iter.final")
+            .unwrap()
+            .into_pointer_value();
+        self.builder
+            .build_call(self.karac_map_iter_free_fn, &[iter_final.into()], "")
+            .unwrap();
+        let rb = self.builder.build_global_string_ptr("}", "sd.rb").unwrap();
+        self.builder
+            .build_call(self.printf_fn, &[rb.as_pointer_value().into()], "p")
+            .unwrap();
+    }
+
     /// Deeply mangled type name suitable for Display cache keys. Unlike
     /// `mangled_type_name` (which is shallow on `Path` types — used for
     /// hash/eq, where `Map[Vec[T], V]` is unreachable so deep mangling is
@@ -5724,6 +6015,13 @@ impl<'ctx> Codegen<'ctx> {
                     });
                     if let (Some(k), Some(v)) = (k_te, v_te) {
                         return self.emit_map_display_fn(&k, &v);
+                    }
+                }
+                if head == Some("Set") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self.emit_set_display_fn(&elem_te);
                     }
                 }
                 // Primitive (or unsupported path) — fall through to by-name.
@@ -5962,6 +6260,80 @@ impl<'ctx> Codegen<'ctx> {
                 ty: ptr_ty.into(),
             },
         );
+        self.track_map_var(slot_ptr);
+        Ok(())
+    }
+
+    /// Compile `let s: Set[T] = Set.new()` — emit `karac_map_new(elem_size,
+    /// 0, hash_fn, eq_fn)` (val_size = 0 → key-only table), alloca a slot
+    /// for the opaque handle, register the scope-exit `karac_map_free`
+    /// cleanup. Mirrors `compile_map_new_stmt` with the value side stripped.
+    fn compile_set_new_stmt(&mut self, var_name: &str) -> Result<(), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let elem_ty = self
+            .set_elem_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        let elem_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let val_size = i64_t.const_int(0, false);
+
+        // Hash/eq fns for the element type. Prefer the TypeExpr-aware path
+        // so compound element shapes (tuples, …) compose correctly.
+        let (hash_fn, eq_fn) =
+            if let Some(elem_te) = self.set_elem_type_exprs.get(var_name).cloned() {
+                (
+                    self.emit_hash_fn_for_type_expr(&elem_te),
+                    self.emit_eq_fn_for_type_expr(&elem_te),
+                )
+            } else {
+                let type_name = self
+                    .set_elem_type_names
+                    .get(var_name)
+                    .cloned()
+                    .unwrap_or_else(|| "i64".to_string());
+                (
+                    self.emit_hash_fn_for_type(&type_name, elem_ty),
+                    self.emit_eq_fn_for_type(&type_name, elem_ty),
+                )
+            };
+        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
+        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
+
+        let set_handle = self
+            .builder
+            .build_call(
+                self.karac_map_new_fn,
+                &[
+                    elem_size.into(),
+                    val_size.into(),
+                    hash_fn_ptr.into(),
+                    eq_fn_ptr.into(),
+                ],
+                "set.new",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let slot_ptr = self.create_entry_alloca(fn_val, &format!("{var_name}.slot"), ptr_ty.into());
+        self.builder.build_store(slot_ptr, set_handle).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            VarSlot {
+                ptr: slot_ptr,
+                ty: ptr_ty.into(),
+            },
+        );
+        // Set handles use the same `karac_map_free` cleanup as Map handles —
+        // the runtime is the same; only the type-system identity differs.
         self.track_map_var(slot_ptr);
         Ok(())
     }
@@ -6656,6 +7028,158 @@ impl<'ctx> Codegen<'ctx> {
             }
             "keys" | "values" | "entries" => self.compile_map_keys_values_entries(var_name, method),
             _ => Err(format!("codegen: Map.{method} not yet implemented")),
+        }
+    }
+
+    /// Compile method calls on `Set[T]` variables. `Set[T]` lowers to
+    /// `Map[T, ()]` at codegen so all Map runtime fns are reused; the
+    /// value-side allocas are sized to the (zero-byte) unit type and the
+    /// runtime's `(key_size + val_size).max(1)` makes the value-store a
+    /// no-op.
+    ///
+    /// Handled methods: `len`, `is_empty`, `insert`, `contains`, `remove`,
+    /// `clear`. `union` / `intersection` / `difference` are out-of-line in
+    /// `compile_set_op_method` so this fn stays focused on the runtime-
+    /// passthrough cases.
+    fn compile_set_method(
+        &mut self,
+        var_name: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let i8_t = self.context.i8_type();
+
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        let set_handle = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "set.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let elem_ty = self
+            .set_elem_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        match method {
+            "len" => {
+                let len = self
+                    .builder
+                    .build_call(self.karac_map_len_fn, &[set_handle.into()], "set.len")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                Ok(len)
+            }
+            "is_empty" => {
+                let len = self
+                    .builder
+                    .build_call(self.karac_map_len_fn, &[set_handle.into()], "set.len")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let zero = i64_t.const_int(0, false);
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "set.is_empty")
+                    .unwrap();
+                Ok(cmp.into())
+            }
+            "insert" => {
+                if args.is_empty() {
+                    return Err("Set.insert requires a value argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let elem_slot = self.create_entry_alloca(fn_val, "set.insert.elem", elem_ty);
+                self.builder.build_store(elem_slot, elem_val).unwrap();
+                // val_size = 0, so dummy_unit / dummy_out can be a single
+                // shared i8 alloca — the runtime store-of-zero-bytes is a
+                // no-op regardless of the byte's contents.
+                let dummy = self.create_entry_alloca(fn_val, "set.dummy", i8_t.into());
+                let existed = self
+                    .builder
+                    .build_call(
+                        self.karac_map_insert_old_fn,
+                        &[
+                            set_handle.into(),
+                            elem_slot.into(),
+                            dummy.into(),
+                            dummy.into(),
+                        ],
+                        "set.insert.existed",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                // Set.insert returns true when the value was newly inserted
+                // (matches Rust HashSet::insert), so flip `existed`.
+                let one = bool_t.const_int(1, false);
+                let inserted = self
+                    .builder
+                    .build_xor(existed, one, "set.insert.inserted")
+                    .unwrap();
+                Ok(inserted.into())
+            }
+            "contains" => {
+                if args.is_empty() {
+                    return Err("Set.contains requires a value argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let elem_slot = self.create_entry_alloca(fn_val, "set.contains.elem", elem_ty);
+                self.builder.build_store(elem_slot, elem_val).unwrap();
+                let found = self
+                    .builder
+                    .build_call(
+                        self.karac_map_contains_fn,
+                        &[set_handle.into(), elem_slot.into()],
+                        "set.contains",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                Ok(found)
+            }
+            "remove" => {
+                if args.is_empty() {
+                    return Err("Set.remove requires a value argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let elem_slot = self.create_entry_alloca(fn_val, "set.remove.elem", elem_ty);
+                self.builder.build_store(elem_slot, elem_val).unwrap();
+                // val_size = 0 → dummy out slot is shared; contents irrelevant.
+                let dummy = self.create_entry_alloca(fn_val, "set.dummy", i8_t.into());
+                let existed = self
+                    .builder
+                    .build_call(
+                        self.karac_map_remove_old_fn,
+                        &[set_handle.into(), elem_slot.into(), dummy.into()],
+                        "set.remove.existed",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                Ok(existed)
+            }
+            "clear" => {
+                self.builder
+                    .build_call(self.karac_map_clear_fn, &[set_handle.into()], "")
+                    .unwrap();
+                Ok(i64_t.const_int(0, false).into())
+            }
+            _ => Err(format!("codegen: Set.{method} not yet implemented")),
         }
     }
 
@@ -8246,6 +8770,10 @@ impl<'ctx> Codegen<'ctx> {
                     if self.map_key_types.contains_key(name.as_str()) {
                         return self.compile_for_map_var(pattern, name, body);
                     }
+                    // Set iteration: for x in set { }
+                    if self.set_elem_types.contains_key(name.as_str()) {
+                        return self.compile_for_set_var(pattern, name, body);
+                    }
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
@@ -8695,6 +9223,117 @@ impl<'ctx> Codegen<'ctx> {
         Ok(i64_t.const_int(0, false).into())
     }
 
+    /// Compile `for x in s { ... }` for a `Set[T]` variable. Mirror of
+    /// `compile_for_map_var` — Set lowers to `Map[T, ()]` so the runtime
+    /// iterator is the same; the value out-slot is sized 0 (a single
+    /// shared `i8` alloca) and discarded since Set iteration produces only
+    /// the element. The element pattern is bound directly (no `(k, v)`
+    /// destructuring like Map's tuple-shaped iteration delivery).
+    fn compile_for_set_var(
+        &mut self,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        let set_handle = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "set.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let elem_ty = self
+            .set_elem_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        let iter_ptr = self
+            .builder
+            .build_call(self.karac_map_iter_new_fn, &[set_handle.into()], "set.iter")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let out_elem = self.create_entry_alloca(fn_val, "set.iter.elem", elem_ty);
+        // val_size = 0 in the runtime; the val out-slot is overwritten
+        // with zero bytes per iteration so a single `i8` is sufficient.
+        let dummy_val = self.create_entry_alloca(fn_val, "set.iter.dummy", i8_t.into());
+
+        let loop_bb = self.context.append_basic_block(fn_val, "set.for.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "set.for.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "set.for.exit");
+
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: loop_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        self.builder.position_at_end(loop_bb);
+        let has_next = self
+            .builder
+            .build_call(
+                self.karac_map_iter_next_fn,
+                &[iter_ptr.into(), out_elem.into(), dummy_val.into()],
+                "set.iter.next",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(has_next, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, out_elem, "set.elem")
+            .unwrap();
+        self.bind_pattern(pattern, elem_val)?;
+        // Re-derive collection side-tables for the bound element so
+        // `for x in s.union(t) { x.len() }` etc. dispatch correctly when
+        // the element type itself is a Vec/Slice/Map (currently a no-op
+        // for scalar Set elements; cheap insurance for the future).
+        if let PatternKind::Binding(elem_name) = &pattern.kind {
+            if let Some(elem_te) = self.set_elem_type_exprs.get(var_name).cloned() {
+                self.register_var_from_type_expr(elem_name, &elem_te);
+            }
+        }
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+        }
+
+        self.loop_stack.pop();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.karac_map_iter_free_fn, &[iter_ptr.into()], "")
+            .unwrap();
+
+        Ok(i64_t.const_int(0, false).into())
+    }
+
     fn compile_for_array_var(
         &mut self,
         pattern: &Pattern,
@@ -8953,6 +9592,26 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap();
                 if !nl.is_empty() {
                     let nl_str = self.builder.build_global_string_ptr("\n", "md.nl").unwrap();
+                    self.builder
+                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
+                        .unwrap();
+                }
+                return Ok(zero.into());
+            }
+            // Set[T]: side-table holds the element `TypeExpr`.
+            if self.set_elem_type_exprs.contains_key(var_name) {
+                let elem_te = self.set_elem_type_exprs[var_name].clone();
+                let slot = self
+                    .variables
+                    .get(var_name)
+                    .copied()
+                    .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
+                let display_fn = self.emit_set_display_fn(&elem_te);
+                self.builder
+                    .build_call(display_fn, &[slot.ptr.into()], "sd")
+                    .unwrap();
+                if !nl.is_empty() {
+                    let nl_str = self.builder.build_global_string_ptr("\n", "sd.nl").unwrap();
                     self.builder
                         .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
                         .unwrap();
@@ -10852,6 +11511,20 @@ fn slice_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
         TypeKind::MutSlice(inner) => Some((**inner).clone()),
         _ => None,
     }
+}
+
+/// Pull the element `TypeExpr` out of `Set[T]`.
+fn set_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+    if let TypeKind::Path(path) = &te.kind {
+        if path.segments.first().map(|s| s.as_str()) == Some("Set") {
+            if let Some(args) = &path.generic_args {
+                if let Some(GenericArg::Type(elem)) = args.first() {
+                    return Some(elem.clone());
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Pull the (key, value) `TypeExpr`s out of `Map[K, V]`.

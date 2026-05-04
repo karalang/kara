@@ -405,4 +405,48 @@ fn main() {
             "question_drains_scope_cleanup_on_none",
         );
     }
+
+    // ── Set[T]: scope-exit free ─────────────────────────────────────
+    // Set lowers to Map[T, ()] and shares the karac_map_free cleanup
+    // action. Verify the FreeMapHandle entry registered by
+    // compile_set_new_stmt fires on scope exit, and that the Set's
+    // backing buckets + heap-bearing String elements are released.
+
+    #[test]
+    fn asan_set_new_insert_scope_exit_free() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(1_i64);
+    s.insert(2_i64);
+    s.insert(3_i64);
+    println(s.len());
+}
+"#,
+            &["3"],
+            "set_new_insert_scope_exit_free",
+        );
+    }
+
+    #[test]
+    fn asan_set_string_scope_exit_free() {
+        // Set[String] keeps the bucket array on the heap and references the
+        // String literal's static buffer (cap = 0) by value-copy. The set
+        // free should release the bucket array; static String buffers must
+        // NOT be freed.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    s.insert("alice");
+    s.insert("bob");
+    s.insert("alice");
+    println(s.len());
+}
+"#,
+            &["2"],
+            "set_string_scope_exit_free",
+        );
+    }
 }

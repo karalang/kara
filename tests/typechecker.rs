@@ -2550,6 +2550,35 @@ fn test_repeat_literal_set_rejected() {
 }
 
 #[test]
+fn test_set_prefix_literal_infers_i64() {
+    // `Set[1_i64, 2_i64, 3_i64]` — element type unified from items.
+    typecheck_ok("fn main() { let s: Set[i64] = Set[1_i64, 2_i64, 3_i64]; }");
+}
+
+#[test]
+fn test_set_prefix_literal_infers_string() {
+    typecheck_ok(r#"fn main() { let s: Set[String] = Set["alice", "bob"]; }"#);
+}
+
+#[test]
+fn test_set_prefix_literal_mismatched_elements_rejected() {
+    // First item types T; subsequent items must be assignable to T.
+    let errors = typecheck_errors(
+        r#"fn main() { let s: Set[i64] = Set[1_i64, "not an int"]; }"#,
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected element-type mismatch diagnostic for heterogeneous Set literal, got no errors"
+    );
+}
+
+#[test]
+fn test_set_prefix_literal_empty_with_annotation() {
+    // Empty `Set[]` requires a type annotation to recover the element type.
+    typecheck_ok("fn main() { let s: Set[i64] = Set[]; }");
+}
+
+#[test]
 fn test_repeat_literal_count_must_be_integer() {
     // Non-integer count emits a clear diagnostic.
     let errors = typecheck_errors("fn main() { let v = [0; \"five\"]; }");
@@ -5543,4 +5572,113 @@ fn test_url_encode_returns_str() {
 #[test]
 fn test_url_decode_returns_result_str() {
     typecheck_ok(r#"fn f() -> Result[String, DecodeError] { Url.decode("hello%20world") }"#);
+}
+
+// ── Iterator: `iter()` / `into_iter()` / `next()` (wip-list2 subtask 1) ──
+
+#[test]
+fn test_iter_on_vec_then_next_returns_option_of_element() {
+    // Vec.iter().next() returns Option[T]; unwrap yields T.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter();
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_into_iter_on_vec_returns_same_iterator_type() {
+    // into_iter() and iter() both produce Iterator[T] at this layer; the
+    // borrow-vs-consume distinction is design.md-only.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.into_iter();
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_on_map_yields_kv_tuple() {
+    // Map[K, V].iter() yields (K, V) tuples per design.md § Iteration.
+    typecheck_ok(
+        "fn main() {
+             let m: Map[String, i64] = Map.new();
+             let mut it = m.iter();
+             let _pair: (String, i64) = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_on_set_yields_element() {
+    typecheck_ok(
+        "fn main() {
+             let s: Set[i64] = Set.new();
+             let mut it = s.iter();
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_on_sorted_set_yields_element() {
+    typecheck_ok(
+        "fn main() {
+             let s: SortedSet[i64] = SortedSet.new();
+             let mut it = s.iter();
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_on_array_literal_yields_element() {
+    // Array[T, N] is also iterable; .iter() returns Iterator[T].
+    typecheck_ok(
+        "fn main() {
+             let a: Array[i64, 3] = [1, 2, 3];
+             let mut it = a.iter();
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_with_extra_argument_rejected() {
+    // iter() / into_iter() are nullary; passing args is a hard error.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter(42);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("'iter' takes no arguments")),
+        "expected WrongNumberOfArgs for iter() with arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_next_with_extra_argument_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter();
+             let _n = it.next(99);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.next() takes no arguments")),
+        "expected WrongNumberOfArgs for next() with arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
 }

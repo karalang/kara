@@ -6414,8 +6414,35 @@ impl<'a> TypeChecker<'a> {
                             }
                         }
                     }
+                    "Set" => {
+                        // `Set[v1, v2, ...]` — element type is the unified
+                        // type of items. Empty `Set[]` falls to `Type::Error`
+                        // for the element; binding-site annotations
+                        // (`let s: Set[i64] = Set[]`) recover the type via
+                        // the assignment check downstream (mirrors
+                        // `design.md` line 1462's empty-collection rule).
+                        if items.is_empty() {
+                            Type::Named {
+                                name: "Set".to_string(),
+                                args: vec![Type::Error],
+                            }
+                        } else {
+                            let first_ty = self.infer_expr(&items[0]);
+                            for item in &items[1..] {
+                                let ty = self.infer_expr(item);
+                                self.check_assignable(&first_ty, &ty, item.span.clone());
+                            }
+                            Type::Named {
+                                name: "Set".to_string(),
+                                args: vec![first_ty],
+                            }
+                        }
+                    }
                     other => {
-                        // Set, Map, etc. — infer all items, return Named type
+                        // Map and other prefix-collection forms — infer all
+                        // items, return Named type. Map's `Map[k: v, ...]`
+                        // form goes through `ExprKind::MapLiteral` separately;
+                        // this arm catches future prefix-literal types.
                         let elem_ty = if items.is_empty() {
                             Type::Error
                         } else {
