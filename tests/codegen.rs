@@ -493,9 +493,7 @@ fn main() {
         // the test program) — surface them loudly. Link and exec failures
         // stay as soft-skip because they can fire in environments that
         // lack libkarac_runtime.a or a working linker.
-        if let Err(e) =
-            compile_to_object_with_options(&parsed.program, &obj_path, None, filename)
-        {
+        if let Err(e) = compile_to_object_with_options(&parsed.program, &obj_path, None, filename) {
             panic!("codegen failed for test program: {}", e);
         }
         link_executable(&obj_path, &exe_path).ok()?;
@@ -4468,6 +4466,206 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "9"); // 2+3+4
+        }
+    }
+
+    // ── Display for collections (recursive codegen) ─────────────────
+    //
+    // Subtask 8 of the canonical Display bullet (phase-7-codegen.md §
+    // Phase 7.2). Each test exercises `compile_print`'s collection
+    // dispatch landed in subtask 7 against the per-type Display fns
+    // emitted by subtasks 1-6. Format expectations match the
+    // interpreter's `Value::Display` impl at `src/interpreter.rs:206`.
+    //
+    // Map iteration order is unspecified per `design.md` line 1588 — the
+    // codegen runtime walks the bucket array directly, so multi-entry
+    // map tests would be order-dependent. The map tests below stick to
+    // single-entry maps; multi-entry coverage is left to interpreter
+    // tests where the iteration is over an ordered Vec.
+
+    #[test]
+    fn test_e2e_display_vec_i64() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    println(v);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[1, 2, 3]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_vec_empty() {
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    println(v);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_vec_string() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("hi");
+    v.push("bye");
+    println(v);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // Interpreter's `Display for Value::String` is unquoted, so
+            // codegen prints unquoted too — matches `src/interpreter.rs:213`.
+            assert_eq!(out.trim(), "[hi, bye]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_vec_nested() {
+        // Vec[Vec[i64]] — exercises recursive composition. The outer Vec
+        // Display fn walks elements; each element is itself a Vec struct,
+        // and the dispatcher routes the inner element's Display through
+        // emit_vec_display_fn_te(i64).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3);
+    let mut outer: Vec[Vec[i64]] = Vec.new();
+    outer.push(a);
+    outer.push(b);
+    println(outer);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[[1, 2], [3]]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_map_string_i64_singleton() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("k", 42_i64);
+    println(m);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{k: 42}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_map_i64_i64_singleton() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(7_i64, 99_i64);
+    println(m);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{7: 99}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_map_empty() {
+        let out = run_program(
+            r#"
+fn main() {
+    let m: Map[i64, i64] = Map.new();
+    println(m);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_vec_tuple_i64_i64() {
+        // Vec[(i64, i64)] — exercises tuple Display recursion via the
+        // Vec body's element dispatcher. Single-entry map keeps the
+        // expected output deterministic.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 10_i64);
+    let es: Vec[(i64, i64)] = m.entries();
+    println(es);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[(1, 10)]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_vec_tuple_i64_string() {
+        // Vec[(i64, String)] — heap-bearing field on the value side of a
+        // tuple element. The tuple Display fn GEPs to the String slot at
+        // offset 8 (after the i64 field) and recurses into String Display.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, String] = Map.new();
+    m.insert(1_i64, "hi");
+    let es: Vec[(i64, String)] = m.entries();
+    println(es);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[(1, hi)]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_display_map_with_vec_value_singleton() {
+        // Map[String, Vec[i64]] — the Map body recurses into Vec Display
+        // for the value side. Single-entry map keeps output deterministic.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    m.insert("k", v);
+    println(m);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{k: [1, 2]}");
         }
     }
 }

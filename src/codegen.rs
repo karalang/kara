@@ -5246,31 +5246,43 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap();
             }
             other if other.starts_with("Vec_") => {
-                let elem_name = other[4..].to_string();
-                let elem_ty = self
-                    .resolve_ty_for_display_name(&elem_name)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "emit_display_fn_for_type: Vec elem type '{elem_name}' not supported"
-                        )
-                    });
-                self.emit_vec_display_body(display_fn, val_ptr, &elem_name, elem_ty);
+                // Vec[T]'s element TypeExpr can't be unambiguously recovered
+                // from the mangled cache name once nested compound shapes
+                // (e.g. `Vec_tuple_i64_String`) are in play — string-splitting
+                // on `_` is brittle. Callers should hold the element
+                // `TypeExpr` and dispatch via `emit_display_fn_for_type_expr`,
+                // which routes Vec to `emit_vec_display_fn_te(elem_te)`.
+                panic!(
+                    "emit_display_fn_for_type: '{other}' must be emitted via \
+                     emit_vec_display_fn_te(elem_te) (or emit_display_fn_for_type_expr)"
+                );
             }
             other if other.starts_with("Map_") => {
                 // Map types have two type parameters and so cannot recover
                 // (key_ty, val_ty) by string-splitting the cache key. Callers
-                // that already know K and V should go through the typed entry
-                // point `emit_map_display_fn` instead — that path constructs
-                // the same canonical name and shares the cache.
+                // that already hold K and V `TypeExpr`s should dispatch via
+                // `emit_display_fn_for_type_expr`, which routes Map to
+                // `emit_map_display_fn(key_te, val_te)`.
                 panic!(
                     "emit_display_fn_for_type: '{other}' must be emitted via \
-                     emit_map_display_fn(key_name, key_ty, val_name, val_ty)"
+                     emit_map_display_fn(key_te, val_te) (or emit_display_fn_for_type_expr)"
+                );
+            }
+            other if other.starts_with("tuple_") => {
+                // n-tuples cannot recover their per-field TypeExprs from the
+                // mangled name alone. Callers that already hold the field
+                // `TypeExpr`s should dispatch via
+                // `emit_display_fn_for_type_expr`, which routes Tuple to
+                // `emit_tuple_display_fn(elems)`.
+                panic!(
+                    "emit_display_fn_for_type: '{other}' must be emitted via \
+                     emit_tuple_display_fn(elems) (or emit_display_fn_for_type_expr)"
                 );
             }
             other => {
-                // Set_*, Tuple_*, user structs not yet supported.
-                // Subtasks 5-6 of the Display canonical bullet
-                // (phase-7-codegen.md § Phase 7.2) extend this match.
+                // Set_*, user structs not yet supported.
+                // Subtask 5 of the Display canonical bullet
+                // (phase-7-codegen.md § Phase 7.2) extends this match for Set.
                 panic!("emit_display_fn_for_type: type_name '{other}' not yet supported");
             }
         }
@@ -5284,58 +5296,35 @@ impl<'ctx> Codegen<'ctx> {
         display_fn
     }
 
-    /// Resolve a Display `type_name` string back to its `BasicTypeEnum`. Used
-    /// when recursing from a compound Display fn (Vec/Map/Set/Tuple) into the
-    /// element/key/value/field type — the recursive `emit_display_fn_for_type`
-    /// call needs both the canonical `type_name` AND the LLVM type to pass.
-    ///
-    /// Covers the same primitives the primitive arms of
-    /// `emit_display_fn_for_type` handle, plus `Vec_*` (always 24-byte struct)
-    /// and `Map_*` (always opaque-handle slot, i.e. a `ptr` to a `ptr`).
-    /// `Set_*` / `Tuple_*` cases land alongside subtasks 5-6.
-    #[allow(dead_code)]
-    fn resolve_ty_for_display_name(&self, name: &str) -> Option<BasicTypeEnum<'ctx>> {
-        match name {
-            "i8" | "u8" => Some(self.context.i8_type().into()),
-            "i16" | "u16" => Some(self.context.i16_type().into()),
-            "i32" | "u32" | "char" => Some(self.context.i32_type().into()),
-            "i64" | "u64" | "isize" | "usize" => Some(self.context.i64_type().into()),
-            "f32" => Some(self.context.f32_type().into()),
-            "f64" => Some(self.context.f64_type().into()),
-            "bool" => Some(self.context.bool_type().into()),
-            "String" | "str" => Some(self.vec_struct_type().into()),
-            n if n.starts_with("Vec_") => Some(self.vec_struct_type().into()),
-            n if n.starts_with("Map_") => Some(
-                self.context
-                    .ptr_type(AddressSpace::default())
-                    .into(),
-            ),
-            _ => None,
-        }
-    }
-
     /// Emit the body of a `Vec[T]` Display function. Reads `data`/`len` from
     /// the 24-byte Vec struct at `val_ptr`, prints `[`, walks elements with
     /// `, ` separators recursing into the element Display fn, prints `]`.
     ///
-    /// `elem_name` / `elem_ty` describe the element type and let us recurse
-    /// into `emit_display_fn_for_type(elem_name, elem_ty)` — this is what
-    /// makes nested cases work (`Vec[Vec[i64]]` → outer dispatches to inner).
+    /// `elem_te` describes the element type. Recursion into the per-element
+    /// Display fn goes through the TypeExpr-aware dispatcher
+    /// (`emit_display_fn_for_type_expr`) so compound elements (`Vec[Vec[T]]`,
+    /// `Vec[(i64, String)]`, `Vec[Map[K, V]]`) compose correctly without the
+    /// by-name path having to recover `TypeExpr`s from a mangled string.
     ///
     /// Caller is expected to have positioned the builder at the entry block
     /// of `display_fn` and to emit the trailing `ret void` after this returns.
-    #[allow(dead_code)]
     fn emit_vec_display_body(
         &mut self,
         display_fn: FunctionValue<'ctx>,
         val_ptr: PointerValue<'ctx>,
-        elem_name: &str,
-        elem_ty: BasicTypeEnum<'ctx>,
+        elem_te: &TypeExpr,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
         let vec_ty = self.vec_struct_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+
+        // Materialize (or fetch) the element Display fn first — the recursive
+        // emit may switch the builder's insert block, so do it before the
+        // remaining body emission positions us at `display_fn`'s entry. The
+        // dispatcher saves/restores so the caller's position is preserved.
+        let elem_disp = self.emit_display_fn_for_type_expr(elem_te);
 
         // Print "[".
         let lb = self.builder.build_global_string_ptr("[", "vd.lb").unwrap();
@@ -5374,9 +5363,6 @@ impl<'ctx> Codegen<'ctx> {
                 .build_int_z_extend(raw_size, i64_t, "esz64")
                 .unwrap()
         };
-
-        // Materialize (or fetch) the element Display fn — recursive call.
-        let elem_disp = self.emit_display_fn_for_type(elem_name, elem_ty);
 
         // Loop: i in 0..len, with ", " separator before every elem after first.
         let pre_bb = self.builder.get_insert_block().unwrap();
@@ -5451,30 +5437,23 @@ impl<'ctx> Codegen<'ctx> {
     /// distinct from `emit_display_fn_for_type` because Map's two type
     /// parameters can't be recovered from a single mangled name string.
     ///
-    /// The emitted function is named `karac_display_Map_<key_name>_<val_name>`
-    /// and is shared with the generic Display cache under the same key, so a
-    /// later `emit_display_fn_for_type("Map_K_V", ...)` cache hit returns the
-    /// same function (the catch-all `Map_*` arm panics on cache miss to steer
-    /// callers here).
+    /// The emitted function is named `karac_display_Map_<key>_<val>` (deeply
+    /// mangled via `display_mangle_te`) and is shared with the generic Display
+    /// cache under the same key, so a later `emit_display_fn_for_type` cache
+    /// hit returns the same function (the catch-all `Map_*` arm panics on
+    /// cache miss to steer callers here).
     ///
     /// Calling convention: `void karac_display_Map_K_V(ptr slot)` where `slot`
     /// is the address of a slot holding the opaque map handle (matches the
-    /// shape produced by `compile_map_new_stmt` — see `src/codegen.rs:5395`).
-    /// Body loads the handle, drives `karac_map_iter_*` (mirroring
-    /// `compile_for_map_var` at `src/codegen.rs:8038`), per-iteration recurses
-    /// into `emit_display_fn_for_type` for K and V, and frees the iterator
-    /// before returning. Iteration order is unspecified per `design.md` line
-    /// 1588 — tests must not assert order.
-    ///
-    /// `dead_code` retained until subtask 7 wires `compile_print` to dispatch.
-    #[allow(dead_code)]
-    fn emit_map_display_fn(
-        &mut self,
-        key_name: &str,
-        key_ty: BasicTypeEnum<'ctx>,
-        val_name: &str,
-        val_ty: BasicTypeEnum<'ctx>,
-    ) -> FunctionValue<'ctx> {
+    /// shape produced by `compile_map_new_stmt`). Body loads the handle,
+    /// drives `karac_map_iter_*` (mirroring `compile_for_map_var`),
+    /// per-iteration recurses into `emit_display_fn_for_type_expr` for K and
+    /// V (so `Map[(i64, String), Vec[bool]]` etc. compose correctly), and
+    /// frees the iterator before returning. Iteration order is unspecified
+    /// per `design.md` line 1588 — tests must not assert order.
+    fn emit_map_display_fn(&mut self, key_te: &TypeExpr, val_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let key_name = Self::display_mangle_te(key_te);
+        let val_name = Self::display_mangle_te(val_te);
         let type_name = format!("Map_{key_name}_{val_name}");
         if let Some(&f) = self.display_fn_cache.get(&type_name) {
             return f;
@@ -5490,16 +5469,16 @@ impl<'ctx> Codegen<'ctx> {
         let saved_bb = self.builder.get_insert_block();
 
         let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
-        let display_fn =
-            self.module
-                .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
         self.display_fn_cache.insert(type_name, display_fn);
 
         let entry_bb = self.context.append_basic_block(display_fn, "entry");
         self.builder.position_at_end(entry_bb);
         let slot_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
 
-        self.emit_map_display_body(display_fn, slot_ptr, key_name, key_ty, val_name, val_ty);
+        self.emit_map_display_body(display_fn, slot_ptr, key_te, val_te);
 
         self.builder.build_return(None).unwrap();
 
@@ -5512,28 +5491,27 @@ impl<'ctx> Codegen<'ctx> {
 
     /// Emit the body of a `Map[K, V]` Display function. Loads the map handle
     /// from `slot_ptr`, prints `"{"`, drives `karac_map_iter_new` /
-    /// `karac_map_iter_next` to walk pairs, per-iteration recurses into
-    /// `emit_display_fn_for_type(K)` and `emit_display_fn_for_type(V)` with
-    /// `": "` between key/value and `", "` between pairs, frees the iterator
-    /// in the exit block, and prints `"}"`.
+    /// `karac_map_iter_next` to walk pairs, per-iteration recurses via
+    /// `emit_display_fn_for_type_expr` for K and V with `": "` between
+    /// key/value and `", "` between pairs, frees the iterator in the exit
+    /// block, and prints `"}"`.
     ///
     /// `is_first` flag is tracked via an i1 alloca because the iterator-driven
     /// loop has no scalar counter (unlike Vec where `i == 0` works).
     ///
     /// Caller positions the builder at `display_fn`'s entry block and is
     /// responsible for emitting the trailing `ret void`.
-    #[allow(dead_code)]
     fn emit_map_display_body(
         &mut self,
         display_fn: FunctionValue<'ctx>,
         slot_ptr: PointerValue<'ctx>,
-        key_name: &str,
-        key_ty: BasicTypeEnum<'ctx>,
-        val_name: &str,
-        val_ty: BasicTypeEnum<'ctx>,
+        key_te: &TypeExpr,
+        val_te: &TypeExpr,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let bool_t = self.context.bool_type();
+        let key_ty = self.llvm_type_for_type_expr(key_te);
+        let val_ty = self.llvm_type_for_type_expr(val_te);
 
         // Print "{".
         let lb = self.builder.build_global_string_ptr("{", "md.lb").unwrap();
@@ -5570,8 +5548,8 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap();
 
         // Materialize (or fetch) the per-key and per-value Display fns.
-        let key_disp = self.emit_display_fn_for_type(key_name, key_ty);
-        let val_disp = self.emit_display_fn_for_type(val_name, val_ty);
+        let key_disp = self.emit_display_fn_for_type_expr(key_te);
+        let val_disp = self.emit_display_fn_for_type_expr(val_te);
 
         let hdr_bb = self.context.append_basic_block(display_fn, "map.hdr");
         let bdy_bb = self.context.append_basic_block(display_fn, "map.bdy");
@@ -5661,6 +5639,250 @@ impl<'ctx> Codegen<'ctx> {
         self.builder
             .build_call(self.printf_fn, &[rb.as_pointer_value().into()], "p")
             .unwrap();
+    }
+
+    /// Deeply mangled type name suitable for Display cache keys. Unlike
+    /// `mangled_type_name` (which is shallow on `Path` types — used for
+    /// hash/eq, where `Map[Vec[T], V]` is unreachable so deep mangling is
+    /// unnecessary), this walks generic args so `Vec[i64]` → `Vec_i64`,
+    /// `Map[String, i64]` → `Map_String_i64`, and nested shapes compose.
+    /// Tuples use the same `tuple_T1_T2_...` form `mangled_type_name`
+    /// produces — the recursive shapes match.
+    fn display_mangle_te(te: &TypeExpr) -> String {
+        match &te.kind {
+            TypeKind::Tuple(elems) if elems.is_empty() => "unit".to_string(),
+            TypeKind::Tuple(elems) => {
+                let parts: Vec<String> = elems.iter().map(Self::display_mangle_te).collect();
+                format!("tuple_{}", parts.join("_"))
+            }
+            TypeKind::Path(p) => {
+                let head = p
+                    .segments
+                    .first()
+                    .cloned()
+                    .unwrap_or_else(|| "unknown".to_string());
+                if let Some(args) = p.generic_args.as_ref() {
+                    let parts: Vec<String> = args
+                        .iter()
+                        .filter_map(|a| match a {
+                            GenericArg::Type(t) => Some(Self::display_mangle_te(t)),
+                            _ => None,
+                        })
+                        .collect();
+                    if !parts.is_empty() {
+                        return format!("{head}_{}", parts.join("_"));
+                    }
+                }
+                head
+            }
+            _ => "unknown".to_string(),
+        }
+    }
+
+    /// TypeExpr-aware Display dispatcher. Canonical entry point for any
+    /// caller that holds a source-level `TypeExpr`: routes by shape to the
+    /// typed Vec / Map / Tuple entry points, and falls through to the
+    /// by-name `emit_display_fn_for_type` for primitives. Mirror of
+    /// `emit_hash_fn_for_type_expr` / `emit_eq_fn_for_type_expr`.
+    ///
+    /// Cache-key check up front so the dispatcher itself is cheap on repeat
+    /// calls — every typed entry point (`emit_*_display_fn_te` /
+    /// `emit_tuple_display_fn`) also re-checks before emitting, but doing it
+    /// here avoids the per-shape branching cost when the function already
+    /// exists.
+    fn emit_display_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(te);
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_display_fn(elems),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str);
+                if head == Some("Vec") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self.emit_vec_display_fn_te(&elem_te);
+                    }
+                }
+                if head == Some("Map") {
+                    let args = p.generic_args.as_ref();
+                    let k_te = args.and_then(|a| a.first()).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    let v_te = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    if let (Some(k), Some(v)) = (k_te, v_te) {
+                        return self.emit_map_display_fn(&k, &v);
+                    }
+                }
+                // Primitive (or unsupported path) — fall through to by-name.
+                let llvm_ty = self.llvm_type_for_type_expr(te);
+                self.emit_display_fn_for_type(&type_name, llvm_ty)
+            }
+            _ => {
+                let llvm_ty = self.llvm_type_for_type_expr(te);
+                self.emit_display_fn_for_type(&type_name, llvm_ty)
+            }
+        }
+    }
+
+    /// Emit (or reuse) a typed Display function for `Vec[T]`. The function
+    /// is named `karac_display_Vec_<elem_mangled>` and shares the generic
+    /// `display_fn_cache` keyed on the same mangled name; the catch-all
+    /// `Vec_*` arm in `emit_display_fn_for_type` panics on cache miss to
+    /// steer callers here. Body delegates to `emit_vec_display_body` which
+    /// recurses via `emit_display_fn_for_type_expr` for the element type.
+    fn emit_vec_display_fn_te(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("Vec_{elem_name}");
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        self.emit_vec_display_body(display_fn, val_ptr, elem_te);
+
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        display_fn
+    }
+
+    /// Emit (or reuse) a typed Display function for an n-tuple
+    /// `(T1, T2, …, Tn)`. Typed entry point — distinct from the by-name
+    /// `emit_display_fn_for_type` because per-field `TypeExpr`s can't be
+    /// recovered from a single mangled name string once nested compound
+    /// shapes (`((i64, i64), String)`) are in play. Mirror of the
+    /// `emit_map_display_fn` pattern.
+    ///
+    /// Cache key (and function name suffix) is the deeply-mangled name —
+    /// `tuple_T1_T2_..._Tn`. Shares the generic `display_fn_cache` so a
+    /// later `emit_display_fn_for_type` cache hit on the same name returns
+    /// this function (the catch-all `tuple_*` arm panics on cache miss to
+    /// steer callers here).
+    ///
+    /// Calling convention: `void karac_display_tuple_T1_T2_..._Tn(ptr p)`
+    /// where `p` points to the LLVM tuple struct value (one alloca'd or
+    /// in-struct field address). Body reads each field via `getelementptr`
+    /// on the tuple's LLVM struct type, recurses via
+    /// `emit_display_fn_for_type_expr` for each field, and prints
+    /// `(field0, field1, ...)` with `, ` between fields. Format matches
+    /// the interpreter's tuple Display at `src/interpreter.rs:215`.
+    fn emit_tuple_display_fn(&mut self, elems: &[TypeExpr]) -> FunctionValue<'ctx> {
+        // Cache lookup. Compute the canonical name first so module + cache
+        // checks share one key.
+        let parts: Vec<String> = elems.iter().map(Self::display_mangle_te).collect();
+        let type_name = format!("tuple_{}", parts.join("_"));
+        let fn_name = format!("karac_display_{type_name}");
+        if let Some(&f) = self.display_fn_cache.get(&type_name) {
+            return f;
+        }
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.display_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let elems_owned: Vec<TypeExpr> = elems.to_vec();
+
+        // Materialize per-field Display fns first. Each recursive emit
+        // saves and restores the builder position, so calling them before
+        // we open this function's body is safe — the alternative (calling
+        // mid-emission) would require careful position management.
+        let field_disps: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_display_fn_for_type_expr(e))
+            .collect();
+
+        // Compute the tuple's LLVM struct type. Must match exactly what
+        // `llvm_type_for_type_expr(Tuple(...))` produces so callers can pass
+        // their tuple value's address directly to this function.
+        let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.llvm_type_for_type_expr(e))
+            .collect();
+        let tuple_ty = self.context.struct_type(&field_tys, false);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+        let display_fn_ty = self.context.void_type().fn_type(&[ptr_ty.into()], false);
+        let display_fn = self
+            .module
+            .add_function(&fn_name, display_fn_ty, Some(Linkage::Internal));
+        self.display_fn_cache.insert(type_name, display_fn);
+
+        let entry_bb = self.context.append_basic_block(display_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let val_ptr = display_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Print "(".
+        let lp = self.builder.build_global_string_ptr("(", "td.lp").unwrap();
+        self.builder
+            .build_call(self.printf_fn, &[lp.as_pointer_value().into()], "p")
+            .unwrap();
+
+        for (i, fd) in field_disps.iter().enumerate() {
+            if i > 0 {
+                let sep = self
+                    .builder
+                    .build_global_string_ptr(", ", "td.sep")
+                    .unwrap();
+                self.builder
+                    .build_call(self.printf_fn, &[sep.as_pointer_value().into()], "p")
+                    .unwrap();
+            }
+            let field_ptr = self
+                .builder
+                .build_struct_gep(tuple_ty, val_ptr, i as u32, &format!("t.f{i}.p"))
+                .unwrap();
+            self.builder
+                .build_call(*fd, &[field_ptr.into()], &format!("t.f{i}.d"))
+                .unwrap();
+        }
+
+        // Print ")".
+        let rp = self.builder.build_global_string_ptr(")", "td.rp").unwrap();
+        self.builder
+            .build_call(self.printf_fn, &[rp.as_pointer_value().into()], "p")
+            .unwrap();
+
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        display_fn
     }
 
     /// Emit `karac_map_new`, alloca a ptr slot to hold the opaque handle, and
@@ -8676,8 +8898,70 @@ impl<'ctx> Codegen<'ctx> {
             return Ok(zero.into());
         }
 
-        let val = self.compile_expr(&args[0].value)?;
         let nl = if name == "println" { "\n" } else { "" };
+
+        // Collection dispatch: when the print arg is a bare identifier that
+        // we've registered as a Vec or Map variable, emit a call to the
+        // per-type Display fn against the variable's alloca. This is the
+        // primary path for `println(v)` on collections; it produces the same
+        // formatted output the interpreter prints. Bare Vec/Map values appear
+        // as struct/pointer values in the legacy `is_struct_value` /
+        // `is_pointer_value` arms below — that path is wrong for collections
+        // (Vec gets treated as String; Map gets printed as a raw address) —
+        // but those arms are still reachable for non-identifier expressions
+        // (function returns, fresh literals) where the source-level type is
+        // not in the side-tables, so we leave them in place as fallbacks.
+        if let ExprKind::Identifier(var_name) = &args[0].value.kind {
+            // Vec[T]: side-table both `vec_elem_types` and `var_elem_type_exprs`
+            // are set (the latter is what distinguishes a Vec variable from a
+            // String variable, which only sets `vec_elem_types`).
+            if self.vec_elem_types.contains_key(var_name)
+                && self.var_elem_type_exprs.contains_key(var_name)
+            {
+                let elem_te = self.var_elem_type_exprs[var_name].clone();
+                let slot = self
+                    .variables
+                    .get(var_name)
+                    .copied()
+                    .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
+                let display_fn = self.emit_vec_display_fn_te(&elem_te);
+                self.builder
+                    .build_call(display_fn, &[slot.ptr.into()], "vd")
+                    .unwrap();
+                if !nl.is_empty() {
+                    let nl_str = self.builder.build_global_string_ptr("\n", "vd.nl").unwrap();
+                    self.builder
+                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
+                        .unwrap();
+                }
+                return Ok(zero.into());
+            }
+            // Map[K, V]: side-tables hold both K and V `TypeExpr`s.
+            if self.map_key_type_exprs.contains_key(var_name)
+                && self.var_elem_type_exprs.contains_key(var_name)
+            {
+                let k_te = self.map_key_type_exprs[var_name].clone();
+                let v_te = self.var_elem_type_exprs[var_name].clone();
+                let slot = self
+                    .variables
+                    .get(var_name)
+                    .copied()
+                    .ok_or_else(|| format!("compile_print: '{var_name}' not bound"))?;
+                let display_fn = self.emit_map_display_fn(&k_te, &v_te);
+                self.builder
+                    .build_call(display_fn, &[slot.ptr.into()], "md")
+                    .unwrap();
+                if !nl.is_empty() {
+                    let nl_str = self.builder.build_global_string_ptr("\n", "md.nl").unwrap();
+                    self.builder
+                        .build_call(self.printf_fn, &[nl_str.as_pointer_value().into()], "p")
+                        .unwrap();
+                }
+                return Ok(zero.into());
+            }
+        }
+
+        let val = self.compile_expr(&args[0].value)?;
 
         if val.is_int_value() {
             let bits = val.into_int_value().get_type().get_bit_width();
@@ -9251,8 +9535,7 @@ impl<'ctx> Codegen<'ctx> {
                                     .build_insert_value(undef, iv, 0, "pat.struct")
                                     .unwrap()
                                     .into_struct_value();
-                                let alloca =
-                                    self.create_entry_alloca(fn_val, name, st.into());
+                                let alloca = self.create_entry_alloca(fn_val, name, st.into());
                                 self.builder.build_store(alloca, struct_val).unwrap();
                                 self.variables.insert(
                                     name.clone(),
