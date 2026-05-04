@@ -6,6 +6,13 @@ fn tokens_only(source: &str) -> Vec<Token> {
     tokenize(source).into_iter().map(|st| st.token).collect()
 }
 
+fn ident(name: &str) -> Token {
+    Token::Identifier {
+        name: name.to_string(),
+        raw: false,
+    }
+}
+
 #[test]
 fn test_basic_bindings() {
     let source = r#"
@@ -17,18 +24,18 @@ fn test_basic_bindings() {
     let tokens = tokens_only(source);
     let expected = vec![
         Token::Let,
-        Token::Identifier("x".to_string()),
+        ident("x"),
         Token::Equal,
         Token::Integer(5, None),
         Token::Semicolon,
         Token::Let,
         Token::Mut,
-        Token::Identifier("y".to_string()),
+        ident("y"),
         Token::Equal,
         Token::Float(10.5, None),
         Token::Semicolon,
         Token::Let,
-        Token::Identifier("z".to_string()),
+        ident("z"),
         Token::Equal,
         Token::StringLiteral("hello world".to_string()),
         Token::Semicolon,
@@ -49,15 +56,15 @@ fn test_struct_definition() {
     let tokens = tokens_only(source);
     let expected = vec![
         Token::Struct,
-        Token::Identifier("Entity".to_string()),
+        ident("Entity"),
         Token::LeftBrace,
-        Token::Identifier("id".to_string()),
+        ident("id"),
         Token::Colon,
-        Token::Identifier("u64".to_string()),
+        ident("u64"),
         Token::Comma,
-        Token::Identifier("name".to_string()),
+        ident("name"),
         Token::Colon,
-        Token::Identifier("String".to_string()),
+        ident("String"),
         Token::Comma,
         Token::RightBrace,
         Token::EOF,
@@ -77,23 +84,23 @@ fn test_function_with_effects() {
     let expected = vec![
         Token::Pub,
         Token::Fn,
-        Token::Identifier("save_user".to_string()),
+        ident("save_user"),
         Token::LeftParen,
-        Token::Identifier("user".to_string()),
+        ident("user"),
         Token::Colon,
-        Token::Identifier("User".to_string()),
+        ident("User"),
         Token::RightParen,
         Token::Arrow,
-        Token::Identifier("Result".to_string()),
+        ident("Result"),
         Token::LessThan,
         Token::LeftParen,
         Token::RightParen,
         Token::Comma,
-        Token::Identifier("Error".to_string()),
+        ident("Error"),
         Token::GreaterThan,
         Token::Writes,
         Token::LeftParen,
-        Token::Identifier("UserDB".to_string()),
+        ident("UserDB"),
         Token::RightParen,
         Token::LeftBrace,
         Token::RightBrace,
@@ -119,7 +126,7 @@ fn test_enum_and_match() {
     let tokens = tokens_only(source);
     // Just verify key tokens are present
     assert_eq!(tokens[0], Token::Enum);
-    assert_eq!(tokens[1], Token::Identifier("Shape".to_string()));
+    assert_eq!(tokens[1], ident("Shape"));
     assert!(tokens.contains(&Token::Match));
     assert!(tokens.contains(&Token::FatArrow));
 }
@@ -305,7 +312,7 @@ fn test_block_comments() {
     let tokens = tokens_only(source);
     let expected = vec![
         Token::Let,
-        Token::Identifier("x".to_string()),
+        ident("x"),
         Token::Equal,
         Token::Integer(5, None),
         Token::Semicolon,
@@ -320,7 +327,7 @@ fn test_nested_block_comments() {
     let tokens = tokens_only(source);
     let expected = vec![
         Token::Let,
-        Token::Identifier("x".to_string()),
+        ident("x"),
         Token::Equal,
         Token::Integer(5, None),
         Token::Semicolon,
@@ -363,7 +370,7 @@ fn test_attributes() {
     let tokens = tokens_only(source);
     assert_eq!(tokens[0], Token::Pound);
     assert_eq!(tokens[1], Token::LeftBracket);
-    assert_eq!(tokens[2], Token::Identifier("no_rc".to_string()));
+    assert_eq!(tokens[2], ident("no_rc"));
     assert_eq!(tokens[3], Token::RightBracket);
 }
 
@@ -388,9 +395,9 @@ fn test_type_keyword() {
     let tokens = tokens_only(source);
     let expected = vec![
         Token::Type,
-        Token::Identifier("UserId".to_string()),
+        ident("UserId"),
         Token::Equal,
-        Token::Identifier("u64".to_string()),
+        ident("u64"),
         Token::Semicolon,
         Token::EOF,
     ];
@@ -492,7 +499,7 @@ fn test_char_literal_in_binding() {
     let tokens = tokens_only("let c = 'x';");
     let expected = vec![
         Token::Let,
-        Token::Identifier("c".to_string()),
+        ident("c"),
         Token::Equal,
         Token::CharLiteral('x'),
         Token::Semicolon,
@@ -799,7 +806,7 @@ fn test_suffix_not_confused_with_identifier() {
     // "42i" should not match any suffix — i is not a valid suffix
     let tokens = tokens_only("42 i32_var");
     assert_eq!(tokens[0], Token::Integer(42, None));
-    assert_eq!(tokens[1], Token::Identifier("i32_var".to_string()));
+    assert_eq!(tokens[1], ident("i32_var"));
 }
 
 // ── Float literal exponent notation ─────────────────────────────
@@ -1021,4 +1028,144 @@ fn test_integer_stays_integer_without_exponent() {
 fn test_float_exponent_zero() {
     let tokens = tokens_only("0e0");
     assert_eq!(tokens[0], Token::Float(0.0, None));
+}
+
+// ── Raw-identifier escape r#NAME ────────────────────────────────
+
+fn raw_ident(name: &str) -> Token {
+    Token::Identifier {
+        name: name.to_string(),
+        raw: true,
+    }
+}
+
+#[test]
+fn test_raw_ident_basic() {
+    // `async` is reserved-for-future-use; `r#async` lexes through as a plain
+    // identifier with raw=true, bypassing the keyword check.
+    let tokens = tokens_only("r#async");
+    assert_eq!(tokens[0], raw_ident("async"));
+    assert_eq!(tokens[1], Token::EOF);
+}
+
+#[test]
+fn test_raw_ident_bypasses_normal_keyword() {
+    // `fn` is a real keyword; `r#fn` produces a plain identifier named "fn".
+    let tokens = tokens_only("r#fn");
+    assert_eq!(tokens[0], raw_ident("fn"));
+}
+
+#[test]
+fn test_raw_ident_value_class_preserved() {
+    // The case class is determined by the identifier portion *after* `r#`.
+    // `r#async` → lowercase first letter (Value-class shape).
+    let tokens = tokens_only("r#async r#Async");
+    assert_eq!(tokens[0], raw_ident("async"));
+    assert_eq!(tokens[1], raw_ident("Async"));
+}
+
+#[test]
+fn test_raw_ident_in_let_binding() {
+    let tokens = tokens_only("let r#async = 1;");
+    assert_eq!(tokens[0], Token::Let);
+    assert_eq!(tokens[1], raw_ident("async"));
+    assert_eq!(tokens[2], Token::Equal);
+    assert_eq!(tokens[3], Token::Integer(1, None));
+    assert_eq!(tokens[4], Token::Semicolon);
+}
+
+#[test]
+fn test_raw_ident_in_field_access() {
+    // `obj.r#await` — field access; `await` is a reserved-future word, raw lets
+    // it appear as a field name.
+    let tokens = tokens_only("obj.r#await");
+    assert_eq!(tokens[0], ident("obj"));
+    assert_eq!(tokens[1], Token::Dot);
+    assert_eq!(tokens[2], raw_ident("await"));
+}
+
+#[test]
+fn test_raw_ident_path_segment() {
+    // Each path segment may independently carry r#.
+    let tokens = tokens_only("std.r#async_io");
+    assert_eq!(tokens[0], ident("std"));
+    assert_eq!(tokens[1], Token::Dot);
+    assert_eq!(tokens[2], raw_ident("async_io"));
+}
+
+#[test]
+fn test_raw_ident_in_generic_arg() {
+    let tokens = tokens_only("Foo[r#async]");
+    assert_eq!(tokens[0], ident("Foo"));
+    assert_eq!(tokens[1], Token::LeftBracket);
+    assert_eq!(tokens[2], raw_ident("async"));
+    assert_eq!(tokens[3], Token::RightBracket);
+}
+
+#[test]
+fn test_raw_ident_with_digits() {
+    // Trailing digits and underscores are part of the identifier portion.
+    let tokens = tokens_only("r#try2 r#await_v2");
+    assert_eq!(tokens[0], raw_ident("try2"));
+    assert_eq!(tokens[1], raw_ident("await_v2"));
+}
+
+#[test]
+fn test_raw_ident_rejects_self() {
+    let tokens = tokens_only("r#self");
+    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+}
+
+#[test]
+fn test_raw_ident_rejects_self_type() {
+    let tokens = tokens_only("r#Self");
+    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+}
+
+#[test]
+fn test_raw_ident_rejects_underscore() {
+    let tokens = tokens_only("r#_");
+    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")));
+}
+
+#[test]
+fn test_raw_ident_rejects_mut_pub_ref_own() {
+    for marker in [
+        "mut", "pub", "ref", "own", "priv", "private", "mod", "super", "crate",
+    ] {
+        let src = format!("r#{marker}");
+        let tokens = tokens_only(&src);
+        assert!(
+            matches!(&tokens[0], Token::Error(msg) if msg.contains("structural marker")),
+            "expected E_RAW_IDENT_NOT_ALLOWED for '{marker}'",
+        );
+    }
+}
+
+#[test]
+fn test_raw_prefix_on_digit_falls_through() {
+    // `r#1foo` — `r#` not followed by an identifier-start byte. The lexer must
+    // NOT enter the raw path; the existing diagnostic stack handles it.
+    // Expect: `r` lexes as identifier, `#` lexes as Pound, then 1 / foo lex
+    // as their normal forms. No new error needed here.
+    let tokens = tokens_only("r#1foo");
+    assert_eq!(tokens[0], ident("r"));
+    assert_eq!(tokens[1], Token::Pound);
+}
+
+#[test]
+fn test_raw_double_hash_falls_through_to_reserved_hash_string() {
+    // `r##` — `r#` followed by another `#` (not alpha). Falls back to the
+    // existing path: lone `r` identifier + reserved hash-cluster diagnostic.
+    let tokens = tokens_only("r##");
+    assert_eq!(tokens[0], ident("r"));
+    assert!(matches!(&tokens[1], Token::Error(msg) if msg.contains("reserved")));
+}
+
+#[test]
+fn test_raw_identifier_does_not_intercept_r_string_prefix() {
+    // `r"..."` is the reserved-string-prefix path — must not enter the raw
+    // identifier path.
+    let tokens = tokens_only(r#"r"hello""#);
+    assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("reserved")));
 }

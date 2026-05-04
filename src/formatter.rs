@@ -52,6 +52,38 @@ impl Formatter {
         self.output.push_str(s);
     }
 
+    /// Emit an AST-level identifier name, prepending `r#` when the bare name
+    /// would otherwise lex as a keyword or reserved-for-future-use word — i.e.
+    /// when round-tripping requires the raw-identifier escape (design.md §
+    /// Raw Identifiers). Structural markers (`self`/`Self`/`_`/etc.) are
+    /// rejected at lex time and never reach the formatter as plain `name`s.
+    fn write_ident(&mut self, name: &str) {
+        if needs_raw_escape(name) {
+            self.output.push_str("r#");
+        }
+        self.output.push_str(name);
+    }
+
+    /// Emit a dotted path, escaping each segment independently.
+    fn write_path(&mut self, segments: &[String]) {
+        for (i, seg) in segments.iter().enumerate() {
+            if i > 0 {
+                self.output.push('.');
+            }
+            self.write_ident(seg);
+        }
+    }
+
+    /// Emit a `, `-separated list of identifiers, escaping each independently.
+    fn write_ident_list(&mut self, names: &[String]) {
+        for (i, n) in names.iter().enumerate() {
+            if i > 0 {
+                self.output.push_str(", ");
+            }
+            self.write_ident(n);
+        }
+    }
+
     /// Emit the visibility keyword (`pub ` / `private ` / `""`) for items
     /// that carry the three-level `Visibility`.
     fn write_visibility(&mut self, v: Visibility) {
@@ -135,20 +167,20 @@ impl Formatter {
             Item::LayoutDef(l) => self.format_layout(l),
             Item::UseDecl(u) => {
                 let vis = if u.is_pub { "pub " } else { "" };
-                self.writeln(&format!("{}use {};", vis, u.path.join(".")));
+                self.writeln(&format!("{vis}use {};", path_str(&u.path)));
             }
             Item::Import(i) => {
                 let vis = if i.is_pub { "pub " } else { "" };
-                let prefix = i.path.join(".");
+                let prefix = path_str(&i.path);
                 let rendered = if i.items.len() == 1 {
                     let only = &i.items[0];
                     let base = if prefix.is_empty() {
-                        only.name.clone()
+                        ident_str(&only.name)
                     } else {
-                        format!("{prefix}.{}", only.name)
+                        format!("{prefix}.{}", ident_str(&only.name))
                     };
                     match &only.alias {
-                        Some(a) => format!("{base} as {a}"),
+                        Some(a) => format!("{base} as {}", ident_str(a)),
                         None => base,
                     }
                 } else {
@@ -156,8 +188,8 @@ impl Formatter {
                         .items
                         .iter()
                         .map(|it| match &it.alias {
-                            Some(a) => format!("{} as {}", it.name, a),
-                            None => it.name.clone(),
+                            Some(a) => format!("{} as {}", ident_str(&it.name), ident_str(a)),
+                            None => ident_str(&it.name),
                         })
                         .collect();
                     if prefix.is_empty() {
@@ -172,15 +204,15 @@ impl Formatter {
             Item::AliasDecl(a) => {
                 self.writeln(&format!(
                     "alias {} = {};",
-                    a.left.join("."),
-                    a.right.join(".")
+                    path_str(&a.left),
+                    path_str(&a.right)
                 ));
             }
             Item::IndependentDecl(i) => {
                 self.writeln(&format!(
                     "independent {}, {};",
-                    i.left.join("."),
-                    i.right.join(".")
+                    path_str(&i.left),
+                    path_str(&i.right)
                 ));
             }
             Item::ExternFunction(e) => self.format_extern_fn(e),
@@ -195,7 +227,7 @@ impl Formatter {
         for attr in attrs {
             self.write_indent();
             self.write_str("#[");
-            self.write_str(&attr.name);
+            self.write_ident(&attr.name);
             if !attr.args.is_empty() {
                 self.write_str("(");
                 for (i, arg) in attr.args.iter().enumerate() {
@@ -204,11 +236,11 @@ impl Formatter {
                     }
                     match (&arg.name, &arg.value) {
                         (Some(n), Some(v)) => {
-                            self.write_str(n);
+                            self.write_ident(n);
                             self.write_str(" = ");
                             self.format_expr(v);
                         }
-                        (Some(n), None) => self.write_str(n),
+                        (Some(n), None) => self.write_ident(n),
                         (None, Some(v)) => self.format_expr(v),
                         (None, None) => {}
                     }
@@ -231,7 +263,7 @@ impl Formatter {
         self.write_indent();
         self.write_visibility(f.visibility());
         self.write_str("fn ");
-        self.write_str(&f.name);
+        self.write_ident(&f.name);
         self.format_generic_params(&f.generic_params);
         self.write_str("(");
         self.format_fn_params(&f.self_param, &f.params);
@@ -292,13 +324,13 @@ impl Formatter {
                         if j > 0 {
                             self.write_str(", ");
                         }
-                        self.write_str(&r.path.join("."));
+                        self.write_path(&r.path);
                     }
                     self.write_str(")");
                 }
-                EffectItem::Group(g) => self.write_str(g),
+                EffectItem::Group(g) => self.write_ident(g),
                 EffectItem::Polymorphic => self.write_str("_"),
-                EffectItem::Variable(v) => self.write_str(v),
+                EffectItem::Variable(v) => self.write_ident(v),
             }
         }
     }
@@ -318,7 +350,7 @@ impl Formatter {
             self.write_indent();
             self.write_str("    ensures ");
             if let Some(ref p) = e.param {
-                self.write_str(p);
+                self.write_ident(p);
                 self.write_str(" ");
             }
             self.format_expr(&e.body);
@@ -341,13 +373,13 @@ impl Formatter {
                 WhereConstraint::TypeBound {
                     type_name, bounds, ..
                 } => {
-                    self.write_str(type_name);
+                    self.write_ident(type_name);
                     self.write_str(": ");
                     for (j, b) in bounds.iter().enumerate() {
                         if j > 0 {
                             self.write_str(" + ");
                         }
-                        self.write_str(&b.path.join("."));
+                        self.write_path(&b.path);
                         self.format_generic_args_opt(&b.generic_args);
                     }
                 }
@@ -357,9 +389,9 @@ impl Formatter {
                     ty,
                     ..
                 } => {
-                    self.write_str(type_name);
+                    self.write_ident(type_name);
                     self.write_str(".");
-                    self.write_str(assoc_name);
+                    self.write_ident(assoc_name);
                     self.write_str(" = ");
                     self.format_type_expr(ty);
                 }
@@ -377,7 +409,7 @@ impl Formatter {
             self.write_str("shared ");
         }
         self.write_str("struct ");
-        self.write_str(&s.name);
+        self.write_ident(&s.name);
         self.format_generic_params(&s.generic_params);
         self.format_where_clause(&s.where_clause);
         self.write_str(" {\n");
@@ -390,7 +422,7 @@ impl Formatter {
             if field.is_mut {
                 self.write_str("mut ");
             }
-            self.write_str(&field.name);
+            self.write_ident(&field.name);
             self.write_str(": ");
             self.format_type_expr(&field.ty);
             self.write_str(",\n");
@@ -415,14 +447,14 @@ impl Formatter {
             self.write_str("shared ");
         }
         self.write_str("enum ");
-        self.write_str(&e.name);
+        self.write_ident(&e.name);
         self.format_generic_params(&e.generic_params);
         self.format_where_clause(&e.where_clause);
         self.write_str(" {\n");
         self.push_indent();
         for variant in &e.variants {
             self.write_indent();
-            self.write_str(&variant.name);
+            self.write_ident(&variant.name);
             match &variant.kind {
                 VariantKind::Unit => {}
                 VariantKind::Tuple(types) => {
@@ -440,7 +472,7 @@ impl Formatter {
                     self.push_indent();
                     for field in fields {
                         self.write_indent();
-                        self.write_str(&field.name);
+                        self.write_ident(&field.name);
                         self.write_str(": ");
                         self.format_type_expr(&field.ty);
                         self.write_str(",\n");
@@ -463,7 +495,7 @@ impl Formatter {
         self.write_indent();
         self.write_visibility(t.visibility());
         self.write_str("trait ");
-        self.write_str(&t.name);
+        self.write_ident(&t.name);
         self.format_generic_params(&t.generic_params);
         if !t.supertraits.is_empty() {
             self.write_str(": ");
@@ -471,7 +503,7 @@ impl Formatter {
                 if i > 0 {
                     self.write_str(" + ");
                 }
-                self.write_str(&bound.path.join("."));
+                self.write_path(&bound.path);
             }
         }
         self.format_effects(&t.trait_effects);
@@ -484,14 +516,14 @@ impl Formatter {
                 TraitItem::AssocType(a) => {
                     self.write_indent();
                     self.write_str("type ");
-                    self.write_str(&a.name);
+                    self.write_ident(&a.name);
                     if !a.bounds.is_empty() {
                         self.write_str(": ");
                         for (i, b) in a.bounds.iter().enumerate() {
                             if i > 0 {
                                 self.write_str(" + ");
                             }
-                            self.write_str(&b.path.join("."));
+                            self.write_path(&b.path);
                         }
                     }
                     self.write_str(";\n");
@@ -505,7 +537,7 @@ impl Formatter {
     fn format_trait_method(&mut self, m: &TraitMethod) {
         self.write_indent();
         self.write_str("fn ");
-        self.write_str(&m.name);
+        self.write_ident(&m.name);
         self.format_generic_params(&m.generic_params);
         self.write_str("(");
         self.format_fn_params(&m.self_param, &m.params);
@@ -535,7 +567,7 @@ impl Formatter {
         self.format_generic_params(&imp.generic_params);
         if let Some(ref trait_name) = imp.trait_name {
             self.write_str(" ");
-            self.write_str(&trait_name.segments.join("."));
+            self.write_path(&trait_name.segments);
             self.format_generic_args_opt(&trait_name.generic_args);
             self.write_str(" for");
         }
@@ -564,7 +596,7 @@ impl Formatter {
                 ImplItem::AssocType(a) => {
                     self.write_indent();
                     self.write_str("type ");
-                    self.write_str(&a.name);
+                    self.write_ident(&a.name);
                     self.write_str(" = ");
                     self.format_type_expr(&a.ty);
                     self.write_str(";\n");
@@ -580,11 +612,11 @@ impl Formatter {
     fn format_effect_resource(&mut self, e: &EffectResourceDecl) {
         self.write_indent();
         self.write_str("effect resource ");
-        self.write_str(&e.name);
+        self.write_ident(&e.name);
         self.format_generic_params(&e.generic_params);
         if let Some(ref pt) = e.provider_trait {
             self.write_str(": ");
-            self.write_str(pt);
+            self.write_ident(pt);
         }
         self.write_str(";\n");
     }
@@ -598,7 +630,7 @@ impl Formatter {
             self.write_str("stable ");
         }
         self.write_str("effect ");
-        self.write_str(&e.name);
+        self.write_ident(&e.name);
         self.write_str(" = ");
         for (i, term) in e.body.iter().enumerate() {
             if i > 0 {
@@ -612,11 +644,11 @@ impl Formatter {
                         if j > 0 {
                             self.write_str(", ");
                         }
-                        self.write_str(&r.path.join("."));
+                        self.write_path(&r.path);
                     }
                     self.write_str(")");
                 }
-                EffectGroupTerm::GroupRef(g) => self.write_str(g),
+                EffectGroupTerm::GroupRef(g) => self.write_ident(g),
             }
         }
         self.write_str(";\n");
@@ -631,7 +663,7 @@ impl Formatter {
             self.write_str("transparent ");
         }
         self.write_str("effect verb ");
-        self.write_str(&e.verb_name);
+        self.write_ident(&e.verb_name);
         self.write_str(";\n");
     }
 
@@ -640,7 +672,7 @@ impl Formatter {
     fn format_layout(&mut self, l: &LayoutDef) {
         self.write_indent();
         self.write_str("layout ");
-        self.write_str(&l.name);
+        self.write_ident(&l.name);
         self.write_str(" for ");
         self.format_type_expr(&l.collection_type);
         self.write_str(" {\n");
@@ -655,9 +687,9 @@ impl Formatter {
                 } => {
                     self.write_indent();
                     self.write_str("group ");
-                    self.write_str(name);
+                    self.write_ident(name);
                     self.write_str(" { ");
-                    self.write_str(&fields.join(", "));
+                    self.write_ident_list(fields);
                     self.write_str(" }");
                     if let Some(n) = align {
                         self.write_str(&format!(" align({})", n));
@@ -667,7 +699,7 @@ impl Formatter {
                 LayoutItem::Cold { fields, .. } => {
                     self.write_indent();
                     self.write_str("cold { ");
-                    self.write_str(&fields.join(", "));
+                    self.write_ident_list(fields);
                     self.write_str(" }\n");
                 }
                 LayoutItem::SplitByVariant(_) => {
@@ -685,7 +717,7 @@ impl Formatter {
         self.write_indent();
         self.write_visibility(c.visibility());
         self.write_str("const ");
-        self.write_str(&c.name);
+        self.write_ident(&c.name);
         self.write_str(": ");
         self.format_type_expr(&c.ty);
         self.write_str(" = ");
@@ -698,7 +730,9 @@ impl Formatter {
     fn format_extern_fn(&mut self, e: &ExternFunction) {
         self.write_indent();
         self.write_visibility(e.visibility());
-        write!(self.output, "extern \"{}\" fn {}(", e.abi, e.name).unwrap();
+        write!(self.output, "extern \"{}\" fn ", e.abi).unwrap();
+        self.write_ident(&e.name);
+        self.write_str("(");
         for (i, p) in e.params.iter().enumerate() {
             if i > 0 {
                 self.write_str(", ");
@@ -722,7 +756,7 @@ impl Formatter {
         self.write_indent();
         self.write_visibility(t.visibility());
         self.write_str("type ");
-        self.write_str(&t.name);
+        self.write_ident(&t.name);
         self.format_generic_params(&t.generic_params);
         self.write_str(" = ");
         self.format_type_expr(&t.ty);
@@ -734,7 +768,7 @@ impl Formatter {
         self.write_indent();
         self.write_visibility(d.visibility());
         self.write_str("distinct type ");
-        self.write_str(&d.name);
+        self.write_ident(&d.name);
         self.format_generic_params(&d.generic_params);
         self.write_str(" = ");
         self.format_type_expr(&d.base_type);
@@ -758,7 +792,7 @@ impl Formatter {
             if p.is_const {
                 self.write_str("const ");
             }
-            self.write_str(&p.name);
+            self.write_ident(&p.name);
             if let Some(ref ct) = p.const_type {
                 self.write_str(": ");
                 self.format_type_expr(ct);
@@ -768,7 +802,7 @@ impl Formatter {
                     if i > 0 {
                         self.write_str(" + ");
                     }
-                    self.write_str(&b.path.join("."));
+                    self.write_path(&b.path);
                     self.format_generic_args_opt(&b.generic_args);
                 }
             }
@@ -779,7 +813,7 @@ impl Formatter {
             }
             first = false;
             self.write_str("effect ");
-            self.write_str(ep);
+            self.write_ident(ep);
         }
         self.write_str("]");
     }
@@ -807,7 +841,7 @@ impl Formatter {
     fn format_type_expr(&mut self, ty: &TypeExpr) {
         match &ty.kind {
             TypeKind::Path(p) => {
-                self.write_str(&p.segments.join("."));
+                self.write_path(&p.segments);
                 self.format_generic_args_opt(&p.generic_args);
             }
             TypeKind::Tuple(types) => {
@@ -929,7 +963,7 @@ impl Formatter {
                 if *is_mut {
                     self.write_str("mut ");
                 }
-                self.write_str(name);
+                self.write_ident(name);
                 self.write_str(": ");
                 self.format_type_expr(ty);
                 self.write_str(";\n");
@@ -963,7 +997,9 @@ impl Formatter {
                 self.write_indent();
                 self.write_str("errdefer");
                 if let Some(ref b) = binding {
-                    write!(self.output, "({})", b).unwrap();
+                    self.write_str("(");
+                    self.write_ident(b);
+                    self.write_str(")");
                 }
                 self.write_str(" ");
                 self.format_block(body);
@@ -1047,8 +1083,8 @@ impl Formatter {
                 self.write_str("\"");
             }
             ExprKind::Bool(b) => self.write_str(if *b { "true" } else { "false" }),
-            ExprKind::Identifier(name) => self.write_str(name),
-            ExprKind::Path(segments) => self.write_str(&segments.join(".")),
+            ExprKind::Identifier(name) => self.write_ident(name),
+            ExprKind::Path(segments) => self.write_path(segments),
             ExprKind::SelfValue => self.write_str("self"),
             ExprKind::SelfType => self.write_str("Self"),
 
@@ -1098,7 +1134,7 @@ impl Formatter {
             } => {
                 self.format_expr(object);
                 self.write_str("?.");
-                self.write_str(field_or_method);
+                self.write_ident(field_or_method);
                 if let Some(ref a) = args {
                     self.write_str("(");
                     self.format_call_args(a);
@@ -1124,7 +1160,7 @@ impl Formatter {
             } => {
                 self.format_expr(object);
                 self.write_str(".");
-                self.write_str(method);
+                self.write_ident(method);
                 if let Some(ref tf) = turbofish {
                     self.write_str("[");
                     for (i, t) in tf.iter().enumerate() {
@@ -1142,7 +1178,7 @@ impl Formatter {
             ExprKind::FieldAccess { object, field } => {
                 self.format_expr(object);
                 self.write_str(".");
-                self.write_str(field);
+                self.write_ident(field);
             }
             ExprKind::TupleIndex { object, index } => {
                 self.format_expr(object);
@@ -1354,7 +1390,7 @@ impl Formatter {
                 count,
             } => {
                 if let Some(name) = type_name {
-                    self.write_str(name);
+                    self.write_ident(name);
                 }
                 self.write_str("[");
                 self.format_expr(value);
@@ -1385,15 +1421,15 @@ impl Formatter {
                 fields,
                 spread,
             } => {
-                self.write_str(&path.join("."));
+                self.write_path(path);
                 self.write_str(" {\n");
                 self.push_indent();
                 for fi in fields {
                     self.write_indent();
                     if fi.shorthand {
-                        self.write_str(&fi.name);
+                        self.write_ident(&fi.name);
                     } else {
-                        self.write_str(&fi.name);
+                        self.write_ident(&fi.name);
                         self.write_str(": ");
                         self.format_expr(&fi.value);
                     }
@@ -1464,7 +1500,7 @@ impl Formatter {
                 self.push_indent();
                 for b in bindings {
                     self.write_indent();
-                    self.write_str(&b.resource);
+                    self.write_ident(&b.resource);
                     self.write_str(" => ");
                     self.format_expr(&b.value);
                     self.write_str(",\n");
@@ -1484,7 +1520,7 @@ impl Formatter {
                 self.write_str(", ");
             }
             if let Some(ref label) = arg.label {
-                self.write_str(label);
+                self.write_ident(label);
                 self.write_str(": ");
             }
             if arg.mut_marker {
@@ -1499,7 +1535,7 @@ impl Formatter {
     fn format_pattern(&mut self, pat: &Pattern) {
         match &pat.kind {
             PatternKind::Wildcard => self.write_str("_"),
-            PatternKind::Binding(name) => self.write_str(name),
+            PatternKind::Binding(name) => self.write_ident(name),
             PatternKind::Literal(lit) => self.format_literal_pattern(lit),
             PatternKind::RangePattern {
                 start,
@@ -1519,18 +1555,18 @@ impl Formatter {
                 }
             }
             PatternKind::AtBinding { name, pattern } => {
-                self.write_str(name);
+                self.write_ident(name);
                 self.write_str(" @ ");
                 self.format_pattern(pattern);
             }
             PatternKind::Struct { path, fields } => {
-                self.write_str(&path.join("."));
+                self.write_path(path);
                 self.write_str(" { ");
                 for (i, f) in fields.iter().enumerate() {
                     if i > 0 {
                         self.write_str(", ");
                     }
-                    self.write_str(&f.name);
+                    self.write_ident(&f.name);
                     if let Some(ref p) = f.pattern {
                         self.write_str(": ");
                         self.format_pattern(p);
@@ -1539,7 +1575,7 @@ impl Formatter {
                 self.write_str(" }");
             }
             PatternKind::TupleVariant { path, patterns } => {
-                self.write_str(&path.join("."));
+                self.write_path(path);
                 self.write_str("(");
                 for (i, p) in patterns.iter().enumerate() {
                     if i > 0 {
@@ -1596,6 +1632,74 @@ impl Formatter {
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
+
+/// String-returning equivalent of `Formatter::write_ident`. Used when the
+/// caller is composing output via `format!(...)` and can't take `&mut self`.
+fn ident_str(name: &str) -> String {
+    if needs_raw_escape(name) {
+        format!("r#{name}")
+    } else {
+        name.to_string()
+    }
+}
+
+/// String-returning equivalent of `Formatter::write_path`.
+fn path_str(segments: &[String]) -> String {
+    segments
+        .iter()
+        .map(|s| ident_str(s))
+        .collect::<Vec<_>>()
+        .join(".")
+}
+
+/// True iff emitting `name` bare would lex as a keyword / reserved-future-use
+/// word (i.e. anything other than `Token::Identifier`). The list mirrors the
+/// keyword table in `src/lexer.rs::identifier()` plus the reserved-future-use
+/// set; structural markers (`self`/`Self`/`_`/...) are excluded because they
+/// cannot reach the formatter as a plain `name` — the lexer rejects raw
+/// escapes for them.
+fn needs_raw_escape(name: &str) -> bool {
+    matches!(
+        name,
+        // Declarations
+        "fn" | "struct" | "enum" | "trait" | "impl" | "mod" | "use" | "import"
+        | "const" | "type" | "distinct"
+        // Visibility
+        | "pub" | "private"
+        // Control flow
+        | "if" | "else" | "match" | "while" | "for" | "in" | "loop"
+        | "return" | "break" | "continue"
+        | "defer" | "errdefer" | "asm" | "global_asm"
+        // Bindings
+        | "let" | "mut"
+        // Logical (keyword forms)
+        | "and" | "or" | "not"
+        // Ownership
+        | "own" | "ref" | "weak" | "lock" | "move"
+        // Effects
+        | "effect" | "resource" | "verb"
+        | "reads" | "writes" | "sends" | "receives" | "allocates" | "panics"
+        | "blocks" | "suspends"
+        | "with" | "transparent" | "stable" | "seq" | "par" | "yield"
+        // Type system
+        | "as" | "where" | "dyn"
+        // Contracts
+        | "requires" | "ensures" | "invariant"
+        // Safety
+        | "unsafe" | "extern"
+        // Shared / layout
+        | "shared" | "layout" | "group"
+        // Bool literals
+        | "true" | "false"
+        // Providers / misc
+        | "providers" | "alias" | "independent"
+        // Reserved-for-future-use numeric types
+        | "f16" | "bf16"
+        // Reserved-for-future-use keywords
+        | "gen" | "become" | "do" | "final" | "override" | "priv" | "try"
+        | "typeof" | "virtual" | "async" | "await" | "comptime" | "pure" | "box"
+    )
+}
 
 fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
     match v {

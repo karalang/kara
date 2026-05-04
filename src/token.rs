@@ -210,7 +210,12 @@ pub enum Token {
     GreaterGreaterEqual, // >>=
 
     // ── Literals ──────────────────────────────────────────────
-    Identifier(String),
+    Identifier {
+        name: String,
+        /// `true` when the source wrote `r#NAME` (raw-identifier escape).
+        /// The `name` field stores the bare identifier without the `r#` prefix.
+        raw: bool,
+    },
     Integer(i64, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLiteral(char),

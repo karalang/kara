@@ -4702,3 +4702,109 @@ fn test_let_uninit_followed_by_assignment_parses() {
         assert!(matches!(f.body.stmts[1].kind, StmtKind::Assign { .. }));
     }
 }
+
+// ── Raw-identifier escape r#NAME ────────────────────────────────────
+
+#[test]
+fn raw_ident_in_let_binding_strips_prefix_in_ast() {
+    // The AST stores the bare identifier ("async"), not "r#async". The
+    // raw-flag lives on the lexer token; the formatter re-emits the prefix.
+    let prog = parse_ok("fn main() { let r#async = 1; }");
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected function"),
+    };
+    let stmt0 = &f.body.stmts[0];
+    let pat = match &stmt0.kind {
+        StmtKind::Let { pattern, .. } => pattern,
+        _ => panic!("expected let stmt"),
+    };
+    match &pat.kind {
+        PatternKind::Binding(name) => assert_eq!(name, "async"),
+        other => panic!("expected binding pattern, got {:?}", other),
+    }
+}
+
+#[test]
+fn raw_ident_in_function_name_strips_prefix_in_ast() {
+    let prog = parse_ok("fn r#try() -> i32 { 0 }");
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected function"),
+    };
+    assert_eq!(f.name, "try");
+}
+
+#[test]
+fn raw_ident_in_field_access_strips_prefix() {
+    let prog = parse_ok("fn main() { obj.r#await; }");
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!(),
+    };
+    let expr = match &f.body.stmts[0].kind {
+        StmtKind::Expr(e) => e,
+        _ => panic!(),
+    };
+    match &expr.kind {
+        ExprKind::FieldAccess { field, .. } => assert_eq!(field, "await"),
+        other => panic!("expected field access, got {:?}", other),
+    }
+}
+
+#[test]
+fn raw_ident_in_struct_field_strips_prefix() {
+    let prog = parse_ok("struct S { r#move: i32, }");
+    let s = match &prog.items[0] {
+        Item::StructDef(s) => s,
+        _ => panic!(),
+    };
+    assert_eq!(s.fields[0].name, "move");
+}
+
+// ── Round-trip: lex → parse → format → lex again ─────────────────────
+
+fn lex_ident_tokens(source: &str) -> Vec<karac::token::Token> {
+    karac::tokenize(source)
+        .into_iter()
+        .map(|st| st.token)
+        .collect()
+}
+
+#[test]
+fn raw_ident_roundtrip_through_formatter() {
+    // `r#async` written by user, lexed, parsed, formatted, lexed again must
+    // produce the same token sequence (specifically, `async` must come back
+    // as Identifier { raw: true }).
+    let src = "fn main() { let r#async = 1; }";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    assert!(
+        formatted.contains("r#async"),
+        "formatter must re-emit r# escape, got:\n{formatted}"
+    );
+    let original_tokens = lex_ident_tokens(src);
+    let reformatted_tokens = lex_ident_tokens(&formatted);
+    // Pull out the raw-identifier tokens from each sequence and compare.
+    let raw_in_original: Vec<_> = original_tokens
+        .iter()
+        .filter(|t| matches!(t, karac::token::Token::Identifier { raw: true, .. }))
+        .collect();
+    let raw_in_reformatted: Vec<_> = reformatted_tokens
+        .iter()
+        .filter(|t| matches!(t, karac::token::Token::Identifier { raw: true, .. }))
+        .collect();
+    assert_eq!(
+        raw_in_original, raw_in_reformatted,
+        "round-trip must preserve raw-identifier tokens"
+    );
+}
+
+#[test]
+fn raw_ident_roundtrip_in_function_name_and_field() {
+    let src = "fn r#try() { obj.r#await; }";
+    let prog = parse_ok(src);
+    let formatted = karac::formatter::format_program(&prog);
+    assert!(formatted.contains("fn r#try"), "formatted:\n{formatted}");
+    assert!(formatted.contains(".r#await"), "formatted:\n{formatted}");
+}

@@ -272,6 +272,13 @@ impl<'a> Lexer<'a> {
                 self.interpolated_string()
             }
 
+            // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers).
+            // `r"` is the reserved-string-prefix path (handled below); `r#"..."#`
+            // is the reserved hash-string form (caught later via the lone `r`
+            // identifier + the `#`-dispatched `reserved_hash_guarded_string`).
+            // Only `r#` followed by an identifier-start byte enters this path.
+            b'r' if self.peek() == b'#' && is_alpha(self.peek_next()) => self.raw_identifier(),
+
             // Reserved single-letter string-prefix syntax (v60 item 10).
             // `f"..."` is already handled above. Every other ASCII-alphabetic
             // single-letter prefix immediately followed by `"` is reserved at
@@ -824,6 +831,44 @@ impl<'a> Lexer<'a> {
         self.make_spanned(Token::InterpolatedStringLiteral(parts))
     }
 
+    /// Raw-identifier escape `r#NAME` (design.md § Raw Identifiers). On entry
+    /// the leading `r` has been consumed and `self.peek()` is `#`. The keyword
+    /// table is bypassed entirely so reserved-for-future-use words can flow
+    /// through as ordinary identifiers; structural markers (`self`, `Self`, `_`,
+    /// `super`, `crate`, `mod`, `pub`, `priv`, `private`, `mut`, `ref`, `own`)
+    /// remain unescapable and are rejected here.
+    fn raw_identifier(&mut self) -> SpannedToken {
+        self.advance(); // consume `#`
+        let name_start = self.current;
+        while is_alpha(self.peek()) || is_digit(self.peek()) {
+            self.advance();
+        }
+        let name = std::str::from_utf8(&self.source[name_start..self.current]).unwrap();
+        if matches!(
+            name,
+            "self"
+                | "Self"
+                | "_"
+                | "super"
+                | "crate"
+                | "mod"
+                | "pub"
+                | "priv"
+                | "private"
+                | "mut"
+                | "ref"
+                | "own"
+        ) {
+            return self.make_spanned(Token::Error(format!(
+                "'r#{name}' is not legal; '{name}' is a structural marker, not a reservable keyword"
+            )));
+        }
+        self.make_spanned(Token::Identifier {
+            name: name.to_string(),
+            raw: true,
+        })
+    }
+
     fn identifier(&mut self) -> SpannedToken {
         while is_alpha(self.peek()) || is_digit(self.peek()) {
             self.advance();
@@ -937,7 +982,10 @@ impl<'a> Lexer<'a> {
                 format!("'{text}' is reserved for future use and cannot be used as an identifier"),
             ),
             // Regular identifier
-            _ => Token::Identifier(text.to_string()),
+            _ => Token::Identifier {
+                name: text.to_string(),
+                raw: false,
+            },
         };
         self.make_spanned(token)
     }

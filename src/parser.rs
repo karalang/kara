@@ -464,7 +464,7 @@ impl Parser {
                 })
             }
             // Identifier — could be plain binding or struct destructure `Name { ... }`
-            Token::Identifier(_) => {
+            Token::Identifier { .. } => {
                 let name = self.expect_identifier()?;
                 if self.check(&Token::LeftBrace) {
                     // Struct destructuring: Name { field1, field2: pat, ... }
@@ -979,7 +979,7 @@ impl Parser {
         loop {
             if let Some(verb) = self.try_parse_effect_verb() {
                 terms.push(EffectGroupTerm::Verb(verb));
-            } else if let Token::Identifier(_) = self.peek_token() {
+            } else if let Token::Identifier { .. } = self.peek_token() {
                 let name = self.expect_identifier()?;
                 terms.push(EffectGroupTerm::GroupRef(name));
             } else {
@@ -1037,7 +1037,7 @@ impl Parser {
                 // Try verb first (reads, writes, blocks, user-defined, etc.)
                 if let Some(verb) = self.try_parse_effect_verb() {
                     items.push(EffectItem::Verb(verb));
-                } else if let Token::Identifier(_) = self.peek_token() {
+                } else if let Token::Identifier { .. } = self.peek_token() {
                     let name = self.expect_identifier()?;
                     // Named effect variable declared in the function's [with E] params
                     // takes precedence over effect group lookup.
@@ -1116,7 +1116,7 @@ impl Parser {
                 self.advance();
                 EffectVerbKind::Suspends
             }
-            Token::Identifier(name) if self.peek_ahead_is_left_paren() => {
+            Token::Identifier { name, .. } if self.peek_ahead_is_left_paren() => {
                 let name = name.clone();
                 self.advance();
                 EffectVerbKind::UserDefined(name)
@@ -1202,7 +1202,7 @@ impl Parser {
                 let fields = self.parse_layout_field_list()?;
                 self.expect(&Token::RightBrace)?;
                 // Optional `align(N)` modifier after the closing brace.
-                let align = if matches!(self.peek_token(), Token::Identifier(ref s) if s == "align")
+                let align = if matches!(self.peek_token(), Token::Identifier { ref name, .. } if name == "align")
                 {
                     self.advance(); // consume `align`
                     self.expect(&Token::LeftParen)?;
@@ -1230,7 +1230,7 @@ impl Parser {
                 });
             } else {
                 match self.peek_token() {
-                    Token::Identifier(ref s) if s == "cold" => {
+                    Token::Identifier { ref name, .. } if name == "cold" => {
                         let cs = self.current_span();
                         self.advance(); // consume `cold`
                         self.expect(&Token::LeftBrace)?;
@@ -1241,7 +1241,7 @@ impl Parser {
                             span: self.span_from(&cs),
                         });
                     }
-                    Token::Identifier(ref s) if s == "split_by_variant" => {
+                    Token::Identifier { ref name, .. } if name == "split_by_variant" => {
                         let s = self.current_span();
                         self.advance();
                         items.push(LayoutItem::SplitByVariant(s));
@@ -1301,7 +1301,7 @@ impl Parser {
                         // canonical `name ;` form (e.g. `mod foo { ... }`), the resync below
                         // will stop at the next item-starting token via the outer
                         // `synchronize_to_item` pass.
-        if let Token::Identifier(_) = self.peek_token() {
+        if let Token::Identifier { .. } = self.peek_token() {
             self.advance();
         }
         let _ = self.eat(&Token::Semicolon);
@@ -2014,7 +2014,7 @@ impl Parser {
             Token::Mut => {
                 self.advance();
                 // `mut Slice[T]` — mutable slice view (no `ref` keyword).
-                if let Token::Identifier(name) = self.peek_token() {
+                if let Token::Identifier { name, .. } = self.peek_token() {
                     if name == "Slice" {
                         // Parse the Slice path as a normal type, then strip
                         // down to its element and re-wrap as MutSlice.
@@ -2130,8 +2130,8 @@ impl Parser {
             // (round 12.46, Step 4). Both share the same AST shape; the
             // `is_once` flag distinguishes them so `lower_type_expr` can emit
             // `Type::OnceFunction` for the OnceFn form.
-            Token::Identifier(ref s) if s == "Fn" || s == "OnceFn" => {
-                let is_once = s == "OnceFn";
+            Token::Identifier { ref name, .. } if name == "Fn" || name == "OnceFn" => {
+                let is_once = name == "OnceFn";
                 self.advance();
                 self.expect(&Token::LeftParen)?;
                 let mut params = Vec::new();
@@ -2191,7 +2191,7 @@ impl Parser {
                 })
             }
             // Path type: ident[::ident]*[<T, U>]
-            Token::Identifier(_) | Token::SelfType => {
+            Token::Identifier { .. } | Token::SelfType => {
                 let path = self.parse_path_type()?;
                 Some(TypeExpr {
                     kind: TypeKind::Path(path),
@@ -2753,7 +2753,7 @@ impl Parser {
                     span: self.span_from(&start),
                 })
             }
-            Token::Identifier(_) => {
+            Token::Identifier { .. } => {
                 let name = self.expect_identifier()?;
 
                 // Check for @ binding: name @ pattern
@@ -2979,7 +2979,7 @@ impl Parser {
                                 },
                             };
                         }
-                        Token::Identifier(_) => {
+                        Token::Identifier { .. } => {
                             let method = self.expect_identifier()?;
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
@@ -3576,7 +3576,7 @@ impl Parser {
             Token::LeftBracket => self.parse_array_literal(),
 
             // Identifier (possibly path, struct literal, or function call)
-            Token::Identifier(_) => self.parse_identifier_expr(),
+            Token::Identifier { .. } => self.parse_identifier_expr(),
 
             _ => {
                 self.error(&format!(
@@ -3962,7 +3962,7 @@ impl Parser {
             let mut path = vec![name];
             while self.eat(&Token::Dot) {
                 match self.peek_token() {
-                    Token::Identifier(_) => {
+                    Token::Identifier { .. } => {
                         path.push(self.expect_identifier()?);
                     }
                     _ => break,
@@ -4079,8 +4079,8 @@ impl Parser {
         let after = &self.tokens[self.pos + 2].token;
         matches!(
             (next, after),
-            (Token::Identifier(_), Token::Colon)
-                | (Token::Identifier(_), Token::Comma)
+            (Token::Identifier { .. }, Token::Colon)
+                | (Token::Identifier { .. }, Token::Comma)
                 | (Token::RightBrace, _)
                 | (Token::DotDot, _)
         )
@@ -4206,7 +4206,7 @@ impl Parser {
         if self.pos + 1 >= self.tokens.len() {
             return false;
         }
-        matches!(&self.tokens[self.pos].token, Token::Identifier(_))
+        matches!(&self.tokens[self.pos].token, Token::Identifier { .. })
             && matches!(&self.tokens[self.pos + 1].token, Token::Colon)
     }
 
@@ -4216,7 +4216,7 @@ impl Parser {
         let mut segments = Vec::new();
 
         match self.peek_token() {
-            Token::Identifier(_) => segments.push(self.expect_identifier()?),
+            Token::Identifier { .. } => segments.push(self.expect_identifier()?),
             Token::SelfType => {
                 self.advance();
                 segments.push("Self".to_string());
@@ -4273,7 +4273,7 @@ impl Parser {
         if self.check(&Token::Semicolon) || self.check(&Token::RightBrace) {
             return (None, None);
         }
-        if let Token::Identifier(ref name) = self.peek_token() {
+        if let Token::Identifier { ref name, .. } = self.peek_token() {
             let name = name.clone();
             let is_known_label = self.loop_labels.contains(&name);
             if self.pos + 1 < self.tokens.len() {
@@ -4302,7 +4302,7 @@ impl Parser {
         if self.check(&Token::Semicolon) || self.check(&Token::RightBrace) {
             return None;
         }
-        if let Token::Identifier(name) = self.peek_token() {
+        if let Token::Identifier { name, .. } = self.peek_token() {
             self.advance();
             Some(name)
         } else {
@@ -4401,7 +4401,7 @@ impl Parser {
 
     fn expect_identifier(&mut self) -> Option<String> {
         match self.peek_token() {
-            Token::Identifier(name) => {
+            Token::Identifier { name, .. } => {
                 self.advance();
                 Some(name)
             }
@@ -4423,7 +4423,7 @@ impl Parser {
     /// design-conformant attribute syntax parse without quoting.
     fn expect_attr_arg_name(&mut self) -> Option<String> {
         match self.peek_token() {
-            Token::Identifier(name) => {
+            Token::Identifier { name, .. } => {
                 self.advance();
                 Some(name)
             }
@@ -4463,7 +4463,7 @@ impl Parser {
         }
         let is_name_token = matches!(
             self.tokens[self.pos].token,
-            Token::Identifier(_) | Token::Requires | Token::Ensures
+            Token::Identifier { .. } | Token::Requires | Token::Ensures
         );
         if !is_name_token {
             return false;
