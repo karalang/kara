@@ -6603,3 +6603,85 @@ fn test_iter_skip_while_wrong_arg_count_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+#[test]
+fn test_iter_flat_map_uses_inner_element_type() {
+    // flat_map(f: Fn(T) -> Iterator[U]) -> Iterator[U] — closure
+    // returns an Iterator[String]; the result Item is String.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().flat_map(|n| {
+                 let inner: Vec[String] = Vec.new();
+                 inner.iter()
+             });
+             let _s: String = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_flat_map_preserves_outer_element_type_in_pred() {
+    // The closure parameter is the OUTER's element type (i64 here),
+    // not the inner's. Verifies closure-pushdown threads T correctly.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().flat_map(|n: i64| {
+                 let inner: Vec[String] = Vec.new();
+                 inner.iter()
+             });
+             let _s: String = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_flat_map_inner_can_chain_adaptors() {
+    // The closure body can return an iterator that has its own
+    // adaptor chain — its element type after the chain is what
+    // flat_map's result reflects.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().flat_map(|n| {
+                 let inner: Vec[i64] = Vec.new();
+                 inner.iter().map(|x| x > 0)
+             });
+             let _b: bool = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_flat_map_non_iterator_return_rejected() {
+    // Closure returns i64 instead of an iterator — TypeMismatch.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().flat_map(|n| n + 1);
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on non-iterator flat_map return, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_flat_map_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().flat_map();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.flat_map()")),
+        "expected WrongNumberOfArgs for flat_map() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}

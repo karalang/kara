@@ -257,6 +257,19 @@ pub enum IteratorSource {
     /// yield `(a, b)` tuples until either side ends. Each side is a
     /// `Value::Iterator`.
     Zip { left: Box<Value>, right: Box<Value> },
+    /// `.flat_map(f)` — pull an outer item, apply `f` to get an inner
+    /// iterator, drain the inner before pulling the next outer. The
+    /// closure is `Fn(T) -> Iterator[U]`. `current_inner` holds the
+    /// in-flight inner iterator across multiple `next()` pulls; `None`
+    /// means we need to advance the outer on the next pull. `f` is
+    /// boxed because `Value::Iterator` embeds this enum inline; the
+    /// closure (`Value::Function`) lives in `f`, so without indirection
+    /// `Value`'s size would recurse through itself.
+    FlatMap {
+        outer: Box<Value>,
+        f: Box<Value>,
+        current_inner: Option<Box<Value>>,
+    },
 }
 
 /// One step in a `Value::Iterator`'s lazy adaptor chain. Each step is a
@@ -402,6 +415,7 @@ impl std::fmt::Display for Value {
                     write!(f, "<iter chain {}/{}>", current, parts.len())
                 }
                 IteratorSource::Zip { .. } => write!(f, "<iter zip>"),
+                IteratorSource::FlatMap { .. } => write!(f, "<iter flat_map>"),
             },
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
             Value::Entry {
@@ -3389,6 +3403,92 @@ impl<'a> Interpreter<'a> {
                     _ => None,
                 }
             }
+            IteratorSource::FlatMap { .. } => {
+                // Drain the in-flight inner iterator first; if it
+                // yields, that's our item. If exhausted, advance the
+                // outer (recursively iterator_step on it), apply f to
+                // the outer item, store the resulting iterator as the
+                // new inner, and retry. Same `mem::replace` ceremony
+                // as Zip: pull each sub-iterator out of the source,
+                // recurse with `&mut self`, write back.
+                loop {
+                    let inner_yield = if let Value::Iterator {
+                        source: IteratorSource::FlatMap { current_inner, .. },
+                        ..
+                    } = iter
+                    {
+                        if let Some(boxed) = current_inner.as_mut() {
+                            let mut inner = std::mem::replace(boxed.as_mut(), Value::Unit);
+                            let yielded = self.iterator_step(&mut inner);
+                            if let Value::Iterator {
+                                source: IteratorSource::FlatMap { current_inner, .. },
+                                ..
+                            } = iter
+                            {
+                                if let Some(boxed) = current_inner.as_mut() {
+                                    **boxed = inner;
+                                }
+                            }
+                            Some(yielded)
+                        } else {
+                            None
+                        }
+                    } else {
+                        return None;
+                    };
+                    if let Some(Some(v)) = inner_yield {
+                        return Some(v);
+                    }
+                    if let Value::Iterator {
+                        source: IteratorSource::FlatMap { current_inner, .. },
+                        ..
+                    } = iter
+                    {
+                        *current_inner = None;
+                    }
+                    let outer_yield = if let Value::Iterator {
+                        source: IteratorSource::FlatMap { outer, .. },
+                        ..
+                    } = iter
+                    {
+                        let mut o = std::mem::replace(outer.as_mut(), Value::Unit);
+                        let yielded = self.iterator_step(&mut o);
+                        if let Value::Iterator {
+                            source: IteratorSource::FlatMap { outer, .. },
+                            ..
+                        } = iter
+                        {
+                            **outer = o;
+                        }
+                        yielded
+                    } else {
+                        return None;
+                    };
+                    let Some(item) = outer_yield else {
+                        return None;
+                    };
+                    let f_clone = if let Value::Iterator {
+                        source: IteratorSource::FlatMap { f, .. },
+                        ..
+                    } = iter
+                    {
+                        (**f).clone()
+                    } else {
+                        return None;
+                    };
+                    let new_inner = self.invoke_function_value(f_clone, vec![item]);
+                    if !matches!(new_inner, Value::Iterator { .. }) {
+                        return None;
+                    }
+                    if let Value::Iterator {
+                        source: IteratorSource::FlatMap { current_inner, .. },
+                        ..
+                    } = iter
+                    {
+                        *current_inner = Some(Box::new(new_inner));
+                    }
+                }
+            }
         }
     }
 
@@ -3417,6 +3517,26 @@ impl<'a> Interpreter<'a> {
                 {
                     **l_box = l;
                     **r_box = r;
+                }
+            }
+            IteratorSource::FlatMap { outer, .. } => {
+                // Drain the outer and clear the in-flight inner;
+                // pull_source's loop returns None at the outer-pull
+                // step on every subsequent call.
+                let mut o = std::mem::replace(outer.as_mut(), Value::Unit);
+                self.drain_source(&mut o);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::FlatMap {
+                            outer,
+                            current_inner,
+                            ..
+                        },
+                    ..
+                } = iter
+                {
+                    **outer = o;
+                    *current_inner = None;
                 }
             }
         }
@@ -3813,6 +3933,37 @@ impl<'a> Interpreter<'a> {
                         _ => unreachable!(),
                     });
                     return Value::Iterator { source, steps };
+                }
+            }
+            "flat_map" => {
+                // Lazy flatten-after-map combinator. Wraps `self` (the
+                // outer) plus the closure into a fresh
+                // `IteratorSource::FlatMap`. Each pull from the
+                // resulting iterator drains the in-flight inner
+                // iterator (filling it from `f(outer_item)` when
+                // exhausted) and yields one item per pull.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.flat_map() requires a closure argument".to_string(),
+                            span,
+                        );
+                    };
+                    let closure = self.eval_expr_inner(&arg.value);
+                    if !matches!(closure, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.flat_map() expects a closure; got {}", closure),
+                            span,
+                        );
+                    }
+                    return Value::Iterator {
+                        source: IteratorSource::FlatMap {
+                            outer: Box::new(obj),
+                            f: Box::new(closure),
+                            current_inner: None,
+                        },
+                        steps: Vec::new(),
+                    };
                 }
             }
             "chain" => {

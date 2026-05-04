@@ -9107,6 +9107,61 @@ impl<'a> TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "flat_map" => {
+                // `flat_map(f: Fn(T) -> Iterator[U]) -> Iterator[U]` —
+                // the closure body must return an iterator; its element
+                // type becomes the new Item. Same pushdown pattern as
+                // `map`: `Fn(T) -> TypeParam("__iter_flatmap_U")` lets
+                // the body's actual return type flow back, then we
+                // pattern-match it for `Iterator[U]`. A non-iterator
+                // return raises a TypeMismatch explicitly.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.flat_map() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Error],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_flatmap_U".to_string())),
+                };
+                let actual_ty = self.check_expr(&args[0].value, &f_ty);
+                let new_item = match actual_ty {
+                    Type::Function { return_type, .. } => match *return_type {
+                        Type::Named {
+                            name,
+                            args: mut iter_args,
+                        } if name == "Iterator" && iter_args.len() == 1 => iter_args.remove(0),
+                        other => {
+                            self.type_error(
+                                format!(
+                                    "Iterator.flat_map() closure must return Iterator[U], found {:?}",
+                                    other
+                                ),
+                                span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            Type::Error
+                        }
+                    },
+                    _ => Type::Error,
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "chain" => {
                 // `chain(other: Iterator[T]) -> Iterator[T]` — the
                 // element type must agree on both sides. Push down

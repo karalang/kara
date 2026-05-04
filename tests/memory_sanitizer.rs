@@ -449,4 +449,116 @@ fn main() {
             "set_string_scope_exit_free",
         );
     }
+
+    // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
+    //    "Clone trait surface for collections") ───────────────────────────
+
+    #[test]
+    fn asan_vec_clone_independent_buffers() {
+        // Both the source and the cloned Vec own heap buffers; both must
+        // be freed exactly once on scope exit. ASAN catches double-free
+        // (two frees of the same allocation) and leak (no free) — a
+        // working clone keeps them independent.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    let w: Vec[i64] = v.clone();
+    println(v.len());
+    println(w.len());
+}
+"#,
+            &["3", "3"],
+            "vec_clone_independent_buffers",
+        );
+    }
+
+    #[test]
+    fn asan_vec_clone_empty_no_leak() {
+        // Empty Vec clone hits the fast path (no malloc); the resulting
+        // Vec has cap=0 and its scope-exit free must be a no-op rather
+        // than calling free(null) repeatedly or leaking a placeholder
+        // allocation.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let w: Vec[i64] = v.clone();
+    println(w.len());
+}
+"#,
+            &["0"],
+            "vec_clone_empty_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_clone_independent_handle() {
+        // Both maps allocate their own bucket arrays; both must be freed
+        // exactly once on scope exit. ASAN catches handle-aliasing (one
+        // map pointing at another's storage).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 10_i64);
+    m.insert(2_i64, 20_i64);
+    let n: Map[i64, i64] = m.clone();
+    println(m.len());
+    println(n.len());
+}
+"#,
+            &["2", "2"],
+            "map_clone_independent_handle",
+        );
+    }
+
+    #[test]
+    fn asan_set_clone_independent_handle() {
+        // Set[i64] clone — both sets free independent bucket arrays.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7_i64);
+    s.insert(8_i64);
+    let t: Set[i64] = s.clone();
+    println(s.contains(7_i64));
+    println(t.contains(8_i64));
+}
+"#,
+            &["true", "true"],
+            "set_clone_independent_handle",
+        );
+    }
+
+    #[test]
+    fn asan_vec_clone_repeat_stresses_scope_cleanup() {
+        // Clone in a fresh scope across multiple loop iterations —
+        // verifies the scope-exit free fires for each loop-local clone
+        // so allocations don't accumulate. ASAN catches a missing free.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    v.push(3_i64);
+    let mut iter: i64 = 0;
+    let mut total: i64 = 0;
+    while iter < 5_i64 {
+        let w: Vec[i64] = v.clone();
+        total = total + w.len();
+        iter = iter + 1_i64;
+    }
+    println(total);
+}
+"#,
+            &["15"], // 5 clones × 3 elements each
+            "vec_clone_repeat_stresses_scope_cleanup",
+        );
+    }
 }

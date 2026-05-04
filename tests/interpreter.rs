@@ -5533,3 +5533,235 @@ fn main() {
     // sticky-stop after the first failure.
     assert_eq!(output, "5\n6\n7\n");
 }
+
+#[test]
+fn test_iter_flat_map_yields_concatenated_inner_iters() {
+    // For each outer item, closure yields a 2-element inner. Result
+    // concatenates them in outer-then-inner order.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    for x in v.iter().flat_map(|n| { let inner = [n * 10, n * 100]; inner.iter() }) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n100\n20\n200\n30\n300\n");
+}
+
+#[test]
+fn test_iter_flat_map_empty_outer_yields_nothing() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let mut it = v.iter().flat_map(|n| { let inner = [n, n]; inner.iter() });
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}
+
+#[test]
+fn test_iter_flat_map_inner_empty_skipped() {
+    // Some outer items produce empty inner iterators — those are
+    // skipped without yielding anything.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().flat_map(|n| {
+        if n % 2 == 0 {
+            let inner = [n * 10];
+            inner.iter()
+        } else {
+            let inner: Vec[i64] = Vec[];
+            inner.iter()
+        }
+    }) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Outer 1 → empty; 2 → [20]; 3 → empty; 4 → [40].
+    assert_eq!(output, "20\n40\n");
+}
+
+#[test]
+fn test_iter_flat_map_state_persists_across_next_calls() {
+    // next() pulls one item at a time. When the in-flight inner is
+    // exhausted, the next pull must transparently switch to the
+    // next outer's inner.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let mut it = v.iter().flat_map(|n| { let inner = [n * 10, n * 100]; inner.iter() });
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n100\n20\n200\ndone\n");
+}
+
+#[test]
+fn test_iter_flat_map_inner_can_have_adaptors() {
+    // Closure returns an inner iterator with its own adaptor chain
+    // (filter here). Those filter-rejected items don't surface as
+    // flat_map yields.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter().flat_map(|n| {
+        let inner = [n - 1, n, n + 1];
+        inner.iter().filter(|x| x > 1)
+    }).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Outer 1 → [0,1,2] filtered to [2]
+    // Outer 2 → [1,2,3] filtered to [2,3]
+    // Outer 3 → [2,3,4] filtered to [2,3,4]
+    assert_eq!(output, "2\n2\n3\n2\n3\n4\n");
+}
+
+#[test]
+fn test_iter_flat_map_composes_with_filter_after() {
+    // Downstream filter applies to the flattened stream.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter()
+        .flat_map(|n| { let inner = [n, n * 10]; inner.iter() })
+        .filter(|x| x > 5)
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Flattened: 1, 10, 2, 20, 3, 30. Filter >5: 10, 20, 30.
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_flat_map_with_take_short_circuits_outer() {
+    // Downstream take(2) means we should only need to drain enough
+    // outer items to produce 2 yields. Side-effect prefixes prove
+    // that outer 3 is never visited.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    for x in v.iter()
+        .flat_map(|n| { println(f"outer:{n}"); let inner = [n * 10, n * 100]; inner.iter() })
+        .take(2)
+    {
+        println(f"y:{x}");
+    }
+}
+"#,
+    );
+    // For-loop drains: outer:1 → inner [10, 100], take pulls both →
+    // remaining=0. Source still pulled but step rejects. Outer 2 is
+    // pulled (because take exhaustion happens AFTER outer 1's inner
+    // is fully drained — the take step counts post-flat_map). The
+    // test of importance: outer 3 must NEVER be pulled.
+    // Expected: outer:1, y:10, y:100 (or similar drain order),
+    // then nothing more — definitely no "outer:3".
+    let lines: Vec<&str> = output.lines().collect();
+    assert!(
+        lines.contains(&"outer:1"),
+        "outer:1 must fire, got: {:?}",
+        lines
+    );
+    assert!(
+        !lines.contains(&"outer:3"),
+        "outer:3 must NOT fire (take(2) short-circuits), got: {:?}",
+        lines
+    );
+    assert!(
+        lines.iter().filter(|l| l.starts_with("y:")).count() == 2,
+        "exactly 2 yields expected, got: {:?}",
+        lines
+    );
+}
+
+#[test]
+fn test_iter_flat_map_then_map_threads_types() {
+    // flat_map produces a stream of one type, then map transforms.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let xs: Vec[i64] = v.iter()
+        .flat_map(|n| { let inner = [n, n + 100]; inner.iter() })
+        .map(|x| x * 2)
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Flattened: 1, 101, 2, 102. Doubled: 2, 202, 4, 204.
+    assert_eq!(output, "2\n202\n4\n204\n");
+}
+
+#[test]
+fn test_iter_flat_map_after_filter() {
+    // Filter the OUTER stream first — the closure only runs on
+    // kept-outer items.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let xs: Vec[i64] = v.iter()
+        .filter(|n| n % 2 == 0)
+        .flat_map(|n| { let inner = [n, n * 10]; inner.iter() })
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Filtered outer: 2, 4. flat_map: [2, 20], [4, 40] → 2, 20, 4, 40.
+    assert_eq!(output, "2\n20\n4\n40\n");
+}
+
+#[test]
+fn test_iter_flat_map_with_count_terminal() {
+    // Terminal count() drains and counts the flattened stream.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let n = v.iter().flat_map(|n| { let inner = [n, n, n]; inner.iter() }).count();
+    println(n);
+}
+"#,
+    );
+    // 3 outer × 3 inner each = 9.
+    assert_eq!(output, "9\n");
+}
