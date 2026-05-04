@@ -4492,6 +4492,144 @@ fn main() {
         }
     }
 
+    // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
+    //    "Clone trait surface for collections") ───────────────────────────
+
+    #[test]
+    fn test_e2e_vec_clone_preserves_contents() {
+        // Cloned Vec contains the same elements as the source.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    let w: Vec[i64] = v.clone();
+    println(w[0]);
+    println(w[1]);
+    println(w[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_clone_independent_buffers() {
+        // Mutating the source Vec after cloning leaves the clone unchanged
+        // — independent buffers from a fresh malloc.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    v.push(2_i64);
+    let w: Vec[i64] = v.clone();
+    v.push(99_i64);
+    println(v.len());
+    println(w.len());
+    println(w[0]);
+    println(w[1]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "2", "1", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_clone_empty_fast_path() {
+        // `v.clone()` on an empty Vec hits the empty-fast path: dst gets
+        // {null, 0, 0} without any allocation. Verifies the cloned Vec is
+        // still observably empty and supports push afterwards.
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.new();
+    let w: Vec[i64] = v.clone();
+    println(w.len());
+    w.push(7_i64);
+    println(w.len());
+    println(w[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "1", "7"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_clone_preserves_entry() {
+        // Cloned Map carries the source's single entry; lookup on the clone
+        // resolves to the cloned value.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(7_i64, 42_i64);
+    let n: Map[i64, i64] = m.clone();
+    let v = n.get(7_i64);
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_clone_independent_after_source_insert() {
+        // Inserting into the source after cloning doesn't affect the clone
+        // — independent map handles, separate bucket arrays.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+    let n: Map[i64, i64] = m.clone();
+    m.insert(2_i64, 200_i64);
+    println(m.len());
+    println(n.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_set_clone_preserves_membership() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(5_i64);
+    let t: Set[i64] = s.clone();
+    println(t.contains(5_i64));
+    println(t.contains(99_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "false"]);
+        }
+    }
+
     // ── Half-open range indexing ──────────────────────────────────────────────
 
     #[test]

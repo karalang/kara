@@ -507,6 +507,18 @@ struct Codegen<'ctx> {
     /// `and_modify`. The closure runs only when occupied=true; nothing is
     /// inserted on the Vacant path.
     karac_map_lookup_slot_fn: FunctionValue<'ctx>,
+    /// `karac_string_clone(src: ptr, dst: ptr) -> void` — runtime helper
+    /// for the codegen-emitted String case in `emit_clone_fn_for_type_expr`.
+    /// Allocates a fresh buffer, copies len bytes, writes the new
+    /// `{data, len, cap}` to `dst`. Static-literal sources (cap = 0) get
+    /// a heap-owned copy so scope-exit cleanup fires; source untouched.
+    karac_string_clone_fn: FunctionValue<'ctx>,
+    /// Per-type clone function cache. Keyed on the canonical mangled type
+    /// name (`display_mangle_te`). Each emitted fn has signature
+    /// `void karac_clone_<typename>(*const T src, *mut T dst)` — caller
+    /// provides both source and destination addresses, callee writes the
+    /// cloned value into the destination slot. Mirror of `display_fn_cache`.
+    clone_fn_cache: HashMap<String, FunctionValue<'ctx>>,
     /// Per-type Display function cache. Keyed by the canonical type name
     /// (e.g. `"i64"`, `"String"`, `"Vec_i64"`, `"Map_String_i64"`). Each
     /// emitted fn has signature `void karac_display_<typename>(ptr)` and
@@ -698,6 +710,14 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_string_clone(src: ptr, dst: ptr) -> void
+        let string_clone_ty = context.void_type().fn_type(&[ptr_md, ptr_md], false);
+        let karac_string_clone_fn = module.add_function(
+            "karac_string_clone",
+            string_clone_ty,
+            Some(Linkage::External),
+        );
+
         // ── Error return trace runtime ────────────────────────────────
         // karac_error_trace_push(file_ptr: ptr, file_len: i64, line: i32, col: i32) -> void
         let i32_ty = context.i32_type();
@@ -789,6 +809,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_iter_free_fn,
             karac_map_entry_fn,
             karac_map_lookup_slot_fn,
+            karac_string_clone_fn,
+            clone_fn_cache: HashMap::new(),
             display_fn_cache: HashMap::new(),
             karac_error_trace_push_fn,
             karac_error_trace_clear_fn,
@@ -3941,6 +3963,19 @@ impl<'ctx> Codegen<'ctx> {
             return Ok(value);
         }
 
+        // `clone()` dispatch on collection variables — Vec[T], String,
+        // Map[K, V], Set[T]. Routes through the per-type clone-fn machinery
+        // (`emit_clone_fn_for_type_expr`); see the `Clone trait surface for
+        // collections` bullet in `phase-8-stdlib-floor.md`. Returns Some(_)
+        // when the receiver is an identifier-bound collection variable;
+        // otherwise the regular dispatch below runs (so user `impl X { fn
+        // clone(...) }` continues to resolve through the impl-block path).
+        if method == "clone" && args.is_empty() {
+            if let Some(value) = self.try_compile_clone(object)? {
+                return Ok(value);
+            }
+        }
+
         // Type-receiver associated calls: `T.method(...)` where `T` is a
         // primitive type name. Receiver `T` is an identifier naming a type,
         // not a variable, so the normal receiver pipeline would fail. Handle
@@ -7068,6 +7103,588 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// TypeExpr-aware clone-fn dispatcher. Canonical entry point for any
+    /// caller that needs a `void karac_clone_<typename>(*const T, *mut T)`
+    /// function for type `T`. Routes by shape: primitives (load+store),
+    /// String (call runtime helper), Vec[T] (deep clone with elem
+    /// recursion), Map[K, V] (iterate + insert into fresh map),
+    /// Set[T] (Map[T, ()]), Tuple (per-field recurse). Mirrors
+    /// `emit_display_fn_for_type_expr` / `emit_hash_fn_for_type_expr`.
+    /// Cached via `clone_fn_cache` on `display_mangle_te(te)`.
+    ///
+    /// `#[derive(Clone)]` user struct support is a follow-up — emit at the
+    /// derive site by walking field types and recursing through this fn.
+    fn emit_clone_fn_for_type_expr(&mut self, te: &TypeExpr) -> FunctionValue<'ctx> {
+        let type_name = Self::display_mangle_te(te);
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+        match &te.kind {
+            TypeKind::Tuple(elems) if !elems.is_empty() => self.emit_tuple_clone_fn(elems),
+            TypeKind::Path(p) => {
+                let head = p.segments.first().map(String::as_str);
+                if head == Some("Vec") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        return self.emit_vec_clone_fn(&elem_te);
+                    }
+                }
+                if head == Some("Map") {
+                    let args = p.generic_args.as_ref();
+                    let k_te = args.and_then(|a| a.first()).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    let v_te = args.and_then(|a| a.get(1)).and_then(|a| match a {
+                        GenericArg::Type(t) => Some(t.clone()),
+                        _ => None,
+                    });
+                    if let (Some(k), Some(v)) = (k_te, v_te) {
+                        return self.emit_map_clone_fn(&k, &v);
+                    }
+                }
+                if head == Some("Set") {
+                    if let Some(GenericArg::Type(elem_te)) =
+                        p.generic_args.as_ref().and_then(|a| a.first()).cloned()
+                    {
+                        // Set[T] clones as Map[T, ()] — same iterator + insert
+                        // path with a zero-byte value half. The runtime's
+                        // `(key_size + val_size).max(1)` keeps allocations
+                        // valid (val_size = 0).
+                        let unit_te = TypeExpr {
+                            kind: TypeKind::Tuple(Vec::new()),
+                            span: elem_te.span.clone(),
+                        };
+                        return self.emit_map_clone_fn(&elem_te, &unit_te);
+                    }
+                }
+                if head == Some("String") {
+                    return self.emit_string_clone_fn();
+                }
+                // Primitive (or unsupported path) — emit the load+store body.
+                self.emit_primitive_clone_fn(&type_name, te)
+            }
+            _ => self.emit_primitive_clone_fn(&type_name, te),
+        }
+    }
+
+    /// Emit a primitive `karac_clone_<typename>(*const T, *mut T)` whose
+    /// body is `*dst = *src` — single load + store. Covers every Copy-by-
+    /// memcpy type (i8…i64, u8…u64, f32/f64, bool, char, unit). Cache-keyed
+    /// on `type_name` so repeat callers reuse the same fn.
+    fn emit_primitive_clone_fn(
+        &mut self,
+        type_name: &str,
+        te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name.to_string(), f);
+            return f;
+        }
+        let val_ty = self.llvm_type_for_type_expr(te);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn =
+            self.module
+                .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(type_name.to_string(), clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let v = self.builder.build_load(val_ty, src, "v").unwrap();
+        self.builder.build_store(dst, v).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
+    /// Emit (or fetch) the cloned-String fn — a thin wrapper that just
+    /// tail-calls the `karac_string_clone` runtime helper. The wrapper
+    /// keeps the per-type clone-fn signature uniform with other types so
+    /// callers don't special-case Strings.
+    fn emit_string_clone_fn(&mut self) -> FunctionValue<'ctx> {
+        let type_name = "String".to_string();
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = "karac_clone_String".to_string();
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn =
+            self.module
+                .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        self.builder
+            .build_call(
+                self.karac_string_clone_fn,
+                &[src.into(), dst.into()],
+                "",
+            )
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
+    /// Emit `karac_clone_Vec_<elem>` — read the source `{data, len, cap}`,
+    /// allocate a fresh buffer of the same capacity, walk `0..len` calling
+    /// the per-element clone fn through the new dispatcher, write the new
+    /// `{data, len, cap}` to dst.
+    ///
+    /// Empty-source fast path (subtask 9): `len == 0` skips the malloc;
+    /// dst gets `{null, 0, 0}` with `cap == 0` matching the static-literal
+    /// convention so scope-exit cleanup is a no-op.
+    fn emit_vec_clone_fn(&mut self, elem_te: &TypeExpr) -> FunctionValue<'ctx> {
+        let elem_name = Self::display_mangle_te(elem_te);
+        let type_name = format!("Vec_{elem_name}");
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.llvm_type_for_type_expr(elem_te);
+        // Recurse first — emit may switch the builder's insert block.
+        let elem_clone = self.emit_clone_fn_for_type_expr(elem_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn =
+            self.module
+                .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // Load src.{data, len, cap}
+        let src_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, src, 0, "src.data.pp")
+            .unwrap();
+        let src_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 1, "src.len.p")
+            .unwrap();
+        let src_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, src, 2, "src.cap.p")
+            .unwrap();
+        let src_data = self
+            .builder
+            .build_load(ptr_ty, src_data_pp, "src.data")
+            .unwrap()
+            .into_pointer_value();
+        let src_len = self
+            .builder
+            .build_load(i64_t, src_len_p, "src.len")
+            .unwrap()
+            .into_int_value();
+        let src_cap = self
+            .builder
+            .build_load(i64_t, src_cap_p, "src.cap")
+            .unwrap()
+            .into_int_value();
+
+        // dst.{data, len, cap} GEPs
+        let dst_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 0, "dst.data.pp")
+            .unwrap();
+        let dst_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 1, "dst.len.p")
+            .unwrap();
+        let dst_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst, 2, "dst.cap.p")
+            .unwrap();
+
+        // Empty fast path: len == 0 → {null, 0, 0}.
+        let empty_bb = self.context.append_basic_block(clone_fn, "empty");
+        let alloc_bb = self.context.append_basic_block(clone_fn, "alloc");
+        let is_empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, src_len, i64_t.const_zero(), "is.empty")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, alloc_bb)
+            .unwrap();
+
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(dst_data_pp, ptr_ty.const_null())
+            .unwrap();
+        self.builder
+            .build_store(dst_len_p, i64_t.const_zero())
+            .unwrap();
+        self.builder
+            .build_store(dst_cap_p, i64_t.const_zero())
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        // alloc + memcpy-loop path.
+        self.builder.position_at_end(alloc_bb);
+        let raw_size = elem_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let elem_size = if raw_size.get_type().get_bit_width() == 64 {
+            raw_size
+        } else {
+            self.builder
+                .build_int_z_extend(raw_size, i64_t, "esz64")
+                .unwrap()
+        };
+        // Buffer cap matches src.cap when > 0; otherwise (static-literal
+        // source with cap=0 but non-zero len) allocate len-byte buffer.
+        let cap_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, src_cap, i64_t.const_zero(), "cap.zero")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(cap_zero, src_len, src_cap, "new.cap")
+            .unwrap()
+            .into_int_value();
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(new_cap, elem_size, "alloc.bytes")
+            .unwrap();
+        let new_data = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "new.data")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Loop: i in 0..len; call elem_clone(src.data + i*size, new_data + i*size).
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        let hdr_bb = self.context.append_basic_block(clone_fn, "loop.hdr");
+        let bdy_bb = self.context.append_basic_block(clone_fn, "loop.bdy");
+        let exit_bb = self.context.append_basic_block(clone_fn, "loop.exit");
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, src_len, "cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let offset = self
+            .builder
+            .build_int_mul(i_val, elem_size, "off")
+            .unwrap();
+        let src_elem = unsafe {
+            self.builder
+                .build_gep(i8_t, src_data, &[offset], "src.elem")
+                .unwrap()
+        };
+        let dst_elem = unsafe {
+            self.builder
+                .build_gep(i8_t, new_data, &[offset], "dst.elem")
+                .unwrap()
+        };
+        self.builder
+            .build_call(elem_clone, &[src_elem.into(), dst_elem.into()], "")
+            .unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, bdy_bb)]);
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_store(dst_data_pp, new_data).unwrap();
+        self.builder.build_store(dst_len_p, src_len).unwrap();
+        self.builder.build_store(dst_cap_p, new_cap).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
+    /// Emit a Map[K, V] clone fn. Iterates the source via `karac_map_iter_*`,
+    /// per-entry: clone K and V into stack allocas, then `karac_map_insert`
+    /// into the fresh destination map. Hash/eq fn pointers come from the
+    /// existing TypeExpr-aware emit fns, so compound keys (`Map[(i64, String), V]`)
+    /// compose correctly.
+    ///
+    /// Set[T] reuses this path with V = unit (empty-tuple). The runtime's
+    /// `(key_size + val_size).max(1)` keeps the bucket allocation valid
+    /// when val_size = 0.
+    fn emit_map_clone_fn(
+        &mut self,
+        key_te: &TypeExpr,
+        val_te: &TypeExpr,
+    ) -> FunctionValue<'ctx> {
+        let key_name = Self::display_mangle_te(key_te);
+        let val_name = Self::display_mangle_te(val_te);
+        let type_name = format!("Map_{key_name}_{val_name}");
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let key_ty = self.llvm_type_for_type_expr(key_te);
+        let val_ty = self.llvm_type_for_type_expr(val_te);
+        let hash_fn = self.emit_hash_fn_for_type_expr(key_te);
+        let eq_fn = self.emit_eq_fn_for_type_expr(key_te);
+        let key_clone = self.emit_clone_fn_for_type_expr(key_te);
+        let val_clone = self.emit_clone_fn_for_type_expr(val_te);
+
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn =
+            self.module
+                .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        // Load source map handle.
+        let src_handle = self
+            .builder
+            .build_load(ptr_ty, src, "src.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        // Allocate a fresh map. Sizes = sizeof(K), sizeof(V); val_size = 0
+        // for Set's unit-tuple case is fine since llvm_type_for_type_expr
+        // on empty-tuple returns i64 → size 8. For a true zero-size value,
+        // we'd need extra plumbing; the runtime's `.max(1)` already keeps
+        // the allocation valid so 8-byte slots are harmless overhead.
+        let key_size = key_ty.size_of().unwrap_or_else(|| i64_t.const_int(8, false));
+        let val_size = val_ty.size_of().unwrap_or_else(|| i64_t.const_int(8, false));
+        let new_handle = self
+            .builder
+            .build_call(
+                self.karac_map_new_fn,
+                &[
+                    key_size.into(),
+                    val_size.into(),
+                    hash_fn.as_global_value().as_pointer_value().into(),
+                    eq_fn.as_global_value().as_pointer_value().into(),
+                ],
+                "new.map",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Stack allocas for the iterator's key/val out-slots and for the
+        // cloned key/val we pass to `karac_map_insert`.
+        let key_out = self.create_entry_alloca(clone_fn, "k.out", key_ty);
+        let val_out = self.create_entry_alloca(clone_fn, "v.out", val_ty);
+        let key_clone_slot = self.create_entry_alloca(clone_fn, "k.clone", key_ty);
+        let val_clone_slot = self.create_entry_alloca(clone_fn, "v.clone", val_ty);
+
+        // Iterator handle.
+        let iter_handle = self
+            .builder
+            .build_call(self.karac_map_iter_new_fn, &[src_handle.into()], "iter")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let hdr_bb = self.context.append_basic_block(clone_fn, "iter.hdr");
+        let bdy_bb = self.context.append_basic_block(clone_fn, "iter.bdy");
+        let exit_bb = self.context.append_basic_block(clone_fn, "iter.exit");
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let has = self
+            .builder
+            .build_call(
+                self.karac_map_iter_next_fn,
+                &[iter_handle.into(), key_out.into(), val_out.into()],
+                "iter.has",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(has, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        // Clone key and value into fresh allocas, then insert.
+        self.builder
+            .build_call(key_clone, &[key_out.into(), key_clone_slot.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(val_clone, &[val_out.into(), val_clone_slot.into()], "")
+            .unwrap();
+        self.builder
+            .build_call(
+                self.karac_map_insert_fn(),
+                &[new_handle.into(), key_clone_slot.into(), val_clone_slot.into()],
+                "",
+            )
+            .unwrap();
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.karac_map_iter_free_fn, &[iter_handle.into()], "")
+            .unwrap();
+        self.builder.build_store(dst, new_handle).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
+    /// Helper: get-or-declare the `karac_map_insert(map, key, val) -> void`
+    /// runtime fn. We don't use `karac_map_insert_old` here because the
+    /// fresh destination map is empty by construction — there's no old
+    /// value to capture.
+    fn karac_map_insert_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("karac_map_insert") {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        self.module
+            .add_function("karac_map_insert", ty, Some(Linkage::External))
+    }
+
+    /// Emit a per-field-recursive clone fn for an n-tuple. Mirrors the
+    /// tuple Hash/Eq/Display pattern — recursive per-field calls into the
+    /// per-field clone fn via struct GEP.
+    fn emit_tuple_clone_fn(&mut self, elems: &[TypeExpr]) -> FunctionValue<'ctx> {
+        let elems_owned: Vec<TypeExpr> = elems.to_vec();
+        let parts: Vec<String> = elems_owned.iter().map(Self::display_mangle_te).collect();
+        let type_name = format!("tuple_{}", parts.join("_"));
+        if let Some(&f) = self.clone_fn_cache.get(&type_name) {
+            return f;
+        }
+        let fn_name = format!("karac_clone_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.clone_fn_cache.insert(type_name, f);
+            return f;
+        }
+
+        let child_fns: Vec<FunctionValue<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.emit_clone_fn_for_type_expr(e))
+            .collect();
+        let field_tys: Vec<BasicTypeEnum<'ctx>> = elems_owned
+            .iter()
+            .map(|e| self.llvm_type_for_type_expr(e))
+            .collect();
+        let tuple_ty = self.context.struct_type(&field_tys, false);
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let saved_bb = self.builder.get_insert_block();
+        let clone_fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let clone_fn =
+            self.module
+                .add_function(&fn_name, clone_fn_ty, Some(Linkage::Internal));
+        self.clone_fn_cache.insert(type_name, clone_fn);
+
+        let entry_bb = self.context.append_basic_block(clone_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let src = clone_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let dst = clone_fn.get_nth_param(1).unwrap().into_pointer_value();
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let src_field = self
+                .builder
+                .build_struct_gep(tuple_ty, src, i as u32, &format!("t.f{i}.s"))
+                .unwrap();
+            let dst_field = self
+                .builder
+                .build_struct_gep(tuple_ty, dst, i as u32, &format!("t.f{i}.d"))
+                .unwrap();
+            self.builder
+                .build_call(*child_fn, &[src_field.into(), dst_field.into()], "")
+                .unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        clone_fn
+    }
+
     /// Recognise the `Map.entry(k)` chain pattern and lower it as a single
     /// sequence. Returns `Some(value)` only when `<object>.<method>(<args>)`
     /// matches:
@@ -7089,6 +7706,113 @@ impl<'ctx> Codegen<'ctx> {
     ///   `{slot_ptr, occupied}` so further chaining (`.or_insert(d)`) sees
     ///   the same Entry. v1 only nests further `and_modify`s on top; chained
     ///   terminal methods are recognised by recursing through this fn.
+    /// Lower `<receiver>.clone()` for an identifier-bound collection
+    /// receiver (Vec[T], String, Map[K, V], Set[T]). Returns `Some(value)`
+    /// when the receiver is recognised; `None` otherwise (caller falls
+    /// through to the impl-block / generic dispatch so user `clone` impls
+    /// keep working).
+    ///
+    /// Synthesises a `TypeExpr` for the receiver from the codegen side-
+    /// tables (`vec_elem_types` / `var_elem_type_exprs` / `map_key_type_exprs`
+    /// / `set_elem_type_exprs`), routes through `emit_clone_fn_for_type_expr`,
+    /// and emits the `karac_clone_<typename>(src_slot, dst)` call. The
+    /// destination is a fresh stack alloca that the caller's let-binding
+    /// (or expression-statement) consumes. Scope-cleanup integration for
+    /// the cloned value lives in subtask 6 — at this layer the alloca is
+    /// just a temporary; the binding's slot inherits ownership when the
+    /// `let` stores into it.
+    fn try_compile_clone(
+        &mut self,
+        object: &Expr,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let ExprKind::Identifier(name) = &object.kind else {
+            return Ok(None);
+        };
+        let name_owned = name.clone();
+        let span_zero = crate::token::Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        };
+        let mk_path = |seg: &str, args: Vec<TypeExpr>| -> TypeExpr {
+            TypeExpr {
+                kind: TypeKind::Path(crate::ast::PathExpr {
+                    segments: vec![seg.to_string()],
+                    generic_args: if args.is_empty() {
+                        None
+                    } else {
+                        Some(args.into_iter().map(GenericArg::Type).collect())
+                    },
+                    span: span_zero.clone(),
+                }),
+                span: span_zero.clone(),
+            }
+        };
+
+        // Build the receiver's TypeExpr from the side-tables. Order matters
+        // — Set/Map come before Vec since Set's bucket is also routed through
+        // map_key_types when lowered as Map[T, ()], and a Vec with elem=i8
+        // overlaps with String at the LLVM-type level.
+        let te: TypeExpr = if self.set_elem_types.contains_key(name_owned.as_str()) {
+            let elem = self
+                .set_elem_type_exprs
+                .get(name_owned.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    format!("clone: missing set_elem_type_exprs for '{}'", name_owned)
+                })?;
+            mk_path("Set", vec![elem])
+        } else if self.map_key_types.contains_key(name_owned.as_str()) {
+            let k = self
+                .map_key_type_exprs
+                .get(name_owned.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    format!("clone: missing map_key_type_exprs for '{}'", name_owned)
+                })?;
+            let v = self
+                .var_elem_type_exprs
+                .get(name_owned.as_str())
+                .cloned()
+                .ok_or_else(|| {
+                    format!("clone: missing var_elem_type_exprs (val) for '{}'", name_owned)
+                })?;
+            mk_path("Map", vec![k, v])
+        } else if self.vec_elem_types.contains_key(name_owned.as_str()) {
+            // Distinguish String from Vec[T]: String registers in
+            // `vec_elem_types` (so the str-method dispatch finds it) but
+            // skips `var_elem_type_exprs`. Vec[T] populates both.
+            if let Some(elem_te) = self.var_elem_type_exprs.get(name_owned.as_str()).cloned() {
+                mk_path("Vec", vec![elem_te])
+            } else {
+                mk_path("String", vec![])
+            }
+        } else {
+            return Ok(None);
+        };
+
+        let clone_fn = self.emit_clone_fn_for_type_expr(&te);
+        let llvm_ty = self.llvm_type_for_type_expr(&te);
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "clone: no current function".to_string())?;
+        let dst = self.create_entry_alloca(fn_val, "clone.dst", llvm_ty);
+        let src_slot = self
+            .variables
+            .get(name_owned.as_str())
+            .copied()
+            .ok_or_else(|| format!("clone: unknown variable '{}'", name_owned))?;
+        self.builder
+            .build_call(clone_fn, &[src_slot.ptr.into(), dst.into()], "")
+            .unwrap();
+        let dst_val = self
+            .builder
+            .build_load(llvm_ty, dst, "clone.val")
+            .unwrap();
+        Ok(Some(dst_val))
+    }
+
     fn try_compile_entry_chain(
         &mut self,
         object: &Expr,
@@ -7252,12 +7976,7 @@ impl<'ctx> Codegen<'ctx> {
                 if terminal_args.is_empty() {
                     return Err("Entry.and_modify requires a closure argument".to_string());
                 }
-                self.emit_entry_and_modify(
-                    &terminal_args[0].value,
-                    occupied,
-                    slot_ptr,
-                    val_ty,
-                )?;
+                self.emit_entry_and_modify(&terminal_args[0].value, occupied, slot_ptr, val_ty)?;
                 // Return the Entry struct value `{slot_ptr, occupied}` so a
                 // chained terminal sees both halves. Currently no callers
                 // consume the struct directly (chained-after-terminal is
@@ -7380,9 +8099,7 @@ impl<'ctx> Codegen<'ctx> {
         val_ty: BasicTypeEnum<'ctx>,
     ) -> Result<(), String> {
         let ExprKind::Closure { params, body, .. } = &closure_expr.kind else {
-            return Err(
-                "entry chain: and_modify expects an inline closure expression".to_string(),
-            );
+            return Err("entry chain: and_modify expects an inline closure expression".to_string());
         };
         // Closure must have exactly one user-side parameter — the `mut ref V`.
         let Some(param) = params.first() else {
@@ -7404,9 +8121,13 @@ impl<'ctx> Codegen<'ctx> {
             .build_load(val_ty, slot_ptr, "entry.am.load")
             .unwrap();
         self.builder.build_store(local, initial).unwrap();
-        let saved_slot = self
-            .variables
-            .insert(param_name.clone(), VarSlot { ptr: local, ty: val_ty });
+        let saved_slot = self.variables.insert(
+            param_name.clone(),
+            VarSlot {
+                ptr: local,
+                ty: val_ty,
+            },
+        );
 
         // Compile the body in the enclosing scope so it can see captures
         // (the typical case: `|v| { v += 1 }` only reads param-local `v`).

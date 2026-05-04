@@ -9,6 +9,7 @@
 //! versions built in lockstep and is NOT stable across independently built
 //! pairs. Distribution is always compiler+runtime bundled.
 
+mod clone;
 mod map;
 
 use std::ffi::c_void;
