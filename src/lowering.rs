@@ -46,6 +46,16 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the pattern-binding type table so codegen can reconstitute
+    // struct payloads (single-field error wrappers, etc.) from the i64
+    // word at match-arm bind sites. Without this, `Err(e) => e.field`
+    // can't dispatch through the struct shape because `e` was bound as
+    // i64. See `bind_pattern_values` in src/codegen.rs.
+    program.pattern_binding_types = tc
+        .pattern_binding_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
 }
 
 struct Lowerer<'a> {

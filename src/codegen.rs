@@ -396,6 +396,15 @@ struct Codegen<'ctx> {
     /// `compile_method_call` apply the same narrowing that `compile_call`
     /// applies to free-function and `Type.assoc` calls.
     method_callee_types: HashMap<(usize, usize), String>,
+    /// Per-pattern-binding surface type table — populated from
+    /// `Program.pattern_binding_types` (set by the lowering pass from
+    /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
+    /// `(span.offset, span.length)`. Value: canonical type name (e.g.
+    /// `"MyError"`). Used in `bind_pattern_values` to reconstitute struct
+    /// payloads from the i64 word when the surface binding type is a
+    /// struct, so subsequent `.field` access dispatches through the right
+    /// struct shape.
+    pattern_binding_types: HashMap<(usize, usize), String>,
     /// Source filename threaded in from the CLI (`compile_to_object_with_options`
     /// / `compile_to_ir_with_options`). When `Some`, `emit_error_trace_push`
     /// emits a deduped global string and passes its `(ptr, len)` to the runtime
@@ -705,6 +714,7 @@ impl<'ctx> Codegen<'ctx> {
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
+            pattern_binding_types: HashMap::new(),
             source_filename: None,
             source_filename_global: None,
             used_symbols: Vec::new(),
@@ -2119,6 +2129,13 @@ impl<'ctx> Codegen<'ctx> {
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
         self.method_callee_types = program.method_callee_types.clone();
+
+        // Side-table set by `lowering::lower_program`: each pattern-
+        // binding's span maps to its surface type name. Read by
+        // `bind_pattern_values` to reconstitute struct payloads from the
+        // i64 word at match-arm bind sites — so `Err(e) => e.field` works
+        // when the variant payload is a struct.
+        self.pattern_binding_types = program.pattern_binding_types.clone();
 
         // First pass: register generic functions for on-demand monomorphization;
         // declare concrete (non-generic) functions for forward-call support.
@@ -9201,6 +9218,50 @@ impl<'ctx> Codegen<'ctx> {
                     return Ok(());
                 }
                 let fn_val = self.current_fn.unwrap();
+
+                // Struct-payload reconstruction: when the typechecker
+                // recorded a struct surface type for this binding, the
+                // enum-payload codegen has handed us the i64 word that
+                // held the (single-field) struct. Wrap it back into the
+                // struct shape so subsequent `.field` access dispatches
+                // through the right LLVM struct type. Limited to the
+                // single-i64-field case for now — wider error wrappers
+                // can't survive the i64-payload-word lowering anyway, so
+                // there's nothing to reconstitute beyond this shape.
+                let key = (pattern.span.offset, pattern.span.length);
+                if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
+                    if let Some(&st) = self.struct_types.get(&type_name) {
+                        if let BasicValueEnum::IntValue(iv) = scrut {
+                            if st.count_fields() == 1
+                                && matches!(
+                                    st.get_field_type_at_index(0),
+                                    Some(BasicTypeEnum::IntType(t))
+                                        if t.get_bit_width() == iv.get_type().get_bit_width()
+                                )
+                            {
+                                let undef = st.get_undef();
+                                let struct_val = self
+                                    .builder
+                                    .build_insert_value(undef, iv, 0, "pat.struct")
+                                    .unwrap()
+                                    .into_struct_value();
+                                let alloca =
+                                    self.create_entry_alloca(fn_val, name, st.into());
+                                self.builder.build_store(alloca, struct_val).unwrap();
+                                self.variables.insert(
+                                    name.clone(),
+                                    VarSlot {
+                                        ptr: alloca,
+                                        ty: st.into(),
+                                    },
+                                );
+                                self.var_type_names.insert(name.clone(), type_name);
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+
                 let alloca = self.create_entry_alloca(fn_val, name, scrut.get_type());
                 self.builder.build_store(alloca, scrut).unwrap();
                 self.variables.insert(

@@ -1018,6 +1018,16 @@ pub struct TypeCheckResult {
     /// stack at execution time. Consumed by the interpreter to dispatch
     /// `T.method()` calls inside generic function bodies.
     pub call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// For each pattern-binding name introduced by `bind_pattern_types`, the
+    /// canonical type name (e.g. `"MyError"`). Keyed by the pattern's span.
+    /// Used by codegen to reconstitute struct payloads from the i64 word
+    /// when binding match-arm variables: `Err(e)` where the variant payload
+    /// is a struct, `e` is bound as i64 by the enum-payload codegen, and
+    /// codegen uses this table to know the surface type of `e` so
+    /// `e.field` field access can dispatch through the right struct shape.
+    /// Only `Type::Named` types are recorded (primitives, refs, etc. don't
+    /// need the reconstruction step).
+    pub pattern_binding_types: HashMap<SpanKey, String>,
 }
 
 // ── Cross-module visibility helpers (CR-24 slice 6) ─────────────
@@ -1112,6 +1122,9 @@ pub struct TypeChecker<'a> {
     /// pushes the resolved frame so `T.method()` and bare-method calls inside
     /// the callee's body can look up `T`'s concrete binding.
     call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// Pattern-binding name → canonical type name. See the public copy on
+    /// `TypeCheckResult` for the consumer doc.
+    pattern_binding_types: HashMap<SpanKey, String>,
     /// Trait bounds for the generic parameters in the current enclosing scope
     /// (impl-level + function/method-level). Indexed by the param's textual
     /// name so it pairs naturally with `Type::TypeParam(name)`. Populated on
@@ -1165,6 +1178,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
             call_type_subs: HashMap::new(),
+            pattern_binding_types: HashMap::new(),
             enclosing_bounds: HashMap::new(),
             closure_once_reasons: HashMap::new(),
         }
@@ -1212,6 +1226,7 @@ impl<'a> TypeChecker<'a> {
             method_callee_types: self.method_callee_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             call_type_subs: self.call_type_subs,
+            pattern_binding_types: self.pattern_binding_types,
         }
     }
 
@@ -9132,19 +9147,41 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
                 self.local_scope.insert(name.clone(), expected.clone());
+                // Mirror bind_pattern_types's side-table write so codegen
+                // can reconstitute struct payloads for match-arm bindings.
+                if let Type::Named { name: type_name, .. } = expected {
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                }
             }
             PatternKind::Literal(_) => {
                 // Type checking of literal patterns deferred
             }
             PatternKind::TupleVariant { path, patterns } => {
                 let variant_name = path.last().cloned().unwrap_or_default();
-                if let Type::Named { name, .. } = expected {
+                if let Type::Named { name, args } = expected {
                     if let Some(enum_info) = self.env.enums.get(name).cloned() {
                         if let Some((_, VariantTypeInfo::Tuple(field_types))) =
                             enum_info.variants.iter().find(|(n, _)| n == &variant_name)
                         {
+                            // Substitute the enum's generic params with the
+                            // concrete args from the scrutinee's type so
+                            // sub-patterns see the resolved payload type
+                            // (e.g. `Err(e)` against `Result[i64, MyError]`
+                            // sees `e: MyError`, not `e: TypeParam("E")`).
+                            let subs: HashMap<String, Type> = enum_info
+                                .generic_params
+                                .iter()
+                                .cloned()
+                                .zip(args.iter().cloned())
+                                .collect();
                             for (pat, ty) in patterns.iter().zip(field_types.iter()) {
-                                self.check_pattern_against(pat, ty);
+                                let resolved = if subs.is_empty() {
+                                    ty.clone()
+                                } else {
+                                    substitute_type_params(ty, &subs)
+                                };
+                                self.check_pattern_against(pat, &resolved);
                             }
                             return;
                         }
@@ -9327,6 +9364,14 @@ impl<'a> TypeChecker<'a> {
         match &pattern.kind {
             PatternKind::Binding(name) => {
                 self.local_scope.insert(name.clone(), ty.clone());
+                // Record the surface type for codegen so it can reconstitute
+                // struct payloads from the i64 word at match-arm bind sites
+                // (see TypeCheckResult.pattern_binding_types). Only Named
+                // types need this — primitives and references don't.
+                if let Type::Named { name: type_name, .. } = ty {
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                }
             }
             PatternKind::Tuple(patterns) => {
                 if let Type::Tuple(types) = ty {

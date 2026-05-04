@@ -73,6 +73,15 @@ pub type CalleeEffectfulTable = std::collections::HashMap<String, bool>;
 /// calls.
 pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Side-table populated by the lowering pass from the typechecker's
+/// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
+/// length) to the canonical surface type name (e.g. `"MyError"`). Used by
+/// codegen at match-arm bind sites: when binding a tuple-variant payload
+/// to a name whose surface type is a struct, codegen reconstitutes the
+/// struct value from the i64 payload word so subsequent `.field` access
+/// dispatches through the right struct shape.
+pub type PatternBindingTypesTable = std::collections::HashMap<(usize, usize), String>;
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -86,6 +95,8 @@ pub struct Program {
     pub callee_effectful: CalleeEffectfulTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
+    pub pattern_binding_types: PatternBindingTypesTable,
 }
 
 // ── Top-level Items ──────────────────────────────────────────────

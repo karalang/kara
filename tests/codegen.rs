@@ -2864,18 +2864,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "LLVM-verification half of the cross-error `?` bug is fixed: \
-                the `?` propagation now reconstitutes the source error struct \
-                from the i64 payload word before calling Target.from, and \
-                coerces the struct return back to an i64 word for the outer \
-                Result. But the test asserts on `e.code` in `Err(e) => …`, \
-                which needs match-arm bindings to reconstitute struct payloads \
-                from the i64 word — `bind_pattern_values` for TupleVariant \
-                currently binds the i64 directly. Reconstructing the struct \
-                requires plumbing typechecker pattern-type info into codegen's \
-                bind site, a separate codegen change. Smoke-test the \
-                LLVM-verification fix via a follow-up that asserts on a \
-                non-struct-field match-arm action, e.g. `Err(_) => println(99)`."]
     fn test_e2e_question_cross_error_from_conversion() {
         // ? converts the inner error type via the user-impl `From` when
         // typechecker records a question_conversion at this site.
@@ -2900,10 +2888,9 @@ fn main() {
 }
 "#,
         );
-        if let Some(out) = out {
-            // Without conversion: 7. With From doubling: 14.
-            assert_eq!(out.trim(), "14");
-        }
+        let out = out.expect("? cross-error codegen should not bail");
+        // Without conversion: 7. With From doubling: 14.
+        assert_eq!(out.trim(), "14");
     }
 
     #[test]
