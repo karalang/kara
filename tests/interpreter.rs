@@ -4038,3 +4038,138 @@ fn main() {
 "#);
     assert_eq!(output, "5\n5\n");
 }
+
+// ── Iterator: `iter()` / `into_iter()` / `next()` (wip-list2 subtask 1) ──
+
+#[test]
+fn test_iter_next_drains_vec_in_order() {
+    // Calling next() repeatedly walks the source elements then yields None.
+    // The cursor advance writes back through the binding, so successive
+    // calls observe the new state.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    let mut it = v.iter();
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\ndone\n");
+}
+
+#[test]
+fn test_into_iter_matches_iter_at_runtime() {
+    // The interpreter is type-erased; iter() and into_iter() produce the
+    // same Value::Iterator. Verifying observable equivalence pins the
+    // contract before laziness adaptors land.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let mut a = v.iter();
+    let mut b = v.into_iter();
+    println(a.next().unwrap());
+    println(b.next().unwrap());
+    println(a.next().unwrap());
+    println(b.next().unwrap());
+}
+"#,
+    );
+    assert_eq!(output, "1\n1\n2\n2\n");
+}
+
+#[test]
+fn test_iter_on_set_yields_each_element_once() {
+    // Set iterates in insertion order at the interpreter (storage backed
+    // by Vec<Value>); next() yields each element exactly once before None.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    s.insert(7);
+    s.insert(3);
+    s.insert(11);
+    let mut it = s.iter();
+    let mut sum = 0;
+    let mut count = 0;
+    let mut more = true;
+    while more {
+        match it.next() {
+            Some(n) => { sum = sum + n; count = count + 1; },
+            None    => { more = false; },
+        }
+    }
+    println(sum);
+    println(count);
+}
+"#,
+    );
+    assert_eq!(output, "21\n3\n");
+}
+
+#[test]
+fn test_iter_on_sorted_set_yields_ascending() {
+    // SortedSet iterates ascending — verify next() honors that order.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut s: SortedSet[i64] = SortedSet.new();
+    s.insert(11);
+    s.insert(3);
+    s.insert(7);
+    let mut it = s.iter();
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+}
+"#,
+    );
+    assert_eq!(output, "3\n7\n11\n");
+}
+
+#[test]
+fn test_iter_on_map_yields_kv_tuples() {
+    // Map.iter() yields (K, V) tuples in insertion order at the interpreter.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    let mut it = m.iter();
+    let (k1, v1) = it.next().unwrap();
+    let (k2, v2) = it.next().unwrap();
+    println(k1);
+    println(v1);
+    println(k2);
+    println(v2);
+}
+"#,
+    );
+    assert_eq!(output, "a\n1\nb\n2\n");
+}
+
+#[test]
+fn test_iter_on_empty_vec_yields_none_immediately() {
+    // First next() on an empty source returns None; no Some preceded it.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let mut it = v.iter();
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}

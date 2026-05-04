@@ -95,6 +95,15 @@ pub enum Value {
     /// Set[T: Hash + Eq] — hash set backed by a Vec for interpreter simplicity.
     /// O(n) lookup is fine for testing; the typechecker enforces Hash + Eq.
     Set(Vec<Value>),
+    /// Iterator value produced by `.iter()` / `.into_iter()` on a collection.
+    /// `items` holds the source elements eagerly snapshotted at construction
+    /// (Array as-is, Map as `(K, V)` tuples, Set/SortedSet flattened);
+    /// `cursor` is the next-yield index. Subtask 1 of the iterator-adaptor
+    /// surface tracked in `wip-list2.md` — adaptor steps land in subtask 3+.
+    Iterator {
+        items: Vec<Value>,
+        cursor: usize,
+    },
     /// Sender[T] end of a Channel[T]. Wraps a shared queue so that cloning a
     /// Sender creates an additional producer that shares the same buffer.
     Sender(Arc<Mutex<VecDeque<Value>>>),
@@ -191,6 +200,9 @@ impl PartialEq for Value {
             (Value::Sender(a), Value::Sender(b)) => Arc::ptr_eq(a, b),
             (Value::Receiver(a), Value::Receiver(b)) => Arc::ptr_eq(a, b),
             (Value::Function { .. }, Value::Function { .. }) => false,
+            // Iterators have no meaningful equality — like closures, two
+            // iterator values aren't compared structurally.
+            (Value::Iterator { .. }, Value::Iterator { .. }) => false,
             _ => false,
         }
     }
@@ -301,6 +313,9 @@ impl std::fmt::Display for Value {
             }
             Value::Sender(_) => write!(f, "<Sender>"),
             Value::Receiver(_) => write!(f, "<Receiver>"),
+            Value::Iterator { items, cursor } => {
+                write!(f, "<iter {}/{}>", cursor, items.len())
+            }
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
         }
     }
@@ -3220,6 +3235,60 @@ impl<'a> Interpreter<'a> {
                         span.line, span.column
                     ),
                 };
+            }
+            "iter" | "into_iter" => {
+                // Snapshot the source elements eagerly into a Value::Iterator.
+                // Map yields (k, v) tuples; SortedSet flattens to ascending
+                // order; Set/Array yield elements in storage order. The
+                // tree-walk interpreter is type-erased so iter() and
+                // into_iter() are identical at this layer — the design.md
+                // borrow-vs-consume distinction is a typechecker concern.
+                let items = match &obj {
+                    Value::Array(v) => v.clone(),
+                    Value::Set(s) => s.clone(),
+                    Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
+                    Value::Map(m) => m
+                        .iter()
+                        .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
+                        .collect(),
+                    _ => unreachable!(
+                        "{}() on unsupported type at {}:{}; should be caught by typechecker",
+                        method, span.line, span.column,
+                    ),
+                };
+                return Value::Iterator { items, cursor: 0 };
+            }
+            "next" => {
+                // `Iterator.next()` — yield `Some(items[cursor])` and advance,
+                // or `None` when exhausted. When the receiver is a binding,
+                // write the advanced cursor back so subsequent calls see it.
+                // The `matches!` guard borrows `obj` so the fall-through path
+                // (defensive — typechecker should reject non-Iterator receivers)
+                // can keep using it.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Value::Iterator { items, mut cursor } = obj else {
+                        unreachable!()
+                    };
+                    let result = if cursor < items.len() {
+                        let val = items[cursor].clone();
+                        cursor += 1;
+                        Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "Some".to_string(),
+                            data: EnumData::Tuple(vec![val]),
+                        }
+                    } else {
+                        Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        }
+                    };
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::Iterator { items, cursor });
+                    }
+                    return result;
+                }
             }
             "as_slice" | "as_slice_mut" => {
                 // The tree-walk interpreter is type-erased; Slice[T] uses

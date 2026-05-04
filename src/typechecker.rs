@@ -333,6 +333,25 @@ fn method_callee_type_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// Resolve the `Item` type of an iterable receiver — the element yielded by
+/// `next()` after `iter()` / `into_iter()`. Returns `None` if `ty` is not an
+/// iterable collection. `Map[K, V]` yields `(K, V)` tuples per design.md
+/// § Iteration; `Vec`, `Set`, `SortedSet`, `Array`, `Slice` yield `T`.
+/// `ref` / `mut ref` borrows are unwrapped transparently.
+fn iterator_item_type_for(ty: &Type) -> Option<Type> {
+    match ty {
+        Type::Array { element, .. } => Some((**element).clone()),
+        Type::Slice { element, .. } => Some((**element).clone()),
+        Type::Named { name, args } => match name.as_str() {
+            "Vec" | "Set" | "SortedSet" | "VecDeque" if args.len() == 1 => Some(args[0].clone()),
+            "Map" if args.len() == 2 => Some(Type::Tuple(vec![args[0].clone(), args[1].clone()])),
+            _ => None,
+        },
+        Type::Ref(inner) | Type::MutRef(inner) => iterator_item_type_for(inner),
+        _ => None,
+    }
+}
+
 /// Walk `ty` looking for any `Type::TypeParam` or `Type::AssocProjection` node.
 /// Used by `infer_call` to decide whether a callee signature needs ad-hoc
 /// generic instantiation.
@@ -7823,6 +7842,46 @@ impl<'a> TypeChecker<'a> {
             return self.infer_slice_method(element, *mutable, method, args, span);
         }
 
+        // Iterator-source methods: `iter()` / `into_iter()` on any iterable
+        // collection produce an `Iterator[Item = T]` value. Handled here in
+        // one place so per-collection method handlers don't have to repeat
+        // the registration. The borrow-vs-consume distinction between
+        // `iter()` and `into_iter()` is a typechecker concern in design.md
+        // but immaterial at this layer — both return the same Iterator type.
+        // See `wip-list2.md` § Iterator trait — full adaptor surface.
+        if method == "iter" || method == "into_iter" {
+            if let Some(item_ty) = iterator_item_type_for(&obj_ty) {
+                if !args.is_empty() {
+                    self.type_error(
+                        format!("'{}' takes no arguments", method),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                return Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![item_ty],
+                };
+            }
+        }
+
+        // Iterator method dispatch — `Iterator[Item = T].next()` and the
+        // adaptor surface (added in subtask 3+). Keyed on the receiver's
+        // outer Type::Named name; the Item type is at args[0].
+        if let Type::Named {
+            name,
+            args: type_args,
+        } = &obj_ty
+        {
+            if name == "Iterator" {
+                let item_ty = type_args.first().cloned().unwrap_or(Type::Error);
+                return self.infer_iterator_method(&item_ty, method, args, span);
+            }
+        }
+
         // `Vec[T].push(item: T)` slot check (round 12.46 / Step 4). Vec is a
         // built-in prelude type with no impl block, so without this dispatch
         // `push` falls through to the silent `Type::Error` arm below and the
@@ -8571,6 +8630,40 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Infer the return type of a method call on `Iterator[Item = T]`.
+    /// `next()` is the only adaptor method registered in subtask 1; the rest
+    /// of the surface (`map`, `filter`, `take`, etc.) lands in later subtasks
+    /// of `wip-list2.md` § Iterator trait — full adaptor surface.
+    fn infer_iterator_method(
+        &mut self,
+        item: &Type,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        match method {
+            "next" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "Iterator.next() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            _ => {
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                Type::Error
+            }
+        }
+    }
+
     /// Infer the return type of a method call on `Regex`.
     /// Regex is interpreter-only (no codegen). All methods are effect-free.
     fn infer_regex_method(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
@@ -9176,7 +9269,10 @@ impl<'a> TypeChecker<'a> {
                 self.local_scope.insert(name.clone(), expected.clone());
                 // Mirror bind_pattern_types's side-table write so codegen
                 // can reconstitute struct payloads for match-arm bindings.
-                if let Type::Named { name: type_name, .. } = expected {
+                if let Type::Named {
+                    name: type_name, ..
+                } = expected
+                {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
                 }
@@ -9395,7 +9491,10 @@ impl<'a> TypeChecker<'a> {
                 // struct payloads from the i64 word at match-arm bind sites
                 // (see TypeCheckResult.pattern_binding_types). Only Named
                 // types need this — primitives and references don't.
-                if let Type::Named { name: type_name, .. } = ty {
+                if let Type::Named {
+                    name: type_name, ..
+                } = ty
+                {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
                 }

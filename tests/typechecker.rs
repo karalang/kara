@@ -2563,9 +2563,7 @@ fn test_set_prefix_literal_infers_string() {
 #[test]
 fn test_set_prefix_literal_mismatched_elements_rejected() {
     // First item types T; subsequent items must be assignable to T.
-    let errors = typecheck_errors(
-        r#"fn main() { let s: Set[i64] = Set[1_i64, "not an int"]; }"#,
-    );
+    let errors = typecheck_errors(r#"fn main() { let s: Set[i64] = Set[1_i64, "not an int"]; }"#);
     assert!(
         !errors.is_empty(),
         "expected element-type mismatch diagnostic for heterogeneous Set literal, got no errors"
