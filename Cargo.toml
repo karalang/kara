@@ -1,0 +1,21 @@
+[workspace]
+members = ["runtime"]
+
+[package]
+name = "karac"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[features]
+default = []
+llvm = ["inkwell"]
+
+[dependencies]
+inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+regex = "1"
+ureq = "2"
+rustyline = "18.0.0"
+pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }

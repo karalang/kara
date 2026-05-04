@@ -1,0 +1,105 @@
+// db.kara — DatabaseProvider trait, effect resource, and InMemoryDb.
+//
+// This module is the heart of the Kāra-specific design in this project.
+// It exercises: effect resources, provider-rooted injection, and trait-bound
+// effect declarations.
+//
+// GAP-N: Effect resource method call syntax.
+//   The spec shows `Db.query(sql)` inside a `with reads(Db)` function, but
+//   does not specify how the runtime resolves which provider instance to call.
+//   The desugaring is presumably: look up the current `Db` provider in the
+//   ambient provider scope (set by `with_provider`) and dispatch to its
+//   `DatabaseProvider.query` impl.  This is analogous to implicit `self` for
+//   the current instance, but the spec's exact desugaring rules for
+//   `ResourceName.method(args)` inside a `with reads(ResourceName)` scope
+//   are not written out.
+//
+// GAP-O: Parameterized resources for table-level granularity.
+//   `effect resource Db: DatabaseProvider` is a single resource covering the
+//   entire database.  Two concurrent reads of different tables don't conflict
+//   per the `reads + reads = safe` rule, so they'd parallelize correctly.
+//   But two concurrent writes to *different* tables would both have
+//   `writes(Db)` and be forced to serialize — even though the tables are
+//   logically independent.
+//   The spec mentions `effect resource UserDB[user_id: i64]` (parameterized
+//   resources) for finer granularity.  A `Db[table: String]` form would let
+//   the compiler parallelize writes to disjoint tables.  The syntax is in the
+//   spec but the interaction with `DatabaseProvider` trait injection is
+//   underspecified: how does `with_provider` bind a parameterized resource?
+//
+// GAP-P: `with_provider` lifetime constraints in test code.
+//   The spec notes that provider-rooted resources "must not leak past their
+//   scope" — a closure passed to `with_provider` cannot return a value that
+//   captures the provider.  In test code this means the assertion must happen
+//   *inside* the closure, which makes the test structure awkward: you cannot
+//   run the query, extract the result, close the provider scope, and then
+//   assert — the assert must be inside the with_provider block.
+
+import query.{Row, DbError};
+
+pub trait DatabaseProvider {
+    fn query_table(ref self, table: ref String) -> Result[Vec[Row], DbError];
+    fn insert_row(mut ref self, table: ref String, row: Row) -> Result[(), DbError];
+    fn delete_where(mut ref self, table: ref String, column: ref String, value: ref Value) -> Result[(), DbError];
+}
+
+pub effect resource Db: DatabaseProvider;
+
+// InMemoryDb — a simple in-memory store used for tests and demos.
+pub struct InMemoryDb {
+    tables: Map[String, Vec[Row]],
+}
+
+impl InMemoryDb {
+    pub fn new() -> InMemoryDb {
+        InMemoryDb { tables: Map.new() }
+    }
+
+    pub fn create_table(mut ref self, name: String) {
+        self.tables.insert(name, Vec.new());
+    }
+}
+
+impl DatabaseProvider for InMemoryDb {
+    fn query_table(ref self, table: ref String) -> Result[Vec[Row], DbError] {
+        match self.tables.get(table) {
+            None       => Err(DbError.TableNotFound { name: table.clone() }),
+            Some(rows) => Ok(rows.clone()),
+        }
+    }
+
+    fn insert_row(mut ref self, table: ref String, row: Row) -> Result[(), DbError] {
+        match self.tables.get(table) {
+            None => Err(DbError.TableNotFound { name: table.clone() }),
+            Some(_) => {
+                // GAP-Q: No entry API on Map (get_or_insert_with).
+                // Must get, clone the key, and re-insert after modification.
+                // Rust's HashMap has `.entry().or_insert()` for this pattern.
+                let mut rows = self.tables[table].clone();
+                rows.push(row);
+                self.tables.insert(table.clone(), rows);
+                Ok(())
+            },
+        }
+    }
+
+    fn delete_where(mut ref self, table: ref String, column: ref String, value: ref Value) -> Result[(), DbError] {
+        match self.tables.get(table) {
+            None => Err(DbError.TableNotFound { name: table.clone() }),
+            Some(_) => {
+                // GAP-1/GAP-Q: No Vec.retain or Map entry API.
+                // Must rebuild the filtered list manually.
+                let old_rows = self.tables[table].clone();
+                let mut new_rows: Vec[Row] = Vec.new();
+                for row in old_rows {
+                    match row.get(column) {
+                        Some(v) if v == value => {},   // skip matching rows
+                        _                     => new_rows.push(row),
+                    }
+                }
+                self.tables.insert(table.clone(), new_rows);
+                Ok(())
+            },
+        }
+    }
+}

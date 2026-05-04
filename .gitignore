@@ -1,0 +1,8 @@
+# Rust
+target/
+
+# Binaries
+a.out
+
+# IDX
+.idx/

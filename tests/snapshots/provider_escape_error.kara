@@ -1,0 +1,13 @@
+effect resource Clock;
+
+struct FakeClock {}
+
+impl FakeClock {
+    fn now(self) -> i64 { 0 }
+}
+
+fn main() {
+    with_provider[Clock](FakeClock {}, || {
+        return |d: i64| Clock.now() + d;
+    });
+}

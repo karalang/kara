@@ -1,0 +1,1024 @@
+use karac::token::Token;
+use karac::tokenize;
+
+/// Helper: extract just the Token variants from SpannedTokens for easier assertion.
+fn tokens_only(source: &str) -> Vec<Token> {
+    tokenize(source).into_iter().map(|st| st.token).collect()
+}
+
+#[test]
+fn test_basic_bindings() {
+    let source = r#"
+        let x = 5;
+        let mut y = 10.5;
+        let z = "hello world";
+    "#;
+
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Let,
+        Token::Identifier("x".to_string()),
+        Token::Equal,
+        Token::Integer(5, None),
+        Token::Semicolon,
+        Token::Let,
+        Token::Mut,
+        Token::Identifier("y".to_string()),
+        Token::Equal,
+        Token::Float(10.5, None),
+        Token::Semicolon,
+        Token::Let,
+        Token::Identifier("z".to_string()),
+        Token::Equal,
+        Token::StringLiteral("hello world".to_string()),
+        Token::Semicolon,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_struct_definition() {
+    let source = r#"
+        struct Entity {
+            id: u64,
+            name: String,
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Struct,
+        Token::Identifier("Entity".to_string()),
+        Token::LeftBrace,
+        Token::Identifier("id".to_string()),
+        Token::Colon,
+        Token::Identifier("u64".to_string()),
+        Token::Comma,
+        Token::Identifier("name".to_string()),
+        Token::Colon,
+        Token::Identifier("String".to_string()),
+        Token::Comma,
+        Token::RightBrace,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_function_with_effects() {
+    let source = r#"
+        pub fn save_user(user: User) -> Result<(), Error>
+            writes(UserDB) {
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Pub,
+        Token::Fn,
+        Token::Identifier("save_user".to_string()),
+        Token::LeftParen,
+        Token::Identifier("user".to_string()),
+        Token::Colon,
+        Token::Identifier("User".to_string()),
+        Token::RightParen,
+        Token::Arrow,
+        Token::Identifier("Result".to_string()),
+        Token::LessThan,
+        Token::LeftParen,
+        Token::RightParen,
+        Token::Comma,
+        Token::Identifier("Error".to_string()),
+        Token::GreaterThan,
+        Token::Writes,
+        Token::LeftParen,
+        Token::Identifier("UserDB".to_string()),
+        Token::RightParen,
+        Token::LeftBrace,
+        Token::RightBrace,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_enum_and_match() {
+    let source = r#"
+        enum Shape {
+            Circle { radius: f64 },
+            Rectangle { width: f64, height: f64 },
+        }
+
+        match shape {
+            Circle { radius } => radius * radius,
+            Rectangle { width, height } => width * height,
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    // Just verify key tokens are present
+    assert_eq!(tokens[0], Token::Enum);
+    assert_eq!(tokens[1], Token::Identifier("Shape".to_string()));
+    assert!(tokens.contains(&Token::Match));
+    assert!(tokens.contains(&Token::FatArrow));
+}
+
+#[test]
+fn test_trait_and_impl() {
+    let source = r#"
+        trait Processor {
+            fn process(self, data: Data) -> Result[Output, Error] with _;
+        }
+
+        impl Processor for LocalProcessor {
+            fn process(self, data: Data) -> Result[Output, Error] {
+                Ok(compute(data))
+            }
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Trait);
+    assert!(tokens.contains(&Token::With));
+    assert!(tokens.contains(&Token::Underscore));
+    assert!(tokens.contains(&Token::Impl));
+}
+
+#[test]
+fn test_effect_declarations() {
+    let source = r#"
+        effect resource UserDB: DatabaseProvider;
+        effect group OrderProcessing = Validation + Fulfillment;
+        transparent effect verb traces;
+    "#;
+
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Effect);
+    assert!(tokens.contains(&Token::Transparent));
+    assert!(tokens.contains(&Token::Group));
+}
+
+#[test]
+fn test_ownership_keywords() {
+    let source = r#"
+        fn first_word(s: ref String) -> ref String {
+            s.split(' ').first()
+        }
+
+        struct Child {
+            parent: weak Parent,
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::Ref));
+    assert!(tokens.contains(&Token::Weak));
+}
+
+#[test]
+fn test_control_flow() {
+    let source = r#"
+        if condition {
+            return value;
+        } else {
+            break;
+        }
+        while running {
+            continue;
+        }
+        for item in items {
+            loop { break; }
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::If));
+    assert!(tokens.contains(&Token::Else));
+    assert!(tokens.contains(&Token::Return));
+    assert!(tokens.contains(&Token::While));
+    assert!(tokens.contains(&Token::For));
+    assert!(tokens.contains(&Token::In));
+    assert!(tokens.contains(&Token::Loop));
+    assert!(tokens.contains(&Token::Break));
+    assert!(tokens.contains(&Token::Continue));
+}
+
+#[test]
+fn test_operators() {
+    let source = "a && b || !c & d | e ^ f << g >> h % i ..= j .. k";
+    let tokens = tokens_only(source);
+    // Lexer still emits the legacy logical-symbol tokens; the parser rejects
+    // them with a migration error pointing at the keyword forms.
+    assert!(tokens.contains(&Token::AmpAmp));
+    assert!(tokens.contains(&Token::PipePipe));
+    assert!(tokens.contains(&Token::Bang));
+    assert!(tokens.contains(&Token::Amp));
+    assert!(tokens.contains(&Token::Pipe));
+    assert!(tokens.contains(&Token::Caret));
+    assert!(tokens.contains(&Token::LessLess));
+    assert!(tokens.contains(&Token::GreaterGreater));
+    assert!(tokens.contains(&Token::Percent));
+    assert!(tokens.contains(&Token::DotDotEq));
+    assert!(tokens.contains(&Token::DotDot));
+}
+
+#[test]
+fn test_logical_keywords() {
+    let source = "a and b or not c";
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::And));
+    assert!(tokens.contains(&Token::Or));
+    assert!(tokens.contains(&Token::Not));
+}
+
+#[test]
+fn test_move_keyword_reserved() {
+    // `move` is a reserved keyword (used in the parser's closure-capture-mode
+    // diagnostic). It cannot be used as an identifier.
+    let tokens = tokens_only("move");
+    assert!(tokens.contains(&Token::Move));
+}
+
+#[test]
+fn test_path_separator_and_question() {
+    // `.` is both the path separator and field/method access operator since v29;
+    // the parser disambiguates by identifier case class.
+    let source = "std.collections.HashMap value?";
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::Dot));
+    assert!(tokens.contains(&Token::Question));
+}
+
+#[test]
+fn test_numeric_literals() {
+    let source = "42 1_000_000 1.5 0xFF 0b1010 0o77";
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Integer(42, None));
+    assert_eq!(tokens[1], Token::Integer(1_000_000, None));
+    assert_eq!(tokens[2], Token::Float(1.5, None));
+    assert_eq!(tokens[3], Token::Integer(0xFF, None));
+    assert_eq!(tokens[4], Token::Integer(0b1010, None));
+    assert_eq!(tokens[5], Token::Integer(0o77, None));
+}
+
+#[test]
+fn test_unsafe_extern() {
+    let source = r#"
+        unsafe {
+            let ptr = value;
+        }
+        extern "C" fn write(fd: i32) -> i32
+            writes(FileSystem);
+    "#;
+
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::Unsafe));
+    assert!(tokens.contains(&Token::Extern));
+}
+
+#[test]
+fn test_layout_block() {
+    let source = r#"
+        layout entities: Collection[Entity] {
+            group physics { position, velocity }
+            group combat { health, armor }
+        }
+    "#;
+
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Layout);
+    assert!(tokens.contains(&Token::Group));
+}
+
+#[test]
+fn test_self_keywords() {
+    let source = "self Self";
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::SelfValue);
+    assert_eq!(tokens[1], Token::SelfType);
+}
+
+#[test]
+fn test_block_comments() {
+    let source = "let /* this is a comment */ x = 5;";
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Let,
+        Token::Identifier("x".to_string()),
+        Token::Equal,
+        Token::Integer(5, None),
+        Token::Semicolon,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_nested_block_comments() {
+    let source = "let /* outer /* nested */ still comment */ x = 5;";
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Let,
+        Token::Identifier("x".to_string()),
+        Token::Equal,
+        Token::Integer(5, None),
+        Token::Semicolon,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_span_tracking() {
+    let source = "let x = 5;";
+    let spanned_tokens = tokenize(source);
+
+    // "let" starts at line 1, column 1
+    assert_eq!(spanned_tokens[0].span.line, 1);
+    assert_eq!(spanned_tokens[0].span.column, 1);
+    assert_eq!(spanned_tokens[0].span.length, 3);
+
+    // "x" starts at line 1, column 5
+    assert_eq!(spanned_tokens[1].span.line, 1);
+    assert_eq!(spanned_tokens[1].span.column, 5);
+    assert_eq!(spanned_tokens[1].span.length, 1);
+}
+
+#[test]
+fn test_alias_and_independent() {
+    let source = r#"
+        alias mylib.UserDB = theirlib.TheirDB;
+        independent mylib.UserDB, theirlib.TheirDB;
+    "#;
+
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::Alias));
+    assert!(tokens.contains(&Token::Independent));
+}
+
+#[test]
+fn test_attributes() {
+    let source = "#[no_rc]";
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Pound);
+    assert_eq!(tokens[1], Token::LeftBracket);
+    assert_eq!(tokens[2], Token::Identifier("no_rc".to_string()));
+    assert_eq!(tokens[3], Token::RightBracket);
+}
+
+#[test]
+fn test_modules() {
+    let source = r#"
+        mod parser;
+        use std.collections.HashMap;
+        pub const MAX: i64 = 1024;
+    "#;
+
+    let tokens = tokens_only(source);
+    assert!(tokens.contains(&Token::Mod));
+    assert!(tokens.contains(&Token::Use));
+    assert!(tokens.contains(&Token::Pub));
+    assert!(tokens.contains(&Token::Const));
+}
+
+#[test]
+fn test_type_keyword() {
+    let source = "type UserId = u64;";
+    let tokens = tokens_only(source);
+    let expected = vec![
+        Token::Type,
+        Token::Identifier("UserId".to_string()),
+        Token::Equal,
+        Token::Identifier("u64".to_string()),
+        Token::Semicolon,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_string_escape_sequences() {
+    let source = r#""hello\nworld""#;
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::StringLiteral("hello\nworld".to_string()));
+}
+
+#[test]
+fn test_string_escape_tab_and_backslash() {
+    let source = r#""col1\tcol2\\end""#;
+    let tokens = tokens_only(source);
+    assert_eq!(
+        tokens[0],
+        Token::StringLiteral("col1\tcol2\\end".to_string())
+    );
+}
+
+#[test]
+fn test_string_escape_quote() {
+    let source = r#""say \"hello\"""#;
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::StringLiteral("say \"hello\"".to_string()));
+}
+
+#[test]
+fn test_doc_comments() {
+    let source = "/// This is a doc comment\nfn main() {}";
+    let tokens = tokens_only(source);
+    assert_eq!(
+        tokens[0],
+        Token::DocComment("This is a doc comment".to_string())
+    );
+    assert_eq!(tokens[1], Token::Fn);
+}
+
+#[test]
+fn test_regular_comments_still_skipped() {
+    let source = "// regular comment\nlet x = 5;";
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::Let);
+}
+
+#[test]
+fn test_doc_comment_vs_regular_comment() {
+    let source = "// skip this\n/// keep this\nlet x = 5;";
+    let tokens = tokens_only(source);
+    assert_eq!(tokens[0], Token::DocComment("keep this".to_string()));
+    assert_eq!(tokens[1], Token::Let);
+}
+
+#[test]
+fn test_module_doc_comments() {
+    // `//!` lines emit a distinct ModuleDocComment token, separate from
+    // regular `///` doc comments and from plain `//` line comments.
+    let source = "//! Crate-level summary.\n//! Second line.\nfn main() {}";
+    let tokens = tokens_only(source);
+    assert_eq!(
+        tokens[0],
+        Token::ModuleDocComment("Crate-level summary.".to_string())
+    );
+    assert_eq!(
+        tokens[1],
+        Token::ModuleDocComment("Second line.".to_string())
+    );
+    assert_eq!(tokens[2], Token::Fn);
+}
+
+#[test]
+fn test_char_literal_simple() {
+    let tokens = tokens_only("'a'");
+    assert_eq!(tokens[0], Token::CharLiteral('a'));
+    assert_eq!(tokens[1], Token::EOF);
+}
+
+#[test]
+fn test_char_literal_escape_sequences() {
+    assert_eq!(tokens_only("'\\n'")[0], Token::CharLiteral('\n'));
+    assert_eq!(tokens_only("'\\t'")[0], Token::CharLiteral('\t'));
+    assert_eq!(tokens_only("'\\r'")[0], Token::CharLiteral('\r'));
+    assert_eq!(tokens_only("'\\\\'")[0], Token::CharLiteral('\\'));
+    assert_eq!(tokens_only("'\\''")[0], Token::CharLiteral('\''));
+    assert_eq!(tokens_only("'\\0'")[0], Token::CharLiteral('\0'));
+}
+
+#[test]
+fn test_char_literal_unicode_escape() {
+    let tokens = tokens_only("'\\u{1F600}'");
+    assert_eq!(tokens[0], Token::CharLiteral('\u{1F600}'));
+}
+
+#[test]
+fn test_char_literal_in_binding() {
+    let tokens = tokens_only("let c = 'x';");
+    let expected = vec![
+        Token::Let,
+        Token::Identifier("c".to_string()),
+        Token::Equal,
+        Token::CharLiteral('x'),
+        Token::Semicolon,
+        Token::EOF,
+    ];
+    assert_eq!(tokens, expected);
+}
+
+#[test]
+fn test_char_literal_unterminated() {
+    let tokens = tokens_only("'a");
+    assert!(matches!(tokens[0], Token::Error(_)));
+}
+
+#[test]
+fn test_char_literal_unknown_escape() {
+    let tokens = tokens_only("'\\q'");
+    assert!(matches!(tokens[0], Token::Error(_)));
+}
+
+#[test]
+fn test_dyn_keyword() {
+    let tokens = tokens_only("dyn");
+    assert_eq!(tokens, vec![Token::Dyn, Token::EOF]);
+}
+
+#[test]
+fn test_dyn_is_reserved() {
+    // dyn cannot be used as an identifier — it lexes as a keyword
+    let tokens = tokens_only("let dyn = 5;");
+    assert_eq!(
+        tokens,
+        vec![
+            Token::Let,
+            Token::Dyn,
+            Token::Equal,
+            Token::Integer(5, None),
+            Token::Semicolon,
+            Token::EOF,
+        ]
+    );
+}
+
+// ── Interpolated strings ─────────────────────────────────────────
+
+use karac::token::InterpolationPart;
+
+#[test]
+fn test_interpolated_string_basic() {
+    let tokens = tokens_only(r#"f"hello {name}""#);
+    assert!(matches!(&tokens[0], Token::InterpolatedStringLiteral(_)));
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hello "));
+        assert!(matches!(&parts[1], InterpolationPart::Expr(s) if s == "name"));
+    }
+}
+
+#[test]
+fn test_interpolated_string_multiple_exprs() {
+    let tokens = tokens_only(r#"f"{a} and {b}""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], InterpolationPart::Expr(s) if s == "a"));
+        assert!(matches!(&parts[1], InterpolationPart::Text(s) if s == " and "));
+        assert!(matches!(&parts[2], InterpolationPart::Expr(s) if s == "b"));
+    }
+}
+
+#[test]
+fn test_interpolated_string_no_exprs() {
+    let tokens = tokens_only(r#"f"plain text""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "plain text"));
+    }
+}
+
+// ── Multi-line strings ───────────────────────────────────────────
+
+#[test]
+fn test_multi_line_string() {
+    let source = "let s = \"\"\"hello\nworld\"\"\"";
+    let tokens = tokens_only(source);
+    // Find the MultiStringLiteral token (might be at index 2 or 3 depending on parsing)
+    let has_multi = tokens
+        .iter()
+        .any(|t| matches!(t, Token::MultiStringLiteral(_)));
+    assert!(has_multi, "Expected MultiStringLiteral, got: {:?}", tokens);
+}
+
+// ── Defer/errdefer keywords ──────────────────────────────────────
+
+#[test]
+fn test_defer_keywords() {
+    let tokens = tokens_only("defer errdefer");
+    assert_eq!(tokens[0], Token::Defer);
+    assert_eq!(tokens[1], Token::ErrDefer);
+}
+
+// ── Asm keywords ─────────────────────────────────────────────────
+
+#[test]
+fn test_asm_keywords() {
+    let tokens = tokens_only("asm global_asm");
+    assert_eq!(tokens[0], Token::Asm);
+    assert_eq!(tokens[1], Token::GlobalAsm);
+}
+
+// ── New keywords (syntax spec §1.1) ─────────────────────────────
+
+#[test]
+fn test_visibility_private() {
+    let tokens = tokens_only("pub private");
+    assert_eq!(tokens[0], Token::Pub);
+    assert_eq!(tokens[1], Token::Private);
+}
+
+#[test]
+fn test_ownership_keywords_full() {
+    let tokens = tokens_only("own ref weak lock");
+    assert_eq!(tokens[0], Token::Own);
+    assert_eq!(tokens[1], Token::Ref);
+    assert_eq!(tokens[2], Token::Weak);
+    assert_eq!(tokens[3], Token::Lock);
+}
+
+#[test]
+fn test_effect_keywords_full() {
+    let tokens = tokens_only(
+        "effect resource verb reads writes sends receives allocates panics blocks suspends",
+    );
+    assert_eq!(tokens[0], Token::Effect);
+    assert_eq!(tokens[1], Token::Resource);
+    assert_eq!(tokens[2], Token::Verb);
+    assert_eq!(tokens[3], Token::Reads);
+    assert_eq!(tokens[4], Token::Writes);
+    assert_eq!(tokens[5], Token::Sends);
+    assert_eq!(tokens[6], Token::Receives);
+    assert_eq!(tokens[7], Token::Allocates);
+    assert_eq!(tokens[8], Token::Panics);
+    assert_eq!(tokens[9], Token::Blocks);
+    assert_eq!(tokens[10], Token::Suspends);
+}
+
+#[test]
+fn test_effect_modifier_keywords() {
+    let tokens = tokens_only("with transparent stable seq par yield");
+    assert_eq!(tokens[0], Token::With);
+    assert_eq!(tokens[1], Token::Transparent);
+    assert_eq!(tokens[2], Token::Stable);
+    assert_eq!(tokens[3], Token::Seq);
+    assert_eq!(tokens[4], Token::Par);
+    assert_eq!(tokens[5], Token::Yield);
+}
+
+#[test]
+fn test_providers_keyword() {
+    let tokens = tokens_only("providers");
+    assert_eq!(tokens[0], Token::Providers);
+}
+
+// ── Compound assignment operators ───────────────────────────────
+
+#[test]
+fn test_compound_assignment_arithmetic() {
+    let tokens = tokens_only("x += 1; y -= 2; z *= 3; w /= 4; v %= 5;");
+    // x += 1 ;
+    assert_eq!(tokens[1], Token::PlusEqual);
+    // y -= 2 ;
+    assert_eq!(tokens[5], Token::MinusEqual);
+    // z *= 3 ;
+    assert_eq!(tokens[9], Token::StarEqual);
+    // w /= 4 ;
+    assert_eq!(tokens[13], Token::SlashEqual);
+    // v %= 5 ;
+    assert_eq!(tokens[17], Token::PercentEqual);
+}
+
+#[test]
+fn test_compound_assignment_bitwise() {
+    let tokens = tokens_only("a &= b; c |= d; e ^= f; g <<= h; i >>= j;");
+    assert_eq!(tokens[1], Token::AmpEqual);
+    assert_eq!(tokens[5], Token::PipeEqual);
+    assert_eq!(tokens[9], Token::CaretEqual);
+    assert_eq!(tokens[13], Token::LessLessEqual);
+    assert_eq!(tokens[17], Token::GreaterGreaterEqual);
+}
+
+#[test]
+fn test_compound_vs_plain_operators() {
+    // Ensure plain operators still work when not followed by '='
+    let tokens = tokens_only("+ - * / % & | ^ << >>");
+    assert_eq!(tokens[0], Token::Plus);
+    assert_eq!(tokens[1], Token::Minus);
+    assert_eq!(tokens[2], Token::Star);
+    assert_eq!(tokens[3], Token::Slash);
+    assert_eq!(tokens[4], Token::Percent);
+    assert_eq!(tokens[5], Token::Amp);
+    assert_eq!(tokens[6], Token::Pipe);
+    assert_eq!(tokens[7], Token::Caret);
+    assert_eq!(tokens[8], Token::LessLess);
+    assert_eq!(tokens[9], Token::GreaterGreater);
+}
+
+// ── Unicode escapes in strings ──────────────────────────────────
+
+#[test]
+fn test_string_unicode_escape() {
+    let tokens = tokens_only(r#""\u{1F600}""#);
+    match &tokens[0] {
+        Token::StringLiteral(s) => assert_eq!(s, "\u{1F600}"),
+        other => panic!("Expected StringLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_string_unicode_escape_ascii() {
+    let tokens = tokens_only(r#""\u{41}""#);
+    match &tokens[0] {
+        Token::StringLiteral(s) => assert_eq!(s, "A"),
+        other => panic!("Expected StringLiteral, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_interpolated_string_unicode_escape() {
+    use karac::token::InterpolationPart;
+    let tokens = tokens_only(r#"f"hello \u{2764}""#);
+    if let Token::InterpolatedStringLiteral(parts) = &tokens[0] {
+        assert_eq!(parts.len(), 1);
+        assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hello \u{2764}"));
+    } else {
+        panic!("Expected InterpolatedStringLiteral, got {:?}", tokens[0]);
+    }
+}
+
+// ── Integer and float type suffixes ─────────────────────────────
+
+use karac::token::{FloatSuffix, IntSuffix};
+
+#[test]
+fn test_integer_suffix_i32() {
+    let tokens = tokens_only("42i32");
+    assert_eq!(tokens[0], Token::Integer(42, Some(IntSuffix::I32)));
+}
+
+#[test]
+fn test_integer_suffix_u8() {
+    let tokens = tokens_only("255u8");
+    assert_eq!(tokens[0], Token::Integer(255, Some(IntSuffix::U8)));
+}
+
+#[test]
+fn test_integer_suffix_i128() {
+    let tokens = tokens_only("100i128");
+    assert_eq!(tokens[0], Token::Integer(100, Some(IntSuffix::I128)));
+}
+
+#[test]
+fn test_integer_no_suffix() {
+    let tokens = tokens_only("42");
+    assert_eq!(tokens[0], Token::Integer(42, None));
+}
+
+#[test]
+fn test_float_suffix_f32() {
+    let tokens = tokens_only("1.5f32");
+    assert_eq!(tokens[0], Token::Float(1.5, Some(FloatSuffix::F32)));
+}
+
+#[test]
+fn test_float_suffix_f64() {
+    let tokens = tokens_only("2.25f64");
+    assert_eq!(tokens[0], Token::Float(2.25, Some(FloatSuffix::F64)));
+}
+
+#[test]
+fn test_float_no_suffix() {
+    let tokens = tokens_only("1.0");
+    assert_eq!(tokens[0], Token::Float(1.0, None));
+}
+
+#[test]
+fn test_hex_with_suffix() {
+    let tokens = tokens_only("0xFFu32");
+    assert_eq!(tokens[0], Token::Integer(0xFF, Some(IntSuffix::U32)));
+}
+
+#[test]
+fn test_binary_with_suffix() {
+    let tokens = tokens_only("0b1010i8");
+    assert_eq!(tokens[0], Token::Integer(0b1010, Some(IntSuffix::I8)));
+}
+
+#[test]
+fn test_octal_with_suffix() {
+    let tokens = tokens_only("0o77u16");
+    assert_eq!(tokens[0], Token::Integer(0o77, Some(IntSuffix::U16)));
+}
+
+#[test]
+fn test_suffix_not_confused_with_identifier() {
+    // "42i" should not match any suffix — i is not a valid suffix
+    let tokens = tokens_only("42 i32_var");
+    assert_eq!(tokens[0], Token::Integer(42, None));
+    assert_eq!(tokens[1], Token::Identifier("i32_var".to_string()));
+}
+
+// ── Float literal exponent notation ─────────────────────────────
+
+#[test]
+fn test_float_exponent_basic() {
+    let tokens = tokens_only("1e10");
+    assert_eq!(tokens[0], Token::Float(1e10, None));
+}
+
+#[test]
+fn test_float_exponent_with_decimal() {
+    let tokens = tokens_only("1.5e-3");
+    assert_eq!(tokens[0], Token::Float(1.5e-3, None));
+}
+
+#[test]
+fn test_float_exponent_large() {
+    let tokens = tokens_only("6.022e23");
+    assert_eq!(tokens[0], Token::Float(6.022e23, None));
+}
+
+#[test]
+fn test_float_exponent_uppercase_positive_sign() {
+    let tokens = tokens_only("2.5E+6");
+    assert_eq!(tokens[0], Token::Float(2.5E+6, None));
+}
+
+#[test]
+fn test_float_exponent_underscore_separators() {
+    // underscores permitted in both mantissa and exponent digits
+    let tokens = tokens_only("1_000e3");
+    assert_eq!(tokens[0], Token::Float(1_000e3_f64, None));
+}
+
+#[test]
+fn test_float_exponent_with_f32_suffix() {
+    let tokens = tokens_only("2.5E+6f32");
+    assert_eq!(tokens[0], Token::Float(2.5E+6_f64, Some(FloatSuffix::F32)));
+}
+
+#[test]
+fn test_float_exponent_with_f64_suffix() {
+    let tokens = tokens_only("1e10f64");
+    assert_eq!(tokens[0], Token::Float(1e10_f64, Some(FloatSuffix::F64)));
+}
+
+#[test]
+fn test_float_dot_then_exponent() {
+    // `1.e10` → float `1.0e10` per design.md spec
+    let tokens = tokens_only("1.e10");
+    assert_eq!(tokens[0], Token::Float(1.0e10, None));
+}
+
+#[test]
+fn test_float_exponent_no_digits_is_error() {
+    // `1e` — no digits after e → error token
+    let tokens = tokens_only("1e");
+    matches!(tokens[0], Token::Error(_));
+}
+
+#[test]
+fn test_float_exponent_sign_no_digits_is_error() {
+    // `1e+` — sign but no digits → error token
+    let tokens = tokens_only("1e+");
+    matches!(tokens[0], Token::Error(_));
+}
+
+#[test]
+fn test_float_exponent_negative_exponent() {
+    let tokens = tokens_only("1.5e-10");
+    assert_eq!(tokens[0], Token::Float(1.5e-10, None));
+}
+
+#[test]
+fn test_f16_is_reserved_keyword() {
+    let tokens = tokens_only("f16");
+    assert_eq!(
+        tokens,
+        vec![
+            Token::Error(
+                "'f16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string()
+            ),
+            Token::EOF,
+        ]
+    );
+}
+
+#[test]
+fn test_bf16_is_reserved_keyword() {
+    let tokens = tokens_only("bf16");
+    assert_eq!(
+        tokens,
+        vec![
+            Token::Error(
+                "'bf16' is a reserved keyword for a future numeric type; not available until Phase 7".to_string()
+            ),
+            Token::EOF,
+        ]
+    );
+}
+
+#[test]
+fn test_v60_reserved_hash_guarded_string() {
+    // Per design.md § Reserved `#`-Guarded String Syntax (v60 item 11).
+    // The forms `#"..."#`, `##"..."##`, `###"..."###`, etc. and any
+    // multi-`#` cluster are reserved at v1; `#[attr]` continues to lex
+    // unchanged.
+    //
+    // Single-`#` raw string.
+    let tokens = tokens_only(r##"#"hello"#"##);
+    assert_eq!(
+        tokens[0],
+        Token::Error(
+            r##"`#`-guarded string syntax (`#"..."#`) is reserved for future use; not available in v1"##.to_string()
+        ),
+        "expected reserved-hash-string error, got {:?}", tokens[0]
+    );
+    // Double-`#` raw string.
+    let tokens = tokens_only(r###"##"hello"##"###);
+    assert_eq!(
+        tokens[0],
+        Token::Error(
+            r###"`#`-guarded string syntax (`##"..."##`) is reserved for future use; not available in v1"###.to_string()
+        ),
+        "expected reserved-double-hash-string error, got {:?}", tokens[0]
+    );
+    // Bare `##` cluster (no string body).
+    let tokens = tokens_only("##");
+    assert_eq!(
+        tokens[0],
+        Token::Error(
+            "`##` (multi-`#` cluster) is reserved for future use; only `#[...]` attribute syntax is recognized in v1".to_string()
+        ),
+        "expected reserved-multi-hash error, got {:?}", tokens[0]
+    );
+    // `#[attr]` form continues to lex as Pound + LeftBracket — unchanged.
+    let tokens = tokens_only("#[derive(Eq)]");
+    assert_eq!(tokens[0], Token::Pound);
+    assert_eq!(tokens[1], Token::LeftBracket);
+}
+
+#[test]
+fn test_v60_reserved_string_prefix_diagnostic() {
+    // Per design.md § Reserved Single-Letter String-Prefix Syntax (v60 item 10).
+    // Every ASCII single-letter prefix immediately followed by `"` is reserved
+    // at v1, except `f"..."` (interpolated strings, already shipped) and
+    // `c"..."` (C-string literals — specced at v1 per v60 item 18, lex
+    // acceptance lands in Phase 5.2). The lexer emits a focused
+    // reserved-prefix diagnostic and consumes the string body for clean error
+    // recovery.
+    for prefix in ['a', 'b', 'g', 'r', 'x', 'z', '_'] {
+        let source = format!(r#"{prefix}"hello""#);
+        let tokens = tokens_only(&source);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Error(format!(
+                    "string prefix '{prefix}\"...\"' is reserved for future use; only `f\"...\"` is recognized in v1"
+                )),
+                Token::EOF,
+            ],
+            "expected reserved-prefix error for '{prefix}\"...\"'",
+        );
+    }
+    // `f"..."` is the one recognized prefix — it must continue to lex as
+    // an interpolated string, not as a reserved-prefix error.
+    let tokens = tokens_only(r#"f"hello""#);
+    assert!(
+        matches!(tokens[0], Token::InterpolatedStringLiteral(_)),
+        "expected f\"...\" to lex as InterpolatedStringLiteral, got {:?}",
+        tokens[0]
+    );
+    // `c"..."` is specced (v60 item 18) but lex acceptance is gated to
+    // Phase 5.2 — until then it gets a focused diagnostic that points at
+    // the spec, not the generic reserved-prefix message.
+    let tokens = tokens_only(r#"c"hello""#);
+    assert_eq!(
+        tokens,
+        vec![
+            Token::Error(
+                "string prefix 'c\"...\"' (C-string literal) is specced for v1 but lex acceptance lands in Phase 5.2; see design.md § C-String Literals".to_string()
+            ),
+            Token::EOF,
+        ],
+    );
+}
+
+#[test]
+fn test_v60_reserved_for_future_use_keywords() {
+    // Per design.md § Reserved-for-Future-Use Keywords (v60 item 9). Each must
+    // be rejected at the lexer level so they cannot be used as identifiers.
+    for keyword in [
+        "gen", "become", "do", "final", "override", "priv", "try", "typeof", "virtual", "async",
+        "await", "comptime", "pure", "box",
+    ] {
+        let tokens = tokens_only(keyword);
+        assert_eq!(
+            tokens,
+            vec![
+                Token::Error(format!(
+                    "'{keyword}' is reserved for future use and cannot be used as an identifier"
+                )),
+                Token::EOF,
+            ],
+            "expected reserved-keyword error for '{keyword}'",
+        );
+    }
+}
+
+#[test]
+fn test_integer_stays_integer_without_exponent() {
+    // plain integer unchanged
+    let tokens = tokens_only("42");
+    assert_eq!(tokens[0], Token::Integer(42, None));
+}
+
+#[test]
+fn test_float_exponent_zero() {
+    let tokens = tokens_only("0e0");
+    assert_eq!(tokens[0], Token::Float(0.0, None));
+}

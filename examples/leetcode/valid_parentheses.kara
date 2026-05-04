@@ -1,0 +1,38 @@
+// examples/leetcode/valid_parentheses.kara
+//
+// LeetCode #20: Valid Parentheses
+// Given a string containing just '(', ')', '{', '}', '[', ']',
+// determine if the input string is valid.
+//
+// Demonstrates: Vec as stack, match on chars
+
+fn is_valid(s: ref String) -> bool {
+    let mut stack = Vec.new();
+
+    for c in s.chars() {
+        match c {
+            '(' | '[' | '{' => stack.push(c),
+            ')' => if stack.pop() != Some('(') { return false; },
+            ']' => if stack.pop() != Some('[') { return false; },
+            '}' => if stack.pop() != Some('{') { return false; },
+            _ => {}
+        }
+    }
+
+    stack.is_empty()
+}
+
+fn main() {
+    println(f"\"()\"       → {is_valid("()")}");
+    println(f"\"()[]{{}}\" → {is_valid("()[]{}") }");
+    println(f"\"(]\"       → {is_valid("(]")}");
+    println(f"\"([)]\"     → {is_valid("([)]")}");
+    println(f"\"{{[]}}\"   → {is_valid("{[]}")}");
+}
+
+// Expected output:
+// "()"       → true
+// "()[]{}"   → true
+// "(]"       → false
+// "([)]"     → false
+// "{[]}"     → true

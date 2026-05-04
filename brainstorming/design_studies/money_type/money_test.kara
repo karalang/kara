@@ -1,0 +1,50 @@
+// design_studies/money_type/money_test.kara
+//
+// Tests for the Kāra Money type. Pure data + pure methods — no
+// providers, no `#[with_provider]`, no effect resources. This is the
+// trivial-test case; the design-study value here is confirming that
+// a domain-type brick doesn't force any of the injection machinery.
+
+#[test]
+fn test_add_same_currency() {
+    let a = Money.new(1234, Currency.USD);
+    let b = Money.new(567, Currency.USD);
+    let sum = a.add(b).unwrap();
+    assert_eq(sum.amount, 1801);
+    assert_eq(sum.currency, Currency.USD);
+}
+
+#[test]
+fn test_add_mismatched_currency_errors() {
+    let a = Money.new(1234, Currency.USD);
+    let b = Money.new(567, Currency.EUR);
+    match a.add(b) {
+        Err(MoneyError.MismatchedCurrency(left, right)) => {
+            assert_eq(left, Currency.USD);
+            assert_eq(right, Currency.EUR);
+        }
+        _ => panic("expected MismatchedCurrency"),
+    }
+}
+
+#[test]
+fn test_cmp_same_currency() {
+    let a = Money.new(1000, Currency.USD);
+    let b = Money.new(2000, Currency.USD);
+    assert_eq(a.cmp_same(b).unwrap(), Ordering.Less);
+    assert_eq(b.cmp_same(a).unwrap(), Ordering.Greater);
+    assert_eq(a.cmp_same(a).unwrap(), Ordering.Equal);
+}
+
+#[test]
+fn test_cmp_mismatched_currency_errors() {
+    let a = Money.new(1000, Currency.USD);
+    let b = Money.new(1000, Currency.EUR);
+    assert(a.cmp_same(b).is_err());
+}
+
+#[test]
+fn test_display_formats_minor_units() {
+    let m = Money.new(1234, Currency.USD);
+    assert_eq(f"{m}".to_string(), "12.34 USD".to_string());
+}

@@ -1,0 +1,99 @@
+// grid_test.kara — Tests for the Game of Life rules and Grid step.
+
+import grid.Grid;
+import rules.{count_neighbors, next_state};
+
+// --- Rule unit tests ---
+
+test "next_state: live cell with 2 neighbours survives" {
+    assert_eq(next_state(true, 2), true);
+}
+
+test "next_state: live cell with 3 neighbours survives" {
+    assert_eq(next_state(true, 3), true);
+}
+
+test "next_state: live cell with 1 neighbour dies (underpopulation)" {
+    assert_eq(next_state(true, 1), false);
+}
+
+test "next_state: live cell with 4 neighbours dies (overcrowding)" {
+    assert_eq(next_state(true, 4), false);
+}
+
+test "next_state: dead cell with 3 neighbours becomes alive (birth)" {
+    assert_eq(next_state(false, 3), true);
+}
+
+test "next_state: dead cell with 2 neighbours stays dead" {
+    assert_eq(next_state(false, 2), false);
+}
+
+// --- Blinker oscillator (period 2) ---
+//
+// Generation 0:   Generation 1:
+//   . . .           . █ .
+//   █ █ █    ->     . █ .
+//   . . .           . █ .
+
+fn blinker_h(width: i64, height: i64) -> Grid {
+    let mut g = Grid.new(width, height);
+    g.set(1, 1, true);
+    g.set(2, 1, true);
+    g.set(3, 1, true);
+    g
+}
+
+fn blinker_v(width: i64, height: i64) -> Grid {
+    let mut g = Grid.new(width, height);
+    g.set(2, 0, true);
+    g.set(2, 1, true);
+    g.set(2, 2, true);
+    g
+}
+
+test "blinker: horizontal -> vertical after one step" {
+    let gen0 = blinker_h(5, 3);
+    let gen1 = gen0.step();
+
+    assert_eq(gen1.get(2, 0), true);
+    assert_eq(gen1.get(2, 1), true);
+    assert_eq(gen1.get(2, 2), true);
+    assert_eq(gen1.get(1, 1), false);
+    assert_eq(gen1.get(3, 1), false);
+}
+
+test "blinker: vertical -> horizontal after one step (period-2 check)" {
+    let gen0 = blinker_v(5, 3);
+    let gen1 = gen0.step();
+
+    assert_eq(gen1.get(1, 1), true);
+    assert_eq(gen1.get(2, 1), true);
+    assert_eq(gen1.get(3, 1), true);
+    assert_eq(gen1.get(2, 0), false);
+    assert_eq(gen1.get(2, 2), false);
+}
+
+// --- Still life: 2×2 block ---
+test "block: still life is unchanged after one step" {
+    let mut g = Grid.new(4, 4);
+    g.set(1, 1, true);
+    g.set(2, 1, true);
+    g.set(1, 2, true);
+    g.set(2, 2, true);
+
+    let next = g.step();
+    assert_eq(next.get(1, 1), true);
+    assert_eq(next.get(2, 1), true);
+    assert_eq(next.get(1, 2), true);
+    assert_eq(next.get(2, 2), true);
+    assert_eq(next.population(), 4);
+}
+
+// --- Population tracking ---
+test "grid: population counts live cells" {
+    let mut g = Grid.new(5, 5);
+    g.set(0, 0, true);
+    g.set(4, 4, true);
+    assert_eq(g.population(), 2);
+}

@@ -1,0 +1,70 @@
+// design_studies/money_type/money.kara
+//
+// Domain type with behavior — Kāra variant, current design (D1a,
+// Rust-style separated `struct` + `impl Type` + `impl Trait for Type`).
+// See design_studies/money_type/findings.md for cross-language notes.
+
+enum Currency {
+    USD,
+    EUR,
+    GBP,
+}
+
+struct Money {
+    amount: i64,         // minor units (cents)
+    currency: Currency,
+}
+
+enum MoneyError {
+    MismatchedCurrency(Currency, Currency),
+}
+
+// Inherent methods — construction and domain operations.
+impl Money {
+    fn new(amount: i64, currency: Currency) -> Money {
+        Money { amount, currency }
+    }
+
+    fn add(self, other: Money) -> Result[Money, MoneyError] {
+        if self.currency != other.currency {
+            return Err(MoneyError.MismatchedCurrency(self.currency, other.currency));
+        }
+        Ok(Money.new(self.amount + other.amount, self.currency))
+    }
+
+    // Same-currency comparison only. We deliberately don't derive Ord
+    // because lex-comparing (amount, currency) would silently treat
+    // USD < EUR < GBP, which is meaningless.
+    fn cmp_same(self, other: Money) -> Result[Ordering, MoneyError] {
+        if self.currency != other.currency {
+            return Err(MoneyError.MismatchedCurrency(self.currency, other.currency));
+        }
+        Ok(self.amount.cmp(other.amount))
+    }
+}
+
+// Display conformance — separate block per current D1a design.
+impl Display for Money {
+    fn fmt(ref self) -> String {
+        let whole = self.amount / 100;
+        let cents = (self.amount % 100).abs();
+        f"{whole}.{cents:02} {self.currency}"
+    }
+}
+
+impl Display for Currency {
+    fn fmt(ref self) -> String {
+        match self {
+            Currency.USD => "USD".to_string(),
+            Currency.EUR => "EUR".to_string(),
+            Currency.GBP => "GBP".to_string(),
+        }
+    }
+}
+
+fn main() {
+    let a = Money.new(1234, Currency.USD);
+    let b = Money.new(567, Currency.USD);
+    let sum = a.add(b).unwrap();
+    println(f"{a} + {b} = {sum}");
+}

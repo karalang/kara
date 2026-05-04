@@ -1,0 +1,93 @@
+// examples/phase0/dashboard.kara
+//
+// Proof of Value: Effect-driven auto-concurrency.
+//
+// This program fetches data from three independent sources,
+// processes it, and writes a summary. The programmer writes
+// sequential-looking code — the compiler parallelizes it.
+
+effect resource UserDB: DatabaseProvider;
+effect resource OrderDB: DatabaseProvider;
+effect resource NotifDB: DatabaseProvider;
+
+struct Profile {
+    name: String,
+    email: String,
+    tier: String,
+}
+
+struct Order {
+    id: u64,
+    total: f64,
+    status: String,
+}
+
+struct Notification {
+    message: String,
+    unread: bool,
+}
+
+struct Dashboard {
+    greeting: String,
+    order_summary: String,
+    alert: String,
+}
+
+// Private functions — effects are inferred by the compiler from the body.
+// No annotations needed. The compiler traces the call graph and determines:
+//   fetch_profile       → reads(UserDB)   (from UserDB.query_one)
+//   fetch_orders        → reads(OrderDB)  (from OrderDB.query)
+//   fetch_notifications → reads(NotifDB)  (from NotifDB.query)
+//
+// Each resource name (UserDB, OrderDB, NotifDB) is backed by the
+// DatabaseProvider trait. The concrete implementation is injected
+// at the call site via with_provider (see main below).
+
+fn fetch_profile(user_id: u64) -> Result[Profile, Error] {
+    UserDB.query_one("SELECT name, email, tier FROM users WHERE id = ?", user_id)
+}
+
+fn fetch_orders(user_id: u64) -> Result[Vec[Order], Error] {
+    OrderDB.query("SELECT id, total, status FROM orders WHERE user_id = ?", user_id)
+}
+
+fn fetch_notifications(user_id: u64) -> Result[Vec[Notification], Error] {
+    NotifDB.query("SELECT message, unread FROM notifications WHERE user_id = ?", user_id)
+}
+
+// Pure function — no effects, no I/O.
+fn build_dashboard(profile: Profile, orders: Vec[Order], notifs: Vec[Notification]) -> Dashboard {
+    let total_spent = orders.iter().fold(0.0, |sum, o| sum + o.total);
+    let pending = orders.iter().filter(|o| o.status == "pending").count();
+    let unread = notifs.iter().filter(|n| n.unread).count();
+
+    Dashboard {
+        greeting: f"Welcome back, {profile.name} ({profile.tier})",
+        order_summary: f"{orders.len()} orders (${total_spent:.2}), {pending} pending",
+        alert: match unread {
+            0 => "No new notifications".to_string(),
+            1 => "1 unread notification".to_string(),
+            n => f"{n} unread notifications",
+        },
+    }
+}
+
+// main is private too — effects inferred automatically.
+// The compiler infers: reads(Env), reads(UserDB), reads(OrderDB), reads(NotifDB), writes(Stdio)
+fn main() {
+    let user_id = env.args().get(1).unwrap_or("1").parse_u64()?;
+
+    // Three independent reads on different resources.
+    // The compiler sees: reads(UserDB), reads(OrderDB), reads(NotifDB)
+    // No conflicts, no data dependencies → runs all three concurrently.
+    let profile = fetch_profile(user_id)?;
+    let orders = fetch_orders(user_id)?;
+    let notifs = fetch_notifications(user_id)?;
+
+    // Sync point: build_dashboard needs all three results.
+    let dashboard = build_dashboard(profile, orders, notifs);
+
+    println(dashboard.greeting);
+    println(dashboard.order_summary);
+    println(dashboard.alert);
+}

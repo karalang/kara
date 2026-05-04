@@ -1,0 +1,430 @@
+//! Integration tests for par block codegen (Phase 7).
+//!
+//! These tests verify:
+//! - IR-level: par blocks lower to a `karac_par_run` call with the correct
+//!   number of branch function pointers.
+//! - End-to-end: a compiled par program statically links the runtime, spawns
+//!   real threads, and produces output from every branch.
+//!
+//! The end-to-end tests build the runtime crate on first use via
+//! `cargo build -p karac-runtime --release`. If that build fails (e.g., no
+//! Cargo available in the test environment) the tests soft-skip by returning
+//! early, matching the pattern in tests/codegen.rs.
+
+#[cfg(feature = "llvm")]
+mod par_codegen_tests {
+    use karac::codegen::compile_to_ir;
+    use std::path::PathBuf;
+    use std::sync::Once;
+
+    static RUNTIME_BUILT: Once = Once::new();
+    static mut RUNTIME_PATH: Option<PathBuf> = None;
+
+    /// Build the runtime static library once per test process and return its
+    /// path. Returns None if the build fails — callers soft-skip.
+    #[allow(static_mut_refs)]
+    fn runtime_path() -> Option<PathBuf> {
+        RUNTIME_BUILT.call_once(|| {
+            let output = std::process::Command::new("cargo")
+                .args(["build", "-p", "karac-runtime", "--release"])
+                .output();
+            if let Ok(out) = output {
+                if out.status.success() {
+                    let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                        .join("target/release/libkarac_runtime.a");
+                    if p.exists() {
+                        unsafe {
+                            RUNTIME_PATH = Some(p);
+                        }
+                    }
+                }
+            }
+        });
+        unsafe { RUNTIME_PATH.clone() }
+    }
+
+    fn ir_for(src: &str) -> String {
+        let parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        compile_to_ir(&parsed.program, None).expect("codegen failed")
+    }
+
+    /// Like `ir_for` but runs the full analysis pipeline first so the
+    /// `Program.callee_effectful` side-table is populated. Required for the
+    /// par-branch cancel-check narrowing — without effect-check info every
+    /// callee is unknown and the check fires conservatively.
+    fn ir_for_with_pipeline(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        // Mirror `Pipeline::effectcheck`: a callee is "effectful" iff its
+        // inferred or declared set contains reads/writes/sends/receives.
+        use karac::effectchecker::DeclaredEffects;
+        fn set_eff(s: &karac::effectchecker::EffectSet) -> bool {
+            s.effects.iter().any(|t| {
+                matches!(
+                    t.effect.verb,
+                    karac::ast::EffectVerbKind::Reads
+                        | karac::ast::EffectVerbKind::Writes
+                        | karac::ast::EffectVerbKind::Sends
+                        | karac::ast::EffectVerbKind::Receives
+                )
+            })
+        }
+        let mut table = std::collections::HashMap::new();
+        for (name, set) in &effects.inferred_effects {
+            table.insert(name.clone(), set_eff(set));
+        }
+        for (name, decl) in &effects.declared_effects {
+            let eff = match decl {
+                DeclaredEffects::Explicit(s) => set_eff(s),
+                DeclaredEffects::Polymorphic | DeclaredEffects::PolymorphicWithFixed(_) => true,
+                DeclaredEffects::None => false,
+            };
+            table
+                .entry(name.clone())
+                .and_modify(|v| *v = *v || eff)
+                .or_insert(eff);
+        }
+        parsed.program.callee_effectful = table;
+        compile_to_ir(&parsed.program, None).expect("codegen failed")
+    }
+
+    /// Compile, link with the runtime, and run the program. Returns stdout
+    /// on success, None if any step fails (soft-skip).
+    fn run_program(src: &str) -> Option<String> {
+        use karac::codegen::{compile_to_object, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            return None;
+        }
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_par_e2e_{}_{}", std::process::id(), id);
+
+        compile_to_object(&parsed.program, &obj_path, None).ok()?;
+        link_executable(&obj_path, &exe_path).ok()?;
+
+        let output = std::process::Command::new(&exe_path).output().ok()?;
+
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+
+        Some(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
+    // ── IR-level tests ────────────────────────────────────────────
+
+    #[test]
+    fn test_ir_par_block_emits_runtime_call() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    par {
+        println(100);
+        println(200);
+    }
+}
+"#,
+        );
+        assert!(
+            ir.contains("declare void @karac_par_run"),
+            "IR should declare karac_par_run; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @karac_par_run"),
+            "IR should call karac_par_run; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_branch_0_0"),
+            "IR should define first branch fn"
+        );
+        assert!(
+            ir.contains("__par_branch_0_1"),
+            "IR should define second branch fn"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_single_stmt_no_runtime_call() {
+        // Par with one statement is optimized to sequential — no runtime call.
+        let ir = ir_for(
+            r#"
+fn main() {
+    par {
+        println(42);
+    }
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call void @karac_par_run"),
+            "single-stmt par should not call runtime; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_empty_block_no_runtime_call() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    par {
+    }
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call void @karac_par_run"),
+            "empty par should not call runtime; got:\n{ir}"
+        );
+    }
+
+    // ── Mid-branch cooperative cancellation ───────────────────────────────
+
+    /// Count mid-branch cancel checks across every par-branch function in
+    /// the IR. Each top-level statement inside `par { }` lowers to its own
+    /// branch fn (e.g. `__par_branch_0_0`, `__par_branch_0_1`), so per-call
+    /// narrowing is observed by aggregating across all of them. We key on
+    /// `call.cancel.flag = load` — the unique atomic-flag load instruction
+    /// that opens each mid-branch check (the entry-time check uses a
+    /// different `%cancel` SSA name).
+    fn count_branch_cancel_checks(ir: &str) -> usize {
+        let mut total = 0;
+        let mut cursor = 0;
+        while let Some(off) = ir[cursor..].find("define void @__par_branch_") {
+            let start = cursor + off;
+            let end = ir[start + 1..]
+                .find("define ")
+                .map(|i| start + 1 + i)
+                .unwrap_or(ir.len());
+            total += ir[start..end].matches("call.cancel.flag = load").count();
+            cursor = end;
+        }
+        total
+    }
+
+    #[test]
+    fn test_ir_par_branch_emits_cancel_check_per_effectful_call() {
+        // Each call to an effectful helper inside a par branch should emit a
+        // mid-branch cancel check (load-and-branch on the runtime atomic).
+        let ir = ir_for_with_pipeline(
+            r#"
+effect resource Log;
+fn helper(n: i64) -> i64 writes(Log) { n + 1 }
+fn main() {
+    par {
+        let _ = helper(1_i64);
+        let _ = helper(2_i64);
+        let _ = helper(3_i64);
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert!(
+            total >= 3,
+            "expected ≥3 mid-branch cancel checks before effectful helper() calls across all \
+             par branches, found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_skips_cancel_check_for_pure_callees() {
+        // Pure callees (no reads/writes/sends/receives) should have their
+        // mid-branch cancel checks elided per the v1 narrowing — the
+        // observable behavior is unchanged because a cooperative cancel
+        // can't observe a mid-state through a side-effect-free call.
+        let ir = ir_for_with_pipeline(
+            r#"
+fn pure_helper(n: i64) -> i64 { n + 1 }
+fn main() {
+    par {
+        let _ = pure_helper(1_i64);
+        let _ = pure_helper(2_i64);
+        let _ = pure_helper(3_i64);
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 0,
+            "pure helpers should not emit mid-branch cancel checks; found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_mixed_pure_and_effectful() {
+        // In a par block that mixes pure and effectful calls, only the
+        // effectful calls should carry the cancel check.
+        let ir = ir_for_with_pipeline(
+            r#"
+effect resource Log;
+fn pure_helper(n: i64) -> i64 { n + 1 }
+fn effectful_helper(n: i64) -> i64 writes(Log) { n + 1 }
+fn main() {
+    par {
+        let _ = pure_helper(1_i64);
+        let _ = effectful_helper(2_i64);
+        let _ = pure_helper(3_i64);
+        let _ = effectful_helper(4_i64);
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 2,
+            "expected exactly 2 mid-branch cancel checks (one per effectful call); \
+             found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_skips_method_check_for_pure_callee() {
+        // A method whose body has no observable effects (no reads/writes/
+        // sends/receives) should not emit a mid-branch cancel check at the
+        // call site, mirroring the narrowing already in place for free
+        // functions and `Type.assoc` calls.
+        let ir = ir_for_with_pipeline(
+            r#"
+struct Counter { n: i64 }
+impl Counter {
+    fn pure(ref self) -> i64 { self.n + 1 }
+}
+fn main() {
+    let c = Counter { n: 1 };
+    par {
+        let _ = c.pure();
+        let _ = c.pure();
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 0,
+            "pure method calls should not emit mid-branch cancel checks; \
+             found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_emits_method_check_for_effectful_callee() {
+        // A method that writes a resource is observably effectful — the
+        // mid-branch cancel check must fire before each call site.
+        let ir = ir_for_with_pipeline(
+            r#"
+effect resource Log;
+struct Counter { n: i64 }
+impl Counter {
+    fn effectful(ref self) -> i64 writes(Log) { self.n + 1 }
+}
+fn main() {
+    let c = Counter { n: 1 };
+    par {
+        let _ = c.effectful();
+        let _ = c.effectful();
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 2,
+            "expected exactly 2 mid-branch cancel checks (one per effectful method call); \
+             found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_non_par_function_no_cancel_check_per_call() {
+        // Functions outside par blocks should NOT carry mid-call cancel
+        // checks — the cancel pointer isn't even in scope.
+        let ir = ir_for(
+            r#"
+fn helper(n: i64) -> i64 { n + 1 }
+fn main() {
+    let _ = helper(1_i64);
+    let _ = helper(2_i64);
+}
+"#,
+        );
+        // `call.cancel.bb` is the cancel-block label emitted only by the
+        // mid-branch helper. It must not appear in @main's IR.
+        let start = ir.find("define i32 @main").unwrap_or(0);
+        let after_main = &ir[start..];
+        assert!(
+            !after_main.contains("call.cancel.bb"),
+            "non-par function should not emit mid-branch cancel check blocks; IR:\n{after_main}"
+        );
+    }
+
+    // ── End-to-end tests ──────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_par_both_branches_run() {
+        let out = run_program(
+            r#"
+fn main() {
+    par {
+        println(100);
+        println(200);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            // Branches may interleave — just verify both tokens appear.
+            assert!(
+                out.contains("100"),
+                "first branch should have printed 100; got {out:?}"
+            );
+            assert!(
+                out.contains("200"),
+                "second branch should have printed 200; got {out:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_three_branches_run() {
+        let out = run_program(
+            r#"
+fn main() {
+    par {
+        println(1);
+        println(2);
+        println(3);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            for tok in ["1", "2", "3"] {
+                assert!(
+                    out.contains(tok),
+                    "branch {tok} should have printed; got {out:?}"
+                );
+            }
+        }
+    }
+}

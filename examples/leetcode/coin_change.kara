@@ -1,0 +1,101 @@
+// examples/leetcode/coin_change.kara
+//
+// LeetCode #322: Coin Change
+// Given coins of different denominations and a total amount, return the
+// fewest number of coins needed to make up that amount. Return -1 if not possible.
+//
+// Demonstrates: top-down DP with memoization (recursive + Map) vs
+//               true bottom-up tabulation (Vec); mut ref threading through recursion
+
+// ─── Top-down: recursive + memoization ───────────────────────────────────────
+
+fn coin_change_memo(amount: i64, coins: ref Vec[i64]) -> i64 {
+    let mut memo: Map[i64, i64] = Map.new();
+    dp(amount, coins, mut memo)
+}
+
+fn dp(amount: i64, coins: ref Vec[i64], memo: mut ref Map[i64, i64]) -> i64 {
+    if amount == 0 { return 0; }
+    if amount < 0  { return -1; }
+
+    match memo.get(amount) {
+        Some(cached) => return cached,
+        None => {}
+    }
+
+    let mut best = -1i64;
+    for coin in coins.iter() {
+        let sub = dp(amount - coin, coins, memo);
+        if sub != -1 {
+            let candidate = sub + 1;
+            if best == -1 or candidate < best {
+                best = candidate;
+            }
+        }
+    }
+
+    memo.insert(amount, best);
+    best
+}
+
+// ─── Bottom-up: tabulation ────────────────────────────────────────────────────
+
+fn coin_change_bottom_up(amount: i64, coins: ref Vec[i64]) -> i64 {
+    // Sentinel: amount+1 is unreachable (worst case is `amount` coins of 1)
+    let sentinel = amount + 1;
+    let mut table: Vec[i64] = Vec.new();
+    for _ in 0..=amount {
+        table.push(sentinel);
+    }
+    table[0] = 0;
+
+    for i in 1..=amount {
+        for coin in coins.iter() {
+            if coin <= i and table[i - coin] + 1 < table[i] {
+                table[i] = table[i - coin] + 1;
+            }
+        }
+    }
+
+    if table[amount] == sentinel { -1 } else { table[amount] }
+}
+
+fn main() {
+    let coins = [1, 5, 10, 25];
+
+    let cases = [
+        (0,  0),   // zero amount → 0 coins
+        (11, 2),   // 10 + 1
+        (30, 2),   // 25 + 5
+        (3,  3),   // 1 + 1 + 1
+        (7,  3),   // 5 + 1 + 1
+    ];
+
+    println("--- Top-down (recursive + memo) ---");
+    for (amount, expected) in cases.iter() {
+        let result = coin_change_memo(amount, coins);
+        println(f"amount={amount}  → {result}  (expected {expected})");
+    }
+
+    println("");
+    println("--- Bottom-up (tabulation) ---");
+    for (amount, expected) in cases.iter() {
+        let result = coin_change_bottom_up(amount, coins);
+        println(f"amount={amount}  → {result}  (expected {expected})");
+    }
+}
+
+// Expected output:
+// --- Top-down (recursive + memo) ---
+// amount=0   → 0  (expected 0)
+// amount=11  → 2  (expected 2)
+// amount=30  → 2  (expected 2)
+// amount=3   → 3  (expected 3)
+// amount=7   → 3  (expected 3)
+//
+// --- Bottom-up (tabulation) ---
+// amount=0   → 0  (expected 0)
+// amount=11  → 2  (expected 2)
+// amount=30  → 2  (expected 2)
+// amount=3   → 3  (expected 3)
+// amount=7   → 3  (expected 3)

@@ -1,0 +1,24 @@
+// Cost-summary fixture: two `with_provider[Clock](...)` call sites in two
+// different functions, each contributing one Arc-provider-wrap candidate.
+struct FakeClock {}
+
+impl FakeClock {
+    fn now(ref self) -> i64 { 0 }
+}
+
+fn run_one() {
+    with_provider[Clock](FakeClock {}, || {
+        Clock.now();
+    });
+}
+
+fn run_two() {
+    with_provider[Clock](FakeClock {}, || {
+        Clock.now();
+    });
+}
+
+fn main() {
+    run_one();
+    run_two();
+}

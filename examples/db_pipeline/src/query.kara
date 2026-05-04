@@ -1,0 +1,54 @@
+// query.kara — Query AST, row representation, and error types.
+//
+// GAP-M: No recursive enum without shared/RC.
+//   A real query AST needs recursive nodes (WHERE Expr contains sub-Exprs).
+//   In Kāra, a recursive enum requires `shared enum` (RC-backed) because
+//   the compiler cannot know the size of a plain recursive enum at compile
+//   time.  The syntax `shared enum Expr { And(Expr, Expr), Literal(i64) }`
+//   is the intended path, but the spec is silent on whether plain recursive
+//   enums produce a compile error or silently become shared.
+//   For this example we keep the AST flat (no nesting) to sidestep the issue.
+
+pub enum Value {
+    Int(i64),
+    Text(String),
+    Null,
+}
+
+impl Display for Value {
+    fn fmt(ref self, f: mut ref Formatter) {
+        match self {
+            Int(n)    => write(f, "{}", n),
+            Text(s)   => write(f, "\"{}\"", s),
+            Null      => write(f, "NULL"),
+        }
+    }
+}
+
+pub type Row = Map[String, Value];
+
+pub enum DbError {
+    TableNotFound { name: String },
+    ColumnNotFound { name: String },
+    TypeMismatch { expected: String, got: String },
+    ConstraintViolation { message: String },
+}
+
+impl Display for DbError {
+    fn fmt(ref self, f: mut ref Formatter) {
+        match self {
+            TableNotFound { name }            => write(f, "table not found: {}", name),
+            ColumnNotFound { name }           => write(f, "column not found: {}", name),
+            TypeMismatch { expected, got }    => write(f, "type mismatch: expected {}, got {}", expected, got),
+            ConstraintViolation { message }   => write(f, "constraint violation: {}", message),
+        }
+    }
+}
+
+// Flat query representation (no recursive Expr — see GAP-M).
+pub enum Query {
+    Select { table: String, columns: Vec[String] },
+    SelectWhere { table: String, columns: Vec[String], column: String, value: Value },
+    Insert { table: String, row: Row },
+    Delete { table: String, column: String, value: Value },
+}

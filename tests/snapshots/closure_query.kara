@@ -1,0 +1,9 @@
+struct Data { v: i64 }
+
+fn take(d: Data) { }
+
+fn main() {
+    let d = Data { v: 1 };
+    let _f = |x: Data| take(x);
+    let _g = || d.v;
+}

@@ -1,0 +1,84 @@
+// elevator.kara — Generic Elevator parameterised over a Scheduler strategy.
+//
+// GAP-C: Generic structs with trait bounds.
+//   `Elevator[S: Scheduler]` and `impl[S: Scheduler] Elevator[S]` — this
+//   syntax is inferred from the spec's `impl[E: Display] Display for Contextual[E]`
+//   example but is not explicitly shown for non-trait impl blocks.  Whether
+//   the compiler requires an explicit `where` clause or allows the bound
+//   inline in `impl[S: Scheduler]` is unclear.
+//
+// GAP-D: Field shorthand in struct literals.
+//   `Elevator { floor: MIN_FLOOR, direction: Direction.Idle, stops: stops,
+//   scheduler: scheduler }` — Kāra's spec shows no `{ stops, scheduler }`
+//   shorthand (field name = variable name).  Rust has this; Kāra's spec is
+//   silent.  Assumed not supported; all fields written explicitly.
+
+import request.{Direction, Request, MIN_FLOOR, MAX_FLOOR};
+import scheduler.Scheduler;
+
+pub struct Elevator[S: Scheduler] {
+    pub floor: i64,
+    direction: Direction,
+    stops:     Vec[i64],
+    scheduler: S,
+}
+
+impl[S: Scheduler] Elevator[S] {
+    pub fn new(scheduler: S) -> Elevator[S] {
+        Elevator {
+            floor:     MIN_FLOOR,
+            direction: Direction.Idle,
+            stops:     Vec.new(),
+            scheduler: scheduler,
+        }
+    }
+
+    pub fn add_request(mut ref self, req: Request) {
+        let target = req.floor();
+        if target == self.floor
+            or target < MIN_FLOOR
+            or target > MAX_FLOOR
+            or self.stops.contains(target)
+        {
+            return;
+        }
+        self.stops.push(target);
+        self.stops.sort();
+    }
+
+    // Returns the next floor visited, or None when the queue is empty.
+    pub fn step(mut ref self) -> Option[i64] {
+        match self.scheduler.next_stop(self.floor, ref self.direction, ref self.stops) {
+            None => {
+                self.direction = Direction.Idle;
+                None
+            },
+            Some(target) => {
+                self.floor = target;
+                self.remove_stop(target);
+                self.direction = match self.scheduler.next_stop(self.floor, ref self.direction, ref self.stops) {
+                    None                            => Direction.Idle,
+                    Some(next) if next > self.floor => Direction.Up,
+                    Some(_)                         => Direction.Down,
+                };
+                Some(target)
+            },
+        }
+    }
+
+    pub fn pending(ref self) -> ref Vec[i64] {
+        ref self.stops
+    }
+
+    // GAP-1 (from v53): Vec has no remove_by_value.
+    fn remove_stop(mut ref self, target: i64) {
+        let mut i: i64 = 0;
+        while i < self.stops.len() {
+            if self.stops[i] == target {
+                self.stops.remove(i);
+                return;
+            }
+            i = i + 1;
+        }
+    }
+}

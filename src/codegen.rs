@@ -1,0 +1,8991 @@
+//! LLVM code generation for Kāra programs.
+//!
+//! Compiles the AST to LLVM IR, then to native object files.
+//! Uses the `inkwell` crate for LLVM bindings.
+
+use std::collections::{HashMap, HashSet};
+use std::path::Path;
+
+use inkwell::basic_block::BasicBlock;
+use inkwell::builder::Builder;
+use inkwell::context::Context;
+use inkwell::module::Linkage;
+use inkwell::module::Module;
+use inkwell::targets::{
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, StructType};
+use inkwell::values::{
+    BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
+};
+use inkwell::{AddressSpace, FloatPredicate, IntPredicate, OptimizationLevel};
+
+use crate::ast::*;
+use crate::ownership::OwnershipCheckResult;
+use crate::token::{FloatSuffix, IntSuffix};
+
+// ── Public API ─────────────────────────────────────────────────
+
+/// Compile a Kāra program to LLVM IR text (for debugging/testing).
+pub fn compile_to_ir(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+) -> Result<String, String> {
+    compile_to_ir_with_options(program, ownership, None)
+}
+
+/// Like [`compile_to_ir`] but accepts an optional source-filename string used
+/// when emitting `karac_error_trace_push(...)` calls at `?` failure sites.
+/// When `Some`, codegen materializes the filename as a deduped global string
+/// and passes its `(ptr, len)` to the runtime so error-return traces print as
+/// `<file>:<line>:<col>` (matching the interpreter's format) instead of the
+/// MVP fallback `<line>:<col>`. `None` preserves the prior behavior.
+pub fn compile_to_ir_with_options(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    source_filename: Option<&str>,
+) -> Result<String, String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.set_source_filename(source_filename);
+    cg.compile_program(program)?;
+    Ok(cg.module.print_to_string().to_string())
+}
+
+/// Compile a Kāra program to a native object file.
+pub fn compile_to_object(
+    program: &Program,
+    output_path: &str,
+    ownership: Option<&OwnershipCheckResult>,
+) -> Result<(), String> {
+    compile_to_object_with_options(program, output_path, ownership, None)
+}
+
+/// Like [`compile_to_object`] but accepts an optional source-filename string;
+/// see [`compile_to_ir_with_options`] for the rationale.
+pub fn compile_to_object_with_options(
+    program: &Program,
+    output_path: &str,
+    ownership: Option<&OwnershipCheckResult>,
+    source_filename: Option<&str>,
+) -> Result<(), String> {
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.set_source_filename(source_filename);
+    cg.compile_program(program)?;
+
+    let target_machine = create_target_machine()?;
+    target_machine
+        .write_to_file(&cg.module, FileType::Object, Path::new(output_path))
+        .map_err(|e| format!("Failed to write object file: {}", e))
+}
+
+/// Link an object file into an executable using the system C compiler.
+///
+/// Also statically links the Kāra runtime library (`libkarac_runtime.a`) and
+/// pulls in pthread. The runtime path is resolved from (in order):
+///   1. `KARAC_RUNTIME` env var (absolute path to `libkarac_runtime.a`).
+///   2. Installed distribution: `<karac-binary-dir>/../lib/libkarac_runtime.a`.
+///   3. Development fallback: `<workspace>/target/release/libkarac_runtime.a`.
+///
+/// See design.md § Runtime Distribution.
+pub fn link_executable(obj_path: &str, exe_path: &str) -> Result<(), String> {
+    link_executable_impl(obj_path, exe_path, &[])
+}
+
+/// Link like [`link_executable`], but prepend extra flags to the `cc` invocation
+/// (e.g. `-fsanitize=address`). Used by the memory-behavior E2E test harness to
+/// run Kāra-compiled binaries under AddressSanitizer.
+///
+/// ASAN/LSAN interpose libc `malloc`/`free` globally, so the statically linked
+/// `libkarac_runtime.a` does not need to be rebuilt with sanitizer flags for
+/// leak detection from Kāra-emitted IR to work. UAF detection *inside* runtime
+/// code would require an instrumented runtime build; that is out of scope for
+/// this harness, which focuses on codegen-emitted heap operations.
+pub fn link_executable_with_sanitizer(
+    obj_path: &str,
+    exe_path: &str,
+    sanitizer_flags: &[&str],
+) -> Result<(), String> {
+    link_executable_impl(obj_path, exe_path, sanitizer_flags)
+}
+
+fn link_executable_impl(
+    obj_path: &str,
+    exe_path: &str,
+    extra_cc_args: &[&str],
+) -> Result<(), String> {
+    let runtime_path = resolve_runtime_path()?;
+    let mut cmd = std::process::Command::new("cc");
+    for arg in extra_cc_args {
+        cmd.arg(arg);
+    }
+    cmd.args([
+        obj_path,
+        &runtime_path,
+        "-o",
+        exe_path,
+        "-lm",
+        "-lpthread",
+        "-ldl",
+    ]);
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to invoke linker: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Linker failed: {}", stderr));
+    }
+    Ok(())
+}
+
+fn resolve_runtime_path() -> Result<String, String> {
+    if let Ok(p) = std::env::var("KARAC_RUNTIME") {
+        if std::path::Path::new(&p).exists() {
+            return Ok(p);
+        }
+        return Err(format!("KARAC_RUNTIME set to {p} but file does not exist"));
+    }
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(bin_dir) = exe.parent() {
+            let installed = bin_dir.join("../lib/libkarac_runtime.a");
+            if installed.exists() {
+                return Ok(installed.to_string_lossy().into_owned());
+            }
+        }
+    }
+    let dev =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target/release/libkarac_runtime.a");
+    if dev.exists() {
+        return Ok(dev.to_string_lossy().into_owned());
+    }
+    Err(
+        "libkarac_runtime.a not found; set KARAC_RUNTIME or build the runtime crate (`cargo build -p karac-runtime --release`)".to_string(),
+    )
+}
+
+fn create_target_machine() -> Result<TargetMachine, String> {
+    Target::initialize_native(&InitializationConfig::default())
+        .map_err(|e| format!("Failed to initialize native target: {}", e))?;
+
+    let triple = TargetMachine::get_default_triple();
+    let target =
+        Target::from_triple(&triple).map_err(|e| format!("Failed to get target: {}", e))?;
+
+    target
+        .create_target_machine(
+            &triple,
+            "generic",
+            "",
+            OptimizationLevel::Default,
+            RelocMode::Default,
+            CodeModel::Default,
+        )
+        .ok_or_else(|| "Failed to create target machine".to_string())
+}
+
+// ── Variable slot: pointer + LLVM type for typed loads ─────────
+
+#[derive(Clone, Copy)]
+struct VarSlot<'ctx> {
+    ptr: PointerValue<'ctx>,
+    ty: BasicTypeEnum<'ctx>,
+}
+
+// ── Shared type (RC) layout ────────────────────────────────────
+
+/// Metadata for a `shared struct` or `shared enum` that is heap-allocated with RC.
+/// Heap layout for structs: `{ i64 refcount, field0, field1, … }`
+/// Heap layout for enums:   `{ i64 refcount, i64 tag, i64 word0, … }`
+#[derive(Clone)]
+struct SharedTypeInfo<'ctx> {
+    /// The LLVM struct type for the heap object (includes refcount header).
+    heap_type: StructType<'ctx>,
+    /// Field names in declaration order (structs only; empty for enums).
+    #[allow(dead_code)]
+    field_names: Vec<String>,
+    /// true if this is a shared enum (vs shared struct).
+    is_enum: bool,
+}
+
+// ── Enum variant layout ─────────────────────────────────────────
+
+/// Tracks how an enum is laid out in LLVM IR as a tagged union.
+/// Representation: `{ i64 tag, i64 word_0, ..., i64 word_N }`.
+/// All payload words are stored as i64 (signed-extended / reinterpreted).
+#[derive(Clone)]
+struct EnumLayout<'ctx> {
+    /// The LLVM struct type for all instances of this enum.
+    llvm_type: StructType<'ctx>,
+    /// variant name → discriminant tag (0, 1, 2, …)
+    tags: HashMap<String, u64>,
+    /// variant name → number of payload word fields
+    field_counts: HashMap<String, usize>,
+}
+
+// ── SoA layout metadata ─────────────────────────────────────────
+
+/// Metadata for a single group in a SoA layout.
+#[derive(Clone, Debug)]
+struct SoaGroup {
+    #[allow(dead_code)]
+    name: String,
+    #[allow(dead_code)]
+    fields: Vec<String>,
+    /// Index of each field in the original struct's field list.
+    field_indices: Vec<usize>,
+    #[allow(dead_code)]
+    elem_type: Option<StructType<'static>>,
+    /// Optional `align(N)` — N is a power-of-two byte alignment for the group's backing array.
+    align: Option<u32>,
+    #[allow(dead_code)]
+    is_cold: bool,
+}
+
+/// Full SoA layout for a named collection.
+#[derive(Clone, Debug)]
+struct SoaLayout {
+    #[allow(dead_code)]
+    name: String,
+    /// Element struct name (e.g., "Entity").
+    struct_name: String,
+    /// Hot groups in declaration order (excludes the cold group).
+    groups: Vec<SoaGroup>,
+    /// Optional cold group (separate allocation, appended after all hot group pointers).
+    cold_group: Option<SoaGroup>,
+    /// Number of hot groups (including implicit trailing group for unassigned fields).
+    /// Does NOT include the cold group — the cold pointer is always last in the struct.
+    num_groups: usize,
+}
+
+// ── Scope cleanup action ────────────────────────────────────────
+
+/// Tagged kind for per-scope destructor actions emitted at scope exit.
+/// The `scope_cleanup_actions` stack holds one `Vec` per scope frame;
+/// each frame accumulates these in push order and drains in reverse.
+enum CleanupAction<'ctx> {
+    /// Decrement the refcount of a `shared struct` value.
+    RcDec {
+        /// Variable name — used to reload the current pointer value in case
+        /// the binding was reassigned after the track call.
+        name: String,
+        /// Fallback pointer if the variable is no longer in scope.
+        ptr: PointerValue<'ctx>,
+        /// LLVM struct type of the heap-allocated RC object.
+        heap_type: StructType<'ctx>,
+    },
+    /// Free the heap buffer of an owned `Vec[T]` or `String`.
+    FreeVecBuffer {
+        /// Alloca pointer of the Vec/String struct (`{ptr, len, cap}`).
+        vec_alloca: PointerValue<'ctx>,
+    },
+    /// Free an owned `Map[K,V]` handle via `karac_map_free`.
+    FreeMapHandle {
+        /// Alloca that holds the opaque map ptr.
+        map_alloca: PointerValue<'ctx>,
+    },
+}
+
+// ── Loop frame: break / continue targets ───────────────────────
+
+#[derive(Clone, Copy)]
+struct LoopFrame<'ctx> {
+    /// Block to branch to on `continue`
+    continue_bb: BasicBlock<'ctx>,
+    /// Block to branch to on `break` (loop exit)
+    break_bb: BasicBlock<'ctx>,
+    /// Optional alloca for `break value`
+    result_slot: Option<PointerValue<'ctx>>,
+}
+
+// ── Codegen ────────────────────────────────────────────────────
+
+struct Codegen<'ctx> {
+    context: &'ctx Context,
+    module: Module<'ctx>,
+    builder: Builder<'ctx>,
+    /// Maps variable name → (alloca pointer, value type).
+    variables: HashMap<String, VarSlot<'ctx>>,
+    /// Maps variable name → Kāra type name (for struct/enum field resolution).
+    var_type_names: HashMap<String, String>,
+    current_fn: Option<FunctionValue<'ctx>>,
+    printf_fn: FunctionValue<'ctx>,
+    /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
+    /// codegen to convert integers and floats to their decimal string forms.
+    snprintf_fn: FunctionValue<'ctx>,
+    /// LLVM struct types for Kāra structs (struct name → LLVM type).
+    struct_types: HashMap<String, StructType<'ctx>>,
+    /// Field names in declaration order (struct name → field names).
+    struct_field_names: HashMap<String, Vec<String>>,
+    /// Enum layouts for tagged-union codegen (enum name → layout).
+    enum_layouts: HashMap<String, EnumLayout<'ctx>>,
+    /// Nested loop stack — innermost frame is last.
+    loop_stack: Vec<LoopFrame<'ctx>>,
+    // ── Generic monomorphization ──────────────────────────────────
+    /// Generic function AST nodes keyed by name. Not compiled until instantiated.
+    generic_fns: HashMap<String, Function>,
+    /// Already-generated monomorphizations (mangled name → done). Prevents duplicate codegen.
+    generated_monos: HashSet<String>,
+    /// Active type-parameter substitution during a monomorphization pass.
+    /// Maps generic param name (e.g. `"T"`) → concrete LLVM type.
+    type_subst: HashMap<String, BasicTypeEnum<'ctx>>,
+    // ── Closure compilation ────────────────────────────────────────
+    /// Monotonic counter used to generate unique closure function names.
+    closure_counter: u32,
+    /// Maps local variable names that hold closure fat-pointers to their LLVM function type.
+    /// Required for indirect calls: `build_indirect_call` needs the callee's function type.
+    closure_fn_types: HashMap<String, FunctionType<'ctx>>,
+    /// Staging slot — set by `compile_closure` so the surrounding `let` binding can record
+    /// the function type under the newly bound name.
+    pending_closure_fn_type: Option<FunctionType<'ctx>>,
+    // ── Shared types (RC) ─────────────────────────────────────────
+    /// Shared type metadata (struct/enum name → heap layout info).
+    shared_types: HashMap<String, SharedTypeInfo<'ctx>>,
+    /// malloc function for heap allocation.
+    malloc_fn: FunctionValue<'ctx>,
+    /// free function for heap deallocation.
+    free_fn: FunctionValue<'ctx>,
+    /// exit function for runtime panics.
+    exit_fn: FunctionValue<'ctx>,
+    /// memcmp for string comparison.
+    memcmp_fn: FunctionValue<'ctx>,
+    /// Per-variable Vec element type tracking (variable name → element LLVM type).
+    vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Per-variable Slice element type tracking (variable name → element LLVM type).
+    /// Entries only exist for values whose LLVM representation is the
+    /// 2-field slice struct `{ptr, i64}`; used to dispatch indexing and
+    /// iteration lowering.
+    slice_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Variables that are ref parameters (name → inner LLVM type for dereferencing).
+    ref_params: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// SoA layout metadata (layout name → SoaLayout).
+    soa_layouts: HashMap<String, SoaLayout>,
+    /// Function parameter ref-ness (function name → vec of is_ref per param).
+    fn_param_ref: HashMap<String, Vec<bool>>,
+    /// Function parameter slice element type (function name → per-param
+    /// Some(elem_ty) if that param is Slice[T] / mut Slice[T], else None).
+    /// Used at call sites to emit Array → Slice and Vec → Slice coercions.
+    fn_param_slice_elem: HashMap<String, Vec<Option<BasicTypeEnum<'ctx>>>>,
+    /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
+    /// are emitted in reverse-push order at scope exit (innermost first).
+    scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// Cross-error-type conversion targets at `?` sites — populated from
+    /// `Program.question_conversions` (set by the lowering pass from the
+    /// typechecker's `question_conversions` map). Key: `(span.offset,
+    /// span.length)` of the `?` expression. Value: target type name (e.g.
+    /// `"AppError"`). When present, `compile_question` emits `Target.from(e)`
+    /// against the inner err payload before the propagation early-return.
+    question_conversions: HashMap<(usize, usize), String>,
+    /// Per-callee effectfulness side-table — populated from
+    /// `Program.callee_effectful` (set by the cli pipeline after effectcheck).
+    /// Key: callable's canonical name (free fn `name`, assoc/method
+    /// `Type.method`). Value: `true` iff the callee carries any of
+    /// `reads`/`writes`/`sends`/`receives`. Read by `emit_branch_cancel_check`
+    /// to skip the cooperative cancel atomic load when we can prove the
+    /// callee is non-observably-effectful. Absent callees are treated as
+    /// potentially effectful (fall back to the conservative MVP behavior).
+    callee_effectful: HashMap<String, bool>,
+    /// Per-method-call → `Type.method` callee key side-table — populated
+    /// from `Program.method_callee_types` (set by the lowering pass from
+    /// `TypeCheckResult.expr_types`). Key: `(span.offset, span.length)` of
+    /// the `MethodCall` expression. Value: canonical `Type.method` string
+    /// usable as a lookup into `callee_effectful`. Lets
+    /// `compile_method_call` apply the same narrowing that `compile_call`
+    /// applies to free-function and `Type.assoc` calls.
+    method_callee_types: HashMap<(usize, usize), String>,
+    /// Source filename threaded in from the CLI (`compile_to_object_with_options`
+    /// / `compile_to_ir_with_options`). When `Some`, `emit_error_trace_push`
+    /// emits a deduped global string and passes its `(ptr, len)` to the runtime
+    /// so error-return traces print as `<file>:<line>:<col>`. `None` preserves
+    /// the original `<line>:<col>` MVP output for callers that don't supply a
+    /// filename (most tests, ad-hoc IR dumps).
+    source_filename: Option<String>,
+    /// Memoized `(ptr, len)` for the global string materialized from
+    /// `source_filename`. Populated lazily on first `?` site so we don't add
+    /// an unused global to programs with no `?` propagation. Cleared on each
+    /// `compile_program` entry alongside the other side-tables.
+    source_filename_global: Option<(PointerValue<'ctx>, u64)>,
+    /// Symbols carrying `#[used]` collected during declaration. After the
+    /// program is fully lowered, `emit_llvm_used` materializes them into the
+    /// special `@llvm.used` appending-linkage global so the linker preserves
+    /// each symbol even when nothing else references it. Order is preserved
+    /// for stable IR output (helps snapshot tests and diffs).
+    used_symbols: Vec<FunctionValue<'ctx>>,
+    /// When compiling a par-branch function body, holds the LLVM pointer
+    /// to the runtime's `AtomicBool` cancel flag (the second parameter
+    /// passed by `karac_par_run`). `compile_call` reads this to emit a
+    /// cooperative cancel check before each call site, implementing
+    /// mid-branch cooperative cancellation per `design.md § Effect-boundary
+    /// cooperative cancellation`. Conservatively fires before ANY call —
+    /// the spec narrows the requirement to effectful calls (reads/writes/
+    /// sends/receives) but the over-approximation is sound and avoids
+    /// threading the `EffectCheckResult` through codegen for v1.
+    /// `None` outside par branches.
+    branch_cancel_ptr: Option<PointerValue<'ctx>>,
+    // ── RC-fallback bindings ──────────────────────────────────────
+    /// Per-function RC-fallback binding names populated from `OwnershipCheckResult`.
+    /// Function name → set of binding names that need heap-boxing + refcount.
+    rc_fallback_fns: HashMap<String, HashSet<String>>,
+    /// Heap struct type for each active RC-fallback binding in the current function.
+    /// Cleared at each `compile_function` call. Key: binding name.
+    rc_fallback_heap_types: HashMap<String, StructType<'ctx>>,
+    /// Name of the function currently being compiled (for rc_fallback_fns lookup).
+    current_fn_name: String,
+    // ── Par block runtime ─────────────────────────────────────────
+    /// Monotonic counter used to generate unique par-branch function names.
+    par_counter: u32,
+    /// Runtime struct `KaracBranch { ptr func, ptr ctx }` — shared across par blocks.
+    karac_branch_ty: StructType<'ctx>,
+    /// Runtime entry point `void karac_par_run(const KaracBranch*, usize)`.
+    karac_par_run_fn: FunctionValue<'ctx>,
+    // ── Map runtime ───────────────────────────────────────────────
+    /// Per-variable Map key LLVM type (variable name → K LLVM type).
+    map_key_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Per-variable Map value LLVM type (variable name → V LLVM type).
+    map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Per-variable Map key type name string (e.g. "i64", "String") for hash/eq fn selection.
+    map_key_type_names: HashMap<String, String>,
+    karac_map_new_fn: FunctionValue<'ctx>,
+    karac_map_free_fn: FunctionValue<'ctx>,
+    karac_map_insert_old_fn: FunctionValue<'ctx>,
+    karac_map_get_fn: FunctionValue<'ctx>,
+    karac_map_remove_old_fn: FunctionValue<'ctx>,
+    karac_map_contains_fn: FunctionValue<'ctx>,
+    karac_map_len_fn: FunctionValue<'ctx>,
+    karac_map_iter_new_fn: FunctionValue<'ctx>,
+    karac_map_iter_next_fn: FunctionValue<'ctx>,
+    karac_map_iter_free_fn: FunctionValue<'ctx>,
+    // ── Error return trace runtime ────────────────────────────────
+    /// `void karac_error_trace_push(ptr file, i64 file_len, i32 line, i32 col)`.
+    /// Called by `compile_question` at each `?` failure block before
+    /// `emit_scope_cleanup`. The runtime maintains a thread-local depth-64
+    /// ring buffer; an atexit handler prints it to stderr at program exit.
+    karac_error_trace_push_fn: FunctionValue<'ctx>,
+    /// `void karac_error_trace_clear()`. Emitted at every `?` success site
+    /// so a recovered earlier propagation doesn't leak frames into a later
+    /// failure.
+    karac_error_trace_clear_fn: FunctionValue<'ctx>,
+}
+
+impl<'ctx> Codegen<'ctx> {
+    fn new(context: &'ctx Context, module_name: &str) -> Self {
+        let module = context.create_module(module_name);
+        let builder = context.create_builder();
+
+        let i32_type = context.i32_type();
+        let i64_type = context.i64_type();
+        let ptr_type = context.ptr_type(AddressSpace::default());
+        let printf_type = i32_type.fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], true);
+        let printf_fn = module.add_function("printf", printf_type, None);
+
+        // `int snprintf(char* buf, size_t n, const char* fmt, ...)` for f-string
+        // integer/float → string conversion.
+        let snprintf_type = i32_type.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(i64_type),
+                BasicMetadataTypeEnum::from(ptr_type),
+            ],
+            true,
+        );
+        let snprintf_fn = module.add_function("snprintf", snprintf_type, Some(Linkage::External));
+
+        // Declare malloc and free for RC heap allocation.
+        let malloc_type = ptr_type.fn_type(&[BasicMetadataTypeEnum::from(i64_type)], false);
+        let malloc_fn = module.add_function("malloc", malloc_type, Some(Linkage::External));
+        let free_type = context
+            .void_type()
+            .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
+        let free_fn = module.add_function("free", free_type, Some(Linkage::External));
+
+        let exit_type = context
+            .void_type()
+            .fn_type(&[BasicMetadataTypeEnum::from(i32_type)], false);
+        let exit_fn = module.add_function("exit", exit_type, Some(Linkage::External));
+
+        let memcmp_type = i32_type.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(i64_type),
+            ],
+            false,
+        );
+        let memcmp_fn = module.add_function("memcmp", memcmp_type, Some(Linkage::External));
+
+        // Declare runtime types and entry points for par blocks.
+        // `KaracBranch { func: ptr, ctx: ptr }` matches the #[repr(C)] struct in
+        // runtime/src/lib.rs. karac_par_run(branches, count) spawns one thread
+        // per branch and joins all before returning.
+        let karac_branch_ty = context.struct_type(&[ptr_type.into(), ptr_type.into()], false);
+        let karac_par_run_type = context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type),
+                BasicMetadataTypeEnum::from(i64_type),
+            ],
+            false,
+        );
+        let karac_par_run_fn =
+            module.add_function("karac_par_run", karac_par_run_type, Some(Linkage::External));
+
+        // ── Map runtime extern declarations ──────────────────────────────
+        // All map methods use opaque ptr for the map handle and key/value
+        // pointers. Sizes and fn-pointers are passed as i64 / ptr.
+        let i64_ty: BasicMetadataTypeEnum = i64_type.into();
+        let ptr_md: BasicMetadataTypeEnum = ptr_type.into();
+
+        // karac_map_new(key_size: i64, val_size: i64, hash_fn: ptr, eq_fn: ptr) -> ptr
+        let map_new_ty = ptr_type.fn_type(&[i64_ty, i64_ty, ptr_md, ptr_md], false);
+        let karac_map_new_fn =
+            module.add_function("karac_map_new", map_new_ty, Some(Linkage::External));
+
+        // karac_map_free(map: ptr) -> void
+        let map_free_ty = context.void_type().fn_type(&[ptr_md], false);
+        let karac_map_free_fn =
+            module.add_function("karac_map_free", map_free_ty, Some(Linkage::External));
+
+        // karac_map_insert_old(map: ptr, key: ptr, val: ptr, out_old_val: ptr) -> i1
+        let map_insert_old_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md, ptr_md], false);
+        let karac_map_insert_old_fn = module.add_function(
+            "karac_map_insert_old",
+            map_insert_old_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_get(map: ptr, key: ptr, out_val: ptr) -> i1
+        let map_get_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md], false);
+        let karac_map_get_fn =
+            module.add_function("karac_map_get", map_get_ty, Some(Linkage::External));
+
+        // karac_map_remove_old(map: ptr, key: ptr, out_old_val: ptr) -> i1
+        let map_remove_old_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md], false);
+        let karac_map_remove_old_fn = module.add_function(
+            "karac_map_remove_old",
+            map_remove_old_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_contains(map: ptr, key: ptr) -> i1
+        let map_contains_ty = context.bool_type().fn_type(&[ptr_md, ptr_md], false);
+        let karac_map_contains_fn = module.add_function(
+            "karac_map_contains",
+            map_contains_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_len(map: ptr) -> i64
+        let map_len_ty = i64_type.fn_type(&[ptr_md], false);
+        let karac_map_len_fn =
+            module.add_function("karac_map_len", map_len_ty, Some(Linkage::External));
+
+        // karac_map_iter_new(map: ptr) -> ptr
+        let map_iter_new_ty = ptr_type.fn_type(&[ptr_md], false);
+        let karac_map_iter_new_fn = module.add_function(
+            "karac_map_iter_new",
+            map_iter_new_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_iter_next(iter: ptr, out_key: ptr, out_val: ptr) -> i1
+        let map_iter_next_ty = context
+            .bool_type()
+            .fn_type(&[ptr_md, ptr_md, ptr_md], false);
+        let karac_map_iter_next_fn = module.add_function(
+            "karac_map_iter_next",
+            map_iter_next_ty,
+            Some(Linkage::External),
+        );
+
+        // karac_map_iter_free(iter: ptr) -> void
+        let map_iter_free_ty = context.void_type().fn_type(&[ptr_md], false);
+        let karac_map_iter_free_fn = module.add_function(
+            "karac_map_iter_free",
+            map_iter_free_ty,
+            Some(Linkage::External),
+        );
+
+        // ── Error return trace runtime ────────────────────────────────
+        // karac_error_trace_push(file_ptr: ptr, file_len: i64, line: i32, col: i32) -> void
+        let i32_ty = context.i32_type();
+        let trace_push_ty = context.void_type().fn_type(
+            &[
+                ptr_md,
+                i64_ty,
+                BasicMetadataTypeEnum::from(i32_ty),
+                BasicMetadataTypeEnum::from(i32_ty),
+            ],
+            false,
+        );
+        let karac_error_trace_push_fn = module.add_function(
+            "karac_error_trace_push",
+            trace_push_ty,
+            Some(Linkage::External),
+        );
+        // karac_error_trace_clear() -> void
+        let trace_clear_ty = context.void_type().fn_type(&[], false);
+        let karac_error_trace_clear_fn = module.add_function(
+            "karac_error_trace_clear",
+            trace_clear_ty,
+            Some(Linkage::External),
+        );
+
+        Codegen {
+            context,
+            module,
+            builder,
+            variables: HashMap::new(),
+            var_type_names: HashMap::new(),
+            current_fn: None,
+            printf_fn,
+            snprintf_fn,
+            struct_types: HashMap::new(),
+            struct_field_names: HashMap::new(),
+            enum_layouts: HashMap::new(),
+            loop_stack: Vec::new(),
+            generic_fns: HashMap::new(),
+            generated_monos: HashSet::new(),
+            type_subst: HashMap::new(),
+            closure_counter: 0,
+            closure_fn_types: HashMap::new(),
+            pending_closure_fn_type: None,
+            shared_types: HashMap::new(),
+            malloc_fn,
+            free_fn,
+            exit_fn,
+            memcmp_fn,
+            vec_elem_types: HashMap::new(),
+            slice_elem_types: HashMap::new(),
+            fn_param_slice_elem: HashMap::new(),
+            ref_params: HashMap::new(),
+            fn_param_ref: HashMap::new(),
+            soa_layouts: HashMap::new(),
+            scope_cleanup_actions: Vec::new(),
+            question_conversions: HashMap::new(),
+            callee_effectful: HashMap::new(),
+            method_callee_types: HashMap::new(),
+            source_filename: None,
+            source_filename_global: None,
+            used_symbols: Vec::new(),
+            branch_cancel_ptr: None,
+            rc_fallback_fns: HashMap::new(),
+            rc_fallback_heap_types: HashMap::new(),
+            current_fn_name: String::new(),
+            par_counter: 0,
+            karac_branch_ty,
+            karac_par_run_fn,
+            map_key_types: HashMap::new(),
+            map_val_types: HashMap::new(),
+            map_key_type_names: HashMap::new(),
+            karac_map_new_fn,
+            karac_map_free_fn,
+            karac_map_insert_old_fn,
+            karac_map_get_fn,
+            karac_map_remove_old_fn,
+            karac_map_contains_fn,
+            karac_map_len_fn,
+            karac_map_iter_new_fn,
+            karac_map_iter_next_fn,
+            karac_map_iter_free_fn,
+            karac_error_trace_push_fn,
+            karac_error_trace_clear_fn,
+        }
+    }
+
+    /// Populate RC-fallback data from an ownership check result.
+    fn load_rc_fallback(&mut self, ownership: Option<&OwnershipCheckResult>) {
+        let Some(ow) = ownership else { return };
+        for (fn_name, rc_map) in &ow.rc_values {
+            let names: HashSet<String> = rc_map.keys().cloned().collect();
+            self.rc_fallback_fns.insert(fn_name.clone(), names);
+        }
+    }
+
+    /// Set the source filename used for `karac_error_trace_push` calls at
+    /// `?` failure sites. See the field doc on `source_filename`.
+    fn set_source_filename(&mut self, filename: Option<&str>) {
+        self.source_filename = filename.map(|s| s.to_string());
+    }
+
+    fn is_rc_fallback_binding(&self, name: &str) -> bool {
+        self.rc_fallback_fns
+            .get(&self.current_fn_name)
+            .is_some_and(|set| set.contains(name))
+    }
+
+    // ── Type resolution ───────────────────────────────────────────
+
+    fn llvm_type_for_type_expr(&self, ty: &TypeExpr) -> BasicTypeEnum<'ctx> {
+        match &ty.kind {
+            TypeKind::Path(path) => {
+                let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                if name == "Array" {
+                    if let Some(arr_ty) = self.llvm_array_type(&path.generic_args) {
+                        return arr_ty;
+                    }
+                }
+                if name == "Vec" {
+                    return self.vec_struct_type().into();
+                }
+                if name == "Slice" {
+                    return self.slice_struct_type().into();
+                }
+                // Map[K,V] and Set[T] are opaque heap pointers managed by the
+                // karac_map_* runtime functions.
+                if name == "Map" || name == "Set" || name == "SortedSet" {
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
+                self.llvm_type_for_name(name)
+            }
+            TypeKind::Tuple(elems) if elems.is_empty() => {
+                // unit type → i64 zero
+                self.context.i64_type().into()
+            }
+            TypeKind::Tuple(elems) => {
+                let fields: Vec<BasicTypeEnum<'ctx>> = elems
+                    .iter()
+                    .map(|e| self.llvm_type_for_type_expr(e))
+                    .collect();
+                self.context.struct_type(&fields, false).into()
+            }
+            TypeKind::Ref(_) | TypeKind::MutRef(_) => {
+                self.context.ptr_type(AddressSpace::default()).into()
+            }
+            TypeKind::MutSlice(_) => self.slice_struct_type().into(),
+            _ => self.context.i64_type().into(),
+        }
+    }
+
+    /// Extract the inner type from a ref/mut ref type expression.
+    fn inner_type_of_ref(&self, ty: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        match &ty.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+                Some(self.llvm_type_for_type_expr(inner))
+            }
+            _ => None,
+        }
+    }
+
+    /// Lower `Array[T, N]` generic args to an LLVM `[N x T]` type.
+    /// Mirrors typechecker::lower_array_type — accepts only positive integer-literal size.
+    fn llvm_array_type(
+        &self,
+        generic_args: &Option<Vec<GenericArg>>,
+    ) -> Option<BasicTypeEnum<'ctx>> {
+        let args = generic_args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let elem_ty_expr = match &args[0] {
+            GenericArg::Type(t) => t,
+            GenericArg::Const(_) => return None,
+        };
+        let size = match &args[1] {
+            GenericArg::Const(expr) => match &expr.kind {
+                ExprKind::Integer(n, _) if *n >= 0 => *n as u32,
+                _ => return None,
+            },
+            GenericArg::Type(_) => return None,
+        };
+        let elem_ty = self.llvm_type_for_type_expr(elem_ty_expr);
+        Some(elem_ty.array_type(size).into())
+    }
+
+    /// Vec[T] runtime layout: `{ ptr data, i64 len, i64 capacity }`.
+    fn vec_struct_type(&self) -> StructType<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
+        let i64_ty = self.context.i64_type().into();
+        self.context.struct_type(&[ptr_ty, i64_ty, i64_ty], false)
+    }
+
+    /// Slice[T] and `mut Slice[T]` runtime layout: `{ ptr data, i64 len }`.
+    /// Mutability is a type-system concept — the physical layout is identical
+    /// for read-only and mutable slices. 16 bytes on 64-bit platforms.
+    fn slice_struct_type(&self) -> StructType<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
+        let i64_ty = self.context.i64_type().into();
+        self.context.struct_type(&[ptr_ty, i64_ty], false)
+    }
+
+    /// Produce an LLVM integer type matching the source-level suffix.
+    /// `None` defaults to `i64`. `I128`/`U128` are not supported and fall
+    /// back to `i64` — the typechecker emits a diagnostic on the literal,
+    /// so codegen never needs to reach a correct 128-bit representation.
+    fn llvm_int_type_for_suffix(&self, sfx: Option<IntSuffix>) -> inkwell::types::IntType<'ctx> {
+        match sfx {
+            None => self.context.i64_type(),
+            Some(IntSuffix::I8) | Some(IntSuffix::U8) => self.context.i8_type(),
+            Some(IntSuffix::I16) | Some(IntSuffix::U16) => self.context.i16_type(),
+            Some(IntSuffix::I32) | Some(IntSuffix::U32) => self.context.i32_type(),
+            Some(IntSuffix::I64) | Some(IntSuffix::U64) => self.context.i64_type(),
+            Some(IntSuffix::I128) | Some(IntSuffix::U128) => self.context.i64_type(),
+        }
+    }
+
+    fn llvm_float_type_for_suffix(
+        &self,
+        sfx: Option<FloatSuffix>,
+    ) -> inkwell::types::FloatType<'ctx> {
+        match sfx {
+            None | Some(FloatSuffix::F64) => self.context.f64_type(),
+            Some(FloatSuffix::F32) => self.context.f32_type(),
+        }
+    }
+
+    fn const_int_for_suffix(
+        &self,
+        n: i64,
+        sfx: Option<IntSuffix>,
+    ) -> inkwell::values::IntValue<'ctx> {
+        let is_signed = matches!(
+            sfx,
+            None | Some(IntSuffix::I8)
+                | Some(IntSuffix::I16)
+                | Some(IntSuffix::I32)
+                | Some(IntSuffix::I64)
+                | Some(IntSuffix::I128)
+        );
+        self.llvm_int_type_for_suffix(sfx)
+            .const_int(n as u64, is_signed)
+    }
+
+    fn const_float_for_suffix(
+        &self,
+        f: f64,
+        sfx: Option<FloatSuffix>,
+    ) -> inkwell::values::FloatValue<'ctx> {
+        self.llvm_float_type_for_suffix(sfx).const_float(f)
+    }
+
+    /// Infer the slice element type from a let-binding RHS that produces
+    /// a slice value. Recognizes `.as_slice()` / `.as_slice_mut()` on a
+    /// known sequence variable and range-indexing `x[a..b]` on the same.
+    /// Returns `None` when the RHS is not a slice-producing shape.
+    fn infer_slice_elem_from_rhs(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        match &expr.kind {
+            ExprKind::MethodCall { object, method, .. }
+                if method == "as_slice" || method == "as_slice_mut" =>
+            {
+                self.infer_elem_from_source(object)
+            }
+            ExprKind::Index { object, index } => {
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    self.infer_elem_from_source(object)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Look up the element LLVM type of a known sequence variable (Array,
+    /// Vec, or Slice).
+    fn infer_elem_from_source(&self, object: &Expr) -> Option<BasicTypeEnum<'ctx>> {
+        let name = if let ExprKind::Identifier(n) = &object.kind {
+            n
+        } else {
+            return None;
+        };
+        if let Some(slot) = self.variables.get(name.as_str()) {
+            if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                return Some(at.get_element_type());
+            }
+        }
+        if let Some(&elem) = self.slice_elem_types.get(name.as_str()) {
+            return Some(elem);
+        }
+        if let Some(&elem) = self.vec_elem_types.get(name.as_str()) {
+            return Some(elem);
+        }
+        if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
+            return Some(at.get_element_type());
+        }
+        None
+    }
+
+    /// Extract the element LLVM type from a `Slice[T]` or `mut Slice[T]`
+    /// type expression.
+    fn extract_slice_elem_type(&self, te: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        match &te.kind {
+            TypeKind::Path(path) => {
+                let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                if name != "Slice" {
+                    return None;
+                }
+                let args = path.generic_args.as_ref()?;
+                if args.len() != 1 {
+                    return None;
+                }
+                match &args[0] {
+                    GenericArg::Type(t) => Some(self.llvm_type_for_type_expr(t)),
+                    GenericArg::Const(_) => None,
+                }
+            }
+            TypeKind::MutSlice(element) => Some(self.llvm_type_for_type_expr(element)),
+            _ => None,
+        }
+    }
+
+    /// Extract the element LLVM type from a `Vec[T]` type expression.
+    fn extract_vec_elem_type(&self, te: &TypeExpr) -> Option<BasicTypeEnum<'ctx>> {
+        if let TypeKind::Path(path) = &te.kind {
+            let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+            if name == "Vec" {
+                if let Some(args) = &path.generic_args {
+                    if let Some(GenericArg::Type(elem_te)) = args.first() {
+                        return Some(self.llvm_type_for_type_expr(elem_te));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    fn is_string_type_expr(&self, te: &TypeExpr) -> bool {
+        if let TypeKind::Path(path) = &te.kind {
+            path.segments.first().map(|s| s.as_str()) == Some("String")
+        } else {
+            false
+        }
+    }
+
+    /// Extract the key type name string from a `Map[K, V]` type expression.
+    /// Returns the first segment of K's path, e.g. "i64", "String", "MyStruct".
+    fn extract_map_key_name(te: &TypeExpr) -> Option<String> {
+        if let TypeKind::Path(path) = &te.kind {
+            if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if let Some(GenericArg::Type(k_te)) = args.first() {
+                if let TypeKind::Path(kpath) = &k_te.kind {
+                    return kpath.segments.first().cloned();
+                }
+            }
+        }
+        None
+    }
+
+    /// Extract (K, V) LLVM types from a `Map[K, V]` type expression.
+    fn extract_map_kv_types(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicTypeEnum<'ctx>)> {
+        if let TypeKind::Path(path) = &te.kind {
+            if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if args.len() != 2 {
+                return None;
+            }
+            let k = match &args[0] {
+                GenericArg::Type(t) => self.llvm_type_for_type_expr(t),
+                _ => return None,
+            };
+            let v = match &args[1] {
+                GenericArg::Type(t) => self.llvm_type_for_type_expr(t),
+                _ => return None,
+            };
+            Some((k, v))
+        } else {
+            None
+        }
+    }
+
+    fn is_map_new_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path(segs) = &callee.kind {
+                return segs.len() == 2 && segs[0] == "Map" && segs[1] == "new";
+            }
+        }
+        false
+    }
+
+    fn is_vec_new_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path(segs) = &callee.kind {
+                return segs.len() == 2 && segs[0] == "Vec" && segs[1] == "new";
+            }
+        }
+        false
+    }
+
+    fn is_string_binary_op(&self, expr: &Expr) -> bool {
+        // Source-form `a + b` (pre-lowering).
+        if let ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            ..
+        } = &expr.kind
+        {
+            return self.first_operand_is_string(left);
+        }
+        // Lowered form `Call(Path(["String", "add"]), [a, b])` — produced by
+        // the operator lowering pass. Also recognize String + String here.
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            if let ExprKind::Path(segs) = &callee.kind {
+                if segs.len() == 2 && segs[0] == "String" && segs[1] == "add" {
+                    if let Some(first) = args.first() {
+                        return self.first_operand_is_string(&first.value);
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Helper: is this expression a string literal or a known string variable?
+    fn first_operand_is_string(&self, expr: &Expr) -> bool {
+        if matches!(&expr.kind, ExprKind::StringLit(_)) {
+            return true;
+        }
+        if let ExprKind::Identifier(name) = &expr.kind {
+            return self
+                .vec_elem_types
+                .get(name.as_str())
+                .map(|t| t.is_int_type() && t.into_int_type().get_bit_width() == 8)
+                .unwrap_or(false);
+        }
+        false
+    }
+
+    fn is_string_new_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path(segs) = &callee.kind {
+                return segs.len() == 2 && segs[0] == "String" && segs[1] == "new";
+            }
+        }
+        false
+    }
+
+    /// Look up the Vec element type for a variable, defaulting to i64.
+    fn vec_elem_type_for_var(&self, name: &str) -> BasicTypeEnum<'ctx> {
+        self.vec_elem_types
+            .get(name)
+            .copied()
+            .unwrap_or_else(|| self.context.i64_type().into())
+    }
+
+    fn llvm_type_for_name(&self, name: &str) -> BasicTypeEnum<'ctx> {
+        // Active monomorphization substitution takes priority.
+        if let Some(&ty) = self.type_subst.get(name) {
+            return ty;
+        }
+        match name {
+            "i8" | "u8" => self.context.i8_type().into(),
+            "i16" | "u16" => self.context.i16_type().into(),
+            "i32" | "u32" => self.context.i32_type().into(),
+            "i64" | "u64" | "isize" | "usize" => self.context.i64_type().into(),
+            "f32" => self.context.f32_type().into(),
+            "f64" => self.context.f64_type().into(),
+            "bool" => self.context.bool_type().into(),
+            "String" | "str" => self.vec_struct_type().into(),
+            name => {
+                // Shared types are heap-allocated pointers.
+                if self.shared_types.contains_key(name) {
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
+                if let Some(st) = self.struct_types.get(name) {
+                    (*st).into()
+                } else if let Some(layout) = self.enum_layouts.get(name) {
+                    // Enum types are represented as tagged-union structs.
+                    layout.llvm_type.into()
+                } else {
+                    self.context.i64_type().into()
+                }
+            }
+        }
+    }
+
+    fn llvm_return_type(&self, ty: &Option<TypeExpr>) -> Option<BasicTypeEnum<'ctx>> {
+        let te = ty.as_ref()?;
+        match &te.kind {
+            TypeKind::Path(path) => {
+                let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                if name.is_empty() {
+                    return None;
+                }
+                // Delegate to llvm_type_for_type_expr so generic types
+                // (Array[T, N], Vec[T], Slice[T], Map[K,V], …) are honored
+                // — bare llvm_type_for_name drops generic args.
+                Some(self.llvm_type_for_type_expr(te))
+            }
+            TypeKind::Tuple(elems) if elems.is_empty() => None,
+            _ => Some(self.llvm_type_for_type_expr(te)),
+        }
+    }
+
+    fn llvm_param_type(&self, param: &Param) -> BasicMetadataTypeEnum<'ctx> {
+        BasicMetadataTypeEnum::from(self.llvm_type_for_type_expr(&param.ty))
+    }
+
+    // ── Shared type helpers ─────────────────────────────────────────
+
+    /// Check if a type name refers to a shared (RC) type.
+    #[allow(dead_code)]
+    fn is_shared_type(&self, name: &str) -> bool {
+        self.shared_types.contains_key(name)
+    }
+
+    /// Get the heap struct type for a shared type, if it exists.
+    #[allow(dead_code)]
+    fn shared_heap_type(&self, name: &str) -> Option<StructType<'ctx>> {
+        self.shared_types.get(name).map(|info| info.heap_type)
+    }
+
+    /// If the expression refers to a variable of shared type, return the type name and info.
+    fn shared_type_for_expr(&self, expr: &Expr) -> Option<(String, SharedTypeInfo<'ctx>)> {
+        if let ExprKind::Identifier(var_name) = &expr.kind {
+            if let Some(type_name) = self.var_type_names.get(var_name.as_str()) {
+                if let Some(info) = self.shared_types.get(type_name.as_str()) {
+                    return Some((type_name.clone(), info.clone()));
+                }
+            }
+        }
+        None
+    }
+
+    /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
+    /// Returns a pointer to the heap object.
+    fn emit_panic(&self, message: &str) {
+        let msg = self
+            .builder
+            .build_global_string_ptr(&format!("panic: {}\n\0", message), "panic_msg")
+            .unwrap();
+        self.builder
+            .build_call(
+                self.printf_fn,
+                &[msg.as_pointer_value().into()],
+                "panic_print",
+            )
+            .unwrap();
+        let exit_code = self.context.i32_type().const_int(1, false);
+        self.builder
+            .build_call(self.exit_fn, &[exit_code.into()], "")
+            .unwrap();
+    }
+
+    fn emit_rc_alloc(&self, heap_type: StructType<'ctx>) -> PointerValue<'ctx> {
+        let size = heap_type.size_of().expect("heap type must be sized");
+        let call = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "rc_alloc")
+            .unwrap();
+        let ptr = call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        // Store refcount = 1 at field 0.
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(heap_type, ptr, 0, "rc_ptr")
+            .unwrap();
+        self.builder
+            .build_store(rc_ptr, self.context.i64_type().const_int(1, false))
+            .unwrap();
+        ptr
+    }
+
+    /// Increment the reference count of a shared object.
+    fn emit_rc_inc(&self, heap_type: StructType<'ctx>, ptr: PointerValue<'ctx>) {
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(heap_type, ptr, 0, "rc_ptr")
+            .unwrap();
+        let rc = self
+            .builder
+            .build_load(self.context.i64_type(), rc_ptr, "rc")
+            .unwrap()
+            .into_int_value();
+        let rc_inc = self
+            .builder
+            .build_int_add(rc, self.context.i64_type().const_int(1, false), "rc_inc")
+            .unwrap();
+        self.builder.build_store(rc_ptr, rc_inc).unwrap();
+    }
+
+    /// Decrement the reference count. If it reaches zero, call free().
+    fn emit_rc_dec(&self, heap_type: StructType<'ctx>, ptr: PointerValue<'ctx>) {
+        let rc_ptr = self
+            .builder
+            .build_struct_gep(heap_type, ptr, 0, "rc_ptr")
+            .unwrap();
+        let rc = self
+            .builder
+            .build_load(self.context.i64_type(), rc_ptr, "rc")
+            .unwrap()
+            .into_int_value();
+        let rc_dec = self
+            .builder
+            .build_int_sub(rc, self.context.i64_type().const_int(1, false), "rc_dec")
+            .unwrap();
+        self.builder.build_store(rc_ptr, rc_dec).unwrap();
+
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                rc_dec,
+                self.context.i64_type().const_zero(),
+                "rc_is_zero",
+            )
+            .unwrap();
+
+        let current_fn = self.current_fn.unwrap();
+        let free_bb = self.context.append_basic_block(current_fn, "rc_free");
+        let done_bb = self.context.append_basic_block(current_fn, "rc_done");
+
+        self.builder
+            .build_conditional_branch(is_zero, free_bb, done_bb)
+            .unwrap();
+
+        self.builder.position_at_end(free_bb);
+        self.builder
+            .build_call(self.free_fn, &[ptr.into()], "")
+            .unwrap();
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+        self.builder.position_at_end(done_bb);
+    }
+
+    /// Track a shared-type variable for scope-exit rc_dec.
+    fn track_rc_var(&mut self, name: &str, ptr: PointerValue<'ctx>, heap_type: StructType<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::RcDec {
+                name: name.to_string(),
+                ptr,
+                heap_type,
+            });
+        }
+    }
+
+    /// Track a Vec/String alloca for scope-exit buffer free.
+    fn track_vec_var(&mut self, vec_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeVecBuffer { vec_alloca });
+        }
+    }
+
+    /// Track a Map alloca for scope-exit `karac_map_free` call.
+    fn track_map_var(&mut self, map_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeMapHandle { map_alloca });
+        }
+    }
+
+    /// Emit all cleanup actions registered across all scope frames (for function exit).
+    /// Iterates frames in reverse (innermost first) and within each frame in push order
+    /// (consistent with how RAII destruction works in block-structured languages).
+    fn emit_scope_cleanup(&self) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        for frame in self.scope_cleanup_actions.iter().rev() {
+            for action in frame {
+                match action {
+                    CleanupAction::RcDec {
+                        name,
+                        ptr,
+                        heap_type,
+                    } => {
+                        let current_ptr = if let Some(slot) = self.variables.get(name) {
+                            self.builder
+                                .build_load(ptr_ty, slot.ptr, &format!("{}_rc_cleanup", name))
+                                .unwrap()
+                                .into_pointer_value()
+                        } else {
+                            *ptr
+                        };
+                        self.emit_rc_dec(*heap_type, current_ptr);
+                    }
+                    CleanupAction::FreeVecBuffer { vec_alloca } => {
+                        let cap_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, *vec_alloca, 2, "cleanup.cap.ptr")
+                            .unwrap();
+                        let cap = self
+                            .builder
+                            .build_load(i64_t, cap_ptr, "cleanup.cap")
+                            .unwrap()
+                            .into_int_value();
+                        let zero = i64_t.const_int(0, false);
+                        let is_heap = self
+                            .builder
+                            .build_int_compare(IntPredicate::UGT, cap, zero, "is_heap")
+                            .unwrap();
+                        let free_bb = self.context.append_basic_block(fn_val, "cleanup.free");
+                        let skip_bb = self.context.append_basic_block(fn_val, "cleanup.skip");
+                        self.builder
+                            .build_conditional_branch(is_heap, free_bb, skip_bb)
+                            .unwrap();
+                        self.builder.position_at_end(free_bb);
+                        let data_ptr_ptr = self
+                            .builder
+                            .build_struct_gep(vec_ty, *vec_alloca, 0, "cleanup.data.ptr")
+                            .unwrap();
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_ptr_ptr, "cleanup.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        self.builder
+                            .build_call(self.free_fn, &[data.into()], "")
+                            .unwrap();
+                        self.builder.build_unconditional_branch(skip_bb).unwrap();
+                        self.builder.position_at_end(skip_bb);
+                    }
+                    CleanupAction::FreeMapHandle { map_alloca } => {
+                        let handle = self
+                            .builder
+                            .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
+                            .unwrap()
+                            .into_pointer_value();
+                        self.builder
+                            .build_call(self.karac_map_free_fn, &[handle.into()], "")
+                            .unwrap();
+                    }
+                }
+            }
+        }
+    }
+
+    // ── F-string helpers ──────────────────────────────────────────
+
+    /// Append `src_len` bytes from `src_ptr` to the String (Vec<u8>) alloca at
+    /// `dest_alloca`, growing the buffer if necessary.  Mirrors the inline
+    /// `push_str` logic in `compile_vec_method`.
+    fn emit_string_append_raw(
+        &mut self,
+        dest_alloca: PointerValue<'ctx>,
+        src_ptr: PointerValue<'ctx>,
+        src_len: inkwell::values::IntValue<'ctx>,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, dest_alloca, 0, "fsa.data.pp")
+            .unwrap();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, dest_alloca, 1, "fsa.len.ptr")
+            .unwrap();
+        let cap_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, dest_alloca, 2, "fsa.cap.ptr")
+            .unwrap();
+
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "fsa.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "fsa.len")
+            .unwrap()
+            .into_int_value();
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_ptr, "fsa.cap")
+            .unwrap()
+            .into_int_value();
+
+        let new_len = self
+            .builder
+            .build_int_add(len, src_len, "fsa.new_len")
+            .unwrap();
+
+        // Grow if new_len > cap.
+        let grow_bb = self.context.append_basic_block(fn_val, "fsa.grow");
+        let copy_bb = self.context.append_basic_block(fn_val, "fsa.copy");
+        let needs_grow = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, new_len, cap, "fsa.needs_grow")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+            .unwrap();
+
+        // Grow path: compute new_cap, malloc, memcpy old data, free old, update alloca.
+        self.builder.position_at_end(grow_bb);
+        let two = i64_t.const_int(2, false);
+        let four = i64_t.const_int(4, false);
+        let doubled = self.builder.build_int_mul(cap, two, "fsa.doubled").unwrap();
+        let cmp1 = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, doubled, four, "fsa.cmp1")
+            .unwrap();
+        let growth_min = self
+            .builder
+            .build_select(cmp1, doubled, four, "fsa.gmin")
+            .unwrap()
+            .into_int_value();
+        let cmp2 = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, new_len, growth_min, "fsa.cmp2")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(cmp2, new_len, growth_min, "fsa.new_cap")
+            .unwrap()
+            .into_int_value();
+        let new_buf = self
+            .builder
+            .build_call(self.malloc_fn, &[new_cap.into()], "fsa.new_buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        // Copy existing data into new buffer (memcpy with len=0 is safe per C spec).
+        self.builder.build_memcpy(new_buf, 1, data, 1, len).unwrap();
+        // Free old heap buffer (free(null) is a no-op per C spec).
+        self.builder
+            .build_call(self.free_fn, &[data.into()], "")
+            .unwrap();
+        // Update data pointer and cap in the alloca.
+        self.builder.build_store(data_ptr_ptr, new_buf).unwrap();
+        self.builder.build_store(cap_ptr, new_cap).unwrap();
+        self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+        // Copy path: reload cur data (updated by grow, or unchanged), memcpy src.
+        self.builder.position_at_end(copy_bb);
+        let cur_data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "fsa.cur_data")
+            .unwrap()
+            .into_pointer_value();
+        let i8_ty = self.context.i8_type();
+        let dest = unsafe {
+            self.builder
+                .build_gep(i8_ty, cur_data, &[len], "fsa.dest")
+                .unwrap()
+        };
+        self.builder
+            .build_memcpy(dest, 1, src_ptr, 1, src_len)
+            .unwrap();
+        self.builder.build_store(len_ptr, new_len).unwrap();
+    }
+
+    /// Convert a compiled value to `(raw_ptr, byte_len)` for f-string interpolation.
+    /// Dispatches on the LLVM type so callers don't need to track the Kāra type name.
+    ///
+    /// - `String` (3-field struct) → extract (data_ptr, len)
+    /// - `bool` (i1) → global "true"/"false" literal
+    /// - float (f32/f64) → snprintf "%g" into a 64-byte stack buffer
+    /// - integer → snprintf "%lld" into a 64-byte stack buffer
+    fn compile_fstr_part_to_cstr(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+    ) -> (PointerValue<'ctx>, inkwell::values::IntValue<'ctx>) {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_val = self.current_fn.unwrap();
+
+        match val {
+            BasicValueEnum::StructValue(sv) => {
+                // Treat as String: field 0 = ptr, field 1 = len.
+                let ptr = self
+                    .builder
+                    .build_extract_value(sv, 0, "fst.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 1, "fst.len")
+                    .unwrap()
+                    .into_int_value();
+                (ptr, len)
+            }
+            BasicValueEnum::IntValue(iv) if iv.get_type().get_bit_width() == 1 => {
+                // bool
+                let true_str = self
+                    .builder
+                    .build_global_string_ptr("true", "fst.true")
+                    .unwrap();
+                let false_str = self
+                    .builder
+                    .build_global_string_ptr("false", "fst.false")
+                    .unwrap();
+                let four = i64_t.const_int(4, false);
+                let five = i64_t.const_int(5, false);
+                let ptr = self
+                    .builder
+                    .build_select(
+                        iv,
+                        true_str.as_pointer_value(),
+                        false_str.as_pointer_value(),
+                        "fst.bptr",
+                    )
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_select(iv, four, five, "fst.blen")
+                    .unwrap()
+                    .into_int_value();
+                (ptr, len)
+            }
+            _ => {
+                // Integer or float: use snprintf into a 64-byte stack buffer.
+                let buf_size = i64_t.const_int(64, false);
+                let buf = self.create_entry_alloca(
+                    fn_val,
+                    "fst.buf",
+                    self.context.i8_type().array_type(64).into(),
+                );
+                let buf_ptr = self
+                    .builder
+                    .build_pointer_cast(buf, ptr_ty, "fst.buf_ptr")
+                    .unwrap();
+                let fmt_str = if matches!(val, BasicValueEnum::FloatValue(_)) {
+                    self.builder
+                        .build_global_string_ptr("%g", "fst.fmt_f")
+                        .unwrap()
+                        .as_pointer_value()
+                } else {
+                    // Integer
+                    self.builder
+                        .build_global_string_ptr("%lld", "fst.fmt_i")
+                        .unwrap()
+                        .as_pointer_value()
+                };
+                let written = self
+                    .builder
+                    .build_call(
+                        self.snprintf_fn,
+                        &[buf_ptr.into(), buf_size.into(), fmt_str.into(), val.into()],
+                        "fst.written",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let len = self
+                    .builder
+                    .build_int_z_extend(written, i64_t, "fst.len")
+                    .unwrap();
+                (buf_ptr, len)
+            }
+        }
+    }
+
+    // ── Struct declaration pass ───────────────────────────────────
+
+    fn declare_structs(&mut self, program: &Program) {
+        for item in &program.items {
+            if let Item::StructDef(s) = item {
+                let field_types: Vec<BasicTypeEnum<'ctx>> = s
+                    .fields
+                    .iter()
+                    .map(|f| self.llvm_type_for_type_expr(&f.ty))
+                    .collect();
+                let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
+
+                if s.is_shared {
+                    // Shared struct: heap layout is { i64 refcount, field0, field1, … }
+                    let mut heap_fields: Vec<BasicTypeEnum<'ctx>> =
+                        vec![self.context.i64_type().into()]; // refcount
+                    heap_fields.extend_from_slice(&field_types);
+                    let heap_type = self.context.struct_type(&heap_fields, false);
+
+                    self.shared_types.insert(
+                        s.name.clone(),
+                        SharedTypeInfo {
+                            heap_type,
+                            field_names: names.clone(),
+                            is_enum: false,
+                        },
+                    );
+                    // Also register field names for field-index lookups.
+                    self.struct_field_names.insert(s.name.clone(), names);
+                } else {
+                    let st = self.context.struct_type(&field_types, false);
+                    self.struct_types.insert(s.name.clone(), st);
+                    self.struct_field_names.insert(s.name.clone(), names);
+                }
+            }
+        }
+    }
+
+    fn collect_soa_layouts(&mut self, program: &Program) {
+        for item in &program.items {
+            if let Item::LayoutDef(layout) = item {
+                // Extract element struct name from collection type.
+                let struct_name = if let TypeKind::Path(path) = &layout.collection_type.kind {
+                    if let Some(args) = &path.generic_args {
+                        if let Some(GenericArg::Type(te)) = args.first() {
+                            if let TypeKind::Path(inner) = &te.kind {
+                                inner.segments.first().cloned()
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let struct_name = match struct_name {
+                    Some(n) => n,
+                    None => continue,
+                };
+
+                // Look up struct field names.
+                let all_fields = match self.struct_field_names.get(&struct_name) {
+                    Some(f) => f.clone(),
+                    None => continue,
+                };
+
+                // Build groups from layout items.
+                let mut groups = Vec::new();
+                let mut cold_group: Option<SoaGroup> = None;
+                let mut assigned: HashSet<String> = HashSet::new();
+
+                for li in &layout.items {
+                    match li {
+                        LayoutItem::Group {
+                            name,
+                            fields,
+                            align,
+                            ..
+                        } => {
+                            let field_indices: Vec<usize> = fields
+                                .iter()
+                                .filter_map(|f| all_fields.iter().position(|af| af == f))
+                                .collect();
+                            for f in fields {
+                                assigned.insert(f.clone());
+                            }
+                            groups.push(SoaGroup {
+                                name: name.clone(),
+                                fields: fields.clone(),
+                                field_indices,
+                                elem_type: None,
+                                align: *align,
+                                is_cold: false,
+                            });
+                        }
+                        LayoutItem::Cold { fields, .. } => {
+                            let field_indices: Vec<usize> = fields
+                                .iter()
+                                .filter_map(|f| all_fields.iter().position(|af| af == f))
+                                .collect();
+                            for f in fields {
+                                assigned.insert(f.clone());
+                            }
+                            cold_group = Some(SoaGroup {
+                                name: "__cold".to_string(),
+                                fields: fields.clone(),
+                                field_indices,
+                                elem_type: None,
+                                align: None,
+                                is_cold: true,
+                            });
+                        }
+                        LayoutItem::SplitByVariant(_) => {}
+                    }
+                }
+
+                // Implicit trailing hot group for unassigned fields (excludes cold fields).
+                let unassigned: Vec<String> = all_fields
+                    .iter()
+                    .filter(|f| !assigned.contains(*f))
+                    .cloned()
+                    .collect();
+                if !unassigned.is_empty() {
+                    let field_indices: Vec<usize> = unassigned
+                        .iter()
+                        .filter_map(|f| all_fields.iter().position(|af| af == f))
+                        .collect();
+                    groups.push(SoaGroup {
+                        name: "__unassigned".to_string(),
+                        fields: unassigned,
+                        field_indices,
+                        elem_type: None,
+                        align: None,
+                        is_cold: false,
+                    });
+                }
+
+                let num_groups = groups.len();
+                self.soa_layouts.insert(
+                    layout.name.clone(),
+                    SoaLayout {
+                        name: layout.name.clone(),
+                        struct_name,
+                        groups,
+                        cold_group,
+                        num_groups,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Returns (or lazily declares) `aligned_alloc(i64 alignment, i64 size) -> ptr`.
+    /// Used for SoA group allocations with an `align(N)` modifier.
+    fn aligned_alloc_fn(&self) -> FunctionValue<'ctx> {
+        if let Some(f) = self.module.get_function("aligned_alloc") {
+            return f;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_ty = ptr_ty.fn_type(&[i64_ty.into(), i64_ty.into()], false);
+        self.module
+            .add_function("aligned_alloc", fn_ty, Some(Linkage::External))
+    }
+
+    /// Build the LLVM struct type for a SoA-laid-out Vec.
+    /// Layout: `{ ptr_g0, ..., ptr_gN, [ptr_cold,] i64 len, i64 cap }`.
+    /// The cold pointer (if `has_cold` is true) comes after all hot group pointers and before len/cap.
+    fn soa_vec_type(&self, num_groups: usize, has_cold: bool) -> StructType<'ctx> {
+        let ptr_ty: BasicTypeEnum<'ctx> = self.context.ptr_type(AddressSpace::default()).into();
+        let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+        let num_ptrs = num_groups + if has_cold { 1 } else { 0 };
+        let mut fields: Vec<BasicTypeEnum<'ctx>> = vec![ptr_ty; num_ptrs];
+        fields.push(i64_ty); // len
+        fields.push(i64_ty); // cap
+        self.context.struct_type(&fields, false)
+    }
+
+    /// Returns the struct field index of the cold pointer within a SoA vec struct.
+    /// `num_hot_groups` is the count of hot groups (excluding cold).
+    fn soa_cold_ptr_index(num_hot_groups: usize) -> u32 {
+        num_hot_groups as u32
+    }
+
+    /// Returns the struct field index of `len` within a SoA vec struct.
+    fn soa_len_index(num_hot_groups: usize, has_cold: bool) -> u32 {
+        num_hot_groups as u32 + if has_cold { 1 } else { 0 }
+    }
+
+    /// Returns the struct field index of `cap` within a SoA vec struct.
+    fn soa_cap_index(num_hot_groups: usize, has_cold: bool) -> u32 {
+        Self::soa_len_index(num_hot_groups, has_cold) + 1
+    }
+
+    /// Build the LLVM struct type for one element of a SoA group.
+    /// E.g., if group "physics" has fields { position: f64, velocity: f64 },
+    /// the group element type is `{ f64, f64 }`.
+    fn soa_group_elem_type(&self, struct_name: &str, group: &SoaGroup) -> StructType<'ctx> {
+        let struct_field_types: Vec<BasicTypeEnum<'ctx>> =
+            if let Some(&st) = self.struct_types.get(struct_name) {
+                (0..st.count_fields())
+                    .map(|i| st.get_field_type_at_index(i).unwrap())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+
+        let group_field_types: Vec<BasicTypeEnum<'ctx>> = group
+            .field_indices
+            .iter()
+            .filter_map(|&idx| struct_field_types.get(idx).copied())
+            .collect();
+
+        self.context.struct_type(&group_field_types, false)
+    }
+
+    fn declare_enums(&mut self, program: &Program) {
+        for item in &program.items {
+            if let Item::EnumDef(e) = item {
+                // Compute max payload words across all variants.
+                let max_words = e
+                    .variants
+                    .iter()
+                    .map(|v| match &v.kind {
+                        VariantKind::Unit => 0,
+                        VariantKind::Tuple(tys) => tys.len(),
+                        VariantKind::Struct(fields) => fields.len(),
+                    })
+                    .max()
+                    .unwrap_or(0);
+
+                // Build the unified LLVM type: { i64 tag, i64 w0, ..., i64 wN }
+                let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+                let mut field_types: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // tag
+                for _ in 0..max_words {
+                    field_types.push(i64_t);
+                }
+                let llvm_type = self.context.struct_type(&field_types, false);
+
+                let mut tags = HashMap::new();
+                let mut field_counts = HashMap::new();
+                for (idx, v) in e.variants.iter().enumerate() {
+                    tags.insert(v.name.clone(), idx as u64);
+                    let fc = match &v.kind {
+                        VariantKind::Unit => 0,
+                        VariantKind::Tuple(tys) => tys.len(),
+                        VariantKind::Struct(fields) => fields.len(),
+                    };
+                    field_counts.insert(v.name.clone(), fc);
+                }
+
+                if e.is_shared {
+                    // Shared enum: heap layout is { i64 refcount, i64 tag, i64 w0, … }
+                    let mut heap_fields: Vec<BasicTypeEnum<'ctx>> = vec![i64_t]; // refcount
+                    heap_fields.extend_from_slice(&field_types); // tag + payload words
+                    let heap_type = self.context.struct_type(&heap_fields, false);
+
+                    self.shared_types.insert(
+                        e.name.clone(),
+                        SharedTypeInfo {
+                            heap_type,
+                            field_names: vec![],
+                            is_enum: true,
+                        },
+                    );
+                }
+
+                // Always register in enum_layouts for tag/variant resolution.
+                self.enum_layouts.insert(
+                    e.name.clone(),
+                    EnumLayout {
+                        llvm_type,
+                        tags,
+                        field_counts,
+                    },
+                );
+            }
+        }
+    }
+
+    /// Seed enum layouts for stdlib types that are not declared as `enum` in
+    /// the prelude AST (e.g. Option[T]) so that variant construction/matching
+    /// and methods like `first`/`last`/`get` can produce properly typed LLVM.
+    fn seed_builtin_enum_layouts(&mut self) {
+        let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+        let enum_type = self.context.struct_type(&[i64_t, i64_t], false);
+
+        // Option[T]: { i64 tag, i64 w0 }  — None(tag=0) | Some(tag=1, w0=value)
+        if !self.enum_layouts.contains_key("Option") {
+            let mut tags = HashMap::new();
+            tags.insert("None".to_string(), 0u64);
+            tags.insert("Some".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("None".to_string(), 0usize);
+            field_counts.insert("Some".to_string(), 1usize);
+            self.enum_layouts.insert(
+                "Option".to_string(),
+                EnumLayout {
+                    llvm_type: enum_type,
+                    tags,
+                    field_counts,
+                },
+            );
+        }
+
+        // Result[T, E]: { i64 tag, i64 w0 }  — Err(tag=0, w0=err) | Ok(tag=1, w0=val)
+        if !self.enum_layouts.contains_key("Result") {
+            let mut tags = HashMap::new();
+            tags.insert("Err".to_string(), 0u64);
+            tags.insert("Ok".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Err".to_string(), 1usize);
+            field_counts.insert("Ok".to_string(), 1usize);
+            self.enum_layouts.insert(
+                "Result".to_string(),
+                EnumLayout {
+                    llvm_type: enum_type,
+                    tags,
+                    field_counts,
+                },
+            );
+        }
+    }
+
+    // ── FFI: extern function declarations ──────────────────────────
+
+    fn declare_extern_functions(&mut self, program: &Program) -> Result<(), String> {
+        for item in &program.items {
+            if let Item::ExternFunction(ext) = item {
+                let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = ext
+                    .params
+                    .iter()
+                    .map(|p| BasicMetadataTypeEnum::from(self.llvm_type_for_type_expr(&p.ty)))
+                    .collect();
+
+                let fn_type = match ext.return_type.as_ref().and_then(|ty| match &ty.kind {
+                    TypeKind::Path(path) => {
+                        let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                        if name.is_empty() {
+                            None
+                        } else {
+                            Some(self.llvm_type_for_name(name))
+                        }
+                    }
+                    TypeKind::Tuple(elems) if elems.is_empty() => None,
+                    _ => Some(self.llvm_type_for_type_expr(ty)),
+                }) {
+                    Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+                    Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                        self.context.void_type().fn_type(&param_types, false)
+                    }
+                };
+
+                let fn_val = self
+                    .module
+                    .add_function(&ext.name, fn_type, Some(Linkage::External));
+                // `#[link_section]`, `#[no_mangle]`, `#[used]` attached to
+                // an `extern` declaration apply to the symbol as imported.
+                self.apply_linker_attrs(fn_val, &ext.attributes);
+            }
+        }
+        Ok(())
+    }
+
+    // ── Program / function compilation ───────────────────────────
+
+    fn compile_program(&mut self, program: &Program) -> Result<(), String> {
+        self.declare_structs(program);
+        self.declare_enums(program);
+        self.seed_builtin_enum_layouts();
+        self.collect_soa_layouts(program);
+        self.declare_extern_functions(program)?;
+
+        // Side-table set by `lowering::lower_program`: at each `?` site that
+        // requires `From`-based error conversion, the target type name is
+        // recorded so `compile_question` can emit `Target.from(e)` ahead of
+        // the early-return.
+        self.question_conversions = program.question_conversions.clone();
+
+        // Side-table set by the cli pipeline after effectcheck: per-callee
+        // boolean indicating whether the callee carries any observable
+        // effect (reads/writes/sends/receives). Read by
+        // `emit_branch_cancel_check` to skip the cancel atomic load when the
+        // callee is provably non-observable.
+        self.callee_effectful = program.callee_effectful.clone();
+
+        // Side-table set by `lowering::lower_program`: each `MethodCall`
+        // expression's span maps to the canonical `Type.method` callee key.
+        // Read by `compile_method_call` so the par-branch cancel-check
+        // narrowing applies to instance methods, not just free-function
+        // and `Type.assoc` calls.
+        self.method_callee_types = program.method_callee_types.clone();
+
+        // First pass: register generic functions for on-demand monomorphization;
+        // declare concrete (non-generic) functions for forward-call support.
+        for item in &program.items {
+            if let Item::Function(f) = item {
+                if f.generic_params.is_some() {
+                    self.generic_fns.insert(f.name.clone(), f.clone());
+                } else {
+                    self.declare_function(f)?;
+                }
+            }
+        }
+
+        // Declare user impl-block methods as LLVM functions named
+        // "Type.method". Self-taking methods get `self` prepended as a
+        // normal owned parameter (`ref self`/`mut ref self` deferred; all
+        // current use sites — Eq/Ord/constructors — take `self` or no
+        // receiver). Generic methods are deferred along with generic-fn
+        // monomorphization.
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                if let Some(type_name) = impl_target_name(&imp.target_type) {
+                    for impl_item in &imp.items {
+                        if let ImplItem::Method(method) = impl_item {
+                            if method.generic_params.is_some() {
+                                continue;
+                            }
+                            let synth = make_impl_method_function(&type_name, method);
+                            self.declare_function(&synth)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        // Second pass: compile concrete functions (generic ones are compiled lazily).
+        for item in &program.items {
+            if let Item::Function(f) = item {
+                if f.generic_params.is_none() {
+                    self.compile_function(f)?;
+                }
+            }
+        }
+
+        // Compile user impl-block method bodies.
+        for item in &program.items {
+            if let Item::ImplBlock(imp) = item {
+                if let Some(type_name) = impl_target_name(&imp.target_type) {
+                    for impl_item in &imp.items {
+                        if let ImplItem::Method(method) = impl_item {
+                            if method.generic_params.is_some() {
+                                continue;
+                            }
+                            let synth = make_impl_method_function(&type_name, method);
+                            self.compile_function(&synth)?;
+                        }
+                    }
+                }
+            }
+        }
+
+        self.emit_llvm_used();
+
+        self.module
+            .verify()
+            .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// Materialize the special `@llvm.used` global from `used_symbols`.
+    /// Standard LLVM convention: an `appending`-linkage array of pointers
+    /// in section `llvm.metadata`. The linker treats every entry as
+    /// implicitly referenced and preserves it across dead-code elimination.
+    /// No-op when no `#[used]` symbols were declared.
+    fn emit_llvm_used(&mut self) {
+        if self.used_symbols.is_empty() {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let arr_ty = ptr_ty.array_type(self.used_symbols.len() as u32);
+        let global = self.module.add_global(arr_ty, None, "llvm.used");
+        let entries: Vec<inkwell::values::PointerValue<'ctx>> = self
+            .used_symbols
+            .iter()
+            .map(|f| f.as_global_value().as_pointer_value())
+            .collect();
+        let init = ptr_ty.const_array(&entries);
+        global.set_initializer(&init);
+        global.set_linkage(inkwell::module::Linkage::Appending);
+        global.set_section(Some("llvm.metadata"));
+    }
+
+    /// Apply `#[link_section("name")]`, `#[no_mangle]`, and `#[used]` to
+    /// the given LLVM function. `link_section` calls
+    /// `FunctionValue::set_section`. `no_mangle` is a no-op at this layer —
+    /// the codegen already uses each function's source name as its LLVM
+    /// symbol name (no mangling pass) so the attribute is purely an explicit
+    /// programmer assertion that the symbol stays as-written; preserving it
+    /// in the AST preserves the assertion for reviewers and any future
+    /// mangler. `used` queues the symbol for inclusion in `@llvm.used`,
+    /// emitted at the end of `compile_program` by `emit_llvm_used`.
+    fn apply_linker_attrs(&mut self, fn_val: FunctionValue<'ctx>, attrs: &[Attribute]) {
+        for attr in attrs {
+            match attr.name.as_str() {
+                "link_section" => {
+                    // `#[link_section("name")]` — first positional arg or
+                    // `string_value` carries the section literal. Skip
+                    // silently when neither is present; the parser scaffolding
+                    // accepts the attribute but does not yet enforce arg shape.
+                    let section = attr.string_value.clone().or_else(|| {
+                        attr.args.iter().find_map(|a| match a.value.as_ref() {
+                            Some(Expr {
+                                kind: ExprKind::StringLit(s),
+                                ..
+                            }) => Some(s.clone()),
+                            _ => None,
+                        })
+                    });
+                    if let Some(s) = section {
+                        fn_val.as_global_value().set_section(Some(&s));
+                    }
+                }
+                "no_mangle" => {
+                    // No-op: codegen already emits the symbol under its
+                    // source-level name. Tracked here so future mangling
+                    // passes can opt out.
+                }
+                "used" if !self.used_symbols.contains(&fn_val) => {
+                    self.used_symbols.push(fn_val);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn declare_function(&mut self, func: &Function) -> Result<FunctionValue<'ctx>, String> {
+        if func.name == "main" {
+            let main_type = self.context.i32_type().fn_type(&[], false);
+            return Ok(self.module.add_function("main", main_type, None));
+        }
+
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+            .params
+            .iter()
+            .map(|p| self.llvm_param_type(p))
+            .collect();
+
+        let fn_type = match self.llvm_return_type(&func.return_type) {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_types, false)
+            }
+        };
+
+        // Record which params are ref for call-site argument passing.
+        let ref_flags: Vec<bool> = func
+            .params
+            .iter()
+            .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+            .collect();
+        self.fn_param_ref.insert(func.name.clone(), ref_flags);
+        // Record slice-param element types for call-site coercion.
+        let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
+            .params
+            .iter()
+            .map(|p| self.extract_slice_elem_type(&p.ty))
+            .collect();
+        self.fn_param_slice_elem
+            .insert(func.name.clone(), slice_elems);
+
+        let fn_val = self.module.add_function(&func.name, fn_type, None);
+        self.apply_linker_attrs(fn_val, &func.attributes);
+        Ok(fn_val)
+    }
+
+    fn compile_function(&mut self, func: &Function) -> Result<(), String> {
+        let fn_val = self
+            .module
+            .get_function(&func.name)
+            .ok_or_else(|| format!("Function '{}' not declared", func.name))?;
+
+        self.current_fn = Some(fn_val);
+        self.current_fn_name = func.name.clone();
+        self.variables.clear();
+        self.var_type_names.clear();
+        self.ref_params.clear();
+        self.rc_fallback_heap_types.clear();
+        self.scope_cleanup_actions.clear();
+        self.scope_cleanup_actions.push(Vec::new());
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+
+        if func.name != "main" {
+            for (i, param) in func.params.iter().enumerate() {
+                let param_name = self.param_name(param);
+                let param_val = fn_val.get_nth_param(i as u32).unwrap();
+                let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
+                self.builder.build_store(alloca, param_val).unwrap();
+                // Track ref params: alloca holds a pointer-to-data.
+                if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
+                    self.ref_params.insert(param_name.clone(), inner_ty);
+                    // Also track vec_elem_types for ref Vec/String params.
+                    if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &param.ty.kind {
+                        if let Some(elem) = self.extract_vec_elem_type(inner) {
+                            self.vec_elem_types.insert(param_name.clone(), elem);
+                        }
+                        if self.is_string_type_expr(inner) {
+                            self.vec_elem_types
+                                .insert(param_name.clone(), self.context.i8_type().into());
+                        }
+                    }
+                }
+                // Track slice params: both `Slice[T]` and `mut Slice[T]` use
+                // the 2-field `{ptr, i64}` representation. Recording the
+                // element type here lets indexing and iteration dispatch on
+                // the slice shape.
+                if let Some(elem) = self.extract_slice_elem_type(&param.ty) {
+                    self.slice_elem_types.insert(param_name.clone(), elem);
+                }
+                // Track the declared type name so field/variant lookups work on this param.
+                if let TypeKind::Path(path) = &param.ty.kind {
+                    if let Some(type_name) = path.segments.first() {
+                        self.var_type_names
+                            .insert(param_name.clone(), type_name.clone());
+                        // rc_inc for shared-type parameters (caller keeps its reference).
+                        if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                            let ptr = param_val.into_pointer_value();
+                            self.emit_rc_inc(info.heap_type, ptr);
+                            self.track_rc_var(&param_name, ptr, info.heap_type);
+                        }
+                    }
+                }
+                // RC-fallback boxing for non-shared, non-Vec parameters flagged by the
+                // ownership checker. The param value is boxed in {i64 rc, T} on the heap
+                // so multiple "consumers" each get a copy of T and the heap object is freed
+                // at scope exit when the refcount reaches zero.
+                let is_ref_param = self.ref_params.contains_key(&param_name);
+                let is_vec_param = self.vec_elem_types.contains_key(&param_name);
+                let is_shared_param = if let TypeKind::Path(path) = &param.ty.kind {
+                    path.segments
+                        .first()
+                        .is_some_and(|n| self.shared_types.contains_key(n.as_str()))
+                } else {
+                    false
+                };
+                if !is_ref_param
+                    && !is_vec_param
+                    && !is_shared_param
+                    && self.is_rc_fallback_binding(&param_name)
+                {
+                    let val_ty = param_val.get_type();
+                    let heap_type = self
+                        .context
+                        .struct_type(&[self.context.i64_type().into(), val_ty], false);
+                    let heap_ptr = self.emit_rc_alloc(heap_type);
+                    let val_field = self
+                        .builder
+                        .build_struct_gep(heap_type, heap_ptr, 1, "rc_fb_param_val")
+                        .unwrap();
+                    self.builder.build_store(val_field, param_val).unwrap();
+                    // Overwrite alloca to hold heap ptr instead of T.
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let ptr_alloca = self.create_entry_alloca(fn_val, &param_name, ptr_ty.into());
+                    self.builder.build_store(ptr_alloca, heap_ptr).unwrap();
+                    self.rc_fallback_heap_types
+                        .insert(param_name.clone(), heap_type);
+                    self.track_rc_var(&param_name, heap_ptr, heap_type);
+                    self.variables.insert(
+                        param_name,
+                        VarSlot {
+                            ptr: ptr_alloca,
+                            ty: ptr_ty.into(),
+                        },
+                    );
+                    continue;
+                }
+                self.variables.insert(
+                    param_name,
+                    VarSlot {
+                        ptr: alloca,
+                        ty: param_val.get_type(),
+                    },
+                );
+            }
+        }
+
+        let result = self.compile_block(&func.body)?;
+
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.emit_scope_cleanup();
+            if func.name == "main" {
+                let zero = self.context.i32_type().const_int(0, false);
+                self.builder.build_return(Some(&zero)).unwrap();
+            } else if let Some(val) = result {
+                self.builder.build_return(Some(&val)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
+        }
+
+        self.scope_cleanup_actions.clear();
+        Ok(())
+    }
+
+    fn compile_block(&mut self, block: &Block) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        for stmt in &block.stmts {
+            self.compile_stmt(stmt)?;
+            if self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
+        if let Some(ref expr) = block.final_expr {
+            let val = self.compile_expr(expr)?;
+            Ok(Some(val))
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        match &stmt.kind {
+            StmtKind::Let {
+                pattern, value, ty, ..
+            } => {
+                // Track Vec/String element types from type annotation or RHS.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let mut detected = false;
+                    // Explicit type annotation: let v: Vec[T] = ... or let s: String = ...
+                    if let Some(ref te) = ty {
+                        if let Some(elem_ty) = self.extract_vec_elem_type(te) {
+                            self.vec_elem_types.insert(var_name.clone(), elem_ty);
+                            detected = true;
+                        }
+                        if self.is_string_type_expr(te) {
+                            self.vec_elem_types
+                                .insert(var_name.clone(), self.context.i8_type().into());
+                            detected = true;
+                        }
+                        if let Some(elem_ty) = self.extract_slice_elem_type(te) {
+                            self.slice_elem_types.insert(var_name.clone(), elem_ty);
+                            detected = true;
+                        }
+                        if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
+                            self.map_key_types.insert(var_name.clone(), k_ty);
+                            self.map_val_types.insert(var_name.clone(), v_ty);
+                            if let Some(k_name) = Self::extract_map_key_name(te) {
+                                self.map_key_type_names.insert(var_name.clone(), k_name);
+                            }
+                            detected = true;
+                        }
+                    }
+                    // Infer String from RHS: let s = "hello", let s = String::new(),
+                    // or let s = a + b (string concat)
+                    if !detected
+                        && (matches!(&value.kind, ExprKind::StringLit(_))
+                            || self.is_string_new_call(value)
+                            || self.is_string_binary_op(value))
+                    {
+                        self.vec_elem_types
+                            .insert(var_name.clone(), self.context.i8_type().into());
+                    }
+                    // Infer Slice element type from RHS shapes that produce
+                    // a slice: `x.as_slice()` / `x.as_slice_mut()` on a known
+                    // sequence variable, and `x[a..b]` range indexing.
+                    if !self.slice_elem_types.contains_key(var_name.as_str()) {
+                        if let Some(elem) = self.infer_slice_elem_from_rhs(value) {
+                            self.slice_elem_types.insert(var_name.clone(), elem);
+                        }
+                    }
+                }
+                // SoA layout: if variable matches a layout name and RHS is Vec::new(),
+                // produce the SoA struct type instead of the normal Vec.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let Some(soa) = self.soa_layouts.get(var_name.as_str()).cloned() {
+                        if self.is_vec_new_call(value) {
+                            return self.compile_soa_new(var_name, &soa);
+                        }
+                    }
+                }
+                // Map.new(): emit karac_map_new with sizes and (stub) fn pointers.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.is_map_new_call(value)
+                        && self.map_key_types.contains_key(var_name.as_str())
+                    {
+                        let name = var_name.clone();
+                        return self.compile_map_new_stmt(&name);
+                    }
+                }
+                // Prefer the explicit type annotation when present — it lets
+                // `let c: Cm = i.into();` (lowered to `Cm.from(i)`, which
+                // `type_name_of` can't classify) still register `c` as a
+                // `Cm` so field accesses resolve.
+                let type_hint = ty
+                    .as_ref()
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    })
+                    .or_else(|| self.type_name_of(value));
+                self.pending_closure_fn_type = None;
+                let is_fresh_construction = matches!(&value.kind, ExprKind::StructLiteral { .. });
+                let val = self.compile_expr(value)?;
+                // Track variable → type name for field resolution.
+                let mut shared_info: Option<(String, SharedTypeInfo<'ctx>)> = None;
+                if let Some(ref type_name) = type_hint {
+                    if let PatternKind::Binding(var_name) = &pattern.kind {
+                        self.var_type_names
+                            .insert(var_name.clone(), type_name.clone());
+                        if let Some(info) = self.shared_types.get(type_name.as_str()).cloned() {
+                            shared_info = Some((var_name.clone(), info));
+                        }
+                    }
+                }
+                // Fallback: when there is no type annotation and the RHS is a
+                // call (or any expression `type_name_of` can't classify), but
+                // the compiled value is a struct, reverse-lookup the type by
+                // its LLVM struct identity. Lets `let f = Foo.default()` —
+                // UFCS associated-fn calls returning the impl owner — still
+                // populate `var_type_names` so `f.value` field access
+                // resolves correctly.
+                if type_hint.is_none() {
+                    if let (BasicValueEnum::StructValue(sv), PatternKind::Binding(var_name)) =
+                        (&val, &pattern.kind)
+                    {
+                        let st = sv.get_type();
+                        if let Some((name, _)) = self.struct_types.iter().find(|(_, ty)| **ty == st)
+                        {
+                            let name = name.clone();
+                            self.var_type_names.insert(var_name.clone(), name);
+                        }
+                    }
+                }
+                // For shared types: rc_inc when copying from another variable (not fresh construction).
+                if let Some((ref var_name, ref info)) = shared_info {
+                    if !is_fresh_construction {
+                        // Copying a shared pointer — increment refcount.
+                        let ptr = val.into_pointer_value();
+                        self.emit_rc_inc(info.heap_type, ptr);
+                    }
+                    // Track for scope-exit cleanup.
+                    let ptr = val.into_pointer_value();
+                    self.track_rc_var(var_name, ptr, info.heap_type);
+                }
+                // RC-fallback boxing: heap-box non-shared bindings flagged by the ownership checker.
+                // Skipped for Vec/String bindings (their inner buffers need separate cleanup).
+                let val = if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let is_vec = self.vec_elem_types.contains_key(var_name.as_str());
+                    if shared_info.is_none() && !is_vec && self.is_rc_fallback_binding(var_name) {
+                        let val_ty = val.get_type();
+                        let heap_type = self
+                            .context
+                            .struct_type(&[self.context.i64_type().into(), val_ty], false);
+                        let heap_ptr = self.emit_rc_alloc(heap_type);
+                        let val_field = self
+                            .builder
+                            .build_struct_gep(heap_type, heap_ptr, 1, "rc_fb_val")
+                            .unwrap();
+                        self.builder.build_store(val_field, val).unwrap();
+                        self.rc_fallback_heap_types
+                            .insert(var_name.clone(), heap_type);
+                        self.track_rc_var(var_name, heap_ptr, heap_type);
+                        heap_ptr.into()
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
+                // Register closure function type under bound names.
+                if let Some(fn_type) = self.pending_closure_fn_type.take() {
+                    for bound_name in pattern.binding_names() {
+                        self.closure_fn_types.insert(bound_name, fn_type);
+                    }
+                }
+                self.bind_pattern(pattern, val)?;
+                // Track Vec variables for scope cleanup.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if self.vec_elem_types.contains_key(var_name.as_str()) {
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            self.track_vec_var(slot.ptr);
+                        }
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::Expr(expr) => {
+                self.compile_expr(expr)?;
+                Ok(())
+            }
+            StmtKind::Assign { target, value } => {
+                let val = self.compile_expr(value)?;
+                if let ExprKind::Identifier(name) = &target.kind {
+                    // For shared types: rc_dec old value, rc_inc new value.
+                    if let Some(type_name) = self.var_type_names.get(name).cloned() {
+                        if let Some(info) = self.shared_types.get(&type_name).cloned() {
+                            if let Some(slot) = self.variables.get(name).copied() {
+                                // rc_dec old pointer
+                                let old_ptr = self
+                                    .builder
+                                    .build_load(
+                                        self.context.ptr_type(AddressSpace::default()),
+                                        slot.ptr,
+                                        "old_rc",
+                                    )
+                                    .unwrap()
+                                    .into_pointer_value();
+                                self.emit_rc_dec(info.heap_type, old_ptr);
+                                // rc_inc new pointer
+                                let new_ptr = val.into_pointer_value();
+                                self.emit_rc_inc(info.heap_type, new_ptr);
+                                self.builder.build_store(slot.ptr, val).unwrap();
+                                return Ok(());
+                            }
+                        }
+                    }
+                    if let Some(slot) = self.variables.get(name).copied() {
+                        self.builder.build_store(slot.ptr, val).unwrap();
+                    }
+                } else if let ExprKind::FieldAccess { object, field } = &target.kind {
+                    self.compile_field_store(object, field, val)?;
+                } else if let ExprKind::Index { object, index } = &target.kind {
+                    self.compile_index_store(object, index, val)?;
+                } else if let ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } = &target.kind
+                {
+                    // `*r = val` — store through the mut-ref pointer.
+                    // get_data_ptr loads the raw pointer from the alloca (one
+                    // load, not two), giving us the address to store into.
+                    if let ExprKind::Identifier(name) = &operand.kind {
+                        if let Some(ptr) = self.get_data_ptr(name) {
+                            self.builder.build_store(ptr, val).unwrap();
+                        }
+                    }
+                }
+                Ok(())
+            }
+            StmtKind::CompoundAssign { target, op, value } => {
+                if let ExprKind::Identifier(name) = &target.kind {
+                    let current = self.load_variable(name)?;
+                    let rhs = self.compile_expr(value)?;
+                    let binop = match op {
+                        CompoundOp::Add => BinOp::Add,
+                        CompoundOp::Sub => BinOp::Sub,
+                        CompoundOp::Mul => BinOp::Mul,
+                        CompoundOp::Div => BinOp::Div,
+                        CompoundOp::Mod => BinOp::Mod,
+                        CompoundOp::BitAnd => BinOp::BitAnd,
+                        CompoundOp::BitOr => BinOp::BitOr,
+                        CompoundOp::BitXor => BinOp::BitXor,
+                        CompoundOp::Shl => BinOp::Shl,
+                        CompoundOp::Shr => BinOp::Shr,
+                    };
+                    let result = self.compile_binop(&binop, current, rhs)?;
+                    if let Some(slot) = self.variables.get(name).copied() {
+                        self.builder.build_store(slot.ptr, result).unwrap();
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn bind_pattern(&mut self, pattern: &Pattern, val: BasicValueEnum<'ctx>) -> Result<(), String> {
+        match &pattern.kind {
+            PatternKind::Binding(name) => {
+                let fn_val = self.current_fn.unwrap();
+                let alloca = self.create_entry_alloca(fn_val, name, val.get_type());
+                self.builder.build_store(alloca, val).unwrap();
+                self.variables.insert(
+                    name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: val.get_type(),
+                    },
+                );
+                Ok(())
+            }
+            PatternKind::Wildcard => Ok(()),
+            // Struct destructuring: let Foo { x, y } = val
+            PatternKind::Struct { path: _, fields } => {
+                if let BasicValueEnum::StructValue(sv) = val {
+                    for (idx, field_pat) in fields.iter().enumerate() {
+                        let field_val = self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "field")
+                            .unwrap();
+                        if let Some(pat) = &field_pat.pattern {
+                            self.bind_pattern(pat, field_val)?;
+                        } else {
+                            // Shorthand `Foo { x }` — bind field name as variable
+                            let fn_val = self.current_fn.unwrap();
+                            let alloca = self.create_entry_alloca(
+                                fn_val,
+                                &field_pat.name,
+                                field_val.get_type(),
+                            );
+                            self.builder.build_store(alloca, field_val).unwrap();
+                            self.variables.insert(
+                                field_pat.name.clone(),
+                                VarSlot {
+                                    ptr: alloca,
+                                    ty: field_val.get_type(),
+                                },
+                            );
+                        }
+                    }
+                }
+                Ok(())
+            }
+            // Tuple destructuring: let (a, b) = val
+            PatternKind::Tuple(pats) => {
+                if let BasicValueEnum::StructValue(sv) = val {
+                    for (idx, pat) in pats.iter().enumerate() {
+                        let elem = self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "elem")
+                            .unwrap();
+                        self.bind_pattern(pat, elem)?;
+                    }
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    fn compile_expr(&mut self, expr: &Expr) -> Result<BasicValueEnum<'ctx>, String> {
+        match &expr.kind {
+            ExprKind::Integer(n, sfx) => Ok(self.const_int_for_suffix(*n, *sfx).into()),
+            ExprKind::Float(f, sfx) => Ok(self.const_float_for_suffix(*f, *sfx).into()),
+            ExprKind::Bool(b) => Ok(self
+                .context
+                .bool_type()
+                .const_int(u64::from(*b), false)
+                .into()),
+            ExprKind::StringLit(s) => {
+                let global = self.builder.build_global_string_ptr(s, "str").unwrap();
+                let str_ty = self.vec_struct_type();
+                let i64_t = self.context.i64_type();
+                let len = i64_t.const_int(s.len() as u64, false);
+                let cap_zero = i64_t.const_int(0, false); // cap=0 → static, don't free
+                let mut agg = str_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, global.as_pointer_value(), 0, "str.data")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, len, 1, "str.len")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, cap_zero, 2, "str.cap")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            ExprKind::InterpolatedStringLit(parts) => {
+                // Build an empty String alloca, then append each part.
+                let vec_ty = self.vec_struct_type();
+                let i64_t = self.context.i64_type();
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let fn_val = self.current_fn.unwrap();
+
+                let acc = self.create_entry_alloca(fn_val, "fstr.acc", vec_ty.into());
+                // Initialize: {null, 0, 0} — empty heap string.
+                let null = ptr_ty.const_null();
+                let zero = i64_t.const_int(0, false);
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, acc, 0, "fstr.data.pp")
+                    .unwrap();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, acc, 1, "fstr.len.p")
+                    .unwrap();
+                let cap_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, acc, 2, "fstr.cap.p")
+                    .unwrap();
+                self.builder.build_store(data_pp, null).unwrap();
+                self.builder.build_store(len_p, zero).unwrap();
+                self.builder.build_store(cap_p, zero).unwrap();
+
+                // Register acc for scope cleanup (non-zero cap will be freed).
+                // vec_ty is the same struct type used for Vec/String.
+                self.track_vec_var(acc);
+
+                for part in parts {
+                    match part {
+                        ParsedInterpolationPart::Text(text) => {
+                            if !text.is_empty() {
+                                let gptr = self
+                                    .builder
+                                    .build_global_string_ptr(text, "fstr.text")
+                                    .unwrap();
+                                let text_len = i64_t.const_int(text.len() as u64, false);
+                                self.emit_string_append_raw(acc, gptr.as_pointer_value(), text_len);
+                            }
+                        }
+                        ParsedInterpolationPart::Expr(e) => {
+                            let val = self.compile_expr(e)?;
+                            let (src_ptr, src_len) = self.compile_fstr_part_to_cstr(val);
+                            self.emit_string_append_raw(acc, src_ptr, src_len);
+                        }
+                    }
+                }
+
+                // Load the final String struct from the accumulator alloca.
+                let result = self.builder.build_load(vec_ty, acc, "fstr.result").unwrap();
+                Ok(result)
+            }
+            ExprKind::Identifier(name) => {
+                // Try local variable first, then unit enum variant
+                if self.variables.contains_key(name.as_str()) {
+                    self.load_variable(name)
+                } else if let Some(ev) = self.try_unit_enum_variant(name) {
+                    Ok(ev)
+                } else {
+                    self.load_variable(name)
+                }
+            }
+            ExprKind::SelfValue => {
+                // `self` is bound as an ordinary local by `compile_function`'s
+                // parameter loop (impl methods prepend a `self: Type` param).
+                self.load_variable("self")
+            }
+            ExprKind::Binary { op, left, right } => {
+                let lhs = self.compile_expr(left)?;
+                let rhs = self.compile_expr(right)?;
+                self.compile_binop(op, lhs, rhs)
+            }
+            ExprKind::Unary { op, operand } => {
+                if matches!(op, UnaryOp::Deref) {
+                    // `*r` — load the value the reference points to.
+                    // `load_variable` already performs the two-step dereference
+                    // for ref/mut-ref params (load alloca → load through ptr),
+                    // so `compile_expr(operand)` already yields the inner value.
+                    // Just return it directly.
+                    return self.compile_expr(operand);
+                }
+                let val = self.compile_expr(operand)?;
+                self.compile_unaryop(op, val)
+            }
+            ExprKind::Call { callee, args } => self.compile_call(callee, args),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => self.compile_if(condition, then_block, else_branch.as_deref()),
+            ExprKind::While {
+                condition, body, ..
+            } => self.compile_while(condition, body),
+            ExprKind::Loop { body, .. } => self.compile_loop(body),
+            ExprKind::Break { value, .. } => self.compile_break(value.as_deref()),
+            ExprKind::Continue { .. } => self.compile_continue(),
+            ExprKind::Closure { params, body, .. } => self.compile_closure(params, body),
+            ExprKind::Return(val) => {
+                if let Some(e) = val {
+                    let v = self.compile_expr(e)?;
+                    self.builder.build_return(Some(&v)).unwrap();
+                } else {
+                    self.builder.build_return(None).unwrap();
+                }
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            ExprKind::Block(block) | ExprKind::Seq(block) => match self.compile_block(block)? {
+                Some(v) => Ok(v),
+                None => Ok(self.context.i64_type().const_int(0, false).into()),
+            },
+            ExprKind::FieldAccess { object, field } => self.compile_field_access(object, field),
+            ExprKind::StructLiteral { path, fields, .. } => {
+                let name = path.last().map(|s| s.as_str()).unwrap_or("");
+                self.compile_struct_init(name, fields)
+            }
+            ExprKind::ArrayLiteral(elems) => self.compile_array_literal(elems),
+            ExprKind::RepeatLiteral {
+                type_name,
+                value,
+                count,
+            } => self.compile_repeat_literal(type_name.as_deref(), value, count),
+            ExprKind::Tuple(elems) => self.compile_tuple(elems),
+            ExprKind::TupleIndex { object, index } => {
+                self.compile_tuple_index(object, *index as usize)
+            }
+            ExprKind::Cast { expr: inner, ty } => {
+                let val = self.compile_expr(inner)?;
+                let target_ty = self.llvm_type_for_type_expr(ty);
+                self.compile_cast(val, target_ty)
+            }
+            ExprKind::Match { scrutinee, arms } => self.compile_match(scrutinee, arms),
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => self.compile_for(pattern, iterable, body),
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => self.compile_if_let(pattern, value, then_block, else_branch.as_deref()),
+            // Unsafe blocks: safety checks live in earlier phases; codegen just
+            // compiles the inner block normally.
+            ExprKind::Unsafe(block) => match self.compile_block(block)? {
+                Some(v) => Ok(v),
+                None => Ok(self.context.i64_type().const_int(0, false).into()),
+            },
+            ExprKind::Par(block) => self.compile_par_block(block),
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => self.compile_method_call(object, method, args, &expr.span),
+            ExprKind::Index { object, index } => self.compile_index(object, index),
+            ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
+            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+        }
+    }
+
+    /// Compile the `?` early-propagation operator for `Result[T,E]` and `Option[T]`.
+    ///
+    /// The operand is a `{ i64 tag, i64 w0 }` enum struct. Tag semantics:
+    ///   Result: Err=0, Ok=1
+    ///   Option: None=0, Some=1
+    ///
+    /// On failure (tag == 0): early-return `{ 0, w0 }` from the current function,
+    /// propagating the error/None payload unchanged.
+    /// On success (tag == 1): yield `w0` (the unwrapped value) and continue.
+    fn compile_question(
+        &mut self,
+        inner: &Expr,
+        outer_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let val = self.compile_expr(inner)?;
+        let i64_t = self.context.i64_type();
+        let enum_ty = self.context.struct_type(
+            &[BasicTypeEnum::IntType(i64_t), BasicTypeEnum::IntType(i64_t)],
+            false,
+        );
+
+        // Extract tag (field 0) and payload word (field 1)
+        let tag = self
+            .builder
+            .build_extract_value(val.into_struct_value(), 0, "q_tag")
+            .unwrap()
+            .into_int_value();
+        let w0 = self
+            .builder
+            .build_extract_value(val.into_struct_value(), 1, "q_w0")
+            .unwrap();
+
+        // Check tag == 0 (failure path)
+        let is_failure = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                i64_t.const_int(0, false),
+                "q_is_fail",
+            )
+            .unwrap();
+
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_parent()
+            .unwrap();
+        let fail_bb = self.context.append_basic_block(cur_fn, "q_fail");
+        let ok_bb = self.context.append_basic_block(cur_fn, "q_ok");
+
+        self.builder
+            .build_conditional_branch(is_failure, fail_bb, ok_bb)
+            .unwrap();
+
+        // Failure block: push an error-return-trace frame, drain scope
+        // cleanup actions, optionally convert the err payload via
+        // `Target.from(e)`, build `{ 0, w0' }`, and early-return.
+        // The cleanup walks the full `scope_cleanup_actions` stack so any
+        // heap-owning bindings live at this `?` site (Vec/String buffers, RC
+        // values, Map handles) are released before the function returns.
+        // The trace push happens BEFORE cleanup so the runtime sees the
+        // failure site in source order even if cleanup itself crashes.
+        self.builder.position_at_end(fail_bb);
+        self.emit_error_trace_push(outer_span);
+        self.emit_scope_cleanup();
+
+        // Cross-error-type conversion: when the typechecker recorded a target
+        // type for this `?` site, look up the LLVM function `Target.from` and
+        // call it on the inner err payload. The user-impl `T.from` LLVM
+        // function is already compiled by the impl-block pass.
+        let key = (outer_span.offset, outer_span.length);
+        let propagated_payload: BasicValueEnum<'ctx> =
+            if let Some(target) = self.question_conversions.get(&key).cloned() {
+                let qualified = format!("{}.from", target);
+                if let Some(from_fn) = self.module.get_function(&qualified) {
+                    let call_site = self
+                        .builder
+                        .build_call(from_fn, &[w0.into()], "q_from")
+                        .unwrap();
+                    call_site.try_as_basic_value().unwrap_basic()
+                } else {
+                    // No matching impl emitted — propagate raw payload.
+                    // The typechecker should have rejected this case; staying
+                    // permissive keeps codegen non-fatal on unexpected inputs.
+                    w0
+                }
+            } else {
+                w0
+            };
+
+        let ret_struct = {
+            let undef = enum_ty.get_undef();
+            let s1 = self
+                .builder
+                .build_insert_value(undef, i64_t.const_int(0, false), 0, "q_ret_tag")
+                .unwrap();
+            self.builder
+                .build_insert_value(s1, propagated_payload, 1, "q_ret_val")
+                .unwrap()
+        };
+        self.builder.build_return(Some(&ret_struct)).unwrap();
+
+        // Ok/Some block: clear any frames a recovered earlier `?` had
+        // pushed, then continue with the unwrapped payload word. Mirrors
+        // the interpreter's `clear_error_trace` call on the success path
+        // (src/interpreter.rs:1501).
+        self.builder.position_at_end(ok_bb);
+        self.builder
+            .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
+            .unwrap();
+        Ok(w0)
+    }
+
+    /// Emit a call to `karac_error_trace_push(file, file_len, line, col)`
+    /// at the current insertion point. When `source_filename` is set, a
+    /// deduped global string is materialized on first call and reused for
+    /// every subsequent `?` site in the module — runtime-side, the printer
+    /// formats `<file>:<line>:<col>` rows. When unset, file=null/len=0 and
+    /// the runtime prints `<line>:<col>` only (one .kara file at a time).
+    fn emit_error_trace_push(&mut self, outer_span: &crate::token::Span) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let i32_ty = self.context.i32_type();
+        let (file_ptr, file_len_val) = match self.ensure_source_filename_global() {
+            Some((p, len)) => (p, i64_ty.const_int(len, false)),
+            None => (ptr_ty.const_null(), i64_ty.const_int(0, false)),
+        };
+        let line = i32_ty.const_int(outer_span.line as u64, false);
+        let col = i32_ty.const_int(outer_span.column as u64, false);
+        self.builder
+            .build_call(
+                self.karac_error_trace_push_fn,
+                &[
+                    file_ptr.into(),
+                    file_len_val.into(),
+                    line.into(),
+                    col.into(),
+                ],
+                "q_trace_push",
+            )
+            .unwrap();
+    }
+
+    /// Lazily materialize the LLVM global string for `source_filename` and
+    /// return its `(ptr, byte_len)`. Returns `None` when no filename was
+    /// threaded in. The byte length is the source filename's byte length —
+    /// the runtime's printer writes that many bytes verbatim, so the
+    /// trailing NUL added by `build_global_string_ptr` is intentionally
+    /// excluded.
+    fn ensure_source_filename_global(&mut self) -> Option<(PointerValue<'ctx>, u64)> {
+        if let Some(cached) = self.source_filename_global {
+            return Some(cached);
+        }
+        let name = self.source_filename.as_ref()?.clone();
+        let len = name.len() as u64;
+        let global = self
+            .builder
+            .build_global_string_ptr(&name, "karac.source_filename")
+            .unwrap();
+        let ptr = global.as_pointer_value();
+        self.source_filename_global = Some((ptr, len));
+        Some((ptr, len))
+    }
+
+    // ── Struct/tuple expressions ──────────────────────────────────
+
+    fn compile_struct_init(
+        &mut self,
+        name: &str,
+        fields: &[FieldInit],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Shared struct: heap-allocate with refcount header.
+        if let Some(info) = self.shared_types.get(name).cloned() {
+            if !info.is_enum {
+                let ptr = self.emit_rc_alloc(info.heap_type);
+                for (idx, field_init) in fields.iter().enumerate() {
+                    let val = self.compile_expr(&field_init.value)?;
+                    // Fields start at index 1 (index 0 is the refcount).
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            info.heap_type,
+                            ptr,
+                            (idx + 1) as u32,
+                            &format!("field_{}", field_init.name),
+                        )
+                        .unwrap();
+                    self.builder.build_store(field_ptr, val).unwrap();
+                }
+                return Ok(ptr.into());
+            }
+        }
+        // Non-shared struct: stack-allocated aggregate.
+        if let Some(&st) = self.struct_types.get(name) {
+            let mut agg = st.get_undef();
+            for (idx, field_init) in fields.iter().enumerate() {
+                let val = self.compile_expr(&field_init.value)?;
+                agg = self
+                    .builder
+                    .build_insert_value(agg, val, idx as u32, "field")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            Ok(agg.into())
+        } else {
+            Ok(self.context.i64_type().const_int(0, false).into())
+        }
+    }
+
+    /// Compile `let <name>: Vec[T] = Vec::new()` for a SoA-laid-out collection.
+    /// Produces `{ null, ..., [null_cold,] 0, 0 }` (one null ptr per group plus optional cold, len=0, cap=0).
+    fn compile_soa_new(&mut self, var_name: &str, soa: &SoaLayout) -> Result<(), String> {
+        let fn_val = self.current_fn.unwrap();
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+        let zero = self.context.i64_type().const_int(0, false);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
+
+        let mut agg = soa_ty.get_undef();
+        // Hot group pointers.
+        for i in 0..soa.num_groups {
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, i as u32, &format!("soa.g{}", i))
+                .unwrap()
+                .into_struct_value();
+        }
+        // Cold pointer (if present).
+        if has_cold {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, cold_idx, "soa.cold")
+                .unwrap()
+                .into_struct_value();
+        }
+        // len
+        agg = self
+            .builder
+            .build_insert_value(agg, zero, len_idx, "soa.len")
+            .unwrap()
+            .into_struct_value();
+        // cap
+        agg = self
+            .builder
+            .build_insert_value(agg, zero, cap_idx, "soa.cap")
+            .unwrap()
+            .into_struct_value();
+
+        let alloca = self.create_entry_alloca(fn_val, var_name, soa_ty.into());
+        self.builder.build_store(alloca, agg).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            VarSlot {
+                ptr: alloca,
+                ty: soa_ty.into(),
+            },
+        );
+        // Track for scope cleanup (need to free each group buffer).
+        self.track_vec_var(alloca);
+        Ok(())
+    }
+
+    fn compile_soa_method(
+        &mut self,
+        _var_name: &str,
+        soa: &SoaLayout,
+        slot: VarSlot<'ctx>,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let cap_idx = Self::soa_cap_index(soa.num_groups, has_cold);
+
+        match method {
+            "len" => {
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+                    .unwrap();
+                let len = self.builder.build_load(i64_t, len_ptr, "soa.len").unwrap();
+                Ok(len)
+            }
+            "push" => {
+                if args.is_empty() {
+                    return Err("push requires an argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+                let elem_sv = elem_val.into_struct_value();
+
+                // Load len, cap.
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(soa_ty, slot.ptr, cap_idx, "soa.cap.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "soa.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "soa.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Growth check.
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "soa.grow");
+                let store_bb = self.context.append_basic_block(fn_val, "soa.store");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "soa.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, store_bb)
+                    .unwrap();
+
+                // Grow each group buffer.
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp, doubled, four, "new_cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Collect all groups to grow: hot groups first, then cold (if present).
+                let cold_group_vec: Vec<(usize, &SoaGroup)> = if let Some(ref cg) = soa.cold_group {
+                    let cold_idx = soa.num_groups; // struct field index for cold ptr
+                    vec![(cold_idx, cg)]
+                } else {
+                    Vec::new()
+                };
+                let all_groups: Vec<(usize, &SoaGroup)> = soa
+                    .groups
+                    .iter()
+                    .enumerate()
+                    .chain(cold_group_vec.iter().copied())
+                    .collect();
+
+                for (struct_field_idx, group) in &all_groups {
+                    let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+                    let elem_size = group_elem_ty.size_of().unwrap();
+                    let alloc_bytes = self
+                        .builder
+                        .build_int_mul(new_cap, elem_size, "g.alloc")
+                        .unwrap();
+                    // Use aligned malloc for groups with align(N).
+                    let new_buf = if let Some(align_n) = group.align {
+                        let align_val = i64_t.const_int(align_n as u64, false);
+                        self.builder
+                            .build_call(
+                                self.aligned_alloc_fn(),
+                                &[align_val.into(), alloc_bytes.into()],
+                                "g.new_aligned",
+                            )
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_pointer_value()
+                    } else {
+                        self.builder
+                            .build_call(self.malloc_fn, &[alloc_bytes.into()], "g.new")
+                            .unwrap()
+                            .try_as_basic_value()
+                            .unwrap_basic()
+                            .into_pointer_value()
+                    };
+                    // Copy old data.
+                    let old_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            soa_ty,
+                            slot.ptr,
+                            *struct_field_idx as u32,
+                            &format!("g{}.ptr", struct_field_idx),
+                        )
+                        .unwrap();
+                    let old_buf = self
+                        .builder
+                        .build_load(ptr_ty, old_ptr_ptr, "g.old")
+                        .unwrap()
+                        .into_pointer_value();
+                    let old_bytes = self
+                        .builder
+                        .build_int_mul(len, elem_size, "g.old_bytes")
+                        .unwrap();
+                    self.builder
+                        .build_memcpy(new_buf, 8, old_buf, 8, old_bytes)
+                        .unwrap();
+                    self.builder
+                        .build_call(self.free_fn, &[old_buf.into()], "")
+                        .unwrap();
+                    self.builder.build_store(old_ptr_ptr, new_buf).unwrap();
+                }
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(store_bb).unwrap();
+
+                // Store: decompose the struct into group fields.
+                self.builder.position_at_end(store_bb);
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "cur_len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Store hot groups.
+                for (gi, group) in soa.groups.iter().enumerate() {
+                    let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+                    let grp_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(soa_ty, slot.ptr, gi as u32, &format!("g{}.ptr", gi))
+                        .unwrap();
+                    let grp_buf = self
+                        .builder
+                        .build_load(ptr_ty, grp_ptr_ptr, &format!("g{}.buf", gi))
+                        .unwrap()
+                        .into_pointer_value();
+                    let dest = unsafe {
+                        self.builder
+                            .build_gep(group_elem_ty, grp_buf, &[cur_len], &format!("g{}.dest", gi))
+                            .unwrap()
+                    };
+                    let mut grp_val = group_elem_ty.get_undef();
+                    for (fi, &src_idx) in group.field_indices.iter().enumerate() {
+                        let field_val = self
+                            .builder
+                            .build_extract_value(elem_sv, src_idx as u32, "f")
+                            .unwrap();
+                        grp_val = self
+                            .builder
+                            .build_insert_value(grp_val, field_val, fi as u32, "gf")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    self.builder.build_store(dest, grp_val).unwrap();
+                }
+                // Store cold group (separate allocation).
+                if let Some(ref cold) = soa.cold_group.clone() {
+                    let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+                    let cold_elem_ty = self.soa_group_elem_type(&soa.struct_name, cold);
+                    let cold_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(soa_ty, slot.ptr, cold_idx, "cold.ptr")
+                        .unwrap();
+                    let cold_buf = self
+                        .builder
+                        .build_load(ptr_ty, cold_ptr_ptr, "cold.buf")
+                        .unwrap()
+                        .into_pointer_value();
+                    let dest = unsafe {
+                        self.builder
+                            .build_gep(cold_elem_ty, cold_buf, &[cur_len], "cold.dest")
+                            .unwrap()
+                    };
+                    let mut cold_val = cold_elem_ty.get_undef();
+                    for (fi, &src_idx) in cold.field_indices.iter().enumerate() {
+                        let field_val = self
+                            .builder
+                            .build_extract_value(elem_sv, src_idx as u32, "f")
+                            .unwrap();
+                        cold_val = self
+                            .builder
+                            .build_insert_value(cold_val, field_val, fi as u32, "cf")
+                            .unwrap()
+                            .into_struct_value();
+                    }
+                    self.builder.build_store(dest, cold_val).unwrap();
+                }
+
+                // Increment len.
+                let one = i64_t.const_int(1, false);
+                let new_len = self.builder.build_int_add(cur_len, one, "new_len").unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+        }
+    }
+
+    fn compile_assoc_call(
+        &mut self,
+        type_name: &str,
+        method: &str,
+        _args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Numeric primitive From: `T.from(x)` for integer/float widening.
+        // Codegen currently represents all ints as LLVM i64 and floats as
+        // f64, so widening is a passthrough at this layer. When narrower
+        // int types gain LLVM representation, this branch needs sext/zext.
+        if method == "from"
+            && matches!(
+                type_name,
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+            )
+        {
+            if let Some(arg) = _args.first() {
+                return self.compile_expr(&arg.value);
+            }
+        }
+        // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
+        // by the lowering pass. Reroute to the existing BinOp/UnaryOp
+        // intrinsic compilation so we don't have to duplicate codegen logic.
+        let is_primitive = matches!(
+            type_name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "char"
+                | "String"
+        );
+        if is_primitive {
+            let bin_op = match method {
+                "add" => Some(BinOp::Add),
+                "sub" => Some(BinOp::Sub),
+                "mul" => Some(BinOp::Mul),
+                "div" => Some(BinOp::Div),
+                "rem" => Some(BinOp::Mod),
+                "eq" => Some(BinOp::Eq),
+                "ne" => Some(BinOp::NotEq),
+                "lt" => Some(BinOp::Lt),
+                "le" => Some(BinOp::LtEq),
+                "gt" => Some(BinOp::Gt),
+                "ge" => Some(BinOp::GtEq),
+                "bitand" => Some(BinOp::BitAnd),
+                "bitor" => Some(BinOp::BitOr),
+                "bitxor" => Some(BinOp::BitXor),
+                "shl" => Some(BinOp::Shl),
+                "shr" => Some(BinOp::Shr),
+                _ => None,
+            };
+            if let Some(op) = bin_op {
+                if _args.len() == 2 {
+                    let synth = Expr {
+                        span: _args[0].value.span.clone(),
+                        kind: ExprKind::Binary {
+                            op,
+                            left: Box::new(_args[0].value.clone()),
+                            right: Box::new(_args[1].value.clone()),
+                        },
+                    };
+                    return self.compile_expr(&synth);
+                }
+            }
+            if method == "neg" && _args.len() == 1 {
+                let synth = Expr {
+                    span: _args[0].value.span.clone(),
+                    kind: ExprKind::Unary {
+                        op: UnaryOp::Neg,
+                        operand: Box::new(_args[0].value.clone()),
+                    },
+                };
+                return self.compile_expr(&synth);
+            }
+            if method == "not" && _args.len() == 1 {
+                // `not` covers `!bool` and `~int` — target type disambiguates.
+                let un_op = if type_name == "bool" {
+                    UnaryOp::Not
+                } else {
+                    UnaryOp::BitNot
+                };
+                let synth = Expr {
+                    span: _args[0].value.span.clone(),
+                    kind: ExprKind::Unary {
+                        op: un_op,
+                        operand: Box::new(_args[0].value.clone()),
+                    },
+                };
+                return self.compile_expr(&synth);
+            }
+        }
+        if type_name == "String" && method == "new" {
+            let str_ty = self.vec_struct_type();
+            let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = str_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, 0, "str.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "str.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 2, "str.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
+        // User impl-block method: if a function named `Type.method` exists
+        // in the module (declared by the impl-block pass in `compile`),
+        // route the call there. Covers both source-form `Type.method(args)`
+        // and the operator-lowered `Call(Path([Type, method]))` form.
+        let qualified = format!("{}.{}", type_name, method);
+        if let Some(fn_val) = self.module.get_function(&qualified) {
+            let ref_flags = self
+                .fn_param_ref
+                .get(&qualified)
+                .cloned()
+                .unwrap_or_default();
+            let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+            for (i, a) in _args.iter().enumerate() {
+                let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                if is_ref {
+                    if let ExprKind::Identifier(var_name) = &a.value.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            compiled_args.push(ptr.into());
+                            continue;
+                        }
+                    }
+                }
+                compiled_args.push(self.compile_expr(&a.value)?.into());
+            }
+            let call_site = self
+                .builder
+                .build_call(fn_val, &compiled_args, "usercall")
+                .unwrap();
+            let basic_val = call_site.try_as_basic_value();
+            return if basic_val.is_instruction() {
+                Ok(self.context.i64_type().const_int(0, false).into())
+            } else {
+                Ok(basic_val.unwrap_basic())
+            };
+        }
+
+        if type_name == "Vec" && method == "new" {
+            let vec_ty = self.vec_struct_type();
+            let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, 0, "vec.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "vec.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 2, "vec.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_method_call(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Cooperative cancel check before each call inside a par-branch.
+        // The receiver's `Type.method` key is precomputed by lowering and
+        // stored in `method_callee_types`; consult it so a provably pure
+        // method elides the check, mirroring the narrowing applied to
+        // free-function calls in `compile_call`.
+        let callee_key = self
+            .method_callee_types
+            .get(&(call_span.offset, call_span.length))
+            .cloned();
+        self.emit_branch_cancel_check("mcall", callee_key.as_deref());
+
+        // Type-receiver associated calls: `T.method(...)` where `T` is a
+        // primitive type name. Receiver `T` is an identifier naming a type,
+        // not a variable, so the normal receiver pipeline would fail. Handle
+        // `.from` (numeric widening = passthrough) and the operator methods
+        // (add/sub/eq/lt/bitand/not/…) by delegating to `compile_assoc_call`,
+        // which already knows the primitive fast-path.
+        if let ExprKind::Identifier(type_name) = &object.kind {
+            let is_primitive = matches!(
+                type_name.as_str(),
+                "i8" | "i16"
+                    | "i32"
+                    | "i64"
+                    | "u8"
+                    | "u16"
+                    | "u32"
+                    | "u64"
+                    | "usize"
+                    | "f32"
+                    | "f64"
+                    | "bool"
+                    | "char"
+                    | "String"
+            );
+            if is_primitive {
+                const OP_METHODS: &[&str] = &[
+                    "from", "add", "sub", "mul", "div", "rem", "neg", "eq", "ne", "lt", "le", "gt",
+                    "ge", "bitand", "bitor", "bitxor", "shl", "shr", "not",
+                ];
+                if OP_METHODS.contains(&method) {
+                    return self.compile_assoc_call(type_name.as_str(), method, args);
+                }
+            }
+        }
+
+        // `.as_slice()` / `.as_slice_mut()` on Array, Vec, or Slice —
+        // synthesize a `{ptr, i64}` slice header. The element type for the
+        // resulting slice is inferred from the source variable, not from a
+        // user-supplied argument. See design.md § Slices.
+        if (method == "as_slice" || method == "as_slice_mut") && args.is_empty() {
+            if let ExprKind::Identifier(name) = &object.kind {
+                if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    let i64_t = self.context.i64_type();
+                    let slice_ty = self.slice_struct_type();
+                    if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                        let len = i64_t.const_int(at.len() as u64, false);
+                        return Ok(self.build_slice_header(slice_ty, slot.ptr, len));
+                    }
+                    if self.slice_elem_types.contains_key(name.as_str()) {
+                        return Ok(self
+                            .builder
+                            .build_load(slice_ty, slot.ptr, "as_slice.passthrough")
+                            .unwrap());
+                    }
+                    if self.vec_elem_types.contains_key(name.as_str()) {
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        let vec_ty = self.vec_struct_type();
+                        let data_pp = self
+                            .builder
+                            .build_struct_gep(vec_ty, slot.ptr, 0, "as_slice.v.data.pp")
+                            .unwrap();
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_pp, "as_slice.v.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        let len_p = self
+                            .builder
+                            .build_struct_gep(vec_ty, slot.ptr, 1, "as_slice.v.len.p")
+                            .unwrap();
+                        let len = self
+                            .builder
+                            .build_load(i64_t, len_p, "as_slice.v.len")
+                            .unwrap()
+                            .into_int_value();
+                        return Ok(self.build_slice_header(slice_ty, data, len));
+                    }
+                }
+            }
+        }
+
+        if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                // Array methods (owned — slot.ty is ArrayType)
+                if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                    if method == "len" {
+                        return Ok(self
+                            .context
+                            .i64_type()
+                            .const_int(at.len() as u64, false)
+                            .into());
+                    }
+                }
+                // Ref Array methods — ref_params has the inner type
+                if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str()) {
+                    if method == "len" {
+                        return Ok(self
+                            .context
+                            .i64_type()
+                            .const_int(at.len() as u64, false)
+                            .into());
+                    }
+                }
+                // SoA layout methods
+                if let Some(soa) = self.soa_layouts.get(name.as_str()).cloned() {
+                    return self.compile_soa_method(name, &soa, slot, method, args);
+                }
+                // Vec/String methods (owned or ref)
+                if self.vec_elem_types.contains_key(name.as_str()) {
+                    let data_ptr = self.get_data_ptr(name).unwrap();
+                    return self.compile_vec_method(name, data_ptr, method, args);
+                }
+                // Map methods
+                if self.map_key_types.contains_key(name.as_str()) {
+                    let name = name.clone();
+                    return self.compile_map_method(&name, method, args);
+                }
+            }
+        }
+
+        // User impl-block method on a struct receiver: route `obj.method(args)`
+        // through the `Type.method` function emitted by the impl-block pass.
+        // Requires knowing the object's declared type; the typechecker stashes
+        // it via `var_type_names` for struct-kind locals.
+        if let Some(receiver_type) = self.inferred_receiver_type(object) {
+            let qualified = format!("{}.{}", receiver_type, method);
+            if let Some(fn_val) = self.module.get_function(&qualified) {
+                let obj_val = self.compile_expr(object)?;
+                let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![obj_val.into()];
+                for a in args {
+                    compiled_args.push(self.compile_expr(&a.value)?.into());
+                }
+                let call_site = self
+                    .builder
+                    .build_call(fn_val, &compiled_args, "usermethod")
+                    .unwrap();
+                let basic_val = call_site.try_as_basic_value();
+                return if basic_val.is_instruction() {
+                    Ok(self.context.i64_type().const_int(0, false).into())
+                } else {
+                    Ok(basic_val.unwrap_basic())
+                };
+            }
+        }
+
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Infer the declared struct/enum type name of a method-call receiver,
+    /// or `None` if we can't — in which case the caller falls back to its
+    /// built-in/primitive handling. Keys off `var_type_names`, which the
+    /// existing struct-literal and struct-param paths populate.
+    fn inferred_receiver_type(&self, object: &Expr) -> Option<String> {
+        if let ExprKind::Identifier(name) = &object.kind {
+            return self.var_type_names.get(name.as_str()).cloned();
+        }
+        None
+    }
+
+    fn compile_vec_method(
+        &mut self,
+        var_name: &str,
+        data_ptr: PointerValue<'ctx>,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let elem_ty = self.vec_elem_type_for_var(var_name);
+
+        match method {
+            "len" => {
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let len = self.builder.build_load(i64_t, len_ptr, "vec.len").unwrap();
+                Ok(len)
+            }
+            "push" => {
+                if args.is_empty() {
+                    return Err("Vec.push requires an argument".to_string());
+                }
+                let elem_val = self.compile_expr(&args[0].value)?;
+
+                // Load current vec fields.
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "vec.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Growth check: if len == cap, grow.
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "push.grow");
+                let store_bb = self.context.append_basic_block(fn_val, "push.store");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, cap, "needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, store_bb)
+                    .unwrap();
+
+                // Grow path: new_cap = max(4, cap * 2); malloc; memcpy; free old.
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp, doubled, four, "new_cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Compute byte size: new_cap * sizeof(elem)
+                let elem_size = elem_ty.size_of().unwrap();
+                let alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "alloc_bytes")
+                    .unwrap();
+                let new_data = self
+                    .builder
+                    .build_call(self.malloc_fn, &[alloc_bytes.into()], "new_data")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+
+                // memcpy old data if non-null.
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(len, elem_size, "old_bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(new_data, 8, data, 8, old_bytes)
+                    .unwrap();
+
+                // Free old buffer (free(null) is a no-op per C spec).
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+
+                // Update vec fields.
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(store_bb).unwrap();
+
+                // Store element at data[len].
+                self.builder.position_at_end(store_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[len], "elem.ptr")
+                        .unwrap()
+                };
+                self.builder.build_store(elem_ptr, elem_val).unwrap();
+
+                // Increment len.
+                let one = i64_t.const_int(1, false);
+                let new_len = self.builder.build_int_add(len, one, "new_len").unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            "pop" => {
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+
+                let one = i64_t.const_int(1, false);
+                let new_len = self.builder.build_int_sub(len, one, "new_len").unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[new_len], "pop.ptr")
+                        .unwrap()
+                };
+                let val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "pop.val")
+                    .unwrap();
+                Ok(val)
+            }
+            "push_str" => {
+                if args.is_empty() {
+                    return Err("push_str requires an argument".to_string());
+                }
+                let src_val = self.compile_expr(&args[0].value)?;
+                // Extract src string's ptr and len.
+                let src_ptr = self
+                    .builder
+                    .build_extract_value(src_val.into_struct_value(), 0, "src.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let src_len = self
+                    .builder
+                    .build_extract_value(src_val.into_struct_value(), 1, "src.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Load target fields.
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "t.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "t.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "t.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "t.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "t.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "t.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Required capacity = len + src_len.
+                let new_len = self.builder.build_int_add(len, src_len, "new_len").unwrap();
+
+                // Growth check: if new_len > cap, grow.
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "pstr.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "pstr.copy");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                // Grow: new_cap = max(new_len, max(4, cap * 2))
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self.builder.build_int_mul(cap, two, "doubled").unwrap();
+                let cmp1 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "cmp1")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(cmp1, doubled, four, "growth_min")
+                    .unwrap()
+                    .into_int_value();
+                let cmp2 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, growth_min, "cmp2")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp2, new_len, growth_min, "new_cap")
+                    .unwrap()
+                    .into_int_value();
+
+                let new_data = self
+                    .builder
+                    .build_call(self.malloc_fn, &[new_cap.into()], "new_data")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // Copy old data.
+                self.builder
+                    .build_memcpy(new_data, 1, data, 1, len)
+                    .unwrap();
+                // Free old if cap > 0 (heap-allocated).
+                let zero_val = i64_t.const_int(0, false);
+                let was_heap = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "was_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "pstr.free");
+                let after_free_bb = self.context.append_basic_block(fn_val, "pstr.after_free");
+                self.builder
+                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(after_free_bb);
+
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                // Copy src bytes to data + len.
+                self.builder.position_at_end(copy_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "cur_len")
+                    .unwrap()
+                    .into_int_value();
+                let dest = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), cur_data, &[cur_len], "dest")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(dest, 1, src_ptr, 1, src_len)
+                    .unwrap();
+                // Update len.
+                let updated_len = self
+                    .builder
+                    .build_int_add(cur_len, src_len, "updated_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, updated_len).unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            "is_empty" => {
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "vec.len")
+                    .unwrap()
+                    .into_int_value();
+                let zero = i64_t.const_int(0, false);
+                let is_empty = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "is_empty")
+                    .unwrap();
+                Ok(is_empty.into())
+            }
+            "first" | "last" => {
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let empty_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.empty"));
+                let some_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.some"));
+                let merge_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.merge"));
+
+                let zero = i64_t.const_int(0, false);
+                let is_empty = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "is_empty")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_empty, empty_bb, some_bb)
+                    .unwrap();
+
+                // Empty branch — return None.
+                self.builder.position_at_end(empty_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Some branch — load element at index 0 (first) or len-1 (last).
+                self.builder.position_at_end(some_bb);
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let idx = if method == "first" {
+                    zero
+                } else {
+                    let one = i64_t.const_int(1, false);
+                    self.builder.build_int_sub(len, one, "last_idx").unwrap()
+                };
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[idx], "elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
+                let elem_word = self.coerce_to_i64(elem_val)?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge — phi on tag and payload word, then build Option struct.
+                self.builder.position_at_end(merge_bb);
+                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
+                tag_phi.add_incoming(&[
+                    (&i64_t.const_int(0, false), empty_bb),
+                    (&i64_t.const_int(1, false), some_bb),
+                ]);
+                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
+                word_phi.add_incoming(&[
+                    (&i64_t.const_int(0, false), empty_bb),
+                    (&elem_word, some_bb),
+                ]);
+                let mut agg = option_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            "get" => {
+                if args.is_empty() {
+                    return Err("Vec.get requires an index argument".to_string());
+                }
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let oob_bb = self.context.append_basic_block(fn_val, "get.oob");
+                let valid_bb = self.context.append_basic_block(fn_val, "get.valid");
+                let merge_bb = self.context.append_basic_block(fn_val, "get.merge");
+
+                let in_bounds = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, idx_val, len, "in_bounds")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(in_bounds, valid_bb, oob_bb)
+                    .unwrap();
+
+                // Out-of-bounds branch — return None.
+                self.builder.position_at_end(oob_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Valid branch — return Some(data[idx]).
+                self.builder.position_at_end(valid_bb);
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[idx_val], "elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
+                let elem_word = self.coerce_to_i64(elem_val)?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge — phi, then build Option struct.
+                self.builder.position_at_end(merge_bb);
+                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
+                tag_phi.add_incoming(&[
+                    (&i64_t.const_int(0, false), oob_bb),
+                    (&i64_t.const_int(1, false), valid_bb),
+                ]);
+                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
+                word_phi
+                    .add_incoming(&[(&i64_t.const_int(0, false), oob_bb), (&elem_word, valid_bb)]);
+                let mut agg = option_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+        }
+    }
+
+    // ── Map codegen ───────────────────────────────────────────────
+
+    /// Emit an FNV-1a byte loop over `byte_count` bytes starting at `data_ptr`.
+    /// Appends basic blocks to `hash_fn_val`. Builder must be positioned just before
+    /// the first block of the loop; on return it is positioned at the exit block.
+    /// Returns the accumulated hash `IntValue` (i64).
+    fn emit_fnv1a_over_bytes(
+        &mut self,
+        hash_fn_val: FunctionValue<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        byte_count: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let fnv_basis = i64_t.const_int(14695981039346656037_u64, false);
+        let fnv_prime = i64_t.const_int(1099511628211_u64, false);
+
+        let pre_bb = self.builder.get_insert_block().unwrap();
+        let hdr_bb = self.context.append_basic_block(hash_fn_val, "fnv.hdr");
+        let bdy_bb = self.context.append_basic_block(hash_fn_val, "fnv.bdy");
+        let exit_bb = self.context.append_basic_block(hash_fn_val, "fnv.exit");
+
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(hdr_bb);
+        let i_phi = self.builder.build_phi(i64_t, "fnv.i").unwrap();
+        let hash_phi = self.builder.build_phi(i64_t, "fnv.hash").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), pre_bb)]);
+        hash_phi.add_incoming(&[(&fnv_basis, pre_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let hash_val = hash_phi.as_basic_value().into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, i_val, byte_count, "fnv.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, bdy_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(bdy_bb);
+        let byte_ptr = unsafe {
+            self.builder
+                .build_gep(i8_t, data_ptr, &[i_val], "fnv.bp")
+                .unwrap()
+        };
+        let byte = self
+            .builder
+            .build_load(i8_t, byte_ptr, "fnv.b")
+            .unwrap()
+            .into_int_value();
+        let byte64 = self
+            .builder
+            .build_int_z_extend(byte, i64_t, "fnv.b64")
+            .unwrap();
+        let xored = self.builder.build_xor(hash_val, byte64, "fnv.xor").unwrap();
+        let new_hash = self
+            .builder
+            .build_int_mul(xored, fnv_prime, "fnv.mul")
+            .unwrap();
+        let i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "fnv.i1")
+            .unwrap();
+        i_phi.add_incoming(&[(&i_next, bdy_bb)]);
+        hash_phi.add_incoming(&[(&new_hash, bdy_bb)]);
+        self.builder.build_unconditional_branch(hdr_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        hash_val
+    }
+
+    /// Emit (or reuse) a module-level `karac_hash_{type_name}(ptr) -> i64` function.
+    ///
+    /// - Integer/float primitives: FNV-1a over the raw `sizeof(K)` bytes.
+    /// - `String`: loads `{ ptr data, i64 len }` from the struct and hashes `data[0..len]`.
+    /// - Structs/other: FNV-1a over the raw struct bytes (correct for value-only structs).
+    fn emit_hash_fn_for_type(
+        &mut self,
+        type_name: &str,
+        key_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_hash_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn = self
+            .module
+            .add_function(&fn_name, hash_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        if type_name == "String" || type_name == "str" {
+            // String struct: { ptr data, i64 len, i64 cap }
+            let str_ty = self.vec_struct_type();
+            let data_pp = self
+                .builder
+                .build_struct_gep(str_ty, key_ptr, 0, "s.data.pp")
+                .unwrap();
+            let data_ptr = self
+                .builder
+                .build_load(ptr_ty, data_pp, "s.data")
+                .unwrap()
+                .into_pointer_value();
+            let len_p = self
+                .builder
+                .build_struct_gep(str_ty, key_ptr, 1, "s.len.p")
+                .unwrap();
+            let len = self
+                .builder
+                .build_load(i64_t, len_p, "s.len")
+                .unwrap()
+                .into_int_value();
+            let hash = self.emit_fnv1a_over_bytes(hash_fn, data_ptr, len);
+            self.builder.build_return(Some(&hash)).unwrap();
+        } else {
+            // All other types: FNV-1a over sizeof(K) raw bytes.
+            let raw_size = key_ty
+                .size_of()
+                .unwrap_or_else(|| i64_t.const_int(8, false));
+            let size64 = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "ksz64")
+                    .unwrap()
+            };
+            let hash = self.emit_fnv1a_over_bytes(hash_fn, key_ptr, size64);
+            self.builder.build_return(Some(&hash)).unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
+    /// Emit (or reuse) a module-level `karac_eq_{type_name}(ptr, ptr) -> i1` function.
+    ///
+    /// - Integer primitives: load both values and `icmp eq`.
+    /// - `String`: compare lengths then byte-by-byte.
+    /// - Structs/other: byte-by-byte over raw `sizeof(K)` bytes.
+    fn emit_eq_fn_for_type(
+        &mut self,
+        type_name: &str,
+        key_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_eq_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let i8_t = self.context.i8_type();
+        let bool_t = self.context.bool_type();
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let eq_fn = self
+            .module
+            .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        if type_name == "String" || type_name == "str" {
+            // String: compare lengths first, then byte-by-byte on content.
+            let str_ty = self.vec_struct_type();
+            let la_p = self
+                .builder
+                .build_struct_gep(str_ty, a_ptr, 1, "la.p")
+                .unwrap();
+            let lb_p = self
+                .builder
+                .build_struct_gep(str_ty, b_ptr, 1, "lb.p")
+                .unwrap();
+            let len_a = self
+                .builder
+                .build_load(i64_t, la_p, "la")
+                .unwrap()
+                .into_int_value();
+            let len_b = self
+                .builder
+                .build_load(i64_t, lb_p, "lb")
+                .unwrap()
+                .into_int_value();
+
+            let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+            let bytes_bb = self.context.append_basic_block(eq_fn, "bytes");
+
+            let len_eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, len_a, len_b, "len.eq")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(len_eq, bytes_bb, neq_bb)
+                .unwrap();
+
+            // neq_bb: return false
+            self.builder.position_at_end(neq_bb);
+            self.builder
+                .build_return(Some(&bool_t.const_int(0, false)))
+                .unwrap();
+
+            // bytes_bb: load data ptrs, enter byte loop
+            self.builder.position_at_end(bytes_bb);
+            let da_p = self
+                .builder
+                .build_struct_gep(str_ty, a_ptr, 0, "da.p")
+                .unwrap();
+            let db_p = self
+                .builder
+                .build_struct_gep(str_ty, b_ptr, 0, "db.p")
+                .unwrap();
+            let data_a = self
+                .builder
+                .build_load(ptr_ty, da_p, "da")
+                .unwrap()
+                .into_pointer_value();
+            let data_b = self
+                .builder
+                .build_load(ptr_ty, db_p, "db")
+                .unwrap()
+                .into_pointer_value();
+
+            let loop_hdr = self.context.append_basic_block(eq_fn, "eq.hdr");
+            let loop_bdy = self.context.append_basic_block(eq_fn, "eq.bdy");
+            let loop_exit = self.context.append_basic_block(eq_fn, "eq.exit");
+
+            self.builder.build_unconditional_branch(loop_hdr).unwrap();
+
+            self.builder.position_at_end(loop_hdr);
+            let i_phi = self.builder.build_phi(i64_t, "eq.i").unwrap();
+            i_phi.add_incoming(&[(&i64_t.const_zero(), bytes_bb)]);
+            let i_val = i_phi.as_basic_value().into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i_val, len_a, "eq.cond")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, loop_bdy, loop_exit)
+                .unwrap();
+
+            self.builder.position_at_end(loop_bdy);
+            let bpa = unsafe {
+                self.builder
+                    .build_gep(i8_t, data_a, &[i_val], "bpa")
+                    .unwrap()
+            };
+            let bpb = unsafe {
+                self.builder
+                    .build_gep(i8_t, data_b, &[i_val], "bpb")
+                    .unwrap()
+            };
+            let ba = self
+                .builder
+                .build_load(i8_t, bpa, "ba")
+                .unwrap()
+                .into_int_value();
+            let bb_v = self
+                .builder
+                .build_load(i8_t, bpb, "bb")
+                .unwrap()
+                .into_int_value();
+            let bytes_eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ba, bb_v, "beq")
+                .unwrap();
+            let i_next = self
+                .builder
+                .build_int_add(i_val, i64_t.const_int(1, false), "eq.i1")
+                .unwrap();
+            i_phi.add_incoming(&[(&i_next, loop_bdy)]);
+            self.builder
+                .build_conditional_branch(bytes_eq, loop_hdr, neq_bb)
+                .unwrap();
+
+            self.builder.position_at_end(loop_exit);
+            self.builder
+                .build_return(Some(&bool_t.const_int(1, false)))
+                .unwrap();
+        } else if let BasicTypeEnum::IntType(int_ty) = key_ty {
+            // Integer primitives: load and compare directly.
+            let va = self
+                .builder
+                .build_load(int_ty, a_ptr, "va")
+                .unwrap()
+                .into_int_value();
+            let vb = self
+                .builder
+                .build_load(int_ty, b_ptr, "vb")
+                .unwrap()
+                .into_int_value();
+            let eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, va, vb, "eq")
+                .unwrap();
+            self.builder.build_return(Some(&eq)).unwrap();
+        } else {
+            // Structs and other fixed-size types: byte-by-byte comparison.
+            let raw_size = key_ty
+                .size_of()
+                .unwrap_or_else(|| i64_t.const_int(8, false));
+            let size64 = if raw_size.get_type().get_bit_width() == 64 {
+                raw_size
+            } else {
+                self.builder
+                    .build_int_z_extend(raw_size, i64_t, "ksz64")
+                    .unwrap()
+            };
+
+            let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+            let loop_hdr = self.context.append_basic_block(eq_fn, "eq.hdr");
+            let loop_bdy = self.context.append_basic_block(eq_fn, "eq.bdy");
+            let loop_exit = self.context.append_basic_block(eq_fn, "eq.exit");
+
+            self.builder.build_unconditional_branch(loop_hdr).unwrap();
+
+            self.builder.position_at_end(neq_bb);
+            self.builder
+                .build_return(Some(&bool_t.const_int(0, false)))
+                .unwrap();
+
+            self.builder.position_at_end(loop_hdr);
+            let i_phi = self.builder.build_phi(i64_t, "eq.i").unwrap();
+            i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
+            let i_val = i_phi.as_basic_value().into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(IntPredicate::ULT, i_val, size64, "eq.cond")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, loop_bdy, loop_exit)
+                .unwrap();
+
+            self.builder.position_at_end(loop_bdy);
+            let bpa = unsafe {
+                self.builder
+                    .build_gep(i8_t, a_ptr, &[i_val], "bpa")
+                    .unwrap()
+            };
+            let bpb = unsafe {
+                self.builder
+                    .build_gep(i8_t, b_ptr, &[i_val], "bpb")
+                    .unwrap()
+            };
+            let ba = self
+                .builder
+                .build_load(i8_t, bpa, "ba")
+                .unwrap()
+                .into_int_value();
+            let bb_v = self
+                .builder
+                .build_load(i8_t, bpb, "bb")
+                .unwrap()
+                .into_int_value();
+            let bytes_eq = self
+                .builder
+                .build_int_compare(IntPredicate::EQ, ba, bb_v, "beq")
+                .unwrap();
+            let i_next = self
+                .builder
+                .build_int_add(i_val, i64_t.const_int(1, false), "eq.i1")
+                .unwrap();
+            i_phi.add_incoming(&[(&i_next, loop_bdy)]);
+            self.builder
+                .build_conditional_branch(bytes_eq, loop_hdr, neq_bb)
+                .unwrap();
+
+            self.builder.position_at_end(loop_exit);
+            self.builder
+                .build_return(Some(&bool_t.const_int(1, false)))
+                .unwrap();
+        }
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
+    }
+
+    /// Emit `karac_map_new`, alloca a ptr slot to hold the opaque handle, and
+    /// register a scope-exit `karac_map_free` cleanup action.
+    /// Called from `compile_stmt` when the RHS is `Map.new()`.
+    fn compile_map_new_stmt(&mut self, var_name: &str) -> Result<(), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let key_ty = self
+            .map_key_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        let key_size = key_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+        let val_size = val_ty
+            .size_of()
+            .unwrap_or_else(|| i64_t.const_int(8, false));
+
+        // Emit (or reuse) hash/eq functions for the concrete key type.
+        let type_name = self
+            .map_key_type_names
+            .get(var_name)
+            .cloned()
+            .unwrap_or_else(|| "i64".to_string());
+        let hash_fn = self.emit_hash_fn_for_type(&type_name, key_ty);
+        let eq_fn = self.emit_eq_fn_for_type(&type_name, key_ty);
+        let hash_fn_ptr = hash_fn.as_global_value().as_pointer_value();
+        let eq_fn_ptr = eq_fn.as_global_value().as_pointer_value();
+
+        let map_handle = self
+            .builder
+            .build_call(
+                self.karac_map_new_fn,
+                &[
+                    key_size.into(),
+                    val_size.into(),
+                    hash_fn_ptr.into(),
+                    eq_fn_ptr.into(),
+                ],
+                "map.new",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let slot_ptr = self.create_entry_alloca(fn_val, &format!("{var_name}.slot"), ptr_ty.into());
+        self.builder.build_store(slot_ptr, map_handle).unwrap();
+        self.variables.insert(
+            var_name.to_string(),
+            VarSlot {
+                ptr: slot_ptr,
+                ty: ptr_ty.into(),
+            },
+        );
+        self.track_map_var(slot_ptr);
+        Ok(())
+    }
+
+    /// Compile a method call on a `Map[K,V]` variable.
+    fn compile_map_method(
+        &mut self,
+        var_name: &str,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+
+        // Load the opaque map handle from the ptr alloca.
+        let map_handle = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "map.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let key_ty = self
+            .map_key_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        match method {
+            "len" => {
+                let len = self
+                    .builder
+                    .build_call(self.karac_map_len_fn, &[map_handle.into()], "map.len")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                Ok(len)
+            }
+            "is_empty" => {
+                let len = self
+                    .builder
+                    .build_call(self.karac_map_len_fn, &[map_handle.into()], "map.len")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let zero = i64_t.const_int(0, false);
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "map.is_empty")
+                    .unwrap();
+                Ok(cmp.into())
+            }
+            "insert" => {
+                if args.len() < 2 {
+                    return Err("Map.insert requires key and value arguments".to_string());
+                }
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let key_val = self.compile_expr(&args[0].value)?;
+                let val_val = self.compile_expr(&args[1].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
+                let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
+                let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
+                self.builder.build_store(key_slot, key_val).unwrap();
+                self.builder.build_store(val_slot, val_val).unwrap();
+                let existed = self
+                    .builder
+                    .build_call(
+                        self.karac_map_insert_old_fn,
+                        &[
+                            map_handle.into(),
+                            key_slot.into(),
+                            val_slot.into(),
+                            old_slot.into(),
+                        ],
+                        "map.insert.existed",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                // Build Option[V]: Some(old) if existed, None if fresh insert.
+                let some_bb = self.context.append_basic_block(fn_val, "map.ins.some");
+                let none_bb = self.context.append_basic_block(fn_val, "map.ins.none");
+                let merge_bb = self.context.append_basic_block(fn_val, "map.ins.merge");
+                self.builder
+                    .build_conditional_branch(existed, some_bb, none_bb)
+                    .unwrap();
+                self.builder.position_at_end(some_bb);
+                let old_val = self
+                    .builder
+                    .build_load(val_ty, old_slot, "map.ins.old")
+                    .unwrap();
+                let old_word = self.coerce_to_i64(old_val)?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(none_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                let tag_phi = self.builder.build_phi(i64_t, "ins.opt.tag").unwrap();
+                tag_phi.add_incoming(&[
+                    (&i64_t.const_int(1, false), some_bb),
+                    (&i64_t.const_int(0, false), none_bb),
+                ]);
+                let word_phi = self.builder.build_phi(i64_t, "ins.opt.word").unwrap();
+                word_phi
+                    .add_incoming(&[(&old_word, some_bb), (&i64_t.const_int(0, false), none_bb)]);
+                let mut agg = option_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "ins.opt.tag.f")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "ins.opt.word.f")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            "get" => {
+                if args.is_empty() {
+                    return Err("Map.get requires a key argument".to_string());
+                }
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let key_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let key_slot = self.create_entry_alloca(fn_val, "map.get.key", key_ty);
+                let val_slot = self.create_entry_alloca(fn_val, "map.get.val", val_ty);
+                self.builder.build_store(key_slot, key_val).unwrap();
+
+                let found = self
+                    .builder
+                    .build_call(
+                        self.karac_map_get_fn,
+                        &[map_handle.into(), key_slot.into(), val_slot.into()],
+                        "map.get.found",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+
+                let found_bb = self.context.append_basic_block(fn_val, "map.get.found.bb");
+                let notfound_bb = self
+                    .context
+                    .append_basic_block(fn_val, "map.get.notfound.bb");
+                let merge_bb = self.context.append_basic_block(fn_val, "map.get.merge");
+
+                self.builder
+                    .build_conditional_branch(found, found_bb, notfound_bb)
+                    .unwrap();
+
+                // Found — load value and coerce to i64 payload.
+                self.builder.position_at_end(found_bb);
+                let elem_val = self
+                    .builder
+                    .build_load(val_ty, val_slot, "map.get.val")
+                    .unwrap();
+                let elem_word = self.coerce_to_i64(elem_val)?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Not found.
+                self.builder.position_at_end(notfound_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge — phi and build Option struct.
+                self.builder.position_at_end(merge_bb);
+                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
+                tag_phi.add_incoming(&[
+                    (&i64_t.const_int(1, false), found_bb),
+                    (&i64_t.const_int(0, false), notfound_bb),
+                ]);
+                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
+                word_phi.add_incoming(&[
+                    (&elem_word, found_bb),
+                    (&i64_t.const_int(0, false), notfound_bb),
+                ]);
+                let mut agg = option_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            "remove" => {
+                if args.is_empty() {
+                    return Err("Map.remove requires a key argument".to_string());
+                }
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let key_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
+                let old_slot = self.create_entry_alloca(fn_val, "map.remove.old", val_ty);
+                self.builder.build_store(key_slot, key_val).unwrap();
+                let found = self
+                    .builder
+                    .build_call(
+                        self.karac_map_remove_old_fn,
+                        &[map_handle.into(), key_slot.into(), old_slot.into()],
+                        "map.remove.found",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                // Build Option[V]: Some(old) if found, None otherwise.
+                let found_bb = self.context.append_basic_block(fn_val, "map.rm.found");
+                let notfound_bb = self.context.append_basic_block(fn_val, "map.rm.notfound");
+                let merge_bb = self.context.append_basic_block(fn_val, "map.rm.merge");
+                self.builder
+                    .build_conditional_branch(found, found_bb, notfound_bb)
+                    .unwrap();
+                self.builder.position_at_end(found_bb);
+                let old_val = self
+                    .builder
+                    .build_load(val_ty, old_slot, "map.rm.old")
+                    .unwrap();
+                let old_word = self.coerce_to_i64(old_val)?;
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(notfound_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+                self.builder.position_at_end(merge_bb);
+                let tag_phi = self.builder.build_phi(i64_t, "rm.opt.tag").unwrap();
+                tag_phi.add_incoming(&[
+                    (&i64_t.const_int(1, false), found_bb),
+                    (&i64_t.const_int(0, false), notfound_bb),
+                ]);
+                let word_phi = self.builder.build_phi(i64_t, "rm.opt.word").unwrap();
+                word_phi.add_incoming(&[
+                    (&old_word, found_bb),
+                    (&i64_t.const_int(0, false), notfound_bb),
+                ]);
+                let mut agg = option_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "rm.opt.tag.f")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "rm.opt.word.f")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            "contains_key" => {
+                if args.is_empty() {
+                    return Err("Map.contains_key requires a key argument".to_string());
+                }
+                let key_val = self.compile_expr(&args[0].value)?;
+                let fn_val = self.current_fn.unwrap();
+                let key_slot = self.create_entry_alloca(fn_val, "map.contains.key", key_ty);
+                self.builder.build_store(key_slot, key_val).unwrap();
+                let found = self
+                    .builder
+                    .build_call(
+                        self.karac_map_contains_fn,
+                        &[map_handle.into(), key_slot.into()],
+                        "map.contains",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                Ok(found.into())
+            }
+            _ => Ok(i64_t.const_int(0, false).into()),
+        }
+    }
+
+    fn compile_array_literal(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        if elems.is_empty() {
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+        let vals: Vec<BasicValueEnum<'ctx>> = elems
+            .iter()
+            .map(|e| self.compile_expr(e))
+            .collect::<Result<_, _>>()?;
+        let elem_ty = vals[0].get_type();
+        let arr_ty = elem_ty.array_type(vals.len() as u32);
+        let mut agg = arr_ty.get_undef();
+        for (idx, val) in vals.iter().enumerate() {
+            agg = self
+                .builder
+                .build_insert_value(agg, *val, idx as u32, "arr.elem")
+                .unwrap()
+                .into_array_value();
+        }
+        Ok(agg.into())
+    }
+
+    /// Compile `[value; count]` / `Array[value; count]`. Produces an LLVM
+    /// array value `[N x T]` whose every element is the compiled `value`.
+    /// `count` must be a non-negative integer literal (mirrors the
+    /// typechecker's `Array[T, N]` size constraint).
+    ///
+    /// `Vec[v; n]` prefix form needs heap allocation + fill and is not
+    /// implemented here yet — it errors with a clear message rather than
+    /// silently producing the wrong shape.
+    fn compile_repeat_literal(
+        &mut self,
+        type_name: Option<&str>,
+        value: &Expr,
+        count: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if matches!(type_name, Some("Vec")) {
+            return Err("codegen: Vec[v; n] repeat literal not yet supported".to_string());
+        }
+        let n = match &count.kind {
+            ExprKind::Integer(n, _) if *n >= 0 => *n as u32,
+            _ => {
+                return Err(
+                    "repeat-literal count must be a non-negative integer literal".to_string(),
+                );
+            }
+        };
+        let val = self.compile_expr(value)?;
+        let elem_ty = val.get_type();
+        let arr_ty = elem_ty.array_type(n);
+        let mut agg = arr_ty.get_undef();
+        for idx in 0..n {
+            agg = self
+                .builder
+                .build_insert_value(agg, val, idx, "rep.elem")
+                .unwrap()
+                .into_array_value();
+        }
+        Ok(agg.into())
+    }
+
+    fn compile_index(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Range indexing (`v[a..b]`): produces a Slice[T] value regardless
+        // of whether `v` is an Array, Vec, or Slice. The source element
+        // type is inferred from the object variable.
+        if let ExprKind::Range {
+            start,
+            end,
+            inclusive,
+        } = &index.kind
+        {
+            if let Some(elem_ty) = self.infer_elem_from_source(object) {
+                return self.compile_range_slice(object, start, end, *inclusive, elem_ty);
+            }
+        }
+
+        // Slice variable indexing: before the fast-path alloca lookup, check
+        // whether the object is a slice variable. Slices use a 2-field
+        // `{ptr, len}` representation and dispatch to a dedicated path.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.slice_elem_types.contains_key(name.as_str()) {
+                return self.compile_slice_index(name, index);
+            }
+        }
+
+        let idx_val = self.compile_expr(index)?.into_int_value();
+        let i64_t = self.context.i64_type();
+
+        // Get a pointer to the array storage.
+        // Fast path: if the object is a local variable, use its alloca directly.
+        let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                (slot.ptr, slot.ty)
+            } else {
+                return Err(format!("Undefined variable '{}' in index expression", name));
+            }
+        } else {
+            // Arbitrary expression: compile, store to temp alloca, use that pointer.
+            let arr_val = self.compile_expr(object)?;
+            let fn_val = self.current_fn.unwrap();
+            let tmp = self.create_entry_alloca(fn_val, "arr.tmp", arr_val.get_type());
+            self.builder.build_store(tmp, arr_val).unwrap();
+            (tmp, arr_val.get_type())
+        };
+
+        // Bounds check: panic if index >= array_length.
+        if let BasicTypeEnum::ArrayType(at) = arr_ty {
+            let len = i64_t.const_int(at.len() as u64, false);
+            let fn_val = self.current_fn.unwrap();
+            let oob_bb = self.context.append_basic_block(fn_val, "idx.oob");
+            let ok_bb = self.context.append_basic_block(fn_val, "idx.ok");
+            let cmp = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cmp, oob_bb, ok_bb)
+                .unwrap();
+
+            // OOB path: call abort or unreachable.
+            self.builder.position_at_end(oob_bb);
+            self.emit_panic("array index out of bounds");
+            self.builder.build_unreachable().unwrap();
+
+            // OK path: GEP + load.
+            self.builder.position_at_end(ok_bb);
+            let zero = i64_t.const_int(0, false);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.elem.ptr")
+                    .unwrap()
+            };
+            let elem_ty = at.get_element_type();
+            let val = self
+                .builder
+                .build_load(elem_ty, elem_ptr, "arr.elem")
+                .unwrap();
+            Ok(val)
+        } else if let BasicTypeEnum::StructType(_) = arr_ty {
+            // Vec indexing: load len, bounds check, load data[i].
+            if let ExprKind::Identifier(name) = &object.kind {
+                if self.vec_elem_types.contains_key(name.as_str()) {
+                    let vec_ty = self.vec_struct_type();
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let elem_ty = self.vec_elem_type_for_var(name);
+
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, arr_ptr, 1, "v.len.ptr")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "v.len")
+                        .unwrap()
+                        .into_int_value();
+                    let data_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, arr_ptr, 0, "v.data.ptr")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr_ptr, "v.data")
+                        .unwrap()
+                        .into_pointer_value();
+
+                    let fn_val = self.current_fn.unwrap();
+                    let oob_bb = self.context.append_basic_block(fn_val, "vidx.oob");
+                    let ok_bb = self.context.append_basic_block(fn_val, "vidx.ok");
+                    let cmp = self
+                        .builder
+                        .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(cmp, oob_bb, ok_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(oob_bb);
+                    self.emit_panic("vec index out of bounds");
+                    self.builder.build_unreachable().unwrap();
+
+                    self.builder.position_at_end(ok_bb);
+                    let elem_ptr = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
+                            .unwrap()
+                    };
+                    let val = self
+                        .builder
+                        .build_load(elem_ty, elem_ptr, "v.elem")
+                        .unwrap();
+                    return Ok(val);
+                }
+            }
+            Err("Index operator applied to non-array type".to_string())
+        } else {
+            Err("Index operator applied to non-array type".to_string())
+        }
+    }
+
+    fn compile_slice_index_store(
+        &mut self,
+        var_name: &str,
+        index: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
+        let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
+        let slice_ptr = self.get_data_ptr(var_name).unwrap();
+        let idx_val = self.compile_expr(index)?.into_int_value();
+
+        let data_pp = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 0, "s.st.data.pp")
+            .unwrap();
+        let len_p = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 1, "s.st.len.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "s.st.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "s.st.len")
+            .unwrap()
+            .into_int_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "s.st.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "s.st.ok");
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("slice index out of bounds");
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[idx_val], "s.st.elem.ptr")
+                .unwrap()
+        };
+        self.builder.build_store(elem_ptr, val).unwrap();
+        Ok(())
+    }
+
+    fn compile_slice_index(
+        &mut self,
+        var_name: &str,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
+        let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
+        let slice_ptr = self.get_data_ptr(var_name).unwrap();
+        let idx_val = self.compile_expr(index)?.into_int_value();
+
+        let data_pp = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 0, "s.data.pp")
+            .unwrap();
+        let len_p = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 1, "s.len.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "s.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "s.len")
+            .unwrap()
+            .into_int_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "sidx.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "sidx.ok");
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("slice index out of bounds");
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[idx_val], "s.elem.ptr")
+                .unwrap()
+        };
+        let val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "s.elem")
+            .unwrap();
+        Ok(val)
+    }
+
+    fn compile_index_store(
+        &mut self,
+        object: &Expr,
+        index: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        // Slice[T] / mut Slice[T] element store: the slice is a `{ptr, i64}`
+        // value; the index path GEPs through the stored data pointer. The
+        // ownership checker is responsible for rejecting stores through a
+        // read-only Slice[T] — codegen treats the write path uniformly.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.slice_elem_types.contains_key(name.as_str()) {
+                return self.compile_slice_index_store(name, index, val);
+            }
+        }
+
+        let idx_val = self.compile_expr(index)?.into_int_value();
+        let i64_t = self.context.i64_type();
+
+        let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                (slot.ptr, slot.ty)
+            } else {
+                return Err(format!("Undefined variable '{}' in index store", name));
+            }
+        } else {
+            return Err("Index assignment target must be a variable".to_string());
+        };
+
+        if let BasicTypeEnum::ArrayType(at) = arr_ty {
+            let len = i64_t.const_int(at.len() as u64, false);
+            let fn_val = self.current_fn.unwrap();
+            let oob_bb = self.context.append_basic_block(fn_val, "idx_s.oob");
+            let ok_bb = self.context.append_basic_block(fn_val, "idx_s.ok");
+            let cmp = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cmp, oob_bb, ok_bb)
+                .unwrap();
+
+            self.builder.position_at_end(oob_bb);
+            self.emit_panic("array index out of bounds");
+            self.builder.build_unreachable().unwrap();
+
+            self.builder.position_at_end(ok_bb);
+            let zero = i64_t.const_int(0, false);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(arr_ty, arr_ptr, &[zero, idx_val], "arr.store.ptr")
+                    .unwrap()
+            };
+            self.builder.build_store(elem_ptr, val).unwrap();
+            Ok(())
+        } else {
+            Err("Index store on non-array type".to_string())
+        }
+    }
+
+    fn compile_tuple(&mut self, elems: &[Expr]) -> Result<BasicValueEnum<'ctx>, String> {
+        let vals: Vec<BasicValueEnum<'ctx>> = elems
+            .iter()
+            .map(|e| self.compile_expr(e))
+            .collect::<Result<_, _>>()?;
+        let types: Vec<BasicTypeEnum<'ctx>> = vals.iter().map(|v| v.get_type()).collect();
+        let st = self.context.struct_type(&types, false);
+        let mut agg = st.get_undef();
+        for (idx, val) in vals.iter().enumerate() {
+            agg = self
+                .builder
+                .build_insert_value(agg, *val, idx as u32, "elem")
+                .unwrap()
+                .into_struct_value();
+        }
+        Ok(agg.into())
+    }
+
+    fn compile_field_access(
+        &mut self,
+        object: &Expr,
+        field: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Shared type: object compiles to a pointer; field access via GEP.
+        if let Some((type_name, info)) = self.shared_type_for_expr(object) {
+            if !info.is_enum {
+                let ptr = self.compile_expr(object)?.into_pointer_value();
+                if let Some(names) = self.struct_field_names.get(&type_name) {
+                    if let Some(idx) = names.iter().position(|n| n == field) {
+                        // Fields start at heap index 1 (index 0 is refcount).
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                info.heap_type,
+                                ptr,
+                                (idx + 1) as u32,
+                                &format!("sh_{}", field),
+                            )
+                            .unwrap();
+                        let field_ty = info
+                            .heap_type
+                            .get_field_type_at_index((idx + 1) as u32)
+                            .unwrap();
+                        return Ok(self.builder.build_load(field_ty, field_ptr, field).unwrap());
+                    }
+                }
+            }
+        }
+
+        let obj_val = self.compile_expr(object)?;
+        if let BasicValueEnum::StructValue(sv) = obj_val {
+            // Look up field index from struct type name in object's identifier
+            let field_idx = self.field_index_for(object, field);
+            if let Some(idx) = field_idx {
+                return Ok(self.builder.build_extract_value(sv, idx, field).unwrap());
+            }
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_field_store(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        new_val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        if let ExprKind::Identifier(var_name) = &object.kind {
+            // Shared type: store directly into the heap object via GEP.
+            if let Some(type_name) = self.var_type_names.get(var_name.as_str()).cloned() {
+                if let Some(info) = self.shared_types.get(&type_name).cloned() {
+                    if !info.is_enum {
+                        if let Some(slot) = self.variables.get(var_name).copied() {
+                            let ptr = self
+                                .builder
+                                .build_load(
+                                    self.context.ptr_type(AddressSpace::default()),
+                                    slot.ptr,
+                                    var_name,
+                                )
+                                .unwrap()
+                                .into_pointer_value();
+                            if let Some(names) = self.struct_field_names.get(&type_name) {
+                                if let Some(idx) = names.iter().position(|n| n == field) {
+                                    let field_ptr = self
+                                        .builder
+                                        .build_struct_gep(
+                                            info.heap_type,
+                                            ptr,
+                                            (idx + 1) as u32,
+                                            &format!("sh_{}_ptr", field),
+                                        )
+                                        .unwrap();
+                                    self.builder.build_store(field_ptr, new_val).unwrap();
+                                }
+                            }
+                        }
+                        return Ok(());
+                    }
+                }
+            }
+
+            if let Some(slot) = self.variables.get(var_name).copied() {
+                let obj_val = self
+                    .builder
+                    .build_load(slot.ty, slot.ptr, var_name)
+                    .unwrap();
+                if let BasicValueEnum::StructValue(sv) = obj_val {
+                    let field_idx = self.field_index_for(object, field);
+                    if let Some(idx) = field_idx {
+                        let updated = self
+                            .builder
+                            .build_insert_value(sv, new_val, idx, field)
+                            .unwrap();
+                        self.builder.build_store(slot.ptr, updated).unwrap();
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn compile_tuple_index(
+        &mut self,
+        object: &Expr,
+        index: usize,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let obj_val = self.compile_expr(object)?;
+        if let BasicValueEnum::StructValue(sv) = obj_val {
+            return Ok(self
+                .builder
+                .build_extract_value(sv, index as u32, "tidx")
+                .unwrap());
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn field_index_for(&self, object: &Expr, field: &str) -> Option<u32> {
+        // Try to resolve by variable name → type name → field registry.
+        // `self` inside impl methods is stored as a regular local named "self"
+        // with its type recorded in `var_type_names`.
+        let var_name = match &object.kind {
+            ExprKind::Identifier(n) => Some(n.as_str()),
+            ExprKind::SelfValue => Some("self"),
+            _ => None,
+        };
+        if let Some(var_name) = var_name {
+            if let Some(type_name) = self.var_type_names.get(var_name) {
+                if let Some(names) = self.struct_field_names.get(type_name.as_str()) {
+                    if let Some(idx) = names.iter().position(|n| n == field) {
+                        return Some(idx as u32);
+                    }
+                }
+            }
+        }
+        // Fall back: numeric index for tuple fields like `.0`, `.1`
+        field.parse::<u32>().ok()
+    }
+
+    /// Return the Kāra type name for a compiled expression, if known.
+    fn type_name_of(&self, expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => self.var_type_names.get(n.as_str()).cloned(),
+            ExprKind::StructLiteral { path, .. } => path.last().cloned(),
+            _ => None,
+        }
+    }
+
+    // ── Cast ──────────────────────────────────────────────────────
+
+    fn compile_cast(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        target: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match (val, target) {
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) => {
+                let result = self.builder.build_int_cast(iv, tt, "cast").unwrap();
+                Ok(result.into())
+            }
+            (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => {
+                let result = self
+                    .builder
+                    .build_signed_int_to_float(iv, ft, "cast")
+                    .unwrap();
+                Ok(result.into())
+            }
+            (BasicValueEnum::FloatValue(fv), BasicTypeEnum::IntType(it)) => {
+                let result = self
+                    .builder
+                    .build_float_to_signed_int(fv, it, "cast")
+                    .unwrap();
+                Ok(result.into())
+            }
+            (BasicValueEnum::FloatValue(fv), BasicTypeEnum::FloatType(ft)) => {
+                let result = self.builder.build_float_cast(fv, ft, "cast").unwrap();
+                Ok(result.into())
+            }
+            _ => Ok(val),
+        }
+    }
+
+    // ── Binary / unary operators ──────────────────────────────────
+
+    fn compile_binop(
+        &mut self,
+        op: &BinOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Struct path: strings or user-defined structs.
+        if lhs.is_struct_value() && rhs.is_struct_value() {
+            let ls = lhs.into_struct_value();
+            let rs = rhs.into_struct_value();
+            let field_count = ls.get_type().count_fields();
+            let vec_fields = self.vec_struct_type().count_fields();
+            // String/Vec layout ({ ptr, i64, i64 }) — 3 fields.
+            if field_count == vec_fields {
+                return self.compile_string_binop(op, ls, rs);
+            }
+            // User struct equality: field-by-field comparison.
+            if matches!(op, BinOp::Eq | BinOp::NotEq) {
+                return self.compile_struct_eq(op, ls, rs);
+            }
+            return Err(format!("Unsupported struct binary op: {:?}", op));
+        }
+
+        // Float path
+        if lhs.is_float_value() || rhs.is_float_value() {
+            let lf = self.to_float(lhs)?;
+            let rf = self.to_float(rhs)?;
+            return self.compile_float_binop(op, lf, rf);
+        }
+
+        let lv = lhs.into_int_value();
+        let rv = rhs.into_int_value();
+        let result = match op {
+            BinOp::Add => self.builder.build_int_nsw_add(lv, rv, "add").unwrap(),
+            BinOp::Sub => self.builder.build_int_nsw_sub(lv, rv, "sub").unwrap(),
+            BinOp::Mul => self.builder.build_int_nsw_mul(lv, rv, "mul").unwrap(),
+            BinOp::Div => self.builder.build_int_signed_div(lv, rv, "div").unwrap(),
+            BinOp::Mod => self.builder.build_int_signed_rem(lv, rv, "mod").unwrap(),
+            BinOp::Eq => self
+                .builder
+                .build_int_compare(IntPredicate::EQ, lv, rv, "eq")
+                .unwrap(),
+            BinOp::NotEq => self
+                .builder
+                .build_int_compare(IntPredicate::NE, lv, rv, "ne")
+                .unwrap(),
+            BinOp::Lt => self
+                .builder
+                .build_int_compare(IntPredicate::SLT, lv, rv, "lt")
+                .unwrap(),
+            BinOp::LtEq => self
+                .builder
+                .build_int_compare(IntPredicate::SLE, lv, rv, "le")
+                .unwrap(),
+            BinOp::Gt => self
+                .builder
+                .build_int_compare(IntPredicate::SGT, lv, rv, "gt")
+                .unwrap(),
+            BinOp::GtEq => self
+                .builder
+                .build_int_compare(IntPredicate::SGE, lv, rv, "ge")
+                .unwrap(),
+            BinOp::And => self.builder.build_and(lv, rv, "and").unwrap(),
+            BinOp::Or => self.builder.build_or(lv, rv, "or").unwrap(),
+            BinOp::BitAnd => self.builder.build_and(lv, rv, "bitand").unwrap(),
+            BinOp::BitOr => self.builder.build_or(lv, rv, "bitor").unwrap(),
+            BinOp::BitXor => self.builder.build_xor(lv, rv, "bitxor").unwrap(),
+            BinOp::Shl => self.builder.build_left_shift(lv, rv, "shl").unwrap(),
+            BinOp::Shr => self.builder.build_right_shift(lv, rv, true, "shr").unwrap(),
+            _ => return Err(format!("Unsupported binary op: {:?}", op)),
+        };
+        Ok(result.into())
+    }
+
+    fn compile_struct_eq(
+        &mut self,
+        op: &BinOp,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let field_count = lhs.get_type().count_fields();
+        let bool_t = self.context.bool_type();
+        let mut result = bool_t.const_int(1, false); // start true (all equal)
+
+        for i in 0..field_count {
+            let l_field = self
+                .builder
+                .build_extract_value(lhs, i, &format!("l.f{}", i))
+                .unwrap();
+            let r_field = self
+                .builder
+                .build_extract_value(rhs, i, &format!("r.f{}", i))
+                .unwrap();
+            // Recursively compare the field.
+            let field_eq = self.compile_binop(&BinOp::Eq, l_field, r_field)?;
+            result = self
+                .builder
+                .build_and(result, field_eq.into_int_value(), &format!("eq.f{}", i))
+                .unwrap();
+        }
+
+        if matches!(op, BinOp::NotEq) {
+            Ok(self.builder.build_not(result, "struct_ne").unwrap().into())
+        } else {
+            Ok(result.into())
+        }
+    }
+
+    fn compile_string_binop(
+        &self,
+        op: &BinOp,
+        lhs: inkwell::values::StructValue<'ctx>,
+        rhs: inkwell::values::StructValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i32_t = self.context.i32_type();
+
+        // Extract ptr and len from each string struct.
+        let l_ptr = self
+            .builder
+            .build_extract_value(lhs, 0, "l.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let l_len = self
+            .builder
+            .build_extract_value(lhs, 1, "l.len")
+            .unwrap()
+            .into_int_value();
+        let r_ptr = self
+            .builder
+            .build_extract_value(rhs, 0, "r.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let r_len = self
+            .builder
+            .build_extract_value(rhs, 1, "r.len")
+            .unwrap()
+            .into_int_value();
+
+        match op {
+            BinOp::Eq | BinOp::NotEq => {
+                // Fast reject: if lengths differ, strings are not equal.
+                let len_eq = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, l_len, r_len, "len_eq")
+                    .unwrap();
+                // memcmp the data.
+                let cmp_result = self
+                    .builder
+                    .build_call(
+                        self.memcmp_fn,
+                        &[l_ptr.into(), r_ptr.into(), l_len.into()],
+                        "memcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let data_eq = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        cmp_result,
+                        i32_t.const_int(0, false),
+                        "data_eq",
+                    )
+                    .unwrap();
+                let is_eq = self.builder.build_and(len_eq, data_eq, "str_eq").unwrap();
+                if matches!(op, BinOp::NotEq) {
+                    Ok(self.builder.build_not(is_eq, "str_ne").unwrap().into())
+                } else {
+                    Ok(is_eq.into())
+                }
+            }
+            BinOp::Lt | BinOp::LtEq | BinOp::Gt | BinOp::GtEq => {
+                // Lexicographic comparison: memcmp on min(l_len, r_len), then compare lengths.
+                let cmp_lens = self
+                    .builder
+                    .build_int_compare(IntPredicate::ULT, l_len, r_len, "l_shorter")
+                    .unwrap();
+                let min_len = self
+                    .builder
+                    .build_select(cmp_lens, l_len, r_len, "min_len")
+                    .unwrap()
+                    .into_int_value();
+                let cmp_result = self
+                    .builder
+                    .build_call(
+                        self.memcmp_fn,
+                        &[l_ptr.into(), r_ptr.into(), min_len.into()],
+                        "memcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let zero = i32_t.const_int(0, false);
+                // If memcmp != 0, use its sign. If memcmp == 0, shorter string is "less".
+                let cmp_is_zero = self
+                    .builder
+                    .build_int_compare(IntPredicate::EQ, cmp_result, zero, "cmp_zero")
+                    .unwrap();
+                // When cmp == 0, compare lengths as signed i64 difference.
+                let len_diff = self
+                    .builder
+                    .build_int_sub(l_len, r_len, "len_diff")
+                    .unwrap();
+                let len_diff_i32 = self
+                    .builder
+                    .build_int_truncate(len_diff, i32_t, "len_diff32")
+                    .unwrap();
+                let effective_cmp = self
+                    .builder
+                    .build_select(cmp_is_zero, len_diff_i32, cmp_result, "eff_cmp")
+                    .unwrap()
+                    .into_int_value();
+                let pred = match op {
+                    BinOp::Lt => IntPredicate::SLT,
+                    BinOp::LtEq => IntPredicate::SLE,
+                    BinOp::Gt => IntPredicate::SGT,
+                    BinOp::GtEq => IntPredicate::SGE,
+                    _ => unreachable!(),
+                };
+                let result = self
+                    .builder
+                    .build_int_compare(pred, effective_cmp, zero, "str_cmp")
+                    .unwrap();
+                Ok(result.into())
+            }
+            BinOp::Add => {
+                // String concatenation: allocate new buffer, copy both, return new string.
+                let new_len = self.builder.build_int_add(l_len, r_len, "cat_len").unwrap();
+                let new_buf = self
+                    .builder
+                    .build_call(self.malloc_fn, &[new_len.into()], "cat_buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // Copy left.
+                self.builder
+                    .build_memcpy(new_buf, 1, l_ptr, 1, l_len)
+                    .unwrap();
+                // Copy right after left.
+                let i8_ty = self.context.i8_type();
+                let dest2 = unsafe {
+                    self.builder
+                        .build_gep(i8_ty, new_buf, &[l_len], "cat_dest2")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(dest2, 1, r_ptr, 1, r_len)
+                    .unwrap();
+                // Build result string struct.
+                let str_ty = self.vec_struct_type();
+                let mut agg = str_ty.get_undef();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, new_buf, 0, "cat.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, new_len, 1, "cat.len")
+                    .unwrap()
+                    .into_struct_value();
+                agg = self
+                    .builder
+                    .build_insert_value(agg, new_len, 2, "cat.cap")
+                    .unwrap()
+                    .into_struct_value();
+                Ok(agg.into())
+            }
+            _ => Err(format!("Unsupported string binary op: {:?}", op)),
+        }
+    }
+
+    fn compile_float_binop(
+        &self,
+        op: &BinOp,
+        lf: inkwell::values::FloatValue<'ctx>,
+        rf: inkwell::values::FloatValue<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match op {
+            BinOp::Add => Ok(self.builder.build_float_add(lf, rf, "fadd").unwrap().into()),
+            BinOp::Sub => Ok(self.builder.build_float_sub(lf, rf, "fsub").unwrap().into()),
+            BinOp::Mul => Ok(self.builder.build_float_mul(lf, rf, "fmul").unwrap().into()),
+            BinOp::Div => Ok(self.builder.build_float_div(lf, rf, "fdiv").unwrap().into()),
+            BinOp::Mod => Ok(self.builder.build_float_rem(lf, rf, "frem").unwrap().into()),
+            BinOp::Eq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OEQ, lf, rf, "feq")
+                .unwrap()
+                .into()),
+            BinOp::NotEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::ONE, lf, rf, "fne")
+                .unwrap()
+                .into()),
+            BinOp::Lt => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OLT, lf, rf, "flt")
+                .unwrap()
+                .into()),
+            BinOp::LtEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OLE, lf, rf, "fle")
+                .unwrap()
+                .into()),
+            BinOp::Gt => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OGT, lf, rf, "fgt")
+                .unwrap()
+                .into()),
+            BinOp::GtEq => Ok(self
+                .builder
+                .build_float_compare(FloatPredicate::OGE, lf, rf, "fge")
+                .unwrap()
+                .into()),
+            _ => Err(format!("Unsupported float binary op: {:?}", op)),
+        }
+    }
+
+    fn to_float(
+        &self,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::FloatValue<'ctx>, String> {
+        match val {
+            BasicValueEnum::FloatValue(f) => Ok(f),
+            BasicValueEnum::IntValue(i) => Ok(self
+                .builder
+                .build_signed_int_to_float(i, self.context.f64_type(), "itof")
+                .unwrap()),
+            _ => Err(format!("Cannot convert {:?} to float", val.get_type())),
+        }
+    }
+
+    fn compile_unaryop(
+        &mut self,
+        op: &UnaryOp,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match op {
+            UnaryOp::Neg => {
+                if val.is_float_value() {
+                    Ok(self
+                        .builder
+                        .build_float_neg(val.into_float_value(), "fneg")
+                        .unwrap()
+                        .into())
+                } else {
+                    Ok(self
+                        .builder
+                        .build_int_neg(val.into_int_value(), "neg")
+                        .unwrap()
+                        .into())
+                }
+            }
+            UnaryOp::Not | UnaryOp::BitNot => Ok(self
+                .builder
+                .build_not(val.into_int_value(), "not")
+                .unwrap()
+                .into()),
+            // Deref is handled in compile_expr before reaching here.
+            UnaryOp::Deref => Err("unreachable: Deref handled in compile_expr".into()),
+        }
+    }
+
+    // ── Slice coercion ────────────────────────────────────────────
+
+    /// Synthesize a `{ptr, i64}` slice header at a call site when the
+    /// argument is an Array, Vec, or Slice value and the callee parameter
+    /// expects `Slice[T]` / `mut Slice[T]`.
+    ///
+    /// Returns `Ok(None)` when the argument is not a recognized
+    /// sequence source, signalling the caller to fall back to the
+    /// default argument-passing path.
+    fn coerce_to_slice(
+        &mut self,
+        arg: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
+
+        // Fast path: the argument is a named local variable whose
+        // representation we already understand.
+        if let ExprKind::Identifier(var_name) = &arg.kind {
+            if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                // Owned Array[T, N]: point at the alloca, length is N.
+                if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                    let len = i64_t.const_int(at.len() as u64, false);
+                    return Ok(Some(self.build_slice_header(slice_ty, slot.ptr, len)));
+                }
+                // Already a slice: load and pass through.
+                if self.slice_elem_types.contains_key(var_name.as_str()) {
+                    let loaded = self
+                        .builder
+                        .build_load(slice_ty, slot.ptr, "slice.arg")
+                        .unwrap();
+                    return Ok(Some(loaded));
+                }
+                // Owned Vec[T]: the alloca holds the 3-field struct; load
+                // its data-ptr and len fields, rebuild as a 2-field slice.
+                if self.vec_elem_types.contains_key(var_name.as_str()) {
+                    let vec_ty = self.vec_struct_type();
+                    let data_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, slot.ptr, 0, "coerce.v.data.ptr")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr_ptr, "coerce.v.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len_ptr = self
+                        .builder
+                        .build_struct_gep(vec_ty, slot.ptr, 1, "coerce.v.len.ptr")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_ptr, "coerce.v.len")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(Some(self.build_slice_header(slice_ty, data, len)));
+                }
+            }
+            // Ref parameter: pointer-to-data is in ref_params.
+            if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(var_name.as_str()) {
+                let data = self.get_data_ptr(var_name).unwrap();
+                let len = i64_t.const_int(at.len() as u64, false);
+                return Ok(Some(self.build_slice_header(slice_ty, data, len)));
+            }
+        }
+
+        // Range-indexing at a call boundary — e.g. `sum(a[1..4])`. Produce
+        // a slice header with pointer-into-source and length `end - start`.
+        if let ExprKind::Index { object, index } = &arg.kind {
+            if let ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } = &index.kind
+            {
+                return self
+                    .compile_range_slice(object, start, end, *inclusive, elem_ty)
+                    .map(Some);
+            }
+        }
+
+        let _ = elem_ty;
+        Ok(None)
+    }
+
+    /// Assemble a two-field slice struct value from a data pointer and an
+    /// i64 length.
+    fn build_slice_header(
+        &self,
+        slice_ty: StructType<'ctx>,
+        data_ptr: PointerValue<'ctx>,
+        len: inkwell::values::IntValue<'ctx>,
+    ) -> BasicValueEnum<'ctx> {
+        let mut agg = slice_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, data_ptr, 0, "slice.ptr")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, len, 1, "slice.len")
+            .unwrap()
+            .into_struct_value();
+        agg.into()
+    }
+
+    /// Construct a slice from a `collection[start..end]` expression —
+    /// emits a bounds check and produces a `{ptr + start*stride, end - start}`
+    /// slice header.
+    fn compile_range_slice(
+        &mut self,
+        object: &Expr,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
+
+        let start_val = if let Some(s) = start {
+            self.compile_expr(s)?.into_int_value()
+        } else {
+            i64_t.const_int(0, false)
+        };
+        // Compile end expression now if present; defer to src_len for open-end
+        // forms (`a..` and `..`). Inclusive adjustment applied after src_len
+        // is resolved.
+        let compiled_end = if let Some(e) = end {
+            Some(self.compile_expr(e)?.into_int_value())
+        } else {
+            None
+        };
+
+        // Resolve the object to (base_ptr, length).
+        let (base_ptr, src_len) = if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                    (slot.ptr, i64_t.const_int(at.len() as u64, false))
+                } else if self.slice_elem_types.contains_key(name.as_str()) {
+                    let data_pp = self
+                        .builder
+                        .build_struct_gep(slice_ty, slot.ptr, 0, "rs.s.data.pp")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_pp, "rs.s.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len_p = self
+                        .builder
+                        .build_struct_gep(slice_ty, slot.ptr, 1, "rs.s.len.p")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_p, "rs.s.len")
+                        .unwrap()
+                        .into_int_value();
+                    (data, len)
+                } else if self.vec_elem_types.contains_key(name.as_str()) {
+                    let vec_ty = self.vec_struct_type();
+                    let data_pp = self
+                        .builder
+                        .build_struct_gep(vec_ty, slot.ptr, 0, "rs.v.data.pp")
+                        .unwrap();
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_pp, "rs.v.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    let len_p = self
+                        .builder
+                        .build_struct_gep(vec_ty, slot.ptr, 1, "rs.v.len.p")
+                        .unwrap();
+                    let len = self
+                        .builder
+                        .build_load(i64_t, len_p, "rs.v.len")
+                        .unwrap()
+                        .into_int_value();
+                    (data, len)
+                } else {
+                    return Err(format!(
+                        "range-slice requires Array, Vec, or Slice source; variable '{}' is neither",
+                        name
+                    ));
+                }
+            } else if self.ref_params.contains_key(name.as_str()) {
+                // Ref-parameter path: pointer to inner data.
+                let inner = *self.ref_params.get(name.as_str()).unwrap();
+                if let BasicTypeEnum::ArrayType(at) = inner {
+                    let data = self.get_data_ptr(name).unwrap();
+                    (data, i64_t.const_int(at.len() as u64, false))
+                } else {
+                    return Err("range-slice on ref parameter requires ref Array".into());
+                }
+            } else {
+                return Err(format!("Undefined variable '{}' in range-slice", name));
+            }
+        } else {
+            return Err("range-slice requires a named source variable".into());
+        };
+
+        // Resolve end: open-end (`a..`, `..`) uses src_len; inclusive adds 1.
+        let mut end_val = compiled_end.unwrap_or(src_len);
+        if inclusive {
+            end_val = self
+                .builder
+                .build_int_add(end_val, i64_t.const_int(1, false), "end.incl")
+                .unwrap();
+        }
+
+        // Bounds check: start <= end && end <= len.
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "slice.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "slice.ok");
+        let se_bad = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, start_val, end_val, "s.le.e")
+            .unwrap();
+        let el_bad = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGT, end_val, src_len, "e.le.len")
+            .unwrap();
+        let any_bad = self.builder.build_or(se_bad, el_bad, "slice.bad").unwrap();
+        self.builder
+            .build_conditional_branch(any_bad, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("slice range out of bounds");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        // For an Array source, `base_ptr` is the alloca of `[N x T]` —
+        // compute the element pointer via two-index GEP. For a Vec / Slice
+        // source, `base_ptr` is already an element pointer, so we use a
+        // one-index GEP. We distinguish by asking whether the source var is
+        // an array alloca (known type) or a loaded data pointer.
+        let source_is_array = if let ExprKind::Identifier(name) = &object.kind {
+            if let Some(slot) = self.variables.get(name.as_str()) {
+                matches!(slot.ty, BasicTypeEnum::ArrayType(_))
+            } else if let Some(&inner) = self.ref_params.get(name.as_str()) {
+                matches!(inner, BasicTypeEnum::ArrayType(_))
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+
+        let elem_ptr = if source_is_array {
+            // GEP into `[N x T]*` using [0, start].
+            let arr_ty = if let ExprKind::Identifier(name) = &object.kind {
+                if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    slot.ty
+                } else if let Some(&inner) = self.ref_params.get(name.as_str()) {
+                    inner
+                } else {
+                    return Err("range-slice: lost array type".into());
+                }
+            } else {
+                return Err("range-slice: non-identifier array source".into());
+            };
+            let zero = i64_t.const_int(0, false);
+            unsafe {
+                self.builder
+                    .build_gep(arr_ty, base_ptr, &[zero, start_val], "slice.elem.ptr")
+                    .unwrap()
+            }
+        } else {
+            // GEP into `T*` using [start].
+            unsafe {
+                self.builder
+                    .build_gep(elem_ty, base_ptr, &[start_val], "slice.elem.ptr")
+                    .unwrap()
+            }
+        };
+
+        let new_len = self
+            .builder
+            .build_int_sub(end_val, start_val, "slice.new.len")
+            .unwrap();
+        Ok(self.build_slice_header(slice_ty, elem_ptr, new_len))
+    }
+
+    // ── Call ──────────────────────────────────────────────────────
+
+    fn compile_call(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Cooperative cancel check before each call inside a par-branch.
+        // No-op when not inside a par branch. Narrowed against the
+        // `callee_effectful` side-table when the callee name is statically
+        // recoverable (free fn or `Type.assoc`); other shapes (closure, FFI
+        // through identifier resolved at link time, etc.) fall back to the
+        // conservative "always fire" path via `None`.
+        let callee_key: Option<String> = match &callee.kind {
+            ExprKind::Identifier(n) => Some(n.clone()),
+            ExprKind::Path(segs) if segs.len() == 2 => Some(format!("{}.{}", segs[0], segs[1])),
+            _ => None,
+        };
+        self.emit_branch_cancel_check("call", callee_key.as_deref());
+
+        // Associated function calls: Vec::new(), etc.
+        if let ExprKind::Path(segments) = &callee.kind {
+            if segments.len() == 2 {
+                return self.compile_assoc_call(&segments[0], &segments[1], args);
+            }
+        }
+
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            _ => return Ok(self.context.i64_type().const_int(0, false).into()),
+        };
+
+        if name == "println" || name == "print" {
+            return self.compile_print(&name, args);
+        }
+
+        // Check if this is an enum variant constructor (tuple variant)
+        if let Some(enum_val) = self.try_compile_enum_variant(&name, args)? {
+            return Ok(enum_val);
+        }
+
+        // Check if this is a call to a generic function (monomorphize on demand)
+        if self.generic_fns.contains_key(&name) {
+            return self.compile_generic_call(&name, args);
+        }
+
+        // Check if this is an indirect call through a closure variable.
+        if self.closure_fn_types.contains_key(&name) {
+            return self.compile_closure_call(&name, args);
+        }
+
+        let func = match self.module.get_function(&name) {
+            Some(f) => f,
+            None => {
+                // Unknown function — silently return 0 (e.g. stdlib builtins not yet codegen'd)
+                return Ok(self.context.i64_type().const_int(0, false).into());
+            }
+        };
+
+        let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+        let slice_elems = self
+            .fn_param_slice_elem
+            .get(&name)
+            .cloned()
+            .unwrap_or_default();
+        let mut compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::new();
+        for (i, a) in args.iter().enumerate() {
+            let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+            if is_ref {
+                // Pass a pointer to the variable's data instead of the loaded value.
+                if let ExprKind::Identifier(var_name) = &a.value.kind {
+                    if let Some(ptr) = self.get_data_ptr(var_name) {
+                        compiled_args.push(ptr.into());
+                        continue;
+                    }
+                }
+            }
+            // Slice-parameter coercion: if this parameter slot expects
+            // Slice[T] / mut Slice[T] and the argument is an Array[T, N],
+            // Vec[T], or already a slice, synthesize the `{ptr, i64}`
+            // slice header at the call site. See design.md § Slices.
+            if let Some(Some(elem_ty)) = slice_elems.get(i).cloned() {
+                if let Some(slice_val) = self.coerce_to_slice(&a.value, elem_ty)? {
+                    compiled_args.push(slice_val.into());
+                    continue;
+                }
+            }
+            let val = self.compile_expr(&a.value)?;
+            compiled_args.push(BasicMetadataValueEnum::from(val));
+        }
+
+        let call = self
+            .builder
+            .build_call(func, &compiled_args, "call")
+            .unwrap();
+
+        let basic_val = call.try_as_basic_value();
+        if basic_val.is_instruction() {
+            Ok(self.context.i64_type().const_int(0, false).into())
+        } else {
+            Ok(basic_val.unwrap_basic())
+        }
+    }
+
+    /// Try to construct an enum variant value if `name` matches a known variant.
+    /// Returns `None` if `name` is not an enum variant.
+    fn try_compile_enum_variant(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Find which enum this variant belongs to.
+        let enum_name = {
+            let mut found = None;
+            for (en, layout) in &self.enum_layouts {
+                if layout.tags.contains_key(name) {
+                    found = Some(en.clone());
+                    break;
+                }
+            }
+            found
+        };
+
+        let enum_name = match enum_name {
+            Some(n) => n,
+            None => return Ok(None),
+        };
+
+        let (tag, llvm_type) = {
+            let layout = &self.enum_layouts[&enum_name];
+            (*layout.tags.get(name).unwrap(), layout.llvm_type)
+        };
+
+        let i64_t = self.context.i64_type();
+
+        // Shared enum: heap-allocate with refcount header.
+        if let Some(info) = self.shared_types.get(&enum_name).cloned() {
+            let ptr = self.emit_rc_alloc(info.heap_type);
+            // Tag at heap index 1 (index 0 is refcount).
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
+                .unwrap();
+            self.builder
+                .build_store(tag_ptr, i64_t.const_int(tag, false))
+                .unwrap();
+            // Payload words at heap indices 2, 3, …
+            for (i, arg) in args.iter().enumerate() {
+                let val = self.compile_expr(&arg.value)?;
+                let word = self.coerce_to_i64(val)?;
+                let word_ptr = self
+                    .builder
+                    .build_struct_gep(info.heap_type, ptr, (i + 2) as u32, "sh_word")
+                    .unwrap();
+                self.builder.build_store(word_ptr, word).unwrap();
+            }
+            return Ok(Some(ptr.into()));
+        }
+
+        // Non-shared enum: stack-allocated aggregate.
+        let mut agg = llvm_type.get_undef();
+
+        // Store tag as field 0
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+            .unwrap()
+            .into_struct_value();
+
+        // Store payload args as fields 1, 2, …
+        for (i, arg) in args.iter().enumerate() {
+            let val = self.compile_expr(&arg.value)?;
+            // Coerce to i64 for storage in the uniform payload
+            let word = self.coerce_to_i64(val)?;
+            agg = self
+                .builder
+                .build_insert_value(agg, word, (i + 1) as u32, "word")
+                .unwrap()
+                .into_struct_value();
+        }
+
+        Ok(Some(agg.into()))
+    }
+
+    /// Coerce an arbitrary value to i64 for storage in an enum payload word.
+    fn coerce_to_i64(
+        &self,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        match val {
+            BasicValueEnum::IntValue(iv) => {
+                let w = iv.get_type().get_bit_width();
+                if w == 64 {
+                    Ok(iv)
+                } else if w < 64 {
+                    Ok(self.builder.build_int_z_extend(iv, i64_t, "zext").unwrap())
+                } else {
+                    Ok(self.builder.build_int_truncate(iv, i64_t, "trunc").unwrap())
+                }
+            }
+            BasicValueEnum::FloatValue(fv) => Ok(self
+                .builder
+                .build_bit_cast(fv, i64_t, "fcast")
+                .unwrap()
+                .into_int_value()),
+            BasicValueEnum::PointerValue(pv) => {
+                Ok(self.builder.build_ptr_to_int(pv, i64_t, "ptoi").unwrap())
+            }
+            _ => Ok(i64_t.const_int(0, false)),
+        }
+    }
+
+    /// Look up a unit enum variant by identifier name and construct its value.
+    fn try_unit_enum_variant(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
+        let mut found = None;
+        for (enum_name, layout) in &self.enum_layouts {
+            if let Some(&tag) = layout.tags.get(name) {
+                if layout.field_counts.get(name).copied().unwrap_or(0) == 0 {
+                    let i64_t = self.context.i64_type();
+
+                    // Shared enum: heap-allocate.
+                    if let Some(info) = self.shared_types.get(enum_name) {
+                        let ptr = self.emit_rc_alloc(info.heap_type);
+                        // Tag at heap index 1.
+                        let tag_ptr = self
+                            .builder
+                            .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
+                            .unwrap();
+                        self.builder
+                            .build_store(tag_ptr, i64_t.const_int(tag, false))
+                            .unwrap();
+                        found = Some(ptr.into());
+                        break;
+                    }
+
+                    let mut agg = layout.llvm_type.get_undef();
+                    // Only need to set the tag; remaining fields are undef/zeroed.
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+                        .unwrap()
+                        .into_struct_value();
+                    found = Some(agg.into());
+                    break;
+                }
+            }
+        }
+        found
+    }
+
+    // ── For loop ─────────────────────────────────────────────────
+
+    /// Compile `for pattern in iterable { body }`.
+    /// Currently supports ranges (`start..end`, `start..=end`) and array literals.
+    fn compile_for(
+        &mut self,
+        pattern: &Pattern,
+        iterable: &Expr,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match &iterable.kind {
+            ExprKind::Range {
+                start,
+                end,
+                inclusive,
+            } => self.compile_for_range(pattern, start, end, *inclusive, body),
+            ExprKind::ArrayLiteral(elems) => {
+                // Compile each element eagerly and iterate by index
+                let elems: Vec<BasicValueEnum<'ctx>> = elems
+                    .iter()
+                    .map(|e| self.compile_expr(e))
+                    .collect::<Result<_, _>>()?;
+                self.compile_for_array_values(pattern, &elems, body)
+            }
+            ExprKind::Identifier(name) => {
+                if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                    // Owned array
+                    if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                        return self.compile_for_array_var(pattern, slot.ptr, at, body);
+                    }
+                    // Ref array
+                    if let Some(&BasicTypeEnum::ArrayType(at)) = self.ref_params.get(name.as_str())
+                    {
+                        let arr_ptr = self.get_data_ptr(name).unwrap();
+                        return self.compile_for_array_var(pattern, arr_ptr, at, body);
+                    }
+                    // Vec/String iteration (owned or ref)
+                    if self.vec_elem_types.contains_key(name.as_str()) {
+                        return self.compile_for_vec_var(pattern, name, body);
+                    }
+                    // Slice iteration: `{ptr, len}` struct alloca.
+                    if self.slice_elem_types.contains_key(name.as_str()) {
+                        return self.compile_for_slice_var(pattern, name, body);
+                    }
+                    // Map iteration: for (k, v) in map { }
+                    if self.map_key_types.contains_key(name.as_str()) {
+                        return self.compile_for_map_var(pattern, name, body);
+                    }
+                }
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            _ => {
+                // Unknown iterable — skip body, return unit
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+        }
+    }
+
+    fn compile_for_range(
+        &mut self,
+        pattern: &Pattern,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+
+        let start_val = if let Some(s) = start {
+            self.compile_expr(s)?.into_int_value()
+        } else {
+            i64_t.const_int(0, false)
+        };
+        let end_val = if let Some(e) = end {
+            self.compile_expr(e)?.into_int_value()
+        } else {
+            return Err("for-range loop requires an end bound".to_string());
+        };
+
+        // Allocate loop counter
+        let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
+        self.builder.build_store(counter, start_val).unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // Condition: i < end (or i <= end for inclusive)
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let pred = if inclusive {
+            IntPredicate::SLE
+        } else {
+            IntPredicate::SLT
+        };
+        let cond = self
+            .builder
+            .build_int_compare(pred, cur, end_val, "for.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: bind pattern, compile block
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap();
+        self.bind_pattern(pattern, cur)?;
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(incr_bb).unwrap();
+        }
+
+        // Increment
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_for_slice_var(
+        &mut self,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let slice_ty = self.slice_struct_type();
+        let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
+        let slice_ptr = self.get_data_ptr(var_name).unwrap();
+
+        let data_pp = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 0, "for.s.data.pp")
+            .unwrap();
+        let len_p = self
+            .builder
+            .build_struct_gep(slice_ty, slice_ptr, 1, "for.s.len.p")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "for.s.data")
+            .unwrap()
+            .into_pointer_value();
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "for.s.len")
+            .unwrap()
+            .into_int_value();
+
+        let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.s.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.s.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.s.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.s.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, len, "for.s.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[cur], "for.s.elem.ptr")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "for.s.elem")
+            .unwrap();
+        self.bind_pattern(pattern, elem_val)?;
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(incr_bb).unwrap();
+        }
+
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_for_vec_var(
+        &mut self,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.vec_elem_type_for_var(var_name);
+        let vec_ptr = self.get_data_ptr(var_name).unwrap();
+
+        // Load len and data pointer.
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "for.v.len.ptr")
+            .unwrap();
+        let data_ptr_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 0, "for.v.data.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "for.v.len")
+            .unwrap()
+            .into_int_value();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_ptr_ptr, "for.v.data")
+            .unwrap()
+            .into_pointer_value();
+
+        let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // Condition: i < len
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, len, "for.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: load data[i], bind, execute
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[cur], "for.v.elem.ptr")
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "for.v.elem")
+            .unwrap();
+        self.bind_pattern(pattern, elem_val)?;
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(incr_bb).unwrap();
+        }
+
+        // Increment
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Compile `for <pattern> in <map_var> { body }`.
+    ///
+    /// Uses the `karac_map_iter_*` runtime functions:
+    /// - `karac_map_iter_new` creates the iterator before the loop.
+    /// - `karac_map_iter_next` drives the loop; returns `false` when exhausted.
+    /// - `karac_map_iter_free` runs unconditionally in the exit block so it fires
+    ///   on both normal exit and `break`.
+    ///
+    /// The `(K, V)` pair delivered to `bind_pattern` is a two-field struct so
+    /// tuple patterns like `for (k, v) in m` work via the existing struct-extract
+    /// path in `bind_pattern`.
+    fn compile_for_map_var(
+        &mut self,
+        pattern: &Pattern,
+        var_name: &str,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        let map_handle = self
+            .builder
+            .build_load(ptr_ty, slot.ptr, "map.handle")
+            .unwrap()
+            .into_pointer_value();
+
+        let key_ty = self
+            .map_key_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+        let val_ty = self
+            .map_val_types
+            .get(var_name)
+            .copied()
+            .unwrap_or(i64_t.into());
+
+        // Create the iterator (opaque ptr, lives for the duration of the loop).
+        let iter_ptr = self
+            .builder
+            .build_call(self.karac_map_iter_new_fn, &[map_handle.into()], "map.iter")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Persistent allocas for out_key / out_val — overwritten each iteration.
+        let out_key = self.create_entry_alloca(fn_val, "map.iter.key", key_ty);
+        let out_val = self.create_entry_alloca(fn_val, "map.iter.val", val_ty);
+
+        let loop_bb = self.context.append_basic_block(fn_val, "map.for.loop");
+        let body_bb = self.context.append_basic_block(fn_val, "map.for.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "map.for.exit");
+
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: loop_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // loop_bb: advance iterator; branch on result.
+        self.builder.position_at_end(loop_bb);
+        let has_next = self
+            .builder
+            .build_call(
+                self.karac_map_iter_next_fn,
+                &[iter_ptr.into(), out_key.into(), out_val.into()],
+                "map.iter.next",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        self.builder
+            .build_conditional_branch(has_next, body_bb, exit_bb)
+            .unwrap();
+
+        // body_bb: load key/val, build {K,V} struct, bind pattern, compile body.
+        self.builder.position_at_end(body_bb);
+        let key_val = self.builder.build_load(key_ty, out_key, "map.k").unwrap();
+        let val_val = self.builder.build_load(val_ty, out_val, "map.v").unwrap();
+        let kv_ty = self.context.struct_type(&[key_ty, val_ty], false);
+        let mut kv = kv_ty.get_undef();
+        kv = self
+            .builder
+            .build_insert_value(kv, key_val, 0, "kv.k")
+            .unwrap()
+            .into_struct_value();
+        kv = self
+            .builder
+            .build_insert_value(kv, val_val, 1, "kv.v")
+            .unwrap()
+            .into_struct_value();
+        self.bind_pattern(pattern, kv.into())?;
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+        }
+
+        self.loop_stack.pop();
+
+        // exit_bb: free iterator — runs on both normal exhaustion and break.
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_call(self.karac_map_iter_free_fn, &[iter_ptr.into()], "")
+            .unwrap();
+
+        Ok(i64_t.const_int(0, false).into())
+    }
+
+    fn compile_for_array_var(
+        &mut self,
+        pattern: &Pattern,
+        arr_ptr: PointerValue<'ctx>,
+        arr_ty: inkwell::types::ArrayType<'ctx>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let i64_t = self.context.i64_type();
+        let len = arr_ty.len() as u64;
+        let elem_ty = arr_ty.get_element_type();
+
+        let counter = self.create_entry_alloca(fn_val, "for.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_int(0, false))
+            .unwrap();
+
+        let cond_bb = self.context.append_basic_block(fn_val, "for.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "for.body");
+        let incr_bb = self.context.append_basic_block(fn_val, "for.incr");
+        let exit_bb = self.context.append_basic_block(fn_val, "for.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: incr_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        // Condition: i < N
+        self.builder.position_at_end(cond_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let end_val = i64_t.const_int(len, false);
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, cur, end_val, "for.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        // Body: load arr[i], bind to pattern, compile block
+        self.builder.position_at_end(body_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let zero = i64_t.const_int(0, false);
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(
+                    BasicTypeEnum::ArrayType(arr_ty),
+                    arr_ptr,
+                    &[zero, cur],
+                    "for.elem.ptr",
+                )
+                .unwrap()
+        };
+        let elem_val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "for.elem")
+            .unwrap();
+        self.bind_pattern(pattern, elem_val)?;
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(incr_bb).unwrap();
+        }
+
+        // Increment
+        self.builder.position_at_end(incr_bb);
+        let cur = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
+            .unwrap()
+            .into_int_value();
+        let one = i64_t.const_int(1, false);
+        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        self.builder.build_store(counter, next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_for_array_values(
+        &mut self,
+        pattern: &Pattern,
+        elems: &[BasicValueEnum<'ctx>],
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        for &elem in elems {
+            if self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_some()
+            {
+                break;
+            }
+            self.bind_pattern(pattern, elem)?;
+            self.compile_block(body)?;
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    // ── IfLet ────────────────────────────────────────────────────
+
+    fn compile_if_let(
+        &mut self,
+        pattern: &Pattern,
+        value: &Expr,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let val = self.compile_expr(value)?;
+        let cond = self.compile_pattern_condition(pattern, val)?;
+        // Reuse if-else codegen
+        let fn_val = self.current_fn.unwrap();
+        let then_bb = self.context.append_basic_block(fn_val, "iflet.then");
+        let else_bb = self.context.append_basic_block(fn_val, "iflet.else");
+        let merge_bb = self.context.append_basic_block(fn_val, "iflet.merge");
+
+        self.builder
+            .build_conditional_branch(cond.into_int_value(), then_bb, else_bb)
+            .unwrap();
+
+        self.builder.position_at_end(then_bb);
+        self.bind_pattern_values(pattern, val)?;
+        let then_val = self.compile_block(then_block)?;
+        let then_terminated = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        let then_end = self.builder.get_insert_block().unwrap();
+        if !then_terminated {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(eb) = else_branch {
+            match &eb.kind {
+                ExprKind::Block(blk) => self.compile_block(blk)?,
+                _ => Some(self.compile_expr(eb)?),
+            }
+        } else {
+            None
+        };
+        let else_terminated = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        let else_end = self.builder.get_insert_block().unwrap();
+        if !else_terminated {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        self.builder.position_at_end(merge_bb);
+        if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+            if !then_terminated && !else_terminated && tv.get_type() == ev.get_type() {
+                let phi = self.builder.build_phi(tv.get_type(), "ifletval").unwrap();
+                phi.add_incoming(&[(tv, then_end), (ev, else_end)]);
+                return Ok(phi.as_basic_value());
+            }
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_print(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let zero = self.context.i64_type().const_int(0, false);
+        if args.is_empty() {
+            let fmt = self.builder.build_global_string_ptr("\n", "nl").unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[BasicMetadataValueEnum::from(fmt.as_pointer_value())],
+                    "printf",
+                )
+                .unwrap();
+            return Ok(zero.into());
+        }
+
+        let val = self.compile_expr(&args[0].value)?;
+        let nl = if name == "println" { "\n" } else { "" };
+
+        if val.is_int_value() {
+            let bits = val.into_int_value().get_type().get_bit_width();
+            if bits == 1 {
+                let true_s = self
+                    .builder
+                    .build_global_string_ptr(&format!("true{nl}"), "ts")
+                    .unwrap();
+                let false_s = self
+                    .builder
+                    .build_global_string_ptr(&format!("false{nl}"), "fs")
+                    .unwrap();
+                let sel = self
+                    .builder
+                    .build_select(
+                        val.into_int_value(),
+                        true_s.as_pointer_value(),
+                        false_s.as_pointer_value(),
+                        "bstr",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.printf_fn,
+                        &[BasicMetadataValueEnum::from(sel.into_pointer_value())],
+                        "printf",
+                    )
+                    .unwrap();
+            } else {
+                let fmt = self
+                    .builder
+                    .build_global_string_ptr(&format!("%lld{nl}"), "fi")
+                    .unwrap();
+                self.builder
+                    .build_call(
+                        self.printf_fn,
+                        &[
+                            BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                            BasicMetadataValueEnum::from(val.into_int_value()),
+                        ],
+                        "printf",
+                    )
+                    .unwrap();
+            }
+        } else if val.is_struct_value() {
+            // String struct { ptr, i64, i64 } — extract the data pointer for printf %s.
+            let str_ptr = self
+                .builder
+                .build_extract_value(val.into_struct_value(), 0, "str.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%s{nl}"), "fsp")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(str_ptr),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+        } else if val.is_pointer_value() {
+            // Raw pointer (shared types, etc.) — pass directly to %s.
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%s{nl}"), "fsp")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(val.into_pointer_value()),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+        } else if val.is_float_value() {
+            let fmt = self
+                .builder
+                .build_global_string_ptr(&format!("%g{nl}"), "ff")
+                .unwrap();
+            self.builder
+                .build_call(
+                    self.printf_fn,
+                    &[
+                        BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(val.into_float_value()),
+                    ],
+                    "printf",
+                )
+                .unwrap();
+        }
+        Ok(zero.into())
+    }
+
+    // ── Control flow ──────────────────────────────────────────────
+
+    fn compile_if(
+        &mut self,
+        condition: &Expr,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let cond_val = self.compile_expr(condition)?.into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let then_bb = self.context.append_basic_block(fn_val, "then");
+        let else_bb = self.context.append_basic_block(fn_val, "else");
+        let merge_bb = self.context.append_basic_block(fn_val, "ifmerge");
+
+        self.builder
+            .build_conditional_branch(cond_val, then_bb, else_bb)
+            .unwrap();
+
+        self.builder.position_at_end(then_bb);
+        let then_val = self.compile_block(then_block)?;
+        let then_terminated = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        let then_end_bb = self.builder.get_insert_block().unwrap();
+        if !then_terminated {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        self.builder.position_at_end(else_bb);
+        let else_val = if let Some(else_expr) = else_branch {
+            match &else_expr.kind {
+                ExprKind::Block(blk) => self.compile_block(blk)?,
+                ExprKind::If {
+                    condition: c,
+                    then_block: tb,
+                    else_branch: eb,
+                } => {
+                    let v = self.compile_if(c, tb, eb.as_deref())?;
+                    Some(v)
+                }
+                _ => {
+                    let v = self.compile_expr(else_expr)?;
+                    Some(v)
+                }
+            }
+        } else {
+            None
+        };
+        let else_terminated = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        let else_end_bb = self.builder.get_insert_block().unwrap();
+        if !else_terminated {
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+        }
+
+        self.builder.position_at_end(merge_bb);
+
+        if let (Some(tv), Some(ev)) = (&then_val, &else_val) {
+            if !then_terminated && !else_terminated && tv.get_type() == ev.get_type() {
+                let phi = self.builder.build_phi(tv.get_type(), "ifval").unwrap();
+                phi.add_incoming(&[(tv, then_end_bb), (ev, else_end_bb)]);
+                return Ok(phi.as_basic_value());
+            }
+        }
+
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_while(
+        &mut self,
+        condition: &Expr,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "while.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "while.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "while.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: cond_bb,
+            break_bb: exit_bb,
+            result_slot: None,
+        });
+
+        self.builder.position_at_end(cond_bb);
+        let cond_val = self.compile_expr(condition)?.into_int_value();
+        self.builder
+            .build_conditional_branch(cond_val, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+        }
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    fn compile_loop(&mut self, body: &Block) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let loop_bb = self.context.append_basic_block(fn_val, "loop.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "loop.exit");
+
+        // Allocate a slot for `break value` (i64 by default; refined if used)
+        let result_slot =
+            self.create_entry_alloca(fn_val, "loop.result", self.context.i64_type().into());
+
+        self.loop_stack.push(LoopFrame {
+            continue_bb: loop_bb,
+            break_bb: exit_bb,
+            result_slot: Some(result_slot),
+        });
+
+        self.builder.build_unconditional_branch(loop_bb).unwrap();
+        self.builder.position_at_end(loop_bb);
+        self.compile_block(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_unconditional_branch(loop_bb).unwrap();
+        }
+
+        self.loop_stack.pop();
+        self.builder.position_at_end(exit_bb);
+        // Load result (may be zero if no break-with-value was hit)
+        let result = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(
+                self.context.i64_type().into(),
+                result_slot,
+                "loop.val",
+            )
+            .unwrap();
+        Ok(result)
+    }
+
+    fn compile_break(&mut self, value: Option<&Expr>) -> Result<BasicValueEnum<'ctx>, String> {
+        let zero = self.context.i64_type().const_int(0, false);
+        if let Some(frame) = self.loop_stack.last().copied() {
+            if let Some(slot) = frame.result_slot {
+                let val = if let Some(v) = value {
+                    self.compile_expr(v)?
+                } else {
+                    zero.into()
+                };
+                // Store break value (only works when types match i64)
+                if val.is_int_value() {
+                    self.builder.build_store(slot, val).unwrap();
+                }
+            }
+            self.builder
+                .build_unconditional_branch(frame.break_bb)
+                .unwrap();
+        }
+        Ok(zero.into())
+    }
+
+    fn compile_continue(&mut self) -> Result<BasicValueEnum<'ctx>, String> {
+        let zero = self.context.i64_type().const_int(0, false);
+        if let Some(frame) = self.loop_stack.last().copied() {
+            self.builder
+                .build_unconditional_branch(frame.continue_bb)
+                .unwrap();
+        }
+        Ok(zero.into())
+    }
+
+    // ── Match ─────────────────────────────────────────────────────
+
+    fn compile_match(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let scrut = self.compile_expr(scrutinee)?;
+        let fn_val = self.current_fn.unwrap();
+        let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
+
+        let mut arm_results: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::new();
+
+        let mut next_bb = self.context.append_basic_block(fn_val, "match.arm0");
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        for (i, arm) in arms.iter().enumerate() {
+            let arm_bb = next_bb;
+            // Always create a fresh fail_bb — never reuse merge_bb directly.
+            // If the last pattern condition is false (non-exhaustive match or
+            // missed case), we emit `unreachable` to satisfy LLVM's requirement
+            // that every basic block has a terminator and every phi predecessor
+            // is accounted for.
+            let is_last = i + 1 == arms.len();
+            let fail_bb = if !is_last {
+                self.context
+                    .append_basic_block(fn_val, &format!("match.arm{}", i + 1))
+            } else {
+                self.context.append_basic_block(fn_val, "match.nofall")
+            };
+            next_bb = fail_bb;
+
+            self.builder.position_at_end(arm_bb);
+
+            // Generate pattern condition
+            let cond = self.compile_pattern_condition(&arm.pattern, scrut)?;
+
+            let body_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("match.body{}", i));
+
+            self.builder
+                .build_conditional_branch(cond.into_int_value(), body_bb, fail_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+
+            // Bind pattern variables
+            self.bind_pattern_values(&arm.pattern, scrut)?;
+
+            let arm_val = self.compile_expr(&arm.body)?;
+            let arm_end = self.builder.get_insert_block().unwrap();
+            if arm_end.get_terminator().is_none() {
+                arm_results.push((arm_val, arm_end));
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+            }
+        }
+
+        // Terminate the last fail_bb (match.nofall) — exhaustive matches never
+        // reach here; emit `unreachable` so LLVM doesn't require a phi entry.
+        self.builder.position_at_end(next_bb);
+        if next_bb.get_terminator().is_none() {
+            self.builder.build_unreachable().unwrap();
+        }
+
+        self.builder.position_at_end(merge_bb);
+
+        // Build phi if all arms produce a value of the same type
+        if !arm_results.is_empty() {
+            let first_ty = arm_results[0].0.get_type();
+            if arm_results.iter().all(|(v, _)| v.get_type() == first_ty) {
+                let phi = self.builder.build_phi(first_ty, "matchval").unwrap();
+                for (val, bb) in &arm_results {
+                    phi.add_incoming(&[(val, *bb)]);
+                }
+                return Ok(phi.as_basic_value());
+            }
+        }
+
+        Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// Returns an i1 (bool) value: 1 if the scrutinee matches the pattern.
+    fn compile_pattern_condition(
+        &mut self,
+        pattern: &Pattern,
+        scrut: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let tru = self.context.bool_type().const_int(1, false);
+        match &pattern.kind {
+            PatternKind::Wildcard => Ok(tru.into()),
+            PatternKind::Binding(name) => {
+                // Check if this binding name is actually a unit enum variant.
+                // The parser produces Binding("Color.Red") or Binding("Red") for
+                // unit variants in match arms; detect and compare tags.
+                let variant_name = name.rsplit('.').next().unwrap_or(name);
+                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                    let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
+                    let expected_tag = self.context.i64_type().const_int(tag, false);
+                    return Ok(self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
+                        .unwrap()
+                        .into());
+                }
+                // Not a variant — true binding, always matches.
+                Ok(tru.into())
+            }
+            PatternKind::Literal(lit) => {
+                let lit_val = match lit {
+                    LiteralPattern::Integer(n, sfx) => self.const_int_for_suffix(*n, *sfx).into(),
+                    LiteralPattern::Bool(b) => self
+                        .context
+                        .bool_type()
+                        .const_int(u64::from(*b), false)
+                        .into(),
+                    LiteralPattern::Float(f, sfx) => self.const_float_for_suffix(*f, *sfx).into(),
+                    LiteralPattern::Char(c) => {
+                        self.context.i32_type().const_int(*c as u64, false).into()
+                    }
+                    LiteralPattern::String(s) => self
+                        .builder
+                        .build_global_string_ptr(s, "spat")
+                        .unwrap()
+                        .as_pointer_value()
+                        .into(),
+                };
+                self.compile_binop(&BinOp::Eq, scrut, lit_val)
+            }
+            PatternKind::Or(pats) => {
+                let mut result: BasicValueEnum<'ctx> =
+                    self.context.bool_type().const_int(0, false).into();
+                for p in pats {
+                    let cond = self.compile_pattern_condition(p, scrut)?;
+                    result = self
+                        .builder
+                        .build_or(result.into_int_value(), cond.into_int_value(), "orcond")
+                        .unwrap()
+                        .into();
+                }
+                Ok(result)
+            }
+            // Tuple enum variant: check tag matches
+            PatternKind::TupleVariant { path, .. } => {
+                let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                    let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
+                    let expected_tag = self.context.i64_type().const_int(tag, false);
+                    return Ok(self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
+                        .unwrap()
+                        .into());
+                }
+                Ok(tru.into())
+            }
+            // Struct enum variant: check tag matches
+            PatternKind::Struct { path, .. }
+                if path.len() > 1
+                    || self
+                        .enum_tag_for_variant(path.last().map(|s| s.as_str()).unwrap_or(""))
+                        .is_some() =>
+            {
+                let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                if let Some(tag) = self.enum_tag_for_variant(variant_name) {
+                    let actual_tag = self.extract_enum_tag(scrut, variant_name)?;
+                    let expected_tag = self.context.i64_type().const_int(tag, false);
+                    return Ok(self
+                        .builder
+                        .build_int_compare(IntPredicate::EQ, actual_tag, expected_tag, "tag_eq")
+                        .unwrap()
+                        .into());
+                }
+                Ok(tru.into())
+            }
+            // Plain struct pattern or anything else — always matches
+            _ => Ok(tru.into()),
+        }
+    }
+
+    /// Extract the tag integer from an enum scrutinee.
+    /// Handles both shared enums (pointer — GEP to tag at index 1) and
+    /// non-shared enums (struct value — extractvalue at index 0).
+    fn extract_enum_tag(
+        &self,
+        scrut: BasicValueEnum<'ctx>,
+        variant_name: &str,
+    ) -> Result<inkwell::values::IntValue<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        // Check if this variant belongs to a shared enum.
+        if let BasicValueEnum::PointerValue(ptr) = scrut {
+            for (enum_name, layout) in &self.enum_layouts {
+                if layout.tags.contains_key(variant_name) {
+                    if let Some(info) = self.shared_types.get(enum_name) {
+                        // Shared enum: tag is at heap index 1.
+                        let tag_ptr = self
+                            .builder
+                            .build_struct_gep(info.heap_type, ptr, 1, "sh_tag_ptr")
+                            .unwrap();
+                        let tag = self
+                            .builder
+                            .build_load(i64_t, tag_ptr, "actual_tag")
+                            .unwrap()
+                            .into_int_value();
+                        return Ok(tag);
+                    }
+                }
+            }
+        }
+        // Non-shared enum: extractvalue at index 0.
+        if let BasicValueEnum::StructValue(sv) = scrut {
+            let tag = self
+                .builder
+                .build_extract_value(sv, 0, "actual_tag")
+                .unwrap()
+                .into_int_value();
+            return Ok(tag);
+        }
+        Ok(i64_t.const_int(0, false))
+    }
+
+    /// Find the discriminant tag for a variant name across all registered enums.
+    fn enum_tag_for_variant(&self, variant_name: &str) -> Option<u64> {
+        for layout in self.enum_layouts.values() {
+            if let Some(&tag) = layout.tags.get(variant_name) {
+                return Some(tag);
+            }
+        }
+        None
+    }
+
+    /// Find the LLVM struct type for the enum containing a given variant.
+    #[allow(dead_code)]
+    fn enum_type_for_variant(&self, variant_name: &str) -> Option<StructType<'ctx>> {
+        for layout in self.enum_layouts.values() {
+            if layout.tags.contains_key(variant_name) {
+                return Some(layout.llvm_type);
+            }
+        }
+        None
+    }
+
+    /// Bind variable names from a pattern against the scrutinee value.
+    fn bind_pattern_values(
+        &mut self,
+        pattern: &Pattern,
+        scrut: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        match &pattern.kind {
+            PatternKind::Binding(name) => {
+                // Skip binding if this is a unit enum variant pattern.
+                let variant_name = name.rsplit('.').next().unwrap_or(name);
+                if self.enum_tag_for_variant(variant_name).is_some() {
+                    return Ok(());
+                }
+                let fn_val = self.current_fn.unwrap();
+                let alloca = self.create_entry_alloca(fn_val, name, scrut.get_type());
+                self.builder.build_store(alloca, scrut).unwrap();
+                self.variables.insert(
+                    name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: scrut.get_type(),
+                    },
+                );
+                Ok(())
+            }
+            PatternKind::TupleVariant { path, patterns } => {
+                let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                // Shared enum: extract payload via GEP (words at heap index 2+).
+                if let BasicValueEnum::PointerValue(ptr) = scrut {
+                    for (enum_name, layout) in &self.enum_layouts.clone() {
+                        if layout.tags.contains_key(variant_name) {
+                            if let Some(info) = self.shared_types.get(enum_name).cloned() {
+                                for (i, sub_pat) in patterns.iter().enumerate() {
+                                    let word_ptr = self
+                                        .builder
+                                        .build_struct_gep(
+                                            info.heap_type,
+                                            ptr,
+                                            (i + 2) as u32,
+                                            "sh_payload",
+                                        )
+                                        .unwrap();
+                                    let word = self
+                                        .builder
+                                        .build_load(self.context.i64_type(), word_ptr, "payload")
+                                        .unwrap();
+                                    self.bind_pattern_values(sub_pat, word)?;
+                                }
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+                // Non-shared enum: extract payload words from the struct value.
+                if let BasicValueEnum::StructValue(sv) = scrut {
+                    for (i, sub_pat) in patterns.iter().enumerate() {
+                        let word = self
+                            .builder
+                            .build_extract_value(sv, (i + 1) as u32, "payload")
+                            .unwrap();
+                        self.bind_pattern_values(sub_pat, word)?;
+                    }
+                }
+                Ok(())
+            }
+            PatternKind::Or(pats) => {
+                // Bind variables from first sub-pattern (all alternatives must bind same names)
+                if let Some(first) = pats.first() {
+                    self.bind_pattern_values(first, scrut)?;
+                }
+                Ok(())
+            }
+            _ => Ok(()),
+        }
+    }
+
+    // ── Par block compilation ─────────────────────────────────────
+
+    /// Lower a `par {}` block into a call into the runtime.
+    ///
+    /// Each top-level statement becomes a branch function with signature
+    /// `void(*)(ptr ctx)`. A single shared environment struct is allocated on
+    /// the caller's stack (the runtime joins all branches before returning,
+    /// so the stack frame is live throughout). At the call site we build an
+    /// array of `KaracBranch { func, ctx }` entries and hand it to
+    /// `karac_par_run`.
+    ///
+    /// First cut: no cancellation, no return values, no error propagation.
+    /// The par block always evaluates to `unit` (i64 0 in this codegen's
+    /// convention). Cancellation and error propagation land in later phases
+    /// alongside the work-stealing scheduler.
+    #[allow(clippy::result_large_err)]
+    fn compile_par_block(&mut self, block: &Block) -> Result<BasicValueEnum<'ctx>, String> {
+        let unit = self.context.i64_type().const_int(0, false).into();
+        let stmts = &block.stmts;
+
+        // Zero statements: nothing to do. Single statement: no parallelism
+        // needed — compile in place to avoid the runtime call overhead.
+        if stmts.is_empty() {
+            return Ok(unit);
+        }
+        if stmts.len() == 1 {
+            self.compile_stmt(&stmts[0])?;
+            return Ok(unit);
+        }
+
+        // 1. Collect the union of captured variables across all branch statements.
+        //    Intersection with self.variables filters out non-locals (top-level
+        //    functions, struct names, etc.) that refs_in_block doesn't distinguish.
+        let mut refs: HashSet<String> = HashSet::new();
+        let mut inner_defs: HashSet<String> = HashSet::new();
+        for stmt in stmts {
+            let mini = Block {
+                stmts: vec![stmt.clone()],
+                final_expr: None,
+                span: block.span.clone(),
+            };
+            self.refs_in_block(&mini, &mut refs, &mut inner_defs);
+        }
+        let mut captures: Vec<String> = refs
+            .into_iter()
+            .filter(|n| !inner_defs.contains(n))
+            .filter(|n| self.variables.contains_key(n.as_str()))
+            .collect();
+        captures.sort(); // deterministic order
+
+        // 2. Build the shared env struct. Use a dummy i8 when there are no
+        //    captures so we always have a valid struct type to point at.
+        let env_field_types: Vec<BasicTypeEnum<'ctx>> = if captures.is_empty() {
+            vec![self.context.i8_type().into()]
+        } else {
+            captures.iter().map(|n| self.variables[n].ty).collect()
+        };
+        let env_struct_ty = self.context.struct_type(&env_field_types, false);
+
+        // 3. Allocate and populate the env struct in the outer function. We
+        //    capture by value (copy semantics) — sufficient for the types the
+        //    rest of the codegen already supports (integers, floats, pointers).
+        let outer_fn = self.current_fn.unwrap();
+        let env_alloca = self.create_entry_alloca(outer_fn, "__par_env", env_struct_ty.into());
+        if !captures.is_empty() {
+            let mut env_agg = env_struct_ty.get_undef();
+            for (i, name) in captures.iter().enumerate() {
+                let slot = self.variables[name];
+                let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, val, i as u32, "__par_env_field")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(env_alloca, env_agg).unwrap();
+        }
+
+        // 4. Generate one branch function per statement.
+        let par_id = self.par_counter;
+        self.par_counter += 1;
+        let mut branch_fn_ptrs: Vec<PointerValue<'ctx>> = Vec::with_capacity(stmts.len());
+        for (i, stmt) in stmts.iter().enumerate() {
+            let fn_ptr = self.emit_par_branch_fn(
+                par_id,
+                i,
+                stmt,
+                &captures,
+                &env_field_types,
+                env_struct_ty,
+            )?;
+            branch_fn_ptrs.push(fn_ptr);
+        }
+
+        // 5. Build the KaracBranch array on the stack, one entry per branch.
+        let i64_type = self.context.i64_type();
+        let branches_ty = self.karac_branch_ty.array_type(stmts.len() as u32);
+        let branches_alloca =
+            self.create_entry_alloca(outer_fn, "__par_branches", branches_ty.into());
+        for (i, fn_ptr) in branch_fn_ptrs.iter().enumerate() {
+            let mut entry = self.karac_branch_ty.get_undef();
+            entry = self
+                .builder
+                .build_insert_value(entry, *fn_ptr, 0, "__par_branch_fn")
+                .unwrap()
+                .into_struct_value();
+            entry = self
+                .builder
+                .build_insert_value(entry, env_alloca, 1, "__par_branch_ctx")
+                .unwrap()
+                .into_struct_value();
+            let idx = [
+                i64_type.const_int(0, false),
+                i64_type.const_int(i as u64, false),
+            ];
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(branches_ty, branches_alloca, &idx, "__par_branch_slot")
+                    .unwrap()
+            };
+            self.builder.build_store(elem_ptr, entry).unwrap();
+        }
+
+        // 6. Call karac_par_run(branches, count).
+        let count = i64_type.const_int(stmts.len() as u64, false);
+        self.builder
+            .build_call(
+                self.karac_par_run_fn,
+                &[branches_alloca.into(), count.into()],
+                "__par_run",
+            )
+            .unwrap();
+
+        Ok(unit)
+    }
+
+    /// Generate the branch function for a single par-block statement.
+    /// Signature: `void __par_branch_<par_id>_<i>(ptr ctx)`.
+    ///
+    /// The function unpacks captured locals from the shared env struct,
+    /// compiles the statement, and returns. Captures are loaded as fresh
+    /// allocas so the statement body sees them as ordinary locals.
+    #[allow(clippy::result_large_err)]
+    fn emit_par_branch_fn(
+        &mut self,
+        par_id: u32,
+        index: usize,
+        stmt: &Stmt,
+        captures: &[String],
+        env_field_types: &[BasicTypeEnum<'ctx>],
+        env_struct_ty: StructType<'ctx>,
+    ) -> Result<PointerValue<'ctx>, String> {
+        let fn_name = format!("__par_branch_{}_{}", par_id, index);
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Branch function signature: void fn(ptr ctx, ptr cancel_flag)
+        let fn_type = self.context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty),
+                BasicMetadataTypeEnum::from(ptr_ty),
+            ],
+            false,
+        );
+        let branch_fn = self.module.add_function(&fn_name, fn_type, None);
+
+        // Save outer codegen state — we're about to compile a fresh function.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+
+        self.current_fn = Some(branch_fn);
+        let entry = self.context.append_basic_block(branch_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // Cancel check at branch start: if *cancel_flag != 0, return immediately.
+        let cancel_ptr = branch_fn.get_nth_param(1).unwrap().into_pointer_value();
+        // Stash the cancel pointer so subsequent `compile_call` invocations
+        // can emit mid-branch cooperative cancel checks before each callee.
+        self.branch_cancel_ptr = Some(cancel_ptr);
+        let i8_ty = self.context.i8_type();
+        let cancel_val = self
+            .builder
+            .build_load(i8_ty, cancel_ptr, "cancel")
+            .unwrap()
+            .into_int_value();
+        let is_cancelled = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                cancel_val,
+                i8_ty.const_int(0, false),
+                "is_cancelled",
+            )
+            .unwrap();
+        let body_bb = self.context.append_basic_block(branch_fn, "body");
+        let cancel_bb = self.context.append_basic_block(branch_fn, "cancelled");
+        self.builder
+            .build_conditional_branch(is_cancelled, cancel_bb, body_bb)
+            .unwrap();
+        self.builder.position_at_end(cancel_bb);
+        self.builder.build_return(None).unwrap();
+        self.builder.position_at_end(body_bb);
+
+        // Unpack captures from the env struct into fresh allocas.
+        if !captures.is_empty() {
+            let env_ptr = branch_fn.get_nth_param(0).unwrap().into_pointer_value();
+            let env_val = self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
+                .unwrap();
+            for (i, var_name) in captures.iter().enumerate() {
+                let cap_ty = env_field_types[i];
+                let field_val = self
+                    .builder
+                    .build_extract_value(env_val.into_struct_value(), i as u32, var_name)
+                    .unwrap();
+                let alloca = self.create_entry_alloca(branch_fn, var_name, cap_ty);
+                self.builder.build_store(alloca, field_val).unwrap();
+                self.variables.insert(
+                    var_name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: cap_ty,
+                    },
+                );
+            }
+        }
+
+        // Compile the statement body. Any errors surface to the outer context.
+        let stmt_result = self.compile_stmt(stmt);
+
+        // Terminate the branch function. The par-block API discards branch
+        // return values in this first cut.
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_return(None).unwrap();
+        }
+
+        // Restore outer state.
+        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.scope_cleanup_actions = saved_cleanup;
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        stmt_result?;
+        Ok(branch_fn.as_global_value().as_pointer_value())
+    }
+
+    /// If we are currently compiling a par-branch function body, emit a
+    /// cooperative cancel check at the current insertion point: load the
+    /// runtime's `AtomicBool` cancel flag, branch to a fresh "cancelled"
+    /// block when set, otherwise fall through to a "continue" block. The
+    /// cancelled block drains scope cleanup actions and `return`s void
+    /// from the branch function, mirroring the entry-time check shape.
+    /// No-op outside par branches.
+    ///
+    /// `callee` is the canonical name of the call about to be emitted (free
+    /// fn `name` or `Type.method`). When `Some(name)` and
+    /// `callee_effectful[name] == false`, the check is skipped — the
+    /// callee carries no `reads`/`writes`/`sends`/`receives`, so a mid-branch
+    /// cancellation cannot observe a partial side effect via this call.
+    /// `None` (or an unknown name) preserves the conservative MVP behavior.
+    fn emit_branch_cancel_check(&mut self, label: &str, callee: Option<&str>) {
+        let Some(cancel_ptr) = self.branch_cancel_ptr else {
+            return;
+        };
+        if let Some(name) = callee {
+            if let Some(false) = self.callee_effectful.get(name) {
+                return;
+            }
+        }
+        let i8_ty = self.context.i8_type();
+        let cancel_val = self
+            .builder
+            .build_load(i8_ty, cancel_ptr, &format!("{label}.cancel.flag"))
+            .unwrap()
+            .into_int_value();
+        let is_cancelled = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                cancel_val,
+                i8_ty.const_int(0, false),
+                &format!("{label}.cancelled"),
+            )
+            .unwrap();
+        let fn_val = self.current_fn.unwrap();
+        let cancel_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.cancel.bb"));
+        let cont_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{label}.cont.bb"));
+        self.builder
+            .build_conditional_branch(is_cancelled, cancel_bb, cont_bb)
+            .unwrap();
+        self.builder.position_at_end(cancel_bb);
+        self.emit_scope_cleanup();
+        self.builder.build_return(None).unwrap();
+        self.builder.position_at_end(cont_bb);
+    }
+
+    // ── Closure compilation ────────────────────────────────────────
+
+    /// The LLVM struct type used to represent a closure fat-pointer: `{ ptr fn_ptr, ptr env_ptr }`.
+    fn closure_value_type(&self) -> StructType<'ctx> {
+        let ptr = self.context.ptr_type(AddressSpace::default());
+        self.context.struct_type(&[ptr.into(), ptr.into()], false)
+    }
+
+    /// Compile `|params| body` into a fat-pointer value `{ fn_ptr, env_ptr }`.
+    ///
+    /// Sets `pending_closure_fn_type` so the surrounding `let` binding can register the
+    /// function type for later indirect calls.
+    fn compile_closure(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let fn_name = format!("__closure_{}", id);
+
+        // 1. Collect free variables (names referenced in body, not in params, present in scope).
+        let free_vars = self.collect_closure_free_vars(params, body);
+
+        // 2. Build the env struct type: { T0_cap, T1_cap, ... }.
+        //    Use a dummy i8 when there are no captures so we always have a valid struct type.
+        let env_field_types: Vec<BasicTypeEnum<'ctx>> = if free_vars.is_empty() {
+            vec![self.context.i8_type().into()]
+        } else {
+            free_vars.iter().map(|n| self.variables[n].ty).collect()
+        };
+        let env_struct_ty = self.context.struct_type(&env_field_types, false);
+
+        // 3. Determine param types from annotations (default to i64).
+        let param_llvm_types: Vec<BasicTypeEnum<'ctx>> = params
+            .iter()
+            .map(|p| {
+                p.ty.as_ref()
+                    .map(|te| self.llvm_type_for_type_expr(te))
+                    .unwrap_or_else(|| self.context.i64_type().into())
+            })
+            .collect();
+
+        // 4. Infer return type from the body expression.
+        let closure_param_types: HashMap<String, BasicTypeEnum<'ctx>> = params
+            .iter()
+            .zip(param_llvm_types.iter())
+            .filter_map(|(cp, ty)| {
+                if let PatternKind::Binding(n) = &cp.pattern.kind {
+                    Some((n.clone(), *ty))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        let return_ty = self.infer_closure_return_type(body, &closure_param_types);
+
+        // 5. Declare the closure function: fn(ptr env_ptr, T0, T1, ...) -> R.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let mut fn_param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
+            vec![BasicMetadataTypeEnum::from(ptr_ty)];
+        for &ty in &param_llvm_types {
+            fn_param_types.push(BasicMetadataTypeEnum::from(ty));
+        }
+        let fn_type = match return_ty {
+            BasicTypeEnum::IntType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::FloatType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::PointerType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::StructType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::ArrayType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::VectorType(t) => t.fn_type(&fn_param_types, false),
+            BasicTypeEnum::ScalableVectorType(_) => {
+                self.context.void_type().fn_type(&fn_param_types, false)
+            }
+        };
+        let closure_fn = self.module.add_function(&fn_name, fn_type, None);
+
+        // 6. Save outer codegen state — we're about to compile a new function inline.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+
+        // 7. Build the closure body.
+        self.current_fn = Some(closure_fn);
+        let entry = self.context.append_basic_block(closure_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // 7a. Load captured vars from the env struct (param 0 = env ptr).
+        let env_ptr = closure_fn.get_nth_param(0).unwrap().into_pointer_value();
+        // Load the env struct value through the env pointer.
+        let env_val = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
+            .unwrap();
+
+        if !free_vars.is_empty() {
+            for (i, var_name) in free_vars.iter().enumerate() {
+                let cap_ty = env_field_types[i];
+                let field_val = self
+                    .builder
+                    .build_extract_value(env_val.into_struct_value(), i as u32, var_name)
+                    .unwrap();
+                let alloca = self.create_entry_alloca(closure_fn, var_name, cap_ty);
+                self.builder.build_store(alloca, field_val).unwrap();
+                self.variables.insert(
+                    var_name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: cap_ty,
+                    },
+                );
+            }
+        }
+
+        // 7b. Bind closure params (fn params 1..n).
+        for (i, (cp, ty)) in params.iter().zip(param_llvm_types.iter()).enumerate() {
+            let param_val = closure_fn.get_nth_param((i + 1) as u32).unwrap();
+            let param_name = match &cp.pattern.kind {
+                PatternKind::Binding(n) => n.clone(),
+                _ => format!("_cp{}", i),
+            };
+            let alloca = self.create_entry_alloca(closure_fn, &param_name, *ty);
+            self.builder.build_store(alloca, param_val).unwrap();
+            self.variables.insert(
+                param_name,
+                VarSlot {
+                    ptr: alloca,
+                    ty: *ty,
+                },
+            );
+        }
+
+        // 7c. Compile body and build return.
+        let result = self.compile_expr(body)?;
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            self.builder.build_return(Some(&result)).unwrap();
+        }
+
+        // 8. Restore outer state.
+        self.type_subst = saved_subst;
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_fn_types = saved_cfn;
+        self.pending_closure_fn_type = saved_pct;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        // 9. In the outer context, allocate and populate the env struct.
+        let outer_fn = self.current_fn.unwrap();
+        let env_alloca = self.create_entry_alloca(outer_fn, "__closure_env", env_struct_ty.into());
+        if !free_vars.is_empty() {
+            // Build the env struct by inserting each captured value.
+            let mut env_agg = env_struct_ty.get_undef();
+            for (i, var_name) in free_vars.iter().enumerate() {
+                let slot = self.variables[var_name];
+                let val = self
+                    .builder
+                    .build_load(slot.ty, slot.ptr, var_name)
+                    .unwrap();
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, val, i as u32, "__env_field")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(env_alloca, env_agg).unwrap();
+        }
+
+        // 10. Build the fat-pointer closure struct: { fn_ptr, env_alloca }.
+        let fn_ptr = closure_fn.as_global_value().as_pointer_value();
+        let fat_ptr_ty = self.closure_value_type();
+        let mut fat = fat_ptr_ty.get_undef();
+        fat = self
+            .builder
+            .build_insert_value(fat, fn_ptr, 0, "closure_fn")
+            .unwrap()
+            .into_struct_value();
+        fat = self
+            .builder
+            .build_insert_value(fat, env_alloca, 1, "closure_env")
+            .unwrap()
+            .into_struct_value();
+
+        // 11. Stage the LLVM function type for the surrounding let binding.
+        self.pending_closure_fn_type = Some(fn_type);
+
+        Ok(fat.into())
+    }
+
+    /// Execute an indirect call through a closure fat-pointer variable.
+    fn compile_closure_call(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_type = match self.closure_fn_types.get(name).copied() {
+            Some(t) => t,
+            None => return Ok(self.context.i64_type().const_int(0, false).into()),
+        };
+
+        // Load the closure fat pointer value { fn_ptr, env_ptr }.
+        let fat_val = self.load_variable(name)?;
+        let fat_sv = fat_val.into_struct_value();
+        let fn_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 0, "closure_fn")
+            .unwrap()
+            .into_pointer_value();
+        let env_ptr = self
+            .builder
+            .build_extract_value(fat_sv, 1, "closure_env")
+            .unwrap()
+            .into_pointer_value();
+
+        // Build call args: env_ptr first, then user-supplied args.
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
+            vec![BasicMetadataValueEnum::from(env_ptr)];
+        for arg in args {
+            let val = self.compile_expr(&arg.value)?;
+            call_args.push(BasicMetadataValueEnum::from(val));
+        }
+
+        let call = self
+            .builder
+            .build_indirect_call(fn_type, fn_ptr, &call_args, "closure_call")
+            .unwrap();
+
+        let basic_val = call.try_as_basic_value();
+        if basic_val.is_instruction() {
+            Ok(self.context.i64_type().const_int(0, false).into())
+        } else {
+            Ok(basic_val.unwrap_basic())
+        }
+    }
+
+    /// Lightweight return-type inference for closure bodies.
+    /// Walks the expression shallowly to determine the LLVM type without building IR.
+    fn infer_closure_return_type(
+        &self,
+        expr: &Expr,
+        param_types: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> BasicTypeEnum<'ctx> {
+        match &expr.kind {
+            ExprKind::Integer(_, sfx) => self.llvm_int_type_for_suffix(*sfx).into(),
+            ExprKind::Float(_, sfx) => self.llvm_float_type_for_suffix(*sfx).into(),
+            ExprKind::Bool(_) => self.context.bool_type().into(),
+            ExprKind::CharLit(_) => self.context.i32_type().into(),
+            ExprKind::StringLit(_) => self.context.ptr_type(AddressSpace::default()).into(),
+            ExprKind::Identifier(name) => {
+                if let Some(&ty) = param_types.get(name) {
+                    return ty;
+                }
+                if let Some(slot) = self.variables.get(name.as_str()) {
+                    return slot.ty;
+                }
+                self.context.i64_type().into()
+            }
+            ExprKind::Binary { op, left, right } => match op {
+                BinOp::Eq
+                | BinOp::NotEq
+                | BinOp::Lt
+                | BinOp::LtEq
+                | BinOp::Gt
+                | BinOp::GtEq
+                | BinOp::And
+                | BinOp::Or => self.context.bool_type().into(),
+                _ => {
+                    let lt = self.infer_closure_return_type(left, param_types);
+                    let rt = self.infer_closure_return_type(right, param_types);
+                    if lt.is_float_type() || rt.is_float_type() {
+                        self.context.f64_type().into()
+                    } else {
+                        lt
+                    }
+                }
+            },
+            ExprKind::Unary { operand, .. } => self.infer_closure_return_type(operand, param_types),
+            ExprKind::Cast { ty, .. } => self.llvm_type_for_type_expr(ty),
+            ExprKind::Block(block) | ExprKind::Seq(block) => {
+                if let Some(final_expr) = &block.final_expr {
+                    self.infer_closure_return_type(final_expr, param_types)
+                } else {
+                    self.context.i64_type().into()
+                }
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                if let Some(else_expr) = else_branch {
+                    self.infer_closure_return_type(else_expr, param_types)
+                } else if let Some(final_expr) = &then_block.final_expr {
+                    self.infer_closure_return_type(final_expr, param_types)
+                } else {
+                    self.context.i64_type().into()
+                }
+            }
+            ExprKind::Tuple(elems) => {
+                let field_types: Vec<BasicTypeEnum<'ctx>> = elems
+                    .iter()
+                    .map(|e| self.infer_closure_return_type(e, param_types))
+                    .collect();
+                self.context.struct_type(&field_types, false).into()
+            }
+            // Calls: look up in module or use i64 fallback.
+            ExprKind::Call { callee, args } => {
+                if let ExprKind::Identifier(fname) = &callee.kind {
+                    if let Some(f) = self.module.get_function(fname) {
+                        return f
+                            .get_type()
+                            .get_return_type()
+                            .unwrap_or_else(|| self.context.i64_type().into());
+                    }
+                }
+                // Lowered operator dispatch: `<Primitive>.<op>(args)` —
+                // the lowering pass produces these from BinOp/UnaryOp.
+                if let ExprKind::Path(segments) = &callee.kind {
+                    if segments.len() == 2 {
+                        let target = segments[0].as_str();
+                        let method = segments[1].as_str();
+                        // Eq/Ord methods return bool regardless of operand type.
+                        if matches!(method, "eq" | "ne" | "lt" | "le" | "gt" | "ge") {
+                            return self.context.bool_type().into();
+                        }
+                        // Arithmetic, bitwise, shifts, not — return Self.
+                        let is_self_returning = matches!(
+                            method,
+                            "add"
+                                | "sub"
+                                | "mul"
+                                | "div"
+                                | "rem"
+                                | "neg"
+                                | "bitand"
+                                | "bitor"
+                                | "bitxor"
+                                | "shl"
+                                | "shr"
+                                | "not"
+                        );
+                        if is_self_returning {
+                            return match target {
+                                "f32" => self.context.f32_type().into(),
+                                "f64" => self.context.f64_type().into(),
+                                "bool" => self.context.bool_type().into(),
+                                _ => {
+                                    // Fall back to inferring from operand if available.
+                                    if let Some(arg) = args.first() {
+                                        return self
+                                            .infer_closure_return_type(&arg.value, param_types);
+                                    }
+                                    self.context.i64_type().into()
+                                }
+                            };
+                        }
+                    }
+                }
+                self.context.i64_type().into()
+            }
+            _ => self.context.i64_type().into(),
+        }
+    }
+
+    /// Collect the names of variables captured by a closure (free variables from outer scope).
+    ///
+    /// A variable is captured if:
+    /// 1. It is referenced in `body`.
+    /// 2. It is NOT one of the closure's own parameters.
+    /// 3. It is NOT defined by a `let` inside the closure body.
+    /// 4. It IS present in the current outer scope (`self.variables`).
+    fn collect_closure_free_vars(&self, params: &[ClosureParam], body: &Expr) -> Vec<String> {
+        let param_names: HashSet<String> = params
+            .iter()
+            .flat_map(|p| p.pattern.binding_names())
+            .collect();
+
+        let mut refs = HashSet::new();
+        let mut inner_defs = HashSet::new();
+        self.refs_in_expr(body, &mut refs, &mut inner_defs);
+
+        let mut free: Vec<String> = refs
+            .into_iter()
+            .filter(|n| !param_names.contains(n) && !inner_defs.contains(n))
+            .filter(|n| self.variables.contains_key(n.as_str()))
+            .collect();
+        free.sort(); // deterministic order
+        free
+    }
+
+    /// Walk `expr` and collect all identifier references into `refs`,
+    /// and all names bound by `let` statements into `defs`.
+    fn refs_in_expr(&self, expr: &Expr, refs: &mut HashSet<String>, defs: &mut HashSet<String>) {
+        match &expr.kind {
+            ExprKind::Identifier(n) => {
+                refs.insert(n.clone());
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.refs_in_expr(left, refs, defs);
+                self.refs_in_expr(right, refs, defs);
+            }
+            ExprKind::Unary { operand, .. } => self.refs_in_expr(operand, refs, defs),
+            ExprKind::Call { callee, args } => {
+                self.refs_in_expr(callee, refs, defs);
+                for a in args {
+                    self.refs_in_expr(&a.value, refs, defs);
+                }
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.refs_in_expr(condition, refs, defs);
+                self.refs_in_block(then_block, refs, defs);
+                if let Some(e) = else_branch {
+                    self.refs_in_expr(e, refs, defs);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.refs_in_expr(condition, refs, defs);
+                self.refs_in_block(body, refs, defs);
+            }
+            ExprKind::Loop { body, .. } => self.refs_in_block(body, refs, defs),
+            ExprKind::Block(block) | ExprKind::Seq(block) => {
+                self.refs_in_block(block, refs, defs);
+            }
+            ExprKind::Return(Some(e)) => self.refs_in_expr(e, refs, defs),
+            ExprKind::Return(None) => {}
+            ExprKind::Break { value: Some(e), .. } => self.refs_in_expr(e, refs, defs),
+            ExprKind::Break { value: None, .. } => {}
+            ExprKind::FieldAccess { object, .. } => self.refs_in_expr(object, refs, defs),
+            ExprKind::TupleIndex { object, .. } => self.refs_in_expr(object, refs, defs),
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+                for e in elems {
+                    self.refs_in_expr(e, refs, defs);
+                }
+            }
+            ExprKind::StructLiteral { fields, .. } => {
+                for f in fields {
+                    self.refs_in_expr(&f.value, refs, defs);
+                }
+            }
+            ExprKind::Cast { expr: inner, .. } => self.refs_in_expr(inner, refs, defs),
+            ExprKind::Match { scrutinee, arms } => {
+                self.refs_in_expr(scrutinee, refs, defs);
+                for arm in arms {
+                    for name in arm.pattern.binding_names() {
+                        defs.insert(name);
+                    }
+                    self.refs_in_expr(&arm.body, refs, defs);
+                }
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.refs_in_expr(iterable, refs, defs);
+                for name in pattern.binding_names() {
+                    defs.insert(name);
+                }
+                self.refs_in_block(body, refs, defs);
+            }
+            ExprKind::IfLet {
+                pattern,
+                value,
+                then_block,
+                else_branch,
+            } => {
+                self.refs_in_expr(value, refs, defs);
+                for name in pattern.binding_names() {
+                    defs.insert(name);
+                }
+                self.refs_in_block(then_block, refs, defs);
+                if let Some(e) = else_branch {
+                    self.refs_in_expr(e, refs, defs);
+                }
+            }
+            ExprKind::Closure { params, body, .. } => {
+                // Nested closure: params shadow outer names; body refs are handled recursively
+                // but we only care about what escapes into the outer scope.
+                let inner_params: HashSet<String> = params
+                    .iter()
+                    .flat_map(|p| p.pattern.binding_names())
+                    .collect();
+                let mut inner_refs = HashSet::new();
+                let mut inner_inner_defs = HashSet::new();
+                self.refs_in_expr(body, &mut inner_refs, &mut inner_inner_defs);
+                for r in inner_refs {
+                    if !inner_params.contains(&r) && !inner_inner_defs.contains(&r) {
+                        refs.insert(r);
+                    }
+                }
+            }
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.refs_in_expr(s, refs, defs);
+                }
+                if let Some(e) = end {
+                    self.refs_in_expr(e, refs, defs);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn refs_in_block(&self, block: &Block, refs: &mut HashSet<String>, defs: &mut HashSet<String>) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                    self.refs_in_expr(value, refs, defs);
+                    for name in pattern.binding_names() {
+                        defs.insert(name);
+                    }
+                }
+                StmtKind::Expr(e) => self.refs_in_expr(e, refs, defs),
+                StmtKind::Assign { target, value } => {
+                    self.refs_in_expr(target, refs, defs);
+                    self.refs_in_expr(value, refs, defs);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    self.refs_in_expr(target, refs, defs);
+                    self.refs_in_expr(value, refs, defs);
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = &block.final_expr {
+            self.refs_in_expr(e, refs, defs);
+        }
+    }
+
+    // ── Generic monomorphization ─────────────────────────────────
+
+    /// Compile a call to a generic function, generating a specialization if needed.
+    fn compile_generic_call(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let generic_fn = self.generic_fns[name].clone();
+
+        // Compile argument values so we can infer concrete types.
+        let arg_vals: Vec<BasicValueEnum<'ctx>> = args
+            .iter()
+            .map(|a| self.compile_expr(&a.value))
+            .collect::<Result<_, _>>()?;
+
+        // Infer type arguments from the argument value types.
+        let subst = self.infer_type_args(&generic_fn, &arg_vals);
+
+        // Mangle a unique name for this specialization (e.g. `max$i64`).
+        let mangled = self.mangle_mono_name(name, &generic_fn, &subst);
+
+        // Generate the specialization if we haven't done so yet.
+        if !self.generated_monos.contains(&mangled) {
+            // Mark as in-progress before recursing to avoid infinite loops.
+            self.generated_monos.insert(mangled.clone());
+
+            // Save all per-function codegen state — we're about to compile a
+            // different function inline.
+            let saved_bb = self.builder.get_insert_block();
+            let saved_fn = self.current_fn;
+            let saved_vars = std::mem::take(&mut self.variables);
+            let saved_var_types = std::mem::take(&mut self.var_type_names);
+            let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+            let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+
+            // Declare then compile the specialization.
+            self.declare_mono_function(&generic_fn, &mangled)?;
+            self.compile_mono_function(&generic_fn, &mangled)?;
+
+            // Restore state.
+            self.type_subst = saved_subst;
+            self.loop_stack = saved_loop_stack;
+            self.var_type_names = saved_var_types;
+            self.variables = saved_vars;
+            self.current_fn = saved_fn;
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+        }
+
+        // Call the specialized function.
+        let func = match self.module.get_function(&mangled) {
+            Some(f) => f,
+            None => return Ok(self.context.i64_type().const_int(0, false).into()),
+        };
+
+        let compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = arg_vals
+            .iter()
+            .map(|v| BasicMetadataValueEnum::from(*v))
+            .collect();
+
+        let call = self
+            .builder
+            .build_call(func, &compiled_args, "call")
+            .unwrap();
+
+        let basic_val = call.try_as_basic_value();
+        if basic_val.is_instruction() {
+            Ok(self.context.i64_type().const_int(0, false).into())
+        } else {
+            Ok(basic_val.unwrap_basic())
+        }
+    }
+
+    /// Declare the LLVM function for a monomorphized specialization.
+    /// `type_subst` must already be populated before calling this.
+    fn declare_mono_function(
+        &mut self,
+        func: &Function,
+        mangled: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+            .params
+            .iter()
+            .map(|p| self.llvm_param_type(p))
+            .collect();
+
+        let fn_type = match self.llvm_return_type(&func.return_type) {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_types, false)
+            }
+        };
+
+        Ok(self.module.add_function(mangled, fn_type, None))
+    }
+
+    /// Compile the body of a monomorphized specialization.
+    /// `type_subst` must already be populated and per-function state must be fresh.
+    fn compile_mono_function(&mut self, func: &Function, mangled: &str) -> Result<(), String> {
+        let fn_val = self
+            .module
+            .get_function(mangled)
+            .ok_or_else(|| format!("Mono '{}' not declared", mangled))?;
+
+        self.current_fn = Some(fn_val);
+        self.variables.clear();
+        self.var_type_names.clear();
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+
+        for (i, param) in func.params.iter().enumerate() {
+            let param_name = self.param_name(param);
+            let param_val = fn_val.get_nth_param(i as u32).unwrap();
+            let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
+            self.builder.build_store(alloca, param_val).unwrap();
+            // Track declared type name for struct/enum field resolution.
+            if let TypeKind::Path(path) = &param.ty.kind {
+                if let Some(type_name) = path.segments.first() {
+                    self.var_type_names
+                        .insert(param_name.clone(), type_name.clone());
+                }
+            }
+            self.variables.insert(
+                param_name,
+                VarSlot {
+                    ptr: alloca,
+                    ty: param_val.get_type(),
+                },
+            );
+        }
+
+        let result = self.compile_block(&func.body)?;
+
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            if let Some(val) = result {
+                self.builder.build_return(Some(&val)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Infer the type-parameter substitution for a generic function call by
+    /// matching each parameter's declared type against the concrete argument type.
+    fn infer_type_args(
+        &self,
+        func: &Function,
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> HashMap<String, BasicTypeEnum<'ctx>> {
+        let mut subst = HashMap::new();
+        for (param, val) in func.params.iter().zip(arg_vals.iter()) {
+            self.unify_type_expr(&param.ty, val.get_type(), &mut subst);
+        }
+        subst
+    }
+
+    /// Recursively match a declared type expression against a concrete LLVM type,
+    /// recording bindings for any unbound type parameters found.
+    fn unify_type_expr(
+        &self,
+        ty: &TypeExpr,
+        concrete: BasicTypeEnum<'ctx>,
+        subst: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        if let TypeKind::Path(path) = &ty.kind {
+            if path.segments.len() == 1 && path.generic_args.is_none() {
+                let name = &path.segments[0];
+                // Treat as a type parameter if it's not a known concrete type.
+                if !self.is_known_concrete_type(name) {
+                    subst.entry(name.clone()).or_insert(concrete);
+                }
+            }
+            // TODO: unify generic args (e.g. `Vec[T]`) when container types are codegen'd.
+        }
+    }
+
+    /// Returns true if `name` is a built-in concrete type or a declared struct/enum.
+    fn is_known_concrete_type(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "str"
+                | "String"
+                | "char"
+        ) || self.struct_types.contains_key(name)
+            || self.enum_layouts.contains_key(name)
+    }
+
+    /// Build a mangled name for a specialization, e.g. `max$i64` or `zip$i64$f64`.
+    fn mangle_mono_name(
+        &self,
+        base: &str,
+        func: &Function,
+        subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> String {
+        let params = match &func.generic_params {
+            Some(gp) => &gp.params,
+            None => return base.to_string(),
+        };
+
+        let mut mangled = base.to_string();
+        for param in params {
+            if let Some(ty) = subst.get(&param.name) {
+                mangled.push('$');
+                mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
+            }
+        }
+        mangled
+    }
+
+    /// Produce a stable string token for an LLVM type suitable for name mangling.
+    fn llvm_type_to_mangle_str(&self, ty: BasicTypeEnum<'ctx>) -> String {
+        match ty {
+            BasicTypeEnum::IntType(t) => match t.get_bit_width() {
+                1 => "bool".to_string(),
+                8 => "i8".to_string(),
+                16 => "i16".to_string(),
+                32 => "i32".to_string(),
+                64 => "i64".to_string(),
+                w => format!("i{}", w),
+            },
+            BasicTypeEnum::FloatType(t) => {
+                // Distinguish f32 from f64 by comparing with context-canonical types.
+                if t == self.context.f32_type() {
+                    "f32".to_string()
+                } else {
+                    "f64".to_string()
+                }
+            }
+            BasicTypeEnum::PointerType(_) => "ptr".to_string(),
+            BasicTypeEnum::StructType(_) => "struct".to_string(),
+            _ => "opaque".to_string(),
+        }
+    }
+
+    // ── Helpers ─────────────────────────────────────────────────
+
+    fn load_variable(&self, name: &str) -> Result<BasicValueEnum<'ctx>, String> {
+        if let Some(slot) = self.variables.get(name) {
+            // RC-fallback: the alloca holds a heap ptr → {i64 rc, T value}; load T from field 1.
+            if let Some(&heap_type) = self.rc_fallback_heap_types.get(name) {
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let heap_ptr = self
+                    .builder
+                    .build_load(ptr_ty, slot.ptr, &format!("{}.rcptr", name))
+                    .unwrap()
+                    .into_pointer_value();
+                let val_ty = heap_type.get_field_type_at_index(1).unwrap();
+                let val_field = self
+                    .builder
+                    .build_struct_gep(heap_type, heap_ptr, 1, &format!("{}.rcval", name))
+                    .unwrap();
+                return Ok(self.builder.build_load(val_ty, val_field, name).unwrap());
+            }
+            let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+            // For ref params, the loaded value is a pointer — dereference to get the actual value.
+            if let Some(&inner_ty) = self.ref_params.get(name) {
+                let ptr = val.into_pointer_value();
+                Ok(self
+                    .builder
+                    .build_load(inner_ty, ptr, &format!("{}.deref", name))
+                    .unwrap())
+            } else {
+                Ok(val)
+            }
+        } else {
+            Err(format!("Undefined variable '{}'", name))
+        }
+    }
+
+    /// For a variable that may be a ref param, return a pointer to the underlying data.
+    /// Owned: returns the alloca directly (alloca holds the struct).
+    /// Ref: loads the pointer from alloca then returns it (pointer to the caller's struct).
+    fn get_data_ptr(&self, name: &str) -> Option<PointerValue<'ctx>> {
+        let slot = self.variables.get(name)?;
+        if self.ref_params.contains_key(name) {
+            // Ref param: alloca holds a ptr → load it.
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            Some(
+                self.builder
+                    .build_load(ptr_ty, slot.ptr, &format!("{}.ref.ptr", name))
+                    .unwrap()
+                    .into_pointer_value(),
+            )
+        } else {
+            // Owned: alloca IS the struct pointer.
+            Some(slot.ptr)
+        }
+    }
+
+    fn create_entry_alloca(
+        &self,
+        fn_val: FunctionValue<'ctx>,
+        name: &str,
+        ty: BasicTypeEnum<'ctx>,
+    ) -> PointerValue<'ctx> {
+        let entry = fn_val.get_first_basic_block().unwrap();
+        let b = self.context.create_builder();
+        match entry.get_first_instruction() {
+            Some(inst) => b.position_before(&inst),
+            None => b.position_at_end(entry),
+        }
+        b.build_alloca(ty, name).unwrap()
+    }
+
+    fn param_name(&self, param: &Param) -> String {
+        match &param.pattern.kind {
+            PatternKind::Binding(name) => name.clone(),
+            _ => "_".to_string(),
+        }
+    }
+}
+
+/// Extract the type name from an impl block's target TypeExpr.
+/// Returns `None` for non-path targets (slice/array/etc.) since those
+/// can't carry user-defined impl methods in v1.
+fn impl_target_name(target: &TypeExpr) -> Option<String> {
+    match &target.kind {
+        TypeKind::Path(p) => p.segments.last().cloned(),
+        _ => None,
+    }
+}
+
+/// Build a synthetic `Function` node for an impl-block method so the
+/// existing `declare_function` / `compile_function` machinery can emit it
+/// as an LLVM function named `Type.method`. If the method has a receiver,
+/// prepend a `self` parameter with the impl target type so the body's
+/// `self` reference resolves as a normal local.
+fn make_impl_method_function(type_name: &str, method: &Function) -> Function {
+    let mut f = method.clone();
+    f.name = format!("{}.{}", type_name, method.name);
+    if method.self_param.is_some() {
+        let span = method.span.clone();
+        // v1: owned `self` only. `ref self` / `mut ref self` would wrap the
+        // base type in `TypeKind::Ref`/`MutRef` here — deferred because the
+        // current call sites (Eq/Ord, constructors) all use owned receivers.
+        let ty = TypeExpr {
+            kind: TypeKind::Path(PathExpr {
+                segments: vec![type_name.to_string()],
+                generic_args: None,
+                span: span.clone(),
+            }),
+            span: span.clone(),
+        };
+        let self_param = Param {
+            span: span.clone(),
+            pattern: Pattern {
+                kind: PatternKind::Binding("self".to_string()),
+                span,
+            },
+            ty,
+            default_value: None,
+            doc_comment: None,
+        };
+        f.params.insert(0, self_param);
+    }
+    f.self_param = None;
+    f
+}

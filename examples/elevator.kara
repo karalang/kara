@@ -1,0 +1,162 @@
+// examples/elevator.kara
+//
+// SCAN (Look) elevator algorithm.
+// The elevator starts on floor 1, sweeps upward serving all queued stops,
+// reverses, sweeps downward, and repeats until the queue is empty.
+//
+// Design gaps found while authoring this example are documented at the bottom.
+
+let MIN_FLOOR: i64 = 1;
+let MAX_FLOOR: i64 = 10;
+
+// Three-valued direction: Idle is the initial / quiescent state.
+// Falls into the Up sweep in next_stop so the first request biases upward.
+#[derive(Eq, Clone)]
+enum Direction {
+    Up,
+    Down,
+    Idle,
+}
+
+impl Display for Direction {
+    fn fmt(ref self, f: mut ref Formatter) {
+        match self {
+            Up   => write(f, "↑"),
+            Down => write(f, "↓"),
+            Idle => write(f, "·"),
+        }
+    }
+}
+
+enum Request {
+    // A passenger on a floor pressing the Up or Down call button.
+    FloorCall { floor: i64, direction: Direction },
+    // A passenger inside the cabin pressing a destination button.
+    CabinPress { floor: i64 },
+}
+
+fn floor_of(req: Request) -> i64 {
+    match req {
+        FloorCall { floor, direction: _ } => floor,
+        CabinPress { floor }             => floor,
+    }
+}
+
+// Elevator holds a sorted ascending list of pending stops and the current
+// sweep direction.  A single sorted list is enough for SCAN: going up we take
+// the first stop >= current floor; going down we take the last stop <= current
+// floor; when no stop remains in the sweep direction we wrap to the far end.
+struct Elevator {
+    floor:     i64,
+    direction: Direction,
+    stops:     Vec[i64],   // invariant: sorted ascending, no duplicates
+}
+
+impl Elevator {
+    fn new() -> Elevator {
+        Elevator { floor: MIN_FLOOR, direction: Direction.Idle, stops: Vec.new() }
+    }
+
+    fn enqueue(mut ref self, target: i64) {
+        if target == self.floor
+            or target < MIN_FLOOR
+            or target > MAX_FLOOR
+            or self.stops.contains(target)
+        {
+            return;
+        }
+        self.stops.push(target);
+        self.stops.sort();
+    }
+
+    fn add_request(mut ref self, req: Request) {
+        self.enqueue(floor_of(req));
+    }
+
+    // Returns the next floor to visit under the SCAN sweep policy.
+    fn next_stop(ref self) -> Option[i64] {
+        if self.stops.is_empty() {
+            return None;
+        }
+        match self.direction {
+            Up | Idle => {
+                // First stop at or above the current floor.
+                let mut i: i64 = 0;
+                while i < self.stops.len() {
+                    if self.stops[i] >= self.floor {
+                        return Some(self.stops[i]);
+                    }
+                    i = i + 1;
+                }
+                // All remaining stops are below — wrap to the highest queued stop.
+                Some(self.stops[self.stops.len() - 1])
+            },
+            Down => {
+                // Last stop at or below the current floor (search from the high end).
+                let mut i: i64 = self.stops.len() - 1;
+                while i >= 0 {
+                    if self.stops[i] <= self.floor {
+                        return Some(self.stops[i]);
+                    }
+                    i = i - 1;
+                }
+                // All remaining stops are above — wrap to the lowest queued stop.
+                Some(self.stops[0])
+            },
+        }
+    }
+
+    fn mark_served(mut ref self, target: i64) {
+        let mut i: i64 = 0;
+        while i < self.stops.len() {
+            if self.stops[i] == target {
+                self.stops.remove(i);
+                return;
+            }
+            i = i + 1;
+        }
+    }
+
+    // Move to the next stop, update direction, and return true.
+    // Returns false when the queue is empty and the elevator goes idle.
+    fn step(mut ref self) -> bool {
+        match self.next_stop() {
+            None => false,
+            Some(target) => {
+                println(f"  floor {self.floor} {self.direction} → {target}");
+                self.floor = target;
+                self.mark_served(target);
+                // Recompute direction: peek at what comes after this stop.
+                self.direction = match self.next_stop() {
+                    None                            => Direction.Idle,
+                    Some(next) if next > self.floor => Direction.Up,
+                    Some(_)                         => Direction.Down,
+                };
+                true
+            },
+        }
+    }
+}
+
+fn main() {
+    let mut e = Elevator.new();
+
+    let requests = [
+        Request.CabinPress { floor: 7 },
+        Request.FloorCall  { floor: 3, direction: Direction.Up },
+        Request.CabinPress { floor: 5 },
+        Request.FloorCall  { floor: 9, direction: Direction.Down },
+        Request.FloorCall  { floor: 2, direction: Direction.Up },
+    ];
+
+    for req in requests {
+        e.add_request(req);
+    }
+    println(f"start floor={e.floor}  queued={e.stops}");
+    println("");
+
+    while e.step() {}
+    println("done.");
+}
+
+// Design gaps observed while writing this example: brainstorming/v53_elevator_gaps.md

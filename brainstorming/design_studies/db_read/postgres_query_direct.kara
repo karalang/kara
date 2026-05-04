@@ -1,0 +1,33 @@
+// design_studies/db_read/postgres_query_direct.kara
+//
+// Connect to Postgres and print rows from a `users` table.
+// Direct-use Kāra variant: no trait, no effect resource, no provider
+// injection. Matches the shape of the Java/Python/Rust companions
+// in this directory, which also use their drivers directly.
+//
+// Use this form when the program doesn't need swappable providers
+// (no test fake, no per-target binding). Reach for the trait +
+// `effect resource UserDB: DatabaseProvider` + `providers { }` form
+// in `postgres_query_injected.kara` when injection is actually required.
+//
+// `pg.Connection` / `pg.Error` are illustrative — Kāra doesn't ship
+// a Postgres driver yet.
+
+fn main() -> Result[(), String] {
+    let url = env.var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL not set".to_string())?;
+
+    let conn = pg.Connection.open(url)
+        .map_err(|e| f"DB error: {e}")?;
+
+    let rows = conn.query("SELECT id, name, email FROM users ORDER BY id")
+        .map_err(|e| f"DB error: {e}")?;
+
+    for row in rows {
+        let id:    i64    = row.get_i64("id")?;
+        let name:  String = row.get_string("name")?;
+        let email: String = row.get_string("email")?;
+        println(f"{id}\t{name}\t{email}");
+    }
+    Ok(())
+}

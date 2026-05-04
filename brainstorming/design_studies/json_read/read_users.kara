@@ -1,0 +1,36 @@
+// design_studies/json_read/read_users.kara
+//
+// Read a JSON array of users from disk and print rows.
+// Usage: read_users <path>
+//
+// Note: `#[derive(Serialize, Deserialize)]` and the `Json` backend are
+// specified in docs/design.md but deferred post-v1 (see design.md
+// §Serialization via Derive, and §Derivable traits — Serialize/
+// Deserialize row). This file is shape-accurate per the current spec
+// but not yet compilable.
+
+#[derive(Deserialize, Debug)]
+struct User {
+    id: i64,
+    name: String,
+    email: String,
+}
+
+fn main() -> Result[(), String] {
+    let args = env.args();
+    if args.len() < 2 {
+        eprintln("usage: read_users <path>");
+        return Err("missing path argument".to_string());
+    }
+
+    let content = fs.read_to_string(ref args[1])
+        .map_err(|e| f"read error: {e}")?;
+
+    let users: Vec[User] = Json.deserialize[Vec[User]](content)
+        .map_err(|e| f"parse error: {e}")?;
+
+    for u in users {
+        println(f"{u.id}\t{u.name}\t{u.email}");
+    }
+    Ok(())
+}

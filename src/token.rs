@@ -1,0 +1,228 @@
+// src/token.rs
+
+//! Defines the tokens produced by the Kāra lexer.
+
+/// Source location attached to every token.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Span {
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
+    pub length: usize,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum IntSuffix {
+    I8,
+    I16,
+    I32,
+    I64,
+    I128,
+    U8,
+    U16,
+    U32,
+    U64,
+    U128,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum FloatSuffix {
+    F32,
+    F64,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum InterpolationPart {
+    Text(String),
+    Expr(String), // The raw string of the expression, parsing it is deferred to the parser
+}
+
+/// A token with its source location.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SpannedToken {
+    pub token: Token,
+    pub span: Span,
+}
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Token {
+    // ── Keywords ──────────────────────────────────────────────
+    // Declarations
+    Fn,
+    Struct,
+    Enum,
+    Trait,
+    Impl,
+    Mod,
+    Use,
+    Import,
+    Const,
+    Type,
+    // Visibility
+    Pub,
+    Private,
+    // Control flow
+    If,
+    Else,
+    Match,
+    While,
+    For,
+    In,
+    Loop,
+    Return,
+    Break,
+    Continue,
+    // Bindings
+    Let,
+    Mut,
+    // Logical operators (keyword forms; symbol `&&`/`||`/`!` are not accepted)
+    And,
+    Or,
+    Not,
+    // Ownership
+    Own,
+    Ref,
+    Weak,
+    Lock,
+    // Closure capture (kept reserved for future ref/mut-ref capture work; bare `|...|` is owned-by-default and `move` is not used)
+    Move,
+    // Effects
+    Effect,
+    Resource,
+    Verb,
+    Reads,
+    Writes,
+    Sends,
+    Receives,
+    Allocates,
+    Panics,
+    Blocks,
+    Suspends,
+    With,
+    Transparent,
+    Stable,
+    Seq,
+    Par,
+    Yield,
+    // Type system
+    As,
+    Where,
+    Dyn,
+    // Safety
+    Unsafe,
+    Extern,
+    // Shared
+    Shared,
+    // Layout
+    Layout,
+    Group,
+    // Literals
+    True,
+    False,
+    // Contracts
+    Requires,
+    Ensures,
+    Invariant,
+    // Defer
+    Defer,
+    ErrDefer,
+    // Assembly
+    Asm,
+    GlobalAsm,
+    // Providers
+    Providers,
+    // Other
+    Distinct,
+    Alias,
+    Independent,
+    SelfValue, // self
+    SelfType,  // Self
+
+    // ── Symbols ───────────────────────────────────────────────
+    // Delimiters
+    LeftParen,    // (
+    RightParen,   // )
+    LeftBrace,    // {
+    RightBrace,   // }
+    LeftBracket,  // [
+    RightBracket, // ]
+
+    // Punctuation
+    Colon,            // :
+    Comma,            // ,
+    Semicolon,        // ;
+    Dot,              // .
+    DotDot,           // ..
+    DotDotEq,         // ..=
+    QuestionDot,      // ?.
+    QuestionQuestion, // ??
+    Arrow,            // ->
+    FatArrow,         // =>
+    Question,         // ?
+    Pound,            // #
+    Underscore,       // _ (as a token, e.g., in patterns)
+    At,               // @ (pattern bindings)
+
+    // Arithmetic
+    Plus,    // +
+    Minus,   // -
+    Star,    // *
+    Slash,   // /
+    Percent, // %
+
+    // Comparison
+    EqualEqual,         // ==
+    BangEqual,          // !=
+    LessThan,           // <
+    LessThanOrEqual,    // <=
+    GreaterThan,        // >
+    GreaterThanOrEqual, // >=
+
+    // Logical (legacy — produce an error in parse position; still produced by the
+    // lexer so the parser can emit a targeted "use `and`/`or`/`not` instead" message
+    // rather than a confusing generic error. PipePipe also opens an empty-param
+    // closure (`|| body`); Bang is also the prefix of `!=`, lexed separately as
+    // BangEqual.)
+    AmpAmp,   // &&  -> "use `and`"
+    PipePipe, // ||  -> "use `or`" (in operator position only)
+    Bang,     // !   -> "use `not`"
+
+    // Bitwise
+    Amp,            // &
+    Pipe,           // |
+    PipeArrow,      // |>
+    Caret,          // ^
+    Tilde,          // ~
+    LessLess,       // <<
+    GreaterGreater, // >>
+
+    // Assignment
+    Equal,               // =
+    PlusEqual,           // +=
+    MinusEqual,          // -=
+    StarEqual,           // *=
+    SlashEqual,          // /=
+    PercentEqual,        // %=
+    AmpEqual,            // &=
+    PipeEqual,           // |=
+    CaretEqual,          // ^=
+    LessLessEqual,       // <<=
+    GreaterGreaterEqual, // >>=
+
+    // ── Literals ──────────────────────────────────────────────
+    Identifier(String),
+    Integer(i64, Option<IntSuffix>),
+    Float(f64, Option<FloatSuffix>),
+    CharLiteral(char),
+    StringLiteral(String),
+    MultiStringLiteral(String),
+    InterpolatedStringLiteral(Vec<InterpolationPart>),
+
+    // ── Special ───────────────────────────────────────────────
+    DocComment(String),
+    /// `//!` module-level doc comment. Distinct from `///` so the parser
+    /// can attach it to the enclosing module rather than the next item.
+    ModuleDocComment(String),
+    Error(String),
+    EOF,
+}

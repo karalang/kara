@@ -1,0 +1,89 @@
+// examples/leetcode/course_schedule.kara
+//
+// LeetCode #207: Course Schedule
+// Given numCourses and a list of prerequisite pairs [a, b] meaning
+// "must take b before a", return true if it is possible to finish all courses.
+// Reduces to: does the directed graph contain a cycle?
+//
+// Demonstrates: Map adjacency list, enum for DFS visit state,
+//               recursive DFS cycle detection, Vec[(T, T)] tuples
+
+enum VisitState {
+    Unvisited,
+    Visiting,   // currently on the DFS stack — a back edge here means a cycle
+    Visited,    // fully processed, no cycle reachable from this node
+}
+
+fn can_finish(num_courses: u64, prerequisites: ref Vec[(u64, u64)]) -> bool {
+    // Build adjacency list: prereq → courses that require it
+    let mut graph: Map[u64, Vec[u64]] = Map.new();
+    for i in 0..num_courses {
+        graph.insert(i, Vec.new());
+    }
+    for (course, prereq) in prerequisites.iter() {
+        graph.get_mut(prereq).unwrap().push(course);
+    }
+
+    let mut state: Map[u64, VisitState] = Map.new();
+    for i in 0..num_courses {
+        state.insert(i, VisitState.Unvisited);
+    }
+
+    for i in 0..num_courses {
+        match state.get(i) {
+            Some(VisitState.Unvisited) => {
+                if has_cycle(i, graph, mut state) {
+                    return false;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    true
+}
+
+fn has_cycle(
+    node: u64,
+    graph: ref Map[u64, Vec[u64]],
+    state: mut ref Map[u64, VisitState],
+) -> bool {
+    state.insert(node, VisitState.Visiting);
+
+    for neighbor in graph.get(node).unwrap().iter() {
+        match state.get(neighbor) {
+            Some(VisitState.Visiting)   => return true,   // back edge — cycle found
+            Some(VisitState.Unvisited)  => {
+                if has_cycle(neighbor, graph, state) {
+                    return true;
+                }
+            }
+            _ => {}   // Visited — no cycle through this path
+        }
+    }
+
+    state.insert(node, VisitState.Visited);
+    false
+}
+
+fn main() {
+    // Test 1: 2 courses, take 0 before 1 → no cycle → true
+    println(f"Can finish: {can_finish(2, [(1, 0)])}");
+
+    // Test 2: 2 courses, 0↔1 mutual dependency → cycle → false
+    println(f"Can finish: {can_finish(2, [(1, 0), (0, 1)])}");
+
+    // Test 3: 4 courses, diamond dependency → no cycle → true
+    //   0 → 1 → 3
+    //   0 → 2 → 3
+    println(f"Can finish: {can_finish(4, [(1, 0), (2, 0), (3, 1), (3, 2)])}");
+
+    // Test 4: 3 courses, 0 → 1 → 2 → 0 → cycle → false
+    println(f"Can finish: {can_finish(3, [(1, 0), (2, 1), (0, 2)])}");
+}
+
+// Expected output:
+// Can finish: true
+// Can finish: false
+// Can finish: true
+// Can finish: false

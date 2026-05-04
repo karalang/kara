@@ -1,0 +1,100 @@
+// examples/tests/user_db_test.kara
+//
+// Demonstrates the three forms of provider injection from design.md:
+//
+//   1. `#[with_provider(R, ctor)]`         — per-test fixture sugar
+//   2. `with_provider[R](p, || body)`      — runtime primitive
+//   3. `providers { R => p, ... } in { body }` — multi-provider block
+//
+// Note: the `with_provider` runtime + resolver dispatch are pending
+// (CR-24 follow-up slice 3, see brainstorming/brainstorming_v43.md).
+// This file exercises the *syntax* the implementation is targeting.
+
+trait DatabaseProvider {
+    fn insert(self, key: String, value: String) -> Result[(), String];
+    fn get(self, key: String) -> Option[String];
+}
+
+effect resource UserDB: DatabaseProvider;
+effect resource AuditDB: DatabaseProvider;
+
+shared struct InMemoryUserDB {
+    rows: Map[String, String],
+}
+
+impl InMemoryUserDB {
+    fn new() -> InMemoryUserDB {
+        InMemoryUserDB { rows: Map.new() }
+    }
+}
+
+impl DatabaseProvider for InMemoryUserDB {
+    fn insert(mut self, key: String, value: String) -> Result[(), String] {
+        self.rows.insert(key, value);
+        Ok(())
+    }
+
+    fn get(self, key: String) -> Option[String] {
+        self.rows.get(key)
+    }
+}
+
+// ── Form 1: #[with_provider] attribute (slice 3 target) ─────────────
+//
+// Test runner constructs a fresh InMemoryUserDB per invocation and
+// wraps the body in `with_provider[UserDB](_, || { ... })`.
+
+#[with_provider(UserDB, InMemoryUserDB.new)]
+fn test_insert_then_get() {
+    UserDB.insert("alice", "1").unwrap();
+    assert(UserDB.get("alice") == Some("1"));
+}
+
+#[with_provider(UserDB, InMemoryUserDB.new)]
+fn test_missing_key_is_none() {
+    assert(UserDB.get("nobody") == None);
+}
+
+// Multiple resources on one test — both are constructed fresh, both
+// scopes are entered before the body runs.
+
+#[with_provider(UserDB,  InMemoryUserDB.new)]
+#[with_provider(AuditDB, InMemoryUserDB.new)]
+fn test_two_providers() {
+    UserDB.insert("alice", "1").unwrap();
+    AuditDB.insert("audit:alice", "created").unwrap();
+    assert(UserDB.get("alice") == Some("1"));
+    assert(AuditDB.get("audit:alice") == Some("created"));
+}
+
+// ── Form 2: with_provider primitive (mid-test scope swap) ───────────
+//
+// Useful when one test wants to swap providers partway through.
+
+fn test_swap_provider_midway() {
+    with_provider[UserDB](InMemoryUserDB.new(), || {
+        UserDB.insert("alice", "v1").unwrap();
+        assert(UserDB.get("alice") == Some("v1"));
+    });
+
+    // Fresh instance — previous state is gone with the previous scope.
+    with_provider[UserDB](InMemoryUserDB.new(), || {
+        assert(UserDB.get("alice") == None);
+    });
+}
+
+// ── Form 3: providers { } in { } block (multi-provider bootstrap) ───
+//
+// Flattens what would otherwise be a callback pyramid.
+
+fn test_providers_block() {
+    providers {
+        UserDB  => InMemoryUserDB.new(),
+        AuditDB => InMemoryUserDB.new(),
+    } in {
+        UserDB.insert("alice", "1").unwrap();
+        AuditDB.insert("audit:alice", "created").unwrap();
+        assert(UserDB.get("alice") == Some("1"));
+        assert(AuditDB.get("audit:alice") == Some("created"));
+    }
+}

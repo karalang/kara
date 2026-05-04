@@ -1,0 +1,118 @@
+// executor.kara — Execute a QueryPlan against the current Db provider.
+//
+// This is where the effect resource model is most directly exercised.
+//
+// GAP-N (continued): Resource method dispatch syntax.
+//   `Db.query_table(ref table)` inside a `with reads(Db)` function is the
+//   assumed syntax for calling the current provider.  Whether the compiler
+//   desugars this to `<current_db_provider>.query_table(ref table)` implicitly,
+//   or whether explicit syntax like `Db.get().query_table(ref table)` is
+//   required, is not specified in the design doc.  The code below uses the
+//   implicit dispatch form from the spec's canonical example.
+//
+// GAP-S: Parallel reads on the same resource.
+//   `reads(Db) + reads(Db) = safe` by the conflict table, so two independent
+//   SELECT plans should be parallelizable inside a `par {}` block.
+//   `execute_all` demonstrates this: two FullScan plans on different tables
+//   have non-conflicting effects and can run concurrently.
+//   HOWEVER: if either plan involves a write (Insert/Delete), the par {} block
+//   would be rejected because `writes(Db) + writes(Db) = conflict`.
+//   This means `execute_all` can only safely accept read-only plans in a single
+//   par {} block, with write plans serialized outside it.  The current
+//   signature does not enforce this — a caller passing mixed read/write plans
+//   gets a compile error at the `par {}` site, not a helpful error at the
+//   call site.  A `ReadPlan` / `WritePlan` split at the type level would make
+//   the constraint visible in the API.
+
+import query.{Row, DbError, Value};
+import planner.QueryPlan;
+
+pub fn execute(plan: QueryPlan) -> Result[Vec[Row], DbError]
+    with reads(Db) writes(Db) panics
+{
+    match plan {
+        FullScan { table, columns } => {
+            let rows = Db.query_table(ref table)?;
+            Ok(project(rows, ref columns))
+        },
+
+        FilterScan { table, columns, column, value } => {
+            let rows = Db.query_table(ref table)?;
+            let filtered = filter_rows(rows, ref column, ref value);
+            Ok(project(filtered, ref columns))
+        },
+
+        Insert { table, column_names, values } => {
+            let row = zip_row(column_names, values);
+            Db.insert_row(ref table, row)?;
+            Ok(Vec.new())
+        },
+
+        Delete { table, column, value } => {
+            Db.delete_where(ref table, ref column, ref value)?;
+            Ok(Vec.new())
+        },
+    }
+}
+
+// Run two read-only plans concurrently.
+// Safe because reads(Db) + reads(Db) does not conflict.
+pub fn execute_pair(plan_a: QueryPlan, plan_b: QueryPlan)
+    -> (Result[Vec[Row], DbError], Result[Vec[Row], DbError])
+    with reads(Db)
+{
+    // GAP-T: par {} requires the compiler to verify effect non-conflict
+    // statically.  If plan_a or plan_b is an Insert/Delete (writes(Db)),
+    // this par {} block is a compile error.  But QueryPlan is an enum —
+    // we cannot statically guarantee the variant at this call site.
+    // The type system has no way to express "this function only accepts
+    // FullScan / FilterScan variants of QueryPlan."  A separate
+    // `ReadPlan` enum type would fix this.
+    par {
+        let result_a = execute(plan_a);
+        let result_b = execute(plan_b);
+    }
+    (result_a, result_b)
+}
+
+// Project rows to the requested columns.  Pure helper.
+fn project(rows: Vec[Row], columns: ref Vec[String]) -> Vec[Row] {
+    if columns.is_empty() {
+        return rows;   // SELECT * — no projection
+    }
+    let mut out: Vec[Row] = Vec.new();
+    for row in rows {
+        let mut projected: Row = Map.new();
+        for col in columns {
+            match row.get(col) {
+                Some(v) => { projected.insert(col.clone(), v.clone()); },
+                None    => {},
+            }
+        }
+        out.push(projected);
+    }
+    out
+}
+
+// Filter rows where column == value.  Pure helper.
+fn filter_rows(rows: Vec[Row], column: ref String, value: ref Value) -> Vec[Row] {
+    let mut out: Vec[Row] = Vec.new();
+    for row in rows {
+        match row.get(column) {
+            Some(v) if v == value => out.push(row),
+            _                     => {},
+        }
+    }
+    out
+}
+
+// Zip two parallel Vecs into a Row map.  Pure helper.
+fn zip_row(keys: Vec[String], values: Vec[Value]) -> Row {
+    let mut row: Row = Map.new();
+    let mut i: i64 = 0;
+    while i < keys.len() {
+        row.insert(keys[i].clone(), values[i].clone());
+        i = i + 1;
+    }
+    row
+}

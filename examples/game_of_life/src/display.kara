@@ -1,0 +1,37 @@
+// display.kara — Terminal rendering of a Grid.
+//
+// GAP-K: No string builder / efficient string accumulation.
+//   Rendering a row requires concatenating one character per cell.
+//   The idiomatic approach is a string builder (append to a buffer, flush once).
+//   Kāra's String supports `+` (concatenation, allocates), but chaining N `+`
+//   calls is O(N²).  A `StringBuilder` or `String.with_capacity(n)` + repeated
+//   `push_char` would fix this.  Without it, we fall back to per-cell println,
+//   which issues one write syscall per cell — a significant IO overhead.
+//
+// GAP-L: No ANSI / terminal control in stdlib.
+//   Clearing the screen requires writing the ANSI escape sequence directly
+//   as a raw string.  A stdlib `terminal.clear()` with `writes(Stdout)` effect
+//   would be cleaner and portable.
+
+import grid.Grid;
+
+pub fn render(grid: ref Grid) {
+    let mut y: i64 = 0;
+    while y < grid.height {
+        let mut row = "";
+        let mut x: i64 = 0;
+        while x < grid.width {
+            // GAP-K: String + String allocates on every iteration.
+            row = row + if grid.get(x, y) { "█" } else { "·" };
+            x = x + 1;
+        }
+        println(row);
+        y = y + 1;
+    }
+    println(f"population: {grid.population()}");
+}
+
+pub fn clear_screen() {
+    // GAP-L: raw ANSI escape — no stdlib abstraction.
+    print("\x1b[2J\x1b[H");
+}

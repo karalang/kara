@@ -1,0 +1,42 @@
+// design_studies/event_stream/event_stream.kara
+//
+// Read JSON events line-by-line from stdin and print a one-line
+// summary for each. Unbounded push-model source — runs until EOF.
+//
+// Input shape (one per line):
+//   {"event": "login", "user": "alice"}
+//
+// `#[derive(Deserialize)]` + the `Json` backend are specified in
+// docs/design.md but deferred post-v1. Shape-accurate, not yet
+// compilable.
+
+#[derive(Deserialize)]
+struct Event {
+    event: String,
+    user: String,
+}
+
+fn main() -> Result[(), IoError] {
+    loop {
+        match io.read_line() {
+            Ok(line) => {
+                let trimmed = line.trim();
+                if trimmed.is_empty() { continue; }
+                match Json.deserialize[Event](trimmed) {
+                    Ok(e)  => println(f"[{e.event}] {e.user}"),
+                    Err(_) => eprintln(f"bad event: {trimmed}"),
+                }
+            }
+            Err(IoError.UnexpectedEof) => break,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
+// Inferred effects on main:
+//   reads(Stdin), writes(Stdout), writes(Stderr), allocates(Heap), panics
+//
+// The push-model source is the loop itself; `io.read_line()` blocks
+// until a line arrives or EOF. The effect signature makes this
+// visible to callers without needing a dedicated "stream" type.

@@ -1,0 +1,130 @@
+{
+  "karac_version": "0.1.0-dev",
+  "file": "examples/phase0/dashboard.kara",
+
+  "build": {
+    "diagnostics": [],
+    "status": "success",
+    "summary": "0 errors, 0 warnings"
+  },
+
+  "query_effects": {
+    "command": "karac query effects dashboard.kara.load_dashboard",
+    "function": "main",
+    "file": "examples/phase0/dashboard.kara",
+    "line": 66,
+    "declared_effects": [
+      "reads(Env)",
+      "reads(UserDB)",
+      "reads(OrderDB)",
+      "reads(NotifDB)",
+      "writes(Stdio)"
+    ],
+    "inferred_effects": [
+      "reads(Env)",
+      "reads(UserDB)",
+      "reads(OrderDB)",
+      "reads(NotifDB)",
+      "writes(Stdio)"
+    ],
+    "call_graph": [
+      {
+        "function": "fetch_profile",
+        "line": 72,
+        "effects": ["reads(UserDB)"]
+      },
+      {
+        "function": "fetch_orders",
+        "line": 73,
+        "effects": ["reads(OrderDB)"]
+      },
+      {
+        "function": "fetch_notifications",
+        "line": 74,
+        "effects": ["reads(NotifDB)"]
+      },
+      {
+        "function": "build_dashboard",
+        "line": 77,
+        "effects": []
+      },
+      {
+        "function": "println",
+        "line": 79,
+        "effects": ["writes(Stdio)"]
+      }
+    ]
+  },
+
+  "query_concurrency": {
+    "command": "karac query concurrency dashboard.kara.main",
+    "function": "main",
+    "file": "examples/phase0/dashboard.kara",
+    "parallel_regions": [
+      {
+        "region_id": 1,
+        "lines": [72, 73, 74],
+        "tasks": [
+          {
+            "statement": "let profile = fetch_profile(user_id)?",
+            "line": 72,
+            "effects": ["reads(UserDB)"]
+          },
+          {
+            "statement": "let orders = fetch_orders(user_id)?",
+            "line": 73,
+            "effects": ["reads(OrderDB)"]
+          },
+          {
+            "statement": "let notifs = fetch_notifications(user_id)?",
+            "line": 74,
+            "effects": ["reads(NotifDB)"]
+          }
+        ],
+        "conflict_analysis": [
+          {
+            "pair": ["reads(UserDB)", "reads(OrderDB)"],
+            "same_resource": false,
+            "verdict": "safe"
+          },
+          {
+            "pair": ["reads(UserDB)", "reads(NotifDB)"],
+            "same_resource": false,
+            "verdict": "safe"
+          },
+          {
+            "pair": ["reads(OrderDB)", "reads(NotifDB)"],
+            "same_resource": false,
+            "verdict": "safe"
+          }
+        ],
+        "data_dependencies": {
+          "cross_references": false,
+          "detail": "profile, orders, notifs are assigned independently — no statement reads another's output"
+        },
+        "decision": "PARALLELIZE",
+        "reason": "All three tasks have non-conflicting effects (reads on distinct resources) and no data dependencies. Spawning 3 tasks."
+      }
+    ],
+    "sync_points": [
+      {
+        "line": 77,
+        "statement": "let dashboard = build_dashboard(profile, orders, notifs)",
+        "awaits": ["profile", "orders", "notifs"],
+        "reason": "build_dashboard consumes all three results — must join before proceeding"
+      }
+    ],
+    "serial_regions": [
+      {
+        "lines": [79, 80, 81],
+        "reason": "Sequential writes(Stdio) — same resource, must serialize"
+      }
+    ],
+    "summary": {
+      "total_statements": 8,
+      "parallelized": 3,
+      "serialized": 5,
+      "estimated_speedup": "~3x for I/O-bound workloads (max of parallel tasks vs sum of sequential)"
+    }
+  }
+}

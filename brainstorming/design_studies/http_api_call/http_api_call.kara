@@ -1,0 +1,43 @@
+// design_studies/http_api_call/http_api_call.kara
+//
+// GET a JSON endpoint, parse the response, print rows.
+// Kāra variant — current design.
+//
+// Hypothetical `http` stdlib/package. `#[derive(Deserialize)]` + the
+// `Json` backend are specified in docs/design.md but deferred post-v1.
+// This file is shape-accurate per the current spec but not yet
+// compilable.
+
+#[derive(Deserialize, Debug)]
+struct User {
+    id: i64,
+    name: String,
+    email: String,
+}
+
+fn main() -> Result[(), String] {
+    let url = "https://jsonplaceholder.typicode.com/users".to_string();
+
+    let response = http.get(ref url)
+        .map_err(|e| f"http error: {e}")?;
+
+    if !response.is_success() {
+        return Err(f"http status: {response.status()}");
+    }
+
+    let users: Vec[User] = response.json[Vec[User]]()
+        .map_err(|e| f"parse error: {e}")?;
+
+    for u in users {
+        println(f"{u.id}\t{u.name}\t{u.email}");
+    }
+    Ok(())
+}
+
+// Inferred effects on main:
+//   reads(Network), allocates(Heap), writes(Stdout), panics
+//
+// None of the other three languages surfaces "this function talks
+// to the network" at the type level. That's a Kāra win that is
+// orthogonal to the D1 trait/impl question — it's a property of the
+// effect system, not the definition shape.

@@ -1,0 +1,171 @@
+// examples/leetcode/max_depth_binary_tree.kara
+//
+// LeetCode #104: Maximum Depth of Binary Tree
+// Return the maximum depth (number of nodes along the longest root-to-leaf path)
+// of a binary tree.
+//
+// Demonstrates: shared struct (reference-semantics tree nodes), Option[T],
+//               recursive pattern matching, max(), BFS level-order traversal
+
+shared struct TreeNode {
+    val: i64,
+    mut left: Option[TreeNode],
+    mut right: Option[TreeNode],
+}
+
+fn max_depth_dfs(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => 1 + max(max_depth_dfs(node.left), max_depth_dfs(node.right)),
+    }
+}
+
+// Iterative DFS: simulate the call stack explicitly using a Vec of (node, depth) pairs.
+// Push children with incremented depth; track the running max.
+fn max_depth_dfs_iterative(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => {
+            let mut stack = Vec.new();
+            stack.push((node, 1));
+            let mut max_d = 0;
+
+            loop {
+                match stack.pop() {
+                    None => break,
+                    Some((current, d)) => {
+                        if d > max_d {
+                            max_d = d;
+                        }
+                        if let Some(left) = current.left {
+                            stack.push((left, d + 1));
+                        }
+                        if let Some(right) = current.right {
+                            stack.push((right, d + 1));
+                        }
+                    }
+                }
+            }
+
+            max_d
+        }
+    }
+}
+
+// BFS approach: process the tree level by level using a queue.
+// Each iteration drains one full level; depth increments once per level.
+fn max_depth_bfs(root: Option[TreeNode]) -> i64 {
+    match root {
+        None => 0,
+        Some(node) => {
+            let mut queue = VecDeque.new();
+            queue.push_back(node);
+            let mut depth = 0;
+
+            loop {
+                let level_size = queue.len();
+                if level_size == 0 {
+                    break;
+                }
+                depth = depth + 1;
+                for _ in 0..level_size {
+                    let current = queue.pop_front().unwrap();
+                    if let Some(left) = current.left {
+                        queue.push_back(left);
+                    }
+                    if let Some(right) = current.right {
+                        queue.push_back(right);
+                    }
+                }
+            }
+
+            depth
+        }
+    }
+}
+
+fn main() {
+    // Test 1: [3,9,20,null,null,15,7] → depth 3
+    //        3
+    //       / \
+    //      9  20
+    //        /  \
+    //       15   7
+    let tree1 = Some(TreeNode {
+        val: 3,
+        left: Some(TreeNode { val: 9, left: None, right: None }),
+        right: Some(TreeNode {
+            val: 20,
+            left:  Some(TreeNode { val: 15, left: None, right: None }),
+            right: Some(TreeNode { val: 7,  left: None, right: None }),
+        }),
+    });
+    println(f"DFS (recursive) max depth: {max_depth_dfs(tree1)}");
+
+    // Test 2: [1,null,2] → depth 2
+    //   1
+    //    \
+    //     2
+    let tree2 = Some(TreeNode {
+        val: 1,
+        left: None,
+        right: Some(TreeNode { val: 2, left: None, right: None }),
+    });
+    println(f"DFS (recursive) max depth: {max_depth_dfs(tree2)}");
+
+    // Test 3: empty tree → depth 0
+    println(f"DFS (recursive) max depth: {max_depth_dfs(None)}");
+
+    // --- Iterative DFS ---
+    let tree_dfs1 = Some(TreeNode {
+        val: 3,
+        left: Some(TreeNode { val: 9, left: None, right: None }),
+        right: Some(TreeNode {
+            val: 20,
+            left:  Some(TreeNode { val: 15, left: None, right: None }),
+            right: Some(TreeNode { val: 7,  left: None, right: None }),
+        }),
+    });
+    println(f"DFS (iterative) max depth: {max_depth_dfs_iterative(tree_dfs1)}");
+
+    let tree_dfs2 = Some(TreeNode {
+        val: 1,
+        left: None,
+        right: Some(TreeNode { val: 2, left: None, right: None }),
+    });
+    println(f"DFS (iterative) max depth: {max_depth_dfs_iterative(tree_dfs2)}");
+
+    println(f"DFS (iterative) max depth: {max_depth_dfs_iterative(None)}");
+
+    // --- BFS ---
+    let tree3 = Some(TreeNode {
+        val: 3,
+        left: Some(TreeNode { val: 9, left: None, right: None }),
+        right: Some(TreeNode {
+            val: 20,
+            left:  Some(TreeNode { val: 15, left: None, right: None }),
+            right: Some(TreeNode { val: 7,  left: None, right: None }),
+        }),
+    });
+    println(f"BFS max depth: {max_depth_bfs(tree3)}");
+
+    let tree4 = Some(TreeNode {
+        val: 1,
+        left: None,
+        right: Some(TreeNode { val: 2, left: None, right: None }),
+    });
+    println(f"BFS max depth: {max_depth_bfs(tree4)}");
+
+    println(f"BFS max depth: {max_depth_bfs(None)}");
+}
+
+// Expected output:
+// DFS (recursive) max depth: 3
+// DFS (recursive) max depth: 2
+// DFS (recursive) max depth: 0
+// DFS (iterative) max depth: 3
+// DFS (iterative) max depth: 2
+// DFS (iterative) max depth: 0
+// BFS max depth: 3
+// BFS max depth: 2
+// BFS max depth: 0

@@ -1,0 +1,52 @@
+// elevator_test.kara — Integration tests for the Elevator type.
+
+import request.{Direction, Request};
+import scheduler.Scan;
+import elevator.Elevator;
+
+test "elevator: starts on floor 1, idle" {
+    let e = Elevator.new(Scan {});
+    assert_eq(e.floor, 1);
+    assert_eq(e.pending().is_empty(), true);
+}
+
+test "elevator: step on empty queue returns None" {
+    let mut e = Elevator.new(Scan {});
+    assert_eq(e.step(), None);
+}
+
+test "elevator: single cabin press is served" {
+    let mut e = Elevator.new(Scan {});
+    e.add_request(Request.CabinPress { floor: 5 });
+    assert_eq(e.step(), Some(5));
+    assert_eq(e.floor, 5);
+    assert_eq(e.pending().is_empty(), true);
+}
+
+test "elevator: scan serves stops in sweep order" {
+    let mut e = Elevator.new(Scan {});
+    // Add out-of-order; scan should serve 3, 5, 7 going up.
+    e.add_request(Request.CabinPress { floor: 7 });
+    e.add_request(Request.CabinPress { floor: 3 });
+    e.add_request(Request.CabinPress { floor: 5 });
+
+    assert_eq(e.step(), Some(3));
+    assert_eq(e.step(), Some(5));
+    assert_eq(e.step(), Some(7));
+    assert_eq(e.step(), None);
+}
+
+test "elevator: out-of-range requests are ignored" {
+    let mut e = Elevator.new(Scan {});
+    e.add_request(Request.CabinPress { floor: 0 });
+    e.add_request(Request.CabinPress { floor: 11 });
+    assert_eq(e.pending().is_empty(), true);
+}
+
+test "elevator: duplicate requests are deduplicated" {
+    let mut e = Elevator.new(Scan {});
+    e.add_request(Request.CabinPress { floor: 4 });
+    e.add_request(Request.FloorCall { floor: 4, direction: Direction.Up });
+    // Should only have one stop for floor 4.
+    assert_eq(e.pending().len(), 1);
+}

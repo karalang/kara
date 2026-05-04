@@ -1,0 +1,13 @@
+## Phase 11: Standard Library — Long-Tail
+
+**End of this phase = v1 release.** See [`roadmap.md § Phase 11`](roadmap.md#phase-11-standard-library--long-tail) for the canonical scope.
+
+Items currently tracked here (until physical reorganization happens — they live under [Phase 8 — Floor](#phase-8-standard-library--floor) above for now, mixed with floor items because the working tracker predates the Phase 8/11 split):
+
+- **Numerical and data-science stdlib** — entire `### Numerical and data-science stdlib (Phase 11 — long-tail)` sub-section above.
+- **Embedded / hardware primitives** — `Volatile memory access`, `Inline assembly`, `Atomic[T] and memory ordering`, `#[interrupt] handler ABI`, `Critical sections`.
+- **Security** — `std.secret` module / `Secret[T]` wrapper.
+- **Codegen IR optimization pass** — inline hints, alias metadata (`noalias`/`tbaa`), `nsw`/`nuw` arithmetic flags, LTO, PGO stubs (per `roadmap.md § Phase 11 > Codegen Optimization (IR quality pass)`).
+
+`std.json` stays in Phase 8 (floor) — every config / API client needs it.
+

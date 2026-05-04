@@ -1,0 +1,93 @@
+// scheduler_test.kara — Unit tests for Scan and Fcfs strategies.
+//
+// GAP-F: Test setup boilerplate for owned collections.
+//   Each test that needs a pre-populated Vec[i64] must build it inline.
+//   A `vec![1, 2, 3]`-style macro or `Vec.of(1, 2, 3)` constructor would
+//   reduce noise considerably in test files.
+
+import request.Direction;
+import scheduler.{Scan, Fcfs};
+
+// --- Scan tests ---
+
+test "scan: empty queue returns None" {
+    let s = Scan {};
+    let stops: Vec[i64] = Vec.new();
+    assert_eq(s.next_stop(1, ref Direction.Idle, ref stops), None);
+}
+
+test "scan: idle picks first stop above current" {
+    let s = Scan {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(3);
+    stops.push(7);
+    stops.push(5);
+    stops.sort();
+    // stops = [3, 5, 7], current = 1, Idle -> Up sweep -> first >= 1 is 3
+    assert_eq(s.next_stop(1, ref Direction.Idle, ref stops), Some(3));
+}
+
+test "scan: up sweep skips floors below current" {
+    let s = Scan {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(2);
+    stops.push(8);
+    stops.sort();
+    // current = 5, going Up -> first >= 5 is 8
+    assert_eq(s.next_stop(5, ref Direction.Up, ref stops), Some(8));
+}
+
+test "scan: up sweep wraps to highest when all stops are below" {
+    let s = Scan {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(2);
+    stops.push(4);
+    stops.sort();
+    // current = 6, going Up -> no stop >= 6 -> wrap to highest = 4
+    assert_eq(s.next_stop(6, ref Direction.Up, ref stops), Some(4));
+}
+
+test "scan: down sweep picks highest stop at or below current" {
+    let s = Scan {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(2);
+    stops.push(5);
+    stops.push(8);
+    stops.sort();
+    // current = 7, going Down -> highest <= 7 is 5
+    assert_eq(s.next_stop(7, ref Direction.Down, ref stops), Some(5));
+}
+
+test "scan: down sweep wraps to lowest when all stops are above" {
+    let s = Scan {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(8);
+    stops.push(9);
+    stops.sort();
+    // current = 6, going Down -> no stop <= 6 -> wrap to lowest = 8
+    assert_eq(s.next_stop(6, ref Direction.Down, ref stops), Some(8));
+}
+
+// --- Fcfs tests ---
+
+test "fcfs: empty queue returns None" {
+    let s = Fcfs {};
+    let stops: Vec[i64] = Vec.new();
+    assert_eq(s.next_stop(1, ref Direction.Idle, ref stops), None);
+}
+
+test "fcfs: returns first stop regardless of current floor" {
+    let s = Fcfs {};
+    let mut stops: Vec[i64] = Vec.new();
+    stops.push(9);
+    stops.push(2);
+    stops.push(5);
+    // No sort — FCFS preserves insertion order.
+    // GAP-G: Elevator.add_request sorts the stops Vec for SCAN convenience,
+    // which silently breaks FCFS insertion-order semantics.  A scheduler that
+    // wants a different ordering cannot tell the Elevator struct how to
+    // maintain its queue — the queue management is hardcoded in Elevator.
+    // The Scheduler trait should include a `fn on_enqueue(...)` hook, or
+    // Elevator should delegate queue maintenance to the scheduler entirely.
+    assert_eq(s.next_stop(1, ref Direction.Idle, ref stops), Some(9));
+}

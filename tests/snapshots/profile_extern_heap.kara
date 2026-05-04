@@ -1,0 +1,10 @@
+// Profile-sensitive fixture: `allocates(Heap)` on an extern declaration is
+// accepted under the `default` profile but rejected under both `embedded`
+// and `kernel`. Used by `karac check --profiles=...` driver tests.
+effect resource Heap;
+
+extern "C" fn xmalloc(size: i64) -> i64 allocates(Heap);
+
+fn main() {
+    let _p = xmalloc(64);
+}

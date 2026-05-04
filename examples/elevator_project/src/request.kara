@@ -1,0 +1,37 @@
+// request.kara — Domain types shared across the elevator project.
+
+pub let MIN_FLOOR: i64 = 1;
+pub let MAX_FLOOR: i64 = 10;
+
+#[derive(Eq, Clone)]
+pub enum Direction {
+    Up,
+    Down,
+    Idle,
+}
+
+impl Display for Direction {
+    fn fmt(ref self, f: mut ref Formatter) {
+        match self {
+            Up   => write(f, "↑"),
+            Down => write(f, "↓"),
+            Idle => write(f, "·"),
+        }
+    }
+}
+
+pub enum Request {
+    // A call button pressed on a floor landing.
+    FloorCall { floor: i64, direction: Direction },
+    // A destination button pressed inside the cabin.
+    CabinPress { floor: i64 },
+}
+
+impl Request {
+    pub fn floor(ref self) -> i64 {
+        match self {
+            FloorCall { floor, direction: _ } => floor,
+            CabinPress { floor }             => floor,
+        }
+    }
+}

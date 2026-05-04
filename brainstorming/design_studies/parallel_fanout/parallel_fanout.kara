@@ -1,0 +1,79 @@
+// design_studies/parallel_fanout/parallel_fanout.kara
+//
+// Fetch N user records concurrently and print aggregated output.
+// Kāra variant — current design. Uses `go { }` + channel for the
+// explicit fan-out shape; see findings.md for the alternative
+// auto-parallelism and `par { }` patterns.
+//
+// Hypothetical `http` stdlib/package; `#[derive(Deserialize)]` +
+// `channel` / `go` are specified in docs/design.md (§Feature 5).
+// This file is shape-accurate per the current spec.
+
+#[derive(Deserialize, Debug)]
+struct User {
+    id: i64,
+    name: String,
+    email: String,
+}
+
+fn fetch(id: i64) -> Result[User, String] {
+    let url = f"https://jsonplaceholder.typicode.com/users/{id}";
+    let response = http.get(ref url).map_err(|e| f"http: {e}")?;
+    if !response.is_success() {
+        return Err(f"status {response.status()} for id={id}");
+    }
+    response.json[User]().map_err(|e| f"parse id={id}: {e}")
+}
+
+fn main() -> Result[(), String] {
+    let ids = [1, 2, 3, 4, 5];
+    let (tx, rx) = channel[Result[User, String]]();
+
+    for id in ids {
+        let tx = tx.clone();
+        go {
+            tx.send(fetch(id)).unwrap();
+        }
+    }
+    drop(tx);
+
+    for result in rx {
+        match result {
+            Ok(u)  => println(f"{u.id}\t{u.name}\t{u.email}"),
+            Err(e) => eprintln(f"error: {e}"),
+        }
+    }
+    Ok(())
+}
+
+// ── Alternative shapes Kāra allows for this task ──────────────────
+//
+// (A) Auto-parallelism for a known list. Three independent fetches
+//     with disjoint concrete URLs and reads-only effect are proven
+//     independent by effect analysis — the compiler runs them in
+//     parallel with no go/channel plumbing:
+//
+//     let u1 = fetch(1)?;
+//     let u2 = fetch(2)?;
+//     let u3 = fetch(3)?;
+//     // reads(Network) + reads(Network) + reads(Network) — no conflict,
+//     // scheduled in parallel by the runtime.
+//
+//     Doesn't scale to runtime-length lists (the three calls must be
+//     source-level siblings for the analyser to see them).
+//
+// (B) par { } block over an iteration — explicit, works for dynamic
+//     lists, no channel ceremony:
+//
+//     let users = par {
+//         ids.iter().map(|id| fetch(id)?).collect()
+//     };
+//
+//     Equivalent to the go+channel form above in throughput; the
+//     compiler lowers to the same spawn-and-join primitives.
+//
+// (C) go + channel (the body above) — useful when results come back
+//     out of order and the consumer wants to stream them as each one
+//     completes, rather than wait for the batch. Closest analog to
+//     Rust's futures::try_join_all semantics would be (B); this (C)
+//     form is closer to a streaming producer-consumer.

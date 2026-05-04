@@ -1,0 +1,54 @@
+// main.kara — Simulation entry point.
+// Runs the same request set under SCAN then FCFS to compare behaviour.
+
+import request.{Direction, Request};
+import scheduler.{Scan, Fcfs};
+import elevator.Elevator;
+
+fn run_simulation[S: Scheduler](label: ref String, mut e: Elevator[S]) {
+    println(f"=== {label} ===");
+    println(f"start floor={e.floor}  queued={e.pending()}");
+    loop {
+        match e.step() {
+            None         => { println("idle."); break; },
+            Some(target) => println(f"  → {target}  (now at {e.floor})"),
+        }
+    }
+    println("");
+}
+
+fn main() {
+    let requests = [
+        Request.CabinPress { floor: 7 },
+        Request.FloorCall  { floor: 3, direction: Direction.Up },
+        Request.CabinPress { floor: 5 },
+        Request.FloorCall  { floor: 9, direction: Direction.Down },
+        Request.FloorCall  { floor: 2, direction: Direction.Up },
+    ];
+
+    // SCAN
+    let mut scan_e = Elevator.new(Scan {});
+    for req in requests {
+        scan_e.add_request(req);
+    }
+
+    // GAP-E: No Clone on Vec[Request] / no way to replay the same request list
+    // without re-constructing it.  Here we must re-build for the FCFS elevator.
+    // If Request derived Clone, `requests.clone()` would work.  Without it
+    // (and without Clone on Vec element types), we must duplicate the literal.
+    let requests2 = [
+        Request.CabinPress { floor: 7 },
+        Request.FloorCall  { floor: 3, direction: Direction.Up },
+        Request.CabinPress { floor: 5 },
+        Request.FloorCall  { floor: 9, direction: Direction.Down },
+        Request.FloorCall  { floor: 2, direction: Direction.Up },
+    ];
+
+    let mut fcfs_e = Elevator.new(Fcfs {});
+    for req in requests2 {
+        fcfs_e.add_request(req);
+    }
+
+    run_simulation(ref "SCAN", scan_e);
+    run_simulation(ref "FCFS", fcfs_e);
+}

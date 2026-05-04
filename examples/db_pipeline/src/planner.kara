@@ -1,0 +1,42 @@
+// planner.kara — Pure query planning (no database access).
+// Takes a Query and produces a QueryPlan.  No effects declared or inferred.
+
+import query.{Query, Value};
+
+pub enum QueryPlan {
+    FullScan  { table: String, columns: Vec[String] },
+    FilterScan { table: String, columns: Vec[String], column: String, value: Value },
+    Insert    { table: String, column_names: Vec[String], values: Vec[Value] },
+    Delete    { table: String, column: String, value: Value },
+}
+
+// Plan a query.  Pure: no database reads, no side effects.
+pub fn plan(query: Query) -> QueryPlan {
+    match query {
+        Select { table, columns } =>
+            QueryPlan.FullScan { table: table, columns: columns },
+
+        SelectWhere { table, columns, column, value } =>
+            QueryPlan.FilterScan {
+                table:   table,
+                columns: columns,
+                column:  column,
+                value:   value,
+            },
+
+        Insert { table, row } => {
+            // GAP-R: No Map.keys() -> Vec[String] without iteration boilerplate.
+            // Collecting keys and values into parallel Vecs requires a manual loop.
+            let mut keys:   Vec[String] = Vec.new();
+            let mut vals:   Vec[Value]  = Vec.new();
+            for (k, v) in row {
+                keys.push(k);
+                vals.push(v);
+            }
+            QueryPlan.Insert { table: table, column_names: keys, values: vals }
+        },
+
+        Delete { table, column, value } =>
+            QueryPlan.Delete { table: table, column: column, value: value },
+    }
+}

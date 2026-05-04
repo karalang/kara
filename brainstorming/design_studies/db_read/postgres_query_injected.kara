@@ -1,0 +1,78 @@
+// design_studies/db_read/postgres_query_injected.kara
+//
+// Connect to Postgres and print rows from a `users` table.
+// Injection-shaped Kāra variant — full trait + `effect resource` +
+// `impl Trait for Type` + `providers { } in { }` triangle. Use this
+// form when you want swappable providers (test fakes, per-target
+// bindings, scoped teardown). `postgres_query_direct.kara` in the
+// same directory shows the direct-use shape for programs that don't.
+//
+// Kāra doesn't ship a real Postgres driver yet — `pg.Connection`,
+// `pg.Rows`, and `pg.Error` are illustrative third-party names. The
+// language shape (trait / effect resource / impl Trait for Type /
+// providers { } in { }) is exactly what design.md specifies today.
+
+struct User {
+    id: i64,
+    name: String,
+    email: String,
+}
+
+// The behavioural contract.
+trait DatabaseProvider {
+    fn query_users(self) -> Result[Vec[User], pg.Error] with _;
+}
+
+// Name the capability. Effect-tracked, injectable.
+effect resource UserDB: DatabaseProvider;
+
+// A concrete provider — data.
+shared struct PostgresUserDB {
+    conn: pg.Connection,
+}
+
+// Inherent methods (construction, helpers specific to this type).
+impl PostgresUserDB {
+    fn connect(url: String) -> Result[PostgresUserDB, pg.Error]
+        with reads(Network), allocates(Heap)
+    {
+        let conn = pg.Connection.open(url)?;
+        Ok(PostgresUserDB { conn })
+    }
+}
+
+// Trait conformance — separate block, possibly in a different file.
+impl DatabaseProvider for PostgresUserDB {
+    fn query_users(self) -> Result[Vec[User], pg.Error]
+        with reads(Network), allocates(Heap)
+    {
+        let rows = self.conn.query(
+            "SELECT id, name, email FROM users ORDER BY id",
+        )?;
+
+        let mut users = Vec.new();
+        for row in rows {
+            users.push(User {
+                id:    row.get_i64("id")?,
+                name:  row.get_string("name")?,
+                email: row.get_string("email")?,
+            });
+        }
+        Ok(users)
+    }
+}
+
+fn main() -> Result[(), String] {
+    let url = env.var("DATABASE_URL")
+        .map_err(|_| "DATABASE_URL not set".to_string())?;
+
+    providers {
+        UserDB => PostgresUserDB.connect(url).map_err(|e| f"DB error: {e}")?,
+    } in {
+        let users = UserDB.query_users().map_err(|e| f"DB error: {e}")?;
+        for user in users {
+            println(f"{user.id}\t{user.name}\t{user.email}");
+        }
+        Ok(())
+    }
+}

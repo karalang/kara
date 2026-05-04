@@ -1,0 +1,50 @@
+// examples/leetcode/two_sum.kara
+//
+// LeetCode #1: Two Sum
+// Given an array of integers and a target, return indices of two numbers
+// that add up to the target.
+//
+// Demonstrates: Map, pattern matching (Option), iterators, tuples
+
+fn two_sum(nums: ref Vec[i64], target: i64) -> Option[(u64, u64)] {
+    let mut seen = Map.new();  // value → index
+
+    for (i, num) in nums.iter().enumerate() {
+        let complement = target - num;
+
+        match seen.get(complement) {
+            Some(j) => return Some((j, i)),
+            None => seen.insert(num, i),
+        }
+    }
+
+    None
+}
+
+fn main() {
+    let nums = [2, 7, 11, 15];
+    let target = 9;
+
+    match two_sum(nums, target) {
+        Some((i, j)) => println(f"Found: nums[{i}] + nums[{j}] = {target}"),
+        None => println("No solution found"),
+    }
+
+    // Additional test cases
+    let nums2 = [3, 2, 4];
+    match two_sum(nums2, 6) {
+        Some((i, j)) => println(f"Found: nums[{i}] + nums[{j}] = 6"),
+        None => println("No solution found"),
+    }
+
+    let nums3 = [3, 3];
+    match two_sum(nums3, 6) {
+        Some((i, j)) => println(f"Found: nums[{i}] + nums[{j}] = 6"),
+        None => println("No solution found"),
+    }
+}
+
+// Expected output:
+// Found: nums[0] + nums[1] = 9
+// Found: nums[1] + nums[2] = 6
+// Found: nums[0] + nums[1] = 6

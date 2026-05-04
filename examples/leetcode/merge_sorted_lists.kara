@@ -1,0 +1,139 @@
+// examples/leetcode/merge_sorted_lists.kara
+//
+// LeetCode #21: Merge Two Sorted Lists
+// Merge two sorted linked lists into one sorted list.
+//
+// Demonstrates: enum (linked list), recursive pattern matching,
+//               Option, ownership (move semantics)
+
+enum ListNode {
+    Cons { val: i64, next: Option[ListNode] },
+    Nil,
+}
+
+fn merge(list1: Option[ListNode], list2: Option[ListNode]) -> Option[ListNode] {
+    match (list1, list2) {
+        (None, other) | (other, None) => other,
+        (Some(n1), Some(n2)) => {
+            if n1.val <= n2.val {
+                Some(ListNode.Cons {
+                    val: n1.val,
+                    next: merge(n1.next, Some(n2)),
+                })
+            } else {
+                Some(ListNode.Cons {
+                    val: n2.val,
+                    next: merge(Some(n1), n2.next),
+                })
+            }
+        }
+    }
+}
+
+// Iterative approach: build result by appending to a dummy head
+fn merge_iterative(list1: Option[ListNode], list2: Option[ListNode]) -> Option[ListNode] {
+    let dummy = ListNode.Cons { val: 0, next: None };
+    let tail_val = 0;
+    let tail_next = None;
+    let result_head = None;
+    let mut l1 = list1;
+    let mut l2 = list2;
+    let mut result = Vec.new();
+
+    loop {
+        match (l1, l2) {
+            (None, None) => break,
+            (Some(n1), None) => {
+                result.push(n1.val);
+                l1 = n1.next;
+            }
+            (None, Some(n2)) => {
+                result.push(n2.val);
+                l2 = n2.next;
+            }
+            (Some(n1), Some(n2)) => {
+                if n1.val <= n2.val {
+                    result.push(n1.val);
+                    l1 = n1.next;
+                } else {
+                    result.push(n2.val);
+                    l2 = n2.next;
+                }
+            }
+        }
+    }
+
+    // Rebuild linked list from collected values
+    let mut out = None;
+    for val in result.iter().rev() {
+        out = Some(ListNode.Cons { val, next: out });
+    }
+    out
+}
+
+// Helper: build a linked list from an array
+fn from_array(arr: ref Vec[i64]) -> Option[ListNode] {
+    let mut result = None;
+    for val in arr.iter().rev() {
+        result = Some(ListNode.Cons { val, next: result });
+    }
+    result
+}
+
+// Helper: collect linked list values into a string
+fn to_string(list: ref Option[ListNode]) -> String {
+    let mut parts = Vec.new();
+    let mut current = list;
+
+    loop {
+        match current {
+            Some(ListNode.Cons { val, next }) => {
+                parts.push(val.to_string());
+                current = next;
+            }
+            _ => break,
+        }
+    }
+
+    f"[{parts.join(", ")}]"
+}
+
+fn main() {
+    // --- Recursive ---
+    // Test 1: [1,2,4] + [1,3,4] → [1,1,2,3,4,4]
+    let l1 = from_array([1, 2, 4]);
+    let l2 = from_array([1, 3, 4]);
+    let merged = merge(l1, l2);
+    println(f"Recursive: {to_string(merged)}");
+
+    // Test 2: [] + [] → []
+    let merged2 = merge(None, None);
+    println(f"Recursive: {to_string(merged2)}");
+
+    // Test 3: [] + [0] → [0]
+    let merged3 = merge(None, from_array([0]));
+    println(f"Recursive: {to_string(merged3)}");
+
+    // --- Iterative ---
+    // Test 1: [1,2,4] + [1,3,4] → [1,1,2,3,4,4]
+    let l1 = from_array([1, 2, 4]);
+    let l2 = from_array([1, 3, 4]);
+    let merged = merge_iterative(l1, l2);
+    println(f"Iterative: {to_string(merged)}");
+
+    // Test 2: [] + [] → []
+    let merged2 = merge_iterative(None, None);
+    println(f"Iterative: {to_string(merged2)}");
+
+    // Test 3: [] + [0] → [0]
+    let merged3 = merge_iterative(None, from_array([0]));
+    println(f"Iterative: {to_string(merged3)}");
+}
+
+// Expected output:
+// Recursive: [1, 1, 2, 3, 4, 4]
+// Recursive: []
+// Recursive: [0]
+// Iterative: [1, 1, 2, 3, 4, 4]
+// Iterative: []
+// Iterative: [0]

@@ -1,0 +1,83 @@
+// scheduler.kara — Scheduler trait and two concrete strategies.
+//
+// GAP-A: Effect polymorphism in trait methods.
+//   `next_stop` is declared pure (no `with` clause).  A future implementation
+//   that needs to log decisions (e.g. for an audit trail) cannot implement
+//   this trait — it would have `writes(Log)` in its body and fail verification.
+//   The design supports `fn next_stop[with E](...) -> Option[i64] with E` for
+//   effect-polymorphic trait methods, but the syntax for declaring a ceiling
+//   ("at most these effects") vs a floor ("at least") is underspecified.
+//
+// GAP-B: Unit structs.
+//   Scan and Fcfs carry no state.  The spec does not mention zero-field struct
+//   syntax; `struct Scan {}` is assumed valid but may need `struct Scan;`.
+
+import request.{Direction, MIN_FLOOR, MAX_FLOOR};
+
+pub trait Scheduler {
+    // Returns the next floor to visit given the current state.
+    // Implementations must be pure (no declared effects).
+    fn next_stop(
+        ref self,
+        current:   i64,
+        direction: ref Direction,
+        stops:     ref Vec[i64],
+    ) -> Option[i64];
+}
+
+// SCAN (Look) — sweeps up then down, wrapping at the far end.
+pub struct Scan {}
+
+impl Scheduler for Scan {
+    fn next_stop(
+        ref self,
+        current:   i64,
+        direction: ref Direction,
+        stops:     ref Vec[i64],
+    ) -> Option[i64] {
+        if stops.is_empty() {
+            return None;
+        }
+        match direction {
+            Up | Idle => {
+                let mut i: i64 = 0;
+                while i < stops.len() {
+                    if stops[i] >= current {
+                        return Some(stops[i]);
+                    }
+                    i = i + 1;
+                }
+                Some(stops[stops.len() - 1])   // wrap: highest queued
+            },
+            Down => {
+                let mut i: i64 = stops.len() - 1;
+                while i >= 0 {
+                    if stops[i] <= current {
+                        return Some(stops[i]);
+                    }
+                    i = i - 1;
+                }
+                Some(stops[0])                 // wrap: lowest queued
+            },
+        }
+    }
+}
+
+// FCFS (First Come First Served) — serves stops in insertion order.
+// The stops Vec is kept in insertion order rather than sorted.
+pub struct Fcfs {}
+
+impl Scheduler for Fcfs {
+    fn next_stop(
+        ref self,
+        current:   i64,
+        direction: ref Direction,
+        stops:     ref Vec[i64],
+    ) -> Option[i64] {
+        // GAP-10 (from v53): no iterator adaptors; must use index loop.
+        match stops.get(0) {
+            Some(f) => Some(f),
+            None    => None,
+        }
+    }
+}

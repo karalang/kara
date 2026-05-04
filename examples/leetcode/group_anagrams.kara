@@ -1,0 +1,51 @@
+// examples/leetcode/group_anagrams.kara
+//
+// LeetCode #49: Group Anagrams
+// Given an array of strings, group anagrams together.
+// e.g. ["eat","tea","tan","ate","nat","bat"] → [["eat","tea","ate"],["tan","nat"],["bat"]]
+//
+// Demonstrates: Map, closures (.map, .sort, .collect), string operations,
+//               iterators, tuple returns
+
+fn group_anagrams(strs: ref Vec[String]) -> Vec[Vec[String]] {
+    let mut groups: Map[String, Vec[String]] = Map.new();
+
+    for s in strs.iter() {
+        let key = s.sorted();
+        groups.entry(key).or_insert(Vec.new()).push(s.clone());
+    }
+
+    groups.values().collect()
+}
+
+fn main() {
+    // Test 1
+    let strs = ["eat", "tea", "tan", "ate", "nat", "bat"];
+    let groups = group_anagrams(strs);
+    println(f"Input:  {strs}");
+    println(f"Output: {groups}");
+    println("");
+
+    // Test 2: single element
+    let strs2 = ["a"];
+    let groups2 = group_anagrams(strs2);
+    println(f"Input:  {strs2}");
+    println(f"Output: {groups2}");
+    println("");
+
+    // Test 3: empty string
+    let strs3 = [""];
+    let groups3 = group_anagrams(strs3);
+    println(f"Input:  {strs3}");
+    println(f"Output: {groups3}");
+}
+
+// Expected output:
+// Input:  ["eat", "tea", "tan", "ate", "nat", "bat"]
+// Output: [["eat", "tea", "ate"], ["tan", "nat"], ["bat"]]
+//
+// Input:  ["a"]
+// Output: [["a"]]
+//
+// Input:  [""]
+// Output: [[""]]

@@ -1,0 +1,112 @@
+// executor_test.kara — Tests using with_provider to inject InMemoryDb.
+//
+// This is the canonical Kāra testing pattern for provider-rooted resources:
+// create a test-specific provider, inject it, run the code under test,
+// assert inside the closure.
+//
+// GAP-P (fully visible here): assertions must live inside the with_provider
+// closure.  You cannot do:
+//   let result = with_provider[Db](db, || execute(plan(...)));
+//   assert_eq(result, ...);   // ERROR: result may capture a provider reference
+// Instead every test is structured as with_provider { ... assert ... }.
+
+import query.{Query, Value};
+import db.{InMemoryDb, Db};
+import planner.plan;
+import executor.execute;
+
+fn seeded_db() -> InMemoryDb {
+    let mut db = InMemoryDb.new();
+    db.create_table("items");
+    db
+}
+
+test "execute: FullScan on empty table returns empty result" {
+    let db = seeded_db();
+    with_provider[Db](db, || {
+        let result = execute(plan(Query.Select {
+            table:   "items",
+            columns: Vec.new(),
+        }));
+        assert_eq(result.is_ok(), true);
+        assert_eq(result.unwrap().is_empty(), true);
+    });
+}
+
+test "execute: Insert then FullScan round-trips a row" {
+    let db = seeded_db();
+    with_provider[Db](db, || {
+        execute(plan(Query.Insert {
+            table: "items",
+            row: Map["name": Value.Text("Gadget"), "price": Value.Int(42)],
+        })).unwrap();
+
+        let rows = execute(plan(Query.Select {
+            table:   "items",
+            columns: Vec.new(),
+        })).unwrap();
+
+        assert_eq(rows.len(), 1);
+    });
+}
+
+test "execute: SelectWhere filters correctly" {
+    let db = seeded_db();
+    with_provider[Db](db, || {
+        execute(plan(Query.Insert {
+            table: "items",
+            row: Map["id": Value.Int(1), "name": Value.Text("Alpha")],
+        })).unwrap();
+        execute(plan(Query.Insert {
+            table: "items",
+            row: Map["id": Value.Int(2), "name": Value.Text("Beta")],
+        })).unwrap();
+
+        let rows = execute(plan(Query.SelectWhere {
+            table:   "items",
+            columns: Vec.new(),
+            column:  "id",
+            value:   Value.Int(1),
+        })).unwrap();
+
+        assert_eq(rows.len(), 1);
+    });
+}
+
+test "execute: query on unknown table returns TableNotFound error" {
+    let db = seeded_db();
+    with_provider[Db](db, || {
+        let result = execute(plan(Query.Select {
+            table:   "does_not_exist",
+            columns: Vec.new(),
+        }));
+        assert_eq(result.is_err(), true);
+    });
+}
+
+test "execute: Delete removes matching rows" {
+    let db = seeded_db();
+    with_provider[Db](db, || {
+        execute(plan(Query.Insert {
+            table: "items",
+            row: Map["id": Value.Int(1)],
+        })).unwrap();
+        execute(plan(Query.Insert {
+            table: "items",
+            row: Map["id": Value.Int(2)],
+        })).unwrap();
+
+        execute(plan(Query.Delete {
+            table:  "items",
+            column: "id",
+            value:  Value.Int(1),
+        })).unwrap();
+
+        let rows = execute(plan(Query.Select {
+            table:   "items",
+            columns: Vec.new(),
+        })).unwrap();
+
+        assert_eq(rows.len(), 1);
+    });
+}

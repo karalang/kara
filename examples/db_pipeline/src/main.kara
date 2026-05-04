@@ -1,0 +1,64 @@
+// main.kara — Demo: seed an InMemoryDb, run queries through the pipeline.
+//
+// GAP-P (demonstrated): with_provider scoping forces assertions inside the
+// closure.  The result of execute() cannot escape the provider scope, so
+// the print must happen inside the block.
+
+import query.{Query, Value, Row};
+import db.{InMemoryDb, Db};
+import planner.plan;
+import executor.execute;
+
+fn print_rows(rows: ref Vec[Row]) {
+    if rows.is_empty() {
+        println("  (no rows)");
+        return;
+    }
+    for row in rows {
+        println(f"  {row}");
+    }
+}
+
+fn main() {
+    let mut db = InMemoryDb.new();
+    db.create_table("users");
+    db.create_table("orders");
+
+    // Seed some data.
+    let seed_queries = [
+        Query.Insert {
+            table: "users",
+            row: Map["id": Value.Int(1), "name": Value.Text("Alice")],
+        },
+        Query.Insert {
+            table: "users",
+            row: Map["id": Value.Int(2), "name": Value.Text("Bob")],
+        },
+        Query.Insert {
+            table: "orders",
+            row: Map["user_id": Value.Int(1), "item": Value.Text("Widget")],
+        },
+    ];
+
+    with_provider[Db](db, || {
+        for q in seed_queries {
+            execute(plan(q)).unwrap();
+        }
+
+        println("--- SELECT users ---");
+        let rows = execute(plan(Query.Select {
+            table:   "users",
+            columns: Vec.new(),   // all columns
+        })).unwrap();
+        print_rows(ref rows);
+
+        println("--- SELECT orders WHERE user_id = 1 ---");
+        let rows = execute(plan(Query.SelectWhere {
+            table:   "orders",
+            columns: Vec.new(),
+            column:  "user_id",
+            value:   Value.Int(1),
+        })).unwrap();
+        print_rows(ref rows);
+    });
+}

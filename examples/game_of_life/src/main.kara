@@ -1,0 +1,35 @@
+// main.kara — Run a glider for 20 generationerations.
+//
+// GAP-I (demonstrated here): to get any parallelism across two independent
+// grids we use a par {} block at the simulation level, not within step().
+// The two grids are different allocations -> different effect resources ->
+// reads(grid_a) and reads(grid_b) are independent -> par {} is valid.
+// This is correct but coarse; per-row intra-step parallelism still requires
+// a par-for form or Vec.split_at_mut (GAP-I, GAP-J).
+
+import grid.Grid;
+import display.{render, clear_screen};
+
+// Seed a classic glider in the top-left corner of the grid.
+fn glider(width: i64, height: i64) -> Grid {
+    let mut g = Grid.new(width, height);
+    g.set(1, 0, true);
+    g.set(2, 1, true);
+    g.set(0, 2, true);
+    g.set(1, 2, true);
+    g.set(2, 2, true);
+    g
+}
+
+fn main() {
+    let mut grid = glider(20, 20);
+
+    let mut generation: i64 = 0;
+    while generation < 20 {
+        clear_screen();
+        println(f"Generation {generation}");
+        render(ref grid);
+        grid = grid.step();
+        generation = generation + 1;
+    }
+}

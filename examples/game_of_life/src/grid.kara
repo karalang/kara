@@ -1,0 +1,89 @@
+// grid.kara — Grid type, layout block, and the generation step.
+//
+// GAP-H: Layout blocks with heap-allocated fields.
+//   The spec's layout block examples show plain scalar fields being grouped
+//   for SoA.  Grouping a `Vec[bool]` field (heap-allocated) is ambiguous:
+//   does the layout block control the Vec's internal buffer placement, the
+//   Vec header (ptr+len+cap), or is it silently ignored?  No spec text
+//   addresses this.  The block below is written as intended by the author;
+//   whether the compiler honours it is unclear.
+//
+// GAP-I: No par-for — intra-step parallelism requires awkward decomposition.
+//   `step` reads from `self` (old grid) and writes into a new `Grid`.
+//   Since the two Grid allocations are distinct resources, reads(self) and
+//   writes(next) do not conflict — the compiler COULD auto-parallelize cell
+//   updates.  But `par {}` works on statements, not loop iterations.  To
+//   exploit parallelism the programmer must manually split the grid into
+//   disjoint regions and write a statement per region.  A `par for` form
+//   or a parallel map primitive would express this naturally.
+//
+// GAP-J: No Vec.split_at_mut.
+//   The idiomatic Rust solution for parallel writes into disjoint slices is
+//   `split_at_mut`.  Kāra's Slice type exists but `Vec.split_at_mut` is not
+//   in the stdlib table.  Without it, passing disjoint mutable regions to
+//   parallel tasks has no safe expression in the type system.
+
+import rules.{count_neighbors, next_state};
+
+pub struct Grid {
+    pub width:  i64,
+    pub height: i64,
+    cells: Vec[bool],   // row-major: cell(x, y) = cells[y * width + x]
+}
+
+layout Grid {
+    group { width, height }   // metadata — kept together, likely in a cache line
+    group { cells }           // bulk data — separate region
+}
+
+impl Grid {
+    pub fn new(width: i64, height: i64) -> Grid {
+        Grid {
+            width:  width,
+            height: height,
+            cells:  Vec.filled(width * height, false),
+        }
+    }
+
+    pub fn get(ref self, x: i64, y: i64) -> bool {
+        if x < 0 or x >= self.width or y < 0 or y >= self.height {
+            return false;   // treat out-of-bounds as dead (absorbing boundary)
+        }
+        self.cells[y * self.width + x]
+    }
+
+    pub fn set(mut ref self, x: i64, y: i64, alive: bool) {
+        if x < 0 or x >= self.width or y < 0 or y >= self.height {
+            return;
+        }
+        self.cells[y * self.width + x] = alive;
+    }
+
+    // Advance one generation.  Reads self (old state), returns a new Grid.
+    // The two allocations are distinct resources so reads+writes don't conflict,
+    // but loop-level parallelism requires GAP-I / GAP-J to be resolved first.
+    pub fn step(ref self) -> Grid {
+        let mut next = Grid.new(self.width, self.height);
+        let mut y: i64 = 0;
+        while y < self.height {
+            let mut x: i64 = 0;
+            while x < self.width {
+                let n = count_neighbors(ref self, x, y);
+                next.set(x, y, next_state(self.get(x, y), n));
+                x = x + 1;
+            }
+            y = y + 1;
+        }
+        next
+    }
+
+    pub fn population(ref self) -> i64 {
+        let mut count: i64 = 0;
+        for alive in self.cells {
+            if alive {
+                count = count + 1;
+            }
+        }
+        count
+    }
+}
