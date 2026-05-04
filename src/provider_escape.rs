@@ -20,14 +20,12 @@
 //! - Channel-send escape (`Sender.send(closure)`) — receiver-type
 //!   resolution via `let_types`, including the `let (tx, rx) = Channel.new()`
 //!   destructuring pattern.
+//! - `spawn` escape (`spawn(closure)`) — bare-identifier callee match in the
+//!   `Call` arm; the closure argument flows through the same escape-check
+//!   path as channel-send.
 //! - Ambient program-rooted resources (`FileSystem`, `Clock`, `RandomSource`,
 //!   `Env`, etc.) are exempt — only resources introduced by a `with_provider`
 //!   / `providers { }` scope are pushed onto the rooted-stack.
-//!
-//! Deferred:
-//! - `spawn` escape (`spawn(|| captures_rooted_resource)`) — blocked on
-//!   `spawn(||…)` user syntax landing (Phase 6.3, deferred to v1.1 per
-//!   `docs/roadmap.md`).
 
 use crate::ast::*;
 use crate::resolver::SpanKey;
@@ -86,6 +84,10 @@ pub enum EscapeKind {
     /// (`tx.clone().send(...)`) propagate the rule because the receiver
     /// type is still `Sender[T]`.
     ChannelSend,
+    /// Closure handed to `spawn(closure)`. The spawned task may run on
+    /// another worker and outlive the provider scope, so any closure
+    /// argument is treated as escaping.
+    Spawn,
 }
 
 impl EscapeError {
@@ -100,6 +102,7 @@ impl EscapeError {
                 format!("value reassigned to outer binding `{}`", target_name)
             }
             EscapeKind::ChannelSend => "value sent via channel".to_string(),
+            EscapeKind::Spawn => "value spawned as a task".to_string(),
         };
         format!(
             "closure captures provider-rooted resource `{}` but escapes its provider scope ({})",
@@ -675,6 +678,7 @@ impl<'a> EscapeChecker<'a> {
                 self.visit_expr(operand, false);
             }
             ExprKind::Call { callee, args } => {
+                self.check_spawn_escape(callee, args, &expr.span);
                 self.visit_expr(callee, false);
                 for a in args {
                     self.visit_expr(&a.value, false);
@@ -980,6 +984,28 @@ impl<'a> EscapeChecker<'a> {
             return;
         }
         self.check_escape_expr(&args[0].value, EscapeKind::ChannelSend, call_span);
+    }
+
+    /// Detect `spawn(closure)` calls inside a rooted scope and dispatch the
+    /// escape check on the argument. Spawn is treated as a hard escape
+    /// boundary: the spawned task may run on another worker and outlive
+    /// the provider scope, so any closure argument is treated as escaping.
+    /// Recognized callee shapes: bare identifier `spawn` and single-segment
+    /// path `spawn`. (Qualified stdlib paths like `std.task.spawn` will be
+    /// added when stdlib introduces the symbol.)
+    fn check_spawn_escape(&mut self, callee: &Expr, args: &[CallArg], call_span: &Span) {
+        if self.rooted.is_empty() || args.is_empty() {
+            return;
+        }
+        let is_spawn = match &callee.kind {
+            ExprKind::Identifier(n) => n == "spawn",
+            ExprKind::Path(segs) => segs.as_slice() == ["spawn"],
+            _ => false,
+        };
+        if !is_spawn {
+            return;
+        }
+        self.check_escape_expr(&args[0].value, EscapeKind::Spawn, call_span);
     }
 
     /// Resolve the receiver of a `MethodCall` to a user-defined type name

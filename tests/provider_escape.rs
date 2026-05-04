@@ -1045,3 +1045,117 @@ fn ok_channel_send_ambient_only_closure() {
     );
     assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
 }
+
+// ── spawn escape ───────────────────────────────────────────────
+
+#[test]
+fn err_spawn_closure_literal_captures_rooted() {
+    // Direct closure literal handed to `spawn(closure)` where the closure
+    // captures a provider-rooted resource — rejected.
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 spawn(|| Db.query());\n\
+             });\n\
+         }",
+    );
+    assert_eq!(errs.len(), 1, "expected one error, got {:?}", errs);
+    assert_eq!(errs[0].resource, "Db");
+    assert_eq!(errs[0].kind, EscapeKind::Spawn);
+}
+
+#[test]
+fn err_spawn_let_bound_closure_captures_rooted() {
+    // Closure assigned to a let-binding, then spawned — same rule via the
+    // let-bound-identifier rebind chain.
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 let job = || Db.query();\n\
+                 spawn(job);\n\
+             });\n\
+         }",
+    );
+    assert_eq!(errs.len(), 1, "expected one error, got {:?}", errs);
+    assert_eq!(errs[0].resource, "Db");
+    assert_eq!(errs[0].kind, EscapeKind::Spawn);
+}
+
+#[test]
+fn err_spawn_helper_returning_closure() {
+    // A helper function returns a closure capturing a rooted resource;
+    // the return value flows directly into `spawn(...)` — caught via
+    // the program-wide `compute_escapable_caps` pre-pass.
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn make_job() -> Fn() -> i64 { || Db.query() }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 spawn(make_job());\n\
+             });\n\
+         }",
+    );
+    assert_eq!(errs.len(), 1, "expected one error, got {:?}", errs);
+    assert_eq!(errs[0].resource, "Db");
+    assert_eq!(errs[0].kind, EscapeKind::Spawn);
+}
+
+#[test]
+fn ok_spawn_non_closure_value() {
+    // Spawning a non-closure value — no closure, no escape concern.
+    // (Won't compile end-to-end but the escape check runs structurally.)
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 let n = Db.query();\n\
+                 spawn(n);\n\
+             });\n\
+         }",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
+fn ok_spawn_pure_closure() {
+    // Closure with no captures of any rooted resource — passes.
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 spawn(|x: i64| x + 1);\n\
+             });\n\
+         }",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
+
+#[test]
+fn ok_spawn_ambient_only_closure() {
+    // Closure captures only ambient program-rooted resources (Clock under
+    // default provider) — no `with_provider` introduces those resources,
+    // so they aren't on the rooted stack and the spawn is allowed.
+    let errs = errors(
+        "effect resource Db;\n\
+         struct FakeDb {}\n\
+         impl FakeDb { fn query(self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             with_provider[Db](FakeDb {}, || {\n\
+                 spawn(|| Clock.now());\n\
+             });\n\
+         }",
+    );
+    assert!(errs.is_empty(), "expected no errors, got {:?}", errs);
+}
