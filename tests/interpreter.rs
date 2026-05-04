@@ -4271,3 +4271,129 @@ fn main() {
     );
     assert_eq!(output, "1\n3\n4\n");
 }
+
+// ── map / filter (wip-list2 subtask 3) ───────────────────────────
+
+#[test]
+fn test_iter_map_transforms_each_element() {
+    // `.map(|x| x * 10)` rewrites every element through the closure.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    for n in v.iter().map(|x| x * 10) {
+        println(n);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_filter_keeps_matching_elements() {
+    // `.filter(pred)` yields only elements where pred returns true.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for n in v.iter().filter(|x| x > 2) {
+        println(n);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n4\n5\n");
+}
+
+#[test]
+fn test_iter_map_then_filter_chain() {
+    // Adaptors chain: map first, then filter on the mapped values.
+    // 1,2,3,4 → *3 → 3,6,9,12 → > 5 → 6,9,12.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    for n in v.iter().map(|x| x * 3).filter(|y| y > 5) {
+        println(n);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "6\n9\n12\n");
+}
+
+#[test]
+fn test_iter_filter_then_map_chain() {
+    // Order matters — filter first, then map on filtered elements.
+    // 1,2,3,4,5 → > 2 → 3,4,5 → +100 → 103,104,105.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    for n in v.iter().filter(|x| x > 2).map(|x| x + 100) {
+        println(n);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "103\n104\n105\n");
+}
+
+#[test]
+fn test_iter_map_via_next_step_by_step() {
+    // map is lazy — each next() pull invokes the closure exactly once.
+    // No more, no fewer (verified by counting println side effects).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let mut it = v.iter().map(|x| x + 100);
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "101\n102\ndone\n");
+}
+
+#[test]
+fn test_iter_filter_drops_all_when_predicate_always_false() {
+    // When the predicate rejects every element, next() returns None on
+    // the first pull (after walking the entire source internally).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut it = v.iter().filter(|x| x > 100);
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}
+
+#[test]
+fn test_iter_map_on_map_kv_tuples() {
+    // Map.iter() yields (K, V) tuples; .map(|pair| ...) gets the tuple.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1);
+    m.insert("b", 2);
+    for s in m.iter().map(|(k, v)| f"{k}={v}") {
+        println(s);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "a=1\nb=2\n");
+}

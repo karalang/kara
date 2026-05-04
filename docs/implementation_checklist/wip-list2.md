@@ -76,10 +76,26 @@ reviewable in isolation.
 
 ## Baseline adaptors (the 6 the canonical L2 entry assumes already exist)
 
-- [ ] **3. `map(f)` + `filter(pred)`.** Two lazy wrappers — append a
-  `MapStep(closure)` / `FilterStep(closure)` to the iterator's adaptor chain.
-  Typechecker registers signatures with closure-typed args; interpreter dispatch
-  evaluates each step at `next()` time.
+- [x] **3. `map(f)` + `filter(pred)`.** New `IteratorStep` enum (`Map(Value)`
+  + `Filter(Value)`) extends `Value::Iterator` with a lazy adaptor chain.
+  `eval_method_call` arms for `map` / `filter` evaluate the closure once at
+  construction, push it as the matching step, and return the modified
+  iterator. New `iterator_step` helper drains items one at a time, applying
+  steps in order — `Filter` may reject; the loop retries until an item passes
+  every step or the source exhausts. New `invoke_function_value` helper
+  invokes a `Value::Function` against pre-evaluated args (no CICO write-back,
+  no default-eval, no type-substitution stack). The for-loop arm and `next()`
+  arm both route through `iterator_step` so adaptor closures fire per pull.
+  Typechecker side: `infer_iterator_method` adds `map(f: Fn(T) -> U) ->
+  Iterator[U]` (U solved from the closure's actual return type via
+  check_expr's closure-pushdown — `Type::Function { return: TypeParam(U) }`
+  pushed in, body inferred freely, return type read back) and `filter(pred:
+  Fn(T) -> bool) -> Iterator[T]` (return type known so plain check_expr
+  suffices). 6 typechecker tests + 7 interpreter tests cover map's element
+  type-change, filter's preservation, stacked maps threading types
+  (i64 → bool → String), explicit closure-param annotations, non-bool
+  predicate rejection, arity errors, lazy step-by-step pulls, the
+  empty-after-filter case, and `(K, V)` destructuring on `Map.iter().map(...)`.
 
 - [ ] **4. `collect()` + `fold(init, f)` + `count()`.** Three terminals.
   `collect()` v1 lands as `Vec`-only via typed-context inference (full

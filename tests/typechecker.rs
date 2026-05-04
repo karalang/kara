@@ -5726,3 +5726,90 @@ fn test_for_loop_on_set_iter_binds_element() {
          }",
     );
 }
+
+// ── Iterator adaptors: map / filter (wip-list2 subtask 3) ────────
+
+#[test]
+fn test_iter_map_changes_element_type_to_closure_return() {
+    // `Iterator[i64].map(|x| x > 0) -> Iterator[bool]`. The closure's
+    // return type pushes through the fresh `__iter_map_U` type param via
+    // `check_call_args_with_substitution`.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().map(|x| x > 0);
+             let _b: bool = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_filter_preserves_element_type() {
+    // filter never changes the element type — input and output Item are
+    // the same.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().filter(|x| x > 0);
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_map_chain_threads_types() {
+    // Stacked maps thread types through: i64 → bool → String.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().map(|x| x > 0).map(|b| if b { "yes" } else { "no" });
+             let _s: String = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_map_with_typed_closure_param_accepted() {
+    // Explicit closure-param annotations work alongside check-mode pushdown.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().map(|x: i64| x * 2);
+             let _n: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_filter_predicate_must_return_bool() {
+    // The closure return type is checked against `bool` — non-bool
+    // returns produce a type-mismatch diagnostic.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().filter(|x| x + 1);
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on non-bool predicate, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_map_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().map();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.map()")),
+        "expected WrongNumberOfArgs for map() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}

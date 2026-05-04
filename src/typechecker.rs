@@ -8635,9 +8635,8 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Infer the return type of a method call on `Iterator[Item = T]`.
-    /// `next()` is the only adaptor method registered in subtask 1; the rest
-    /// of the surface (`map`, `filter`, `take`, etc.) lands in later subtasks
-    /// of `wip-list2.md` § Iterator trait — full adaptor surface.
+    /// `next()` lands in subtask 1; `map(f)` / `filter(pred)` in subtask 3;
+    /// the rest of the surface follows in `wip-list2.md` subtasks 4+.
     fn infer_iterator_method(
         &mut self,
         item: &Type,
@@ -8656,6 +8655,69 @@ impl<'a> TypeChecker<'a> {
                 }
                 Type::Named {
                     name: "Option".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "map" => {
+                // `map(f: Fn(T) -> U) -> Iterator[U]` — U is solved by
+                // pushing `Fn(T) -> TypeParam("__iter_map_U")` into
+                // `check_expr`. The closure-pushdown path (lines 5429+) seeds
+                // the closure's parameter from T and infers the body type
+                // freely; the resulting `actual` is `Fn(T) -> body_ty`. We
+                // then read body_ty back out as the new Item type.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.map() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Error],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_map_U".to_string())),
+                };
+                let actual_ty = self.check_expr(&args[0].value, &f_ty);
+                let new_item = match actual_ty {
+                    Type::Function { return_type, .. } => *return_type,
+                    _ => Type::Error,
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
+            "filter" => {
+                // `filter(pred: Fn(T) -> bool) -> Iterator[T]` — no fresh
+                // type variable; the predicate's signature is fully known
+                // so check_expr suffices for closure-param pushdown.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.filter() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![item.clone()],
+                    };
+                }
+                let pred_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::Bool),
+                };
+                self.check_expr(&args[0].value, &pred_ty);
+                Type::Named {
+                    name: "Iterator".to_string(),
                     args: vec![item.clone()],
                 }
             }

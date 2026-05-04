@@ -98,11 +98,13 @@ pub enum Value {
     /// Iterator value produced by `.iter()` / `.into_iter()` on a collection.
     /// `items` holds the source elements eagerly snapshotted at construction
     /// (Array as-is, Map as `(K, V)` tuples, Set/SortedSet flattened);
-    /// `cursor` is the next-yield index. Subtask 1 of the iterator-adaptor
-    /// surface tracked in `wip-list2.md` — adaptor steps land in subtask 3+.
+    /// `cursor` is the next-yield index; `steps` is the lazy adaptor chain
+    /// applied per `next()` pull. The `IteratorStep` enum grows as adaptors
+    /// land. Tracked in `wip-list2.md` § Iterator trait — full adaptor surface.
     Iterator {
         items: Vec<Value>,
         cursor: usize,
+        steps: Vec<IteratorStep>,
     },
     /// Sender[T] end of a Channel[T]. Wraps a shared queue so that cloning a
     /// Sender creates an additional producer that shares the same buffer.
@@ -215,6 +217,19 @@ pub enum EnumData {
     Struct(HashMap<String, Value>),
 }
 
+/// One step in a `Value::Iterator`'s lazy adaptor chain. Each step is a
+/// closure-bearing transform applied per `next()` pull. New variants land
+/// as the adaptor surface grows in `wip-list2.md` subtasks 6+.
+#[derive(Debug, Clone, PartialEq)]
+pub enum IteratorStep {
+    /// `.map(f)` — apply `f` to each item before yielding.
+    /// The Value is a `Value::Function` (closure).
+    Map(Value),
+    /// `.filter(pred)` — yield only items where `pred(item)` is `true`.
+    /// The Value is a `Value::Function` (closure returning `bool`).
+    Filter(Value),
+}
+
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -313,7 +328,7 @@ impl std::fmt::Display for Value {
             }
             Value::Sender(_) => write!(f, "<Sender>"),
             Value::Receiver(_) => write!(f, "<Receiver>"),
-            Value::Iterator { items, cursor } => {
+            Value::Iterator { items, cursor, .. } => {
                 write!(f, "<iter {}/{}>", cursor, items.len())
             }
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
@@ -1705,13 +1720,18 @@ impl<'a> Interpreter<'a> {
                         .into_iter()
                         .map(|(k, v)| Value::Tuple(vec![k, v]))
                         .collect(),
-                    // Iterator: drain remaining items from cursor onward.
-                    // Subtask 1's iterator is eager (items snapshotted at
-                    // iter() time); a snapshot-drain is observably identical
-                    // to a `next()` loop today. When closure-bearing adaptors
-                    // land in subtask 3+ this arm becomes a `next()`-driven
-                    // pull so adaptor closures fire per step. See `wip-list2.md`.
-                    Value::Iterator { items, cursor } => items.into_iter().skip(cursor).collect(),
+                    // Iterator: drain via repeated `iterator_step` so adaptor
+                    // closures (Map / Filter / future) fire per element. The
+                    // for-loop walks the resulting Vec uniformly with the
+                    // raw-collection arms above.
+                    iter @ Value::Iterator { .. } => {
+                        let mut it = iter;
+                        let mut drained = Vec::new();
+                        while let Some(v) = self.iterator_step(&mut it) {
+                            drained.push(v);
+                        }
+                        drained
+                    }
                     _ => vec![iter_val],
                 };
                 for item in items {
@@ -3084,6 +3104,93 @@ impl<'a> Interpreter<'a> {
         }
     }
 
+    /// Pull the next element from a `Value::Iterator`, applying its lazy
+    /// adaptor chain (`Map` / `Filter` / future). Returns `None` when
+    /// exhausted; callers are responsible for any state-write-back of
+    /// the modified iterator value to their bindings.
+    ///
+    /// `Filter` may reject items, so the body loops until either an item
+    /// passes every step or the source runs out. The adaptor closures
+    /// can mutate captured outer bindings (via `mut ref` capture); the
+    /// iterator's own state (items / cursor / steps) is parameter data,
+    /// not on `self`, so the borrow checker tolerates the nested call.
+    fn iterator_step(&mut self, iter: &mut Value) -> Option<Value> {
+        // Snapshot the step chain once so the per-element loop doesn't
+        // hold a borrow on `*iter` across `invoke_function_value` calls.
+        let steps = match iter {
+            Value::Iterator { steps, .. } => steps.clone(),
+            _ => return None,
+        };
+        loop {
+            let raw_item = {
+                let Value::Iterator { items, cursor, .. } = iter else {
+                    return None;
+                };
+                if *cursor >= items.len() {
+                    return None;
+                }
+                let it = items[*cursor].clone();
+                *cursor += 1;
+                it
+            };
+            let mut item = raw_item;
+            let mut keep = true;
+            for step in &steps {
+                match step {
+                    IteratorStep::Map(f) => {
+                        item = self.invoke_function_value(f.clone(), vec![item]);
+                    }
+                    IteratorStep::Filter(pred) => {
+                        let result = self.invoke_function_value(pred.clone(), vec![item.clone()]);
+                        if !matches!(result, Value::Bool(true)) {
+                            keep = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            if keep {
+                return Some(item);
+            }
+        }
+    }
+
+    /// Invoke a `Value::Function` (closure or named function) with
+    /// pre-evaluated argument values. Used by iterator adaptors that
+    /// receive a closure as an already-evaluated value rather than via the
+    /// AST path `eval_call` takes (no CICO write-back, no default-value
+    /// evaluation, no type-substitution stack — the closure is fully
+    /// monomorphic by the time it reaches an adaptor step).
+    fn invoke_function_value(&mut self, callee: Value, arg_vals: Vec<Value>) -> Value {
+        let Value::Function {
+            param_patterns,
+            body,
+            closure_env,
+            ..
+        } = callee
+        else {
+            return Value::Unit;
+        };
+        self.env.push_scope();
+        if let Some(captured) = closure_env {
+            for (k, v) in captured {
+                self.env.define(k, v);
+            }
+        }
+        for (i, pat) in param_patterns.iter().enumerate() {
+            if let Some(v) = arg_vals.get(i) {
+                self.bind_pattern(pat, v.clone());
+            }
+        }
+        let result = self.eval_block_inner(&body);
+        self.env.pop_scope();
+        match result {
+            Ok(v) => v,
+            Err(ControlFlow::Return(v)) => v,
+            Err(cf) => self.set_cf(cf),
+        }
+    }
+
     fn eval_method_call(
         &mut self,
         object: &Expr,
@@ -3263,38 +3370,80 @@ impl<'a> Interpreter<'a> {
                         method, span.line, span.column,
                     ),
                 };
-                return Value::Iterator { items, cursor: 0 };
+                return Value::Iterator {
+                    items,
+                    cursor: 0,
+                    steps: Vec::new(),
+                };
             }
             "next" => {
-                // `Iterator.next()` — yield `Some(items[cursor])` and advance,
-                // or `None` when exhausted. When the receiver is a binding,
-                // write the advanced cursor back so subsequent calls see it.
-                // The `matches!` guard borrows `obj` so the fall-through path
-                // (defensive — typechecker should reject non-Iterator receivers)
-                // can keep using it.
+                // `Iterator.next()` — pull the next item via `iterator_step`,
+                // applying any adaptor closures registered in `steps`. When
+                // the receiver is a binding, write the advanced state back
+                // so subsequent calls see it. The `matches!` guard borrows
+                // `obj` so the fall-through path (defensive — typechecker
+                // should reject non-Iterator receivers) can keep using it.
                 if matches!(obj, Value::Iterator { .. }) {
-                    let Value::Iterator { items, mut cursor } = obj else {
-                        unreachable!()
-                    };
-                    let result = if cursor < items.len() {
-                        let val = items[cursor].clone();
-                        cursor += 1;
-                        Value::EnumVariant {
+                    let mut iter_val = obj;
+                    let yielded = self.iterator_step(&mut iter_val);
+                    let result = match yielded {
+                        Some(val) => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "Some".to_string(),
                             data: EnumData::Tuple(vec![val]),
-                        }
-                    } else {
-                        Value::EnumVariant {
+                        },
+                        None => Value::EnumVariant {
                             enum_name: "Option".to_string(),
                             variant: "None".to_string(),
                             data: EnumData::Unit,
-                        }
+                        },
                     };
                     if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Iterator { items, cursor });
+                        self.env.set(name, iter_val);
                     }
                     return result;
+                }
+            }
+            "map" | "filter" => {
+                // Lazy adaptors — append a `MapStep(closure)` /
+                // `FilterStep(closure)` to the iterator's adaptor chain.
+                // The closure is evaluated to a Value::Function once at
+                // construction; per-element invocation happens at next()
+                // time via `iterator_step`. Per design.md § Iterator
+                // Adaptors, transformations are lazy — only terminal ops
+                // drive iteration.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            format!("Iterator.{}() requires a closure argument", method),
+                            span,
+                        );
+                    };
+                    let closure = self.eval_expr_inner(&arg.value);
+                    if !matches!(closure, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.{}() expects a closure; got {}", method, closure),
+                            span,
+                        );
+                    }
+                    let Value::Iterator {
+                        items,
+                        cursor,
+                        mut steps,
+                    } = obj
+                    else {
+                        unreachable!()
+                    };
+                    steps.push(match method {
+                        "map" => IteratorStep::Map(closure),
+                        "filter" => IteratorStep::Filter(closure),
+                        _ => unreachable!(),
+                    });
+                    return Value::Iterator {
+                        items,
+                        cursor,
+                        steps,
+                    };
                 }
             }
             "as_slice" | "as_slice_mut" => {
