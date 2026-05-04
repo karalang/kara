@@ -158,9 +158,23 @@ reviewable in isolation.
   steps applying to both chained sides, state persistence across
   separate `next()` pulls, and arity / element-type errors.
 
-- [ ] **8. `take_while(pred)` + `skip_while(pred)`.** Predicate-bounded
-  adaptors. `take_while` stops on first failing element; `skip_while` skips
-  while the predicate holds, then yields the rest unconditionally.
+- [x] **8. `take_while(pred)` + `skip_while(pred)`.** Predicate-bounded
+  adaptors. Two new `IteratorStep` variants — `TakeWhile { pred, done }`
+  and `SkipWhile { pred, done }`, both carrying a closure plus a
+  one-shot transition flag. `take_while` evaluates `pred(item)` per
+  pull; on the first false it sets `done = true`, signals stop, and
+  drains the source so subsequent pulls also return None (sticky-stop).
+  `skip_while` rejects items while `pred(item)` is true; on the first
+  false it flips `done = true` and yields the trip element AND every
+  subsequent element unconditionally without re-firing the predicate
+  (sticky-pass). Both share `filter`'s `Fn(T) -> bool` signature so
+  closure-pushdown via `check_expr` suffices. 7 typechecker tests + 12
+  interpreter tests cover the prefix-only / first-fails-yields-nothing
+  / all-pass / first-fails-yields-all axes, the sticky semantics
+  (predicate side-effect prefixes prove no re-fire after trip), state
+  persistence across separate `next()` pulls, composition with filter
+  and with each other (`skip_while.take_while` while-window), and
+  arity / non-bool errors.
 
 - [ ] **9. `flat_map(f)`.** Closure returns an iterator; flatten the result.
   Each `next()` advances through the inner iterator until exhausted, then pulls

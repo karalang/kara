@@ -5301,3 +5301,235 @@ fn main() {
     );
     assert_eq!(output, "1\n2\n9\ndone\n");
 }
+
+#[test]
+fn test_iter_take_while_yields_until_first_failure() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 10, 4, 5];
+    for x in v.iter().take_while(|x| x < 5) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Stops at the first element where predicate fails (10), yielding
+    // only the 1, 2, 3 prefix — even though 4 and 5 follow, take_while
+    // does not resume after a failure.
+    assert_eq!(output, "1\n2\n3\n");
+}
+
+#[test]
+fn test_iter_take_while_first_element_fails_yields_nothing() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    let mut it = v.iter().take_while(|x| x < 5);
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}
+
+#[test]
+fn test_iter_take_while_all_pass_yields_all_elements() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    for x in v.iter().take_while(|x| x < 100) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n3\n");
+}
+
+#[test]
+fn test_iter_take_while_short_circuits_predicate() {
+    // After the first false, predicate must NOT fire on subsequent
+    // elements. Use println side effects to verify: the prefix prints
+    // "p:N" for each predicate call, and the body prints "y:N" for
+    // each yielded element.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 9, 3, 4];
+    for x in v.iter().take_while(|x| { println(f"p:{x}"); x < 5 }) {
+        println(f"y:{x}");
+    }
+}
+"#,
+    );
+    // Predicate fires on 1, 2 (yield), 9 (stop). Never on 3 or 4.
+    // For-loop drains the iterator first, then iterates the body — so
+    // the order is predicate-prefix then yielded-prefix. The
+    // short-circuit guarantee is still proven by the absence of "p:3"
+    // and "p:4".
+    assert_eq!(output, "p:1\np:2\np:9\ny:1\ny:2\n");
+}
+
+#[test]
+fn test_iter_skip_while_drops_leading_prefix() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 10, 1, 2];
+    for x in v.iter().skip_while(|x| x < 5) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Skips 1, 2, 3 (predicate true), then yields 10 and everything
+    // that follows — INCLUDING 1, 2 — because skip_while does not
+    // re-test once the predicate has failed.
+    assert_eq!(output, "10\n1\n2\n");
+}
+
+#[test]
+fn test_iter_skip_while_all_pass_yields_nothing() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut it = v.iter().skip_while(|x| x < 100);
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}
+
+#[test]
+fn test_iter_skip_while_first_element_fails_yields_all() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    for x in v.iter().skip_while(|x| x < 5) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Predicate is false on the very first element, so skip_while
+    // yields the whole iterator unchanged.
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_skip_while_does_not_re_test_after_first_failure() {
+    // Same observation harness as the take_while short-circuit test:
+    // predicate side-effects show the call sequence, body shows yields.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 9, 3, 4];
+    for x in v.iter().skip_while(|x| { println(f"p:{x}"); x < 5 }) {
+        println(f"y:{x}");
+    }
+}
+"#,
+    );
+    // Predicate fires on 1, 2, 9 (trip). Never on 3 or 4. After the
+    // trip, 9 is yielded and 3 / 4 pass through unconditionally.
+    assert_eq!(output, "p:1\np:2\np:9\ny:9\ny:3\ny:4\n");
+}
+
+#[test]
+fn test_iter_take_while_state_persists_across_next_calls() {
+    // Once take_while has tripped, subsequent next() calls must
+    // continue to return None — even though the source has more items.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 9, 3];
+    let mut it = v.iter().take_while(|x| x < 5);
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("still-done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\ndone\nstill-done\n");
+}
+
+#[test]
+fn test_iter_skip_while_state_persists_across_next_calls() {
+    // Once skip_while has tripped, every subsequent next() must
+    // return the next raw item without re-testing the predicate.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 9, 3, 4];
+    let mut it = v.iter().skip_while(|x| x < 5);
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "9\n3\n4\ndone\n");
+}
+
+#[test]
+fn test_iter_take_while_composes_with_filter() {
+    // Filter feeds take_while — predicate sees only elements that
+    // passed the filter; take_while stops on the first kept-but-failing.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6, 7, 8];
+    let xs: Vec[i64] = v.iter().filter(|x| x % 2 == 0).take_while(|x| x < 7).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Filter yields 2, 4, 6, 8. take_while(<7) stops at 8 → [2, 4, 6].
+    assert_eq!(output, "2\n4\n6\n");
+}
+
+#[test]
+fn test_iter_skip_while_then_take_while_window() {
+    // skip_while drops leading prefix, take_while bounds the tail.
+    // Composition produces a "while-window" view.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 5, 6, 7, 9, 1];
+    let xs: Vec[i64] = v.iter().skip_while(|x| x < 5).take_while(|x| x < 9).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // skip_while drops 1, 2 → trips on 5. take_while keeps 5, 6, 7;
+    // stops at 9. Trailing 1 is unreachable because take_while is
+    // sticky-stop after the first failure.
+    assert_eq!(output, "5\n6\n7\n");
+}
