@@ -19,7 +19,7 @@ Sourced from open gaps identified during design review that don't require design
   - [x] **4. `Map.clear()`** — `karac_map_clear` runtime fn + interp + codegen (commit `8806883`)
   - [x] **5. `keys()` / `values()` / `entries()` codegen** — materialize Vec via `karac_map_iter_*` (commit `b150d8c`)
   - [ ] **6. `Display` for collections** — `Vec` / `Map` / `Set` / `VecDeque` / `SortedSet` / `TreeMap`; supersedes the stub at `phase-8-stdlib-floor.md:207` (delete that line)
-  - [ ] **7. `Map[k: v, ...]` prefix-literal K/V inference** — typechecker only; closes `phase-4-interpreter.md` line 13
+  - [x] **7. `Map[k: v, ...]` prefix-literal K/V inference** — turned out to need parser + codegen too; closes `phase-4-interpreter.md` line 13 (commit `1678d0a`)
 
 - [~] **`Set[T]` LLVM codegen.** _(canonical: [phase-8-stdlib-floor.md](phase-8-stdlib-floor.md), search `Set[T] LLVM codegen`)_
   - [ ] **1. Codegen state** — `set_elem_types` side-table + `extract_set_elem_type` helper
