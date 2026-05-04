@@ -220,6 +220,17 @@ impl<'a> Lowerer<'a> {
                 for e in items {
                     self.lower_expr(e);
                 }
+                // `Array[e1, e2, …]` is just the prefix-named form of the
+                // bare `[e1, e2, …]` array literal — canonicalize it here so
+                // codegen has a single ArrayLiteral arm to handle. Vec / Set
+                // / Map prefix forms stay as PrefixCollectionLiteral; their
+                // codegen paths consume the type-name marker.
+                if let ExprKind::PrefixCollectionLiteral { type_name, items } = &mut expr.kind {
+                    if type_name == "Array" {
+                        let lowered_items = std::mem::take(items);
+                        expr.kind = ExprKind::ArrayLiteral(lowered_items);
+                    }
+                }
             }
             ExprKind::MapLiteral(pairs) => {
                 for (k, v) in pairs {

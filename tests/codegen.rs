@@ -1574,14 +1574,6 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "PrefixCollectionLiteral{Array, ...} not lowered to ArrayLiteral — \
-                falls through codegen's expr dispatch to const-i64-zero, then \
-                `arr[i] = v` errors with 'Index store on non-array type'. \
-                Tracked: lowering.rs needs to convert PrefixCollectionLiteral \
-                with type_name Array into ArrayLiteral. Was silently masked by \
-                the harness's `if let Some(out) = out { ... }` accept-on-None \
-                pattern until the harness was hardened to panic on codegen \
-                errors."]
     fn test_e2e_array_basics_example() {
         let src = include_str!("../examples/array_basics.kara");
         let out = run_program(src);
@@ -1810,15 +1802,6 @@ fn main() {
     // ── ref parameter semantics ───────────────────────────────────
 
     #[test]
-    #[ignore = "compile_index doesn't dispatch through the Vec path for \
-                `ref Vec[T]` parameters: the ref-param loads as a pointer, but \
-                the variable's slot type is the i64-default fallback (not \
-                vec_struct_type), so `v[i]` falls through to the array path \
-                which errors 'Index operator applied to non-array type'. \
-                Tracked: compile_index needs a leading branch that checks \
-                vec_elem_types[name] and routes to a Vec-index path that \
-                follows the ref. Was silently masked before the harness \
-                hardening."]
     fn test_e2e_ref_vec_param() {
         let out = run_program(
             r#"
@@ -2881,14 +2864,18 @@ fn main() {
     }
 
     #[test]
-    #[ignore = "? cross-error From-conversion emits LLVM that fails verification: \
-                `MyError.from(e)` returns a `{ i64 }` struct but the `?` \
-                propagation path inserts that struct into an i64 word slot \
-                of the outer Result aggregate (LLVM rejects: 'Call parameter \
-                type does not match function signature'). Tracked: codegen's \
-                `?` path needs to extract the inner i64 from the user-defined \
-                error struct (or coerce_to_i64) before insertvalue. Was \
-                silently masked before the harness hardening."]
+    #[ignore = "LLVM-verification half of the cross-error `?` bug is fixed: \
+                the `?` propagation now reconstitutes the source error struct \
+                from the i64 payload word before calling Target.from, and \
+                coerces the struct return back to an i64 word for the outer \
+                Result. But the test asserts on `e.code` in `Err(e) => …`, \
+                which needs match-arm bindings to reconstitute struct payloads \
+                from the i64 word — `bind_pattern_values` for TupleVariant \
+                currently binds the i64 directly. Reconstructing the struct \
+                requires plumbing typechecker pattern-type info into codegen's \
+                bind site, a separate codegen change. Smoke-test the \
+                LLVM-verification fix via a follow-up that asserts on a \
+                non-struct-field match-arm action, e.g. `Err(_) => println(99)`."]
     fn test_e2e_question_cross_error_from_conversion() {
         // ? converts the inner error type via the user-impl `From` when
         // typechecker records a question_conversion at this site.
@@ -2917,6 +2904,41 @@ fn main() {
             // Without conversion: 7. With From doubling: 14.
             assert_eq!(out.trim(), "14");
         }
+    }
+
+    #[test]
+    fn test_e2e_question_cross_error_from_conversion_reaches_err_arm() {
+        // Smoke test for the LLVM-verification half of the `?` cross-error
+        // path: codegen reconstitutes the source-error struct from the i64
+        // payload word before calling `Target.from`, and coerces the
+        // returned struct back to an i64 word for the outer Result aggregate.
+        // The full `e.code` assertion is gated on a separate codegen fix
+        // for struct-payload match-arm binding (see the `#[ignore]` note on
+        // `test_e2e_question_cross_error_from_conversion`); this case
+        // matches the Err arm without touching the binding's fields, so it
+        // exercises the verification fix in isolation.
+        let out = run_program(
+            r#"
+struct RawError { code: i64 }
+struct MyError { code: i64 }
+impl From for MyError {
+    fn from(e: RawError) -> MyError { MyError { code: e.code * 2_i64 } }
+}
+fn lookup() -> Result[i64, RawError] { Err(RawError { code: 7_i64 }) }
+fn process() -> Result[i64, MyError] {
+    let _ = lookup()?;
+    Ok(0_i64)
+}
+fn main() {
+    match process() {
+        Ok(_) => println(0_i64),
+        Err(_) => println(99_i64),
+    }
+}
+"#,
+        );
+        let out = out.expect("? cross-error codegen should not bail");
+        assert_eq!(out.trim(), "99");
     }
 
     #[test]

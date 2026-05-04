@@ -3122,9 +3122,33 @@ impl<'ctx> Codegen<'ctx> {
             if let Some(target) = self.question_conversions.get(&key).cloned() {
                 let qualified = format!("{}.from", target);
                 if let Some(from_fn) = self.module.get_function(&qualified) {
+                    // The inner err payload was unpacked into the uniform
+                    // i64 word `w0` by the enum-payload codegen, but
+                    // `Target.from(e: SourceError)` is declared at the
+                    // surface level taking the error type itself — for any
+                    // `struct SourceError { ... }` LLVM lowers that to the
+                    // struct shape. Reconstitute the struct value from the
+                    // i64 word so the call's argument matches the param
+                    // type. Single-field structs (the common error-wrapper
+                    // shape) take field 0 from `w0`; other shapes pass `w0`
+                    // through unchanged (the typechecker rejects these
+                    // before reaching codegen, so this is just a safety
+                    // fallback).
+                    let arg_ty = from_fn.get_nth_param(0).unwrap().get_type();
+                    let arg: BasicValueEnum<'ctx> = match arg_ty {
+                        BasicTypeEnum::StructType(st) if st.count_fields() == 1 => {
+                            let undef = st.get_undef();
+                            self.builder
+                                .build_insert_value(undef, w0, 0, "q_from_arg")
+                                .unwrap()
+                                .into_struct_value()
+                                .into()
+                        }
+                        _ => w0,
+                    };
                     let call_site = self
                         .builder
-                        .build_call(from_fn, &[w0.into()], "q_from")
+                        .build_call(from_fn, &[arg.into()], "q_from")
                         .unwrap();
                     call_site.try_as_basic_value().unwrap_basic()
                 } else {
@@ -3137,6 +3161,14 @@ impl<'ctx> Codegen<'ctx> {
                 w0
             };
 
+        // The error-payload slot is a uniform i64 word (matches the
+        // tag+i64-words enum lowering). User-impl `Target.from(e)` returns
+        // the target type's value — a struct for any `struct MyError { ... }`.
+        // Coerce so `insertvalue` agrees with the slot's element type;
+        // single-field structs (the common error-wrapper shape) extract to
+        // their inner field.
+        let propagated_word = self.coerce_to_i64(propagated_payload)?;
+
         let ret_struct = {
             let undef = enum_ty.get_undef();
             let s1 = self
@@ -3144,7 +3176,7 @@ impl<'ctx> Codegen<'ctx> {
                 .build_insert_value(undef, i64_t.const_int(0, false), 0, "q_ret_tag")
                 .unwrap();
             self.builder
-                .build_insert_value(s1, propagated_payload, 1, "q_ret_val")
+                .build_insert_value(s1, propagated_word, 1, "q_ret_val")
                 .unwrap()
         };
         self.builder.build_return(Some(&ret_struct)).unwrap();
@@ -6479,6 +6511,16 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Vec variable indexing: route through `compile_vec_index` so both
+        // owned and `ref Vec[T]` forms work. The downstream slot.ty branch
+        // can't handle ref Vecs — for them slot.ty is `ptr`, not the Vec
+        // struct type, so the StructType arm below would never fire.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.vec_elem_types.contains_key(name.as_str()) {
+                return self.compile_vec_index(name, index);
+            }
+        }
+
         let idx_val = self.compile_expr(index)?.into_int_value();
         let i64_t = self.context.i64_type();
 
@@ -6532,65 +6574,78 @@ impl<'ctx> Codegen<'ctx> {
                 .build_load(elem_ty, elem_ptr, "arr.elem")
                 .unwrap();
             Ok(val)
-        } else if let BasicTypeEnum::StructType(_) = arr_ty {
-            // Vec indexing: load len, bounds check, load data[i].
-            if let ExprKind::Identifier(name) = &object.kind {
-                if self.vec_elem_types.contains_key(name.as_str()) {
-                    let vec_ty = self.vec_struct_type();
-                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
-                    let elem_ty = self.vec_elem_type_for_var(name);
-
-                    let len_ptr = self
-                        .builder
-                        .build_struct_gep(vec_ty, arr_ptr, 1, "v.len.ptr")
-                        .unwrap();
-                    let len = self
-                        .builder
-                        .build_load(i64_t, len_ptr, "v.len")
-                        .unwrap()
-                        .into_int_value();
-                    let data_ptr_ptr = self
-                        .builder
-                        .build_struct_gep(vec_ty, arr_ptr, 0, "v.data.ptr")
-                        .unwrap();
-                    let data = self
-                        .builder
-                        .build_load(ptr_ty, data_ptr_ptr, "v.data")
-                        .unwrap()
-                        .into_pointer_value();
-
-                    let fn_val = self.current_fn.unwrap();
-                    let oob_bb = self.context.append_basic_block(fn_val, "vidx.oob");
-                    let ok_bb = self.context.append_basic_block(fn_val, "vidx.ok");
-                    let cmp = self
-                        .builder
-                        .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
-                        .unwrap();
-                    self.builder
-                        .build_conditional_branch(cmp, oob_bb, ok_bb)
-                        .unwrap();
-
-                    self.builder.position_at_end(oob_bb);
-                    self.emit_panic("vec index out of bounds");
-                    self.builder.build_unreachable().unwrap();
-
-                    self.builder.position_at_end(ok_bb);
-                    let elem_ptr = unsafe {
-                        self.builder
-                            .build_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
-                            .unwrap()
-                    };
-                    let val = self
-                        .builder
-                        .build_load(elem_ty, elem_ptr, "v.elem")
-                        .unwrap();
-                    return Ok(val);
-                }
-            }
-            Err("Index operator applied to non-array type".to_string())
         } else {
+            // Vec, Slice, Map already routed through their dedicated paths
+            // above. Anything still reaching here is genuinely not indexable.
             Err("Index operator applied to non-array type".to_string())
         }
+    }
+
+    /// Index into a `Vec[T]` variable: `v[i]`. Handles both owned Vec values
+    /// (slot is the `{ptr,len,cap}` struct) and `ref Vec[T]` parameters
+    /// (slot is a `ptr` to the caller's struct) by routing the struct-base
+    /// pointer through `get_data_ptr`. Loads `len`, bounds-checks, then
+    /// GEPs `data[i]` and loads the element.
+    fn compile_vec_index(
+        &mut self,
+        name: &str,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let elem_ty = self.vec_elem_type_for_var(name);
+
+        let vec_ptr = self
+            .get_data_ptr(name)
+            .ok_or_else(|| format!("Undefined Vec variable '{}' in index expression", name))?;
+        let idx_val = self.compile_expr(index)?.into_int_value();
+
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "v.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "v.len")
+            .unwrap()
+            .into_int_value();
+        let data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 0, "v.data.ptr")
+            .unwrap();
+        let data = self
+            .builder
+            .build_load(ptr_ty, data_pp, "v.data")
+            .unwrap()
+            .into_pointer_value();
+
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "vidx.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "vidx.ok");
+        let cmp = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, oob_bb, ok_bb)
+            .unwrap();
+
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("vec index out of bounds");
+        self.builder.build_unreachable().unwrap();
+
+        self.builder.position_at_end(ok_bb);
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
+                .unwrap()
+        };
+        let val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "v.elem")
+            .unwrap();
+        Ok(val)
     }
 
     fn compile_slice_index_store(
@@ -7842,6 +7897,19 @@ impl<'ctx> Codegen<'ctx> {
                 .into_int_value()),
             BasicValueEnum::PointerValue(pv) => {
                 Ok(self.builder.build_ptr_to_int(pv, i64_t, "ptoi").unwrap())
+            }
+            // Single-field structs (e.g. `MyError { code: i64 }`) collapse to
+            // their field-0 value so the result fits a uniform i64 payload
+            // word. Multi-field structs intentionally fall through to the
+            // zero default — there's no faithful single-i64 encoding for
+            // them, and any such case here is a codegen-shape bug elsewhere
+            // that we'd rather see surface than paper over.
+            BasicValueEnum::StructValue(sv) if sv.get_type().count_fields() == 1 => {
+                let field = self
+                    .builder
+                    .build_extract_value(sv, 0, "struct.f0")
+                    .unwrap();
+                self.coerce_to_i64(field)
             }
             _ => Ok(i64_t.const_int(0, false)),
         }
