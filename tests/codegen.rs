@@ -3786,26 +3786,25 @@ fn main() {
     println(m.len());
     let v1 = m.get(("alice", 1_i64));
     match v1 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v2 = m.get(("bob", 1_i64));
     match v2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v3 = m.get(("alice", 9_i64));
     match v3 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
 }
 "#,
         );
-        if let Some(out) = out {
-            let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["3", "100", "300", "-1"]);
-        }
+        let out = out.expect("tuple-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["3", "100", "300", "-1"]);
     }
 
     #[test]
@@ -3824,10 +3823,9 @@ fn main() {
 }
 "#,
         );
-        if let Some(out) = out {
-            let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["3", "12", "34", "14"]);
-        }
+        let out = out.expect("tuple-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["3", "12", "34", "14"]);
     }
 
     #[test]
@@ -3840,22 +3838,21 @@ fn main() {
     let mut m: Map[(String, i64), i64] = Map.new();
     let first = m.insert(("k", 1_i64), 10_i64);
     match first {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     let second = m.insert(("k", 1_i64), 20_i64);
     match second {
-        Some(x) => { println(x); }
-        None => { println(0_i64); }
+        Some(x) => println(x),
+        None => println(0_i64),
     }
     println(m.len());
 }
 "#,
         );
-        if let Some(out) = out {
-            let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["0", "10", "1"]);
-        }
+        let out = out.expect("tuple-key overwrite codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["0", "10", "1"]);
     }
 
     #[test]
@@ -3875,26 +3872,160 @@ fn main() {
     println(m.len());
     let v = m.get(("p", (1_i64, 2_i64)));
     match v {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v2 = m.get(("q", (1_i64, 2_i64)));
     match v2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v3 = m.get(("p", (9_i64, 9_i64)));
     match v3 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
 }
 "#,
         );
-        if let Some(out) = out {
-            let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["3", "12", "99", "-1"]);
-        }
+        let out = out.expect("nested tuple-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["3", "12", "99", "-1"]);
+    }
+
+    #[test]
+    fn test_e2e_map_primitive_struct_key() {
+        // `#[derive(Hash, Eq)]` struct of primitives lowers to a packed-by-
+        // field LLVM struct with no padding (here: `{ i64, i64 }`, 16 bytes).
+        // The existing byte-loop FNV-1a path hashes the raw struct bytes,
+        // and the byte-by-byte eq compares them — both correct for the
+        // primitive-only case.
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    let mut m: Map[Point, i64] = Map.new();
+    m.insert(Point { x: 1_i64, y: 2_i64 }, 12_i64);
+    m.insert(Point { x: 3_i64, y: 4_i64 }, 34_i64);
+    println(m.len());
+    let v = m.get(Point { x: 1_i64, y: 2_i64 });
+    match v {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v2 = m.get(Point { x: 9_i64, y: 9_i64 });
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+}
+"#,
+        );
+        let out = out.expect("primitive-struct-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["2", "12", "-1"]);
+    }
+
+    #[test]
+    fn test_e2e_map_struct_with_string_key() {
+        // `#[derive(Hash, Eq)]` struct with a String field — the per-field
+        // recursion path is required: a byte-loop over the raw struct bytes
+        // would hash the data-ptr + len + cap, which differs across distinct
+        // allocations even when the string contents match. Per-field recursion
+        // routes the String field through the contents-aware String hash.
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+struct Tag {
+    name: String,
+    n: i64,
+}
+
+fn main() {
+    let mut m: Map[Tag, i64] = Map.new();
+    m.insert(Tag { name: "alice", n: 1_i64 }, 100_i64);
+    m.insert(Tag { name: "alice", n: 2_i64 }, 200_i64);
+    m.insert(Tag { name: "bob",   n: 1_i64 }, 300_i64);
+    println(m.len());
+    let v1 = m.get(Tag { name: "alice", n: 1_i64 });
+    match v1 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v2 = m.get(Tag { name: "bob", n: 1_i64 });
+    match v2 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+    let v3 = m.get(Tag { name: "alice", n: 9_i64 });
+    match v3 {
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
+    }
+}
+"#,
+        );
+        let out = out.expect("struct-with-String-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["3", "100", "300", "-1"]);
+    }
+
+    #[test]
+    fn test_e2e_enum_match_simple_singleton() {
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let g: Color = Color.Green;
+    match g {
+        Color.Green => println(11_i64),
+        _ => println(99_i64),
+    }
+}
+"#,
+        );
+        let out = out.expect("simple enum match should not bail");
+        assert_eq!(out.trim(), "11");
+    }
+
+    #[test]
+    fn test_e2e_enum_variant_match_codegen_sanity() {
+        // Sanity: distinct unit-enum variants codegen to distinct values
+        // (different tags). Pre-requisite for `Map[Color, V]` to work.
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+enum Color { Red, Green, Blue }
+
+fn main() {
+    let r: Color = Color.Red;
+    let g: Color = Color.Green;
+    let b: Color = Color.Blue;
+    match r {
+        Color.Red => println(0_i64),
+        _ => println(99_i64),
+    }
+    match g {
+        Color.Green => println(1_i64),
+        _ => println(99_i64),
+    }
+    match b {
+        Color.Blue => println(2_i64),
+        _ => println(99_i64),
+    }
+}
+"#,
+        );
+        let out = out.expect("enum variant match codegen sanity");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["0", "1", "2"]);
     }
 
     #[test]
@@ -3916,26 +4047,25 @@ fn main() {
     println(m.len());
     let v1 = m.get(Color.Red);
     match v1 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v2 = m.get(Color.Green);
     match v2 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
     let v3 = m.get(Color.Blue);
     match v3 {
-        Some(x) => { println(x); }
-        None => { println(0_i64 - 1_i64); }
+        Some(x) => println(x),
+        None => println(0_i64 - 1_i64),
     }
 }
 "#,
         );
-        if let Some(out) = out {
-            let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["3", "100", "200", "300"]);
-        }
+        let out = out.expect("unit-enum-key codegen should not bail");
+        let lines: Vec<&str> = out.trim().lines().collect();
+        assert_eq!(lines, vec!["3", "100", "200", "300"]);
     }
 
     #[test]

@@ -3001,8 +3001,48 @@ impl<'ctx> Codegen<'ctx> {
             } => self.compile_method_call(object, method, args, &expr.span),
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
+            ExprKind::Path(segments) => self.compile_path_expr(segments),
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
+    }
+
+    /// Compile a `Type.Variant` path expression. The parser emits `Color.Red`
+    /// as `ExprKind::Path(["Color", "Red"])` (any dotted ident sequence whose
+    /// segments start with an uppercase letter). The only case currently
+    /// reaching this arm is unit-variant construction — payload-bearing
+    /// variants go through `ExprKind::Call { callee: Path(...), args }` and
+    /// are dispatched by `compile_assoc_call`.
+    fn compile_path_expr(&mut self, segments: &[String]) -> Result<BasicValueEnum<'ctx>, String> {
+        if segments.len() == 2 {
+            let type_name = &segments[0];
+            let variant_name = &segments[1];
+            if let Some(layout) = self.enum_layouts.get(type_name).cloned() {
+                if let Some(&tag) = layout.tags.get(variant_name) {
+                    if layout.field_counts.get(variant_name).copied().unwrap_or(0) == 0 {
+                        let i64_t = self.context.i64_type();
+                        if let Some(info) = self.shared_types.get(type_name).cloned() {
+                            let ptr = self.emit_rc_alloc(info.heap_type);
+                            let tag_ptr = self
+                                .builder
+                                .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
+                                .unwrap();
+                            self.builder
+                                .build_store(tag_ptr, i64_t.const_int(tag, false))
+                                .unwrap();
+                            return Ok(ptr.into());
+                        }
+                        let mut agg = layout.llvm_type.get_undef();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+                            .unwrap()
+                            .into_struct_value();
+                        return Ok(agg.into());
+                    }
+                }
+            }
+        }
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// Compile the `?` early-propagation operator for `Result[T,E]` and `Option[T]`.
