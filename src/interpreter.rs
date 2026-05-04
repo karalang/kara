@@ -3814,6 +3814,14 @@ impl<'a> Interpreter<'a> {
                     return Value::Bool(was_present);
                 }
             }
+            "clear" => {
+                if let Value::Map(_) = obj {
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::Map(Vec::new()));
+                    }
+                    return Value::Unit;
+                }
+            }
             "min" => {
                 if let Value::SortedSet(ref set) = obj {
                     return match set.keys().next() {

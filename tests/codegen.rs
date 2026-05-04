@@ -3568,6 +3568,53 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_map_clear() {
+        // clear() empties the map; subsequent insert/lookup work normally.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 10_i64);
+    m.insert(2_i64, 20_i64);
+    m.insert(3_i64, 30_i64);
+    println(m.len());
+    m.clear();
+    println(m.len());
+    println(m.is_empty());
+    m.insert(7_i64, 70_i64);
+    println(m[7_i64]);
+    println(m.contains_key(1_i64));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "0", "true", "70", "false"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_map_clear_string_key() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("a", 1_i64);
+    m.insert("b", 2_i64);
+    m.clear();
+    println(m.len());
+    m.insert("c", 3_i64);
+    println(m["c"]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "3"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_map_index_panics_on_missing() {
         // Indexing a Map with a missing key panics at runtime.
         let captured = run_program_capturing(

@@ -349,6 +349,19 @@ pub unsafe extern "C" fn karac_map_len(map: *const c_void) -> u64 {
     (*(map as *const KaracMap)).len as u64
 }
 
+/// Removes every entry from `map`. Resets `len` and `tombstones` to 0 and
+/// zeroes the status array so every bucket reads as `BUCKET_EMPTY`. The bucket
+/// capacity is preserved — matches the Rust `HashMap::clear` contract. The
+/// `kv` byte buffer is left untouched (its contents become unreachable but
+/// remain allocated for reuse on subsequent inserts).
+#[no_mangle]
+pub unsafe extern "C" fn karac_map_clear(map: *mut c_void) {
+    let m = &mut *(map as *mut KaracMap);
+    ptr::write_bytes(m.status, BUCKET_EMPTY, m.capacity);
+    m.len = 0;
+    m.tombstones = 0;
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn karac_map_iter_new(map: *const c_void) -> *mut c_void {
     let iter = Box::new(KaracMapIter {

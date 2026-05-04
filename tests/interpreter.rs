@@ -3049,6 +3049,23 @@ fn test_map_merge() {
 }
 
 #[test]
+fn test_map_clear() {
+    let output = run("fn main() {\n\
+             let m: Map[String, i64] = Map.new();\n\
+             m.insert(\"a\", 1_i64);\n\
+             m.insert(\"b\", 2_i64);\n\
+             println(m.len());\n\
+             m.clear();\n\
+             println(m.len());\n\
+             println(m.is_empty());\n\
+             m.insert(\"c\", 3_i64);\n\
+             println(m.contains_key(\"a\"));\n\
+             println(m.contains_key(\"c\"));\n\
+         }");
+    assert_eq!(output, "2\n0\ntrue\nfalse\ntrue\n");
+}
+
+#[test]
 fn test_map_merge_overwrite() {
     let output = run("fn main() {\n\
              let a: Map[String, i64] = Map.new();\n\

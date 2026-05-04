@@ -455,6 +455,7 @@ struct Codegen<'ctx> {
     karac_map_remove_old_fn: FunctionValue<'ctx>,
     karac_map_contains_fn: FunctionValue<'ctx>,
     karac_map_len_fn: FunctionValue<'ctx>,
+    karac_map_clear_fn: FunctionValue<'ctx>,
     karac_map_iter_new_fn: FunctionValue<'ctx>,
     karac_map_iter_next_fn: FunctionValue<'ctx>,
     karac_map_iter_free_fn: FunctionValue<'ctx>,
@@ -587,6 +588,11 @@ impl<'ctx> Codegen<'ctx> {
         let karac_map_len_fn =
             module.add_function("karac_map_len", map_len_ty, Some(Linkage::External));
 
+        // karac_map_clear(map: ptr) -> void
+        let map_clear_ty = context.void_type().fn_type(&[ptr_md], false);
+        let karac_map_clear_fn =
+            module.add_function("karac_map_clear", map_clear_ty, Some(Linkage::External));
+
         // karac_map_iter_new(map: ptr) -> ptr
         let map_iter_new_ty = ptr_type.fn_type(&[ptr_md], false);
         let karac_map_iter_new_fn = module.add_function(
@@ -692,6 +698,7 @@ impl<'ctx> Codegen<'ctx> {
             karac_map_remove_old_fn,
             karac_map_contains_fn,
             karac_map_len_fn,
+            karac_map_clear_fn,
             karac_map_iter_new_fn,
             karac_map_iter_next_fn,
             karac_map_iter_free_fn,
@@ -5073,6 +5080,13 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap_basic()
                     .into_int_value();
                 Ok(found.into())
+            }
+            "clear" => {
+                self.builder
+                    .build_call(self.karac_map_clear_fn, &[map_handle.into()], "")
+                    .unwrap();
+                // Map.clear returns Unit — codegen represents Unit as i64 0.
+                Ok(i64_t.const_int(0, false).into())
             }
             _ => Err(format!("codegen: Map.{method} not yet implemented")),
         }

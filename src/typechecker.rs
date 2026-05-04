@@ -8321,6 +8321,16 @@ impl<'a> TypeChecker<'a> {
                 }
                 map_kv
             }
+            "clear" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "Map.clear() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Unit
+            }
             _ => {
                 for arg in args {
                     self.infer_expr(&arg.value);
