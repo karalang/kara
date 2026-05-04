@@ -6316,3 +6316,110 @@ fn test_iter_skip_wrong_arg_count_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+#[test]
+fn test_iter_chain_preserves_element_type() {
+    // chain(other) yields Iterator[T] where T matches both sides.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[i64] = Vec.new();
+             let mut it = v.iter().chain(w.iter());
+             let _x: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_chain_mismatched_element_type_rejected() {
+    // Left yields i64; right yields String — chain rejects the
+    // element-type mismatch.
+    let errs = typecheck_errors(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[String] = Vec.new();
+             let _it = v.iter().chain(w.iter());
+         }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on chain element-type mismatch, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_chain_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chain();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.chain()")),
+        "expected WrongNumberOfArgs for chain() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_zip_yields_tuple_of_two_element_types() {
+    // zip(other) yields Iterator[(T, U)]. Different types on each side.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[String] = Vec.new();
+             let mut it = v.iter().zip(w.iter());
+             let (_a, _b): (i64, String) = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_zip_with_mapped_other_uses_mapped_type() {
+    // zip composes with map on the other side — the U slot reflects
+    // the mapped type.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let w: Vec[i64] = Vec.new();
+             let mut it = v.iter().zip(w.iter().map(|x| if x > 0 { "pos" } else { "neg" }));
+             let (_a, _b): (i64, String) = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_zip_with_non_iterator_arg_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().zip(42);
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on zip(non-iter), got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_zip_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().zip();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.zip()")),
+        "expected WrongNumberOfArgs for zip() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}

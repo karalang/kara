@@ -139,9 +139,24 @@ reviewable in isolation.
   `map.enumerate` mapped tuple), tuple type threading, and arity /
   non-int errors.
 
-- [ ] **7. `chain(other)` + `zip(other)`.** Two-source combinators. `chain`
-  exhausts self then exhausts other; `zip` pairs until the shorter source ends.
-  Both take `other: impl Iterator` typed args.
+- [x] **7. `chain(other)` + `zip(other)`.** Two-source combinators.
+  Required restructuring `Value::Iterator`: previous `items` + `cursor`
+  fields collapsed into a new `IteratorSource` enum with three
+  variants — `Eager { items, cursor }` (the existing `coll.iter()`
+  snapshot path), `Chain { parts, current }` (sequential
+  concatenation), and `Zip { left, right }` (synchronous pair). New
+  `pull_source` helper does the source-layer pull; `iterator_step`
+  now layers the adaptor chain on top of whatever `pull_source`
+  yields. Each side of a chain / zip retains its own step chain;
+  downstream adaptors append to the wrapping iterator's empty steps,
+  applying uniformly to all yielded items. Chain / zip use
+  `mem::replace` to take parts out across recursive `iterator_step`
+  calls (avoids aliasing `&mut self` with the iter binding); state
+  flows back via writeback after the recursive call. 7 typechecker
+  tests + 12 interpreter tests cover order, shorter-side stop on
+  zip, per-side adaptors firing inside chain / zip, downstream
+  steps applying to both chained sides, state persistence across
+  separate `next()` pulls, and arity / element-type errors.
 
 - [ ] **8. `take_while(pred)` + `skip_while(pred)`.** Predicate-bounded
   adaptors. `take_while` stops on first failing element; `skip_while` skips

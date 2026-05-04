@@ -4993,3 +4993,215 @@ fn main() {
     );
     assert_eq!(output, "0=100\n1=200\n2=300\n");
 }
+
+#[test]
+fn test_iter_chain_yields_left_then_right() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let w = [10, 20, 30];
+    for x in v.iter().chain(w.iter()) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_chain_left_empty_yields_only_right() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let w = [7, 8];
+    for x in v.iter().chain(w.iter()) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "7\n8\n");
+}
+
+#[test]
+fn test_iter_chain_right_empty_yields_only_left() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [3, 4];
+    let w: Vec[i64] = Vec[];
+    for x in v.iter().chain(w.iter()) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n4\n");
+}
+
+#[test]
+fn test_iter_chain_preserves_per_side_adaptors() {
+    // Each side keeps its own adaptor chain — left's filter and
+    // right's map both fire on their own elements only.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let w = [10, 20];
+    let xs: Vec[i64] = v.iter().filter(|x| x > 2).chain(w.iter().map(|y| y + 100)).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n4\n110\n120\n");
+}
+
+#[test]
+fn test_iter_chain_downstream_step_applies_to_both_sides() {
+    // Downstream map on the result of chain applies to ALL items
+    // regardless of which side they came from.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let w = [10, 20];
+    for x in v.iter().chain(w.iter()).map(|x| x * 100) {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "100\n200\n1000\n2000\n");
+}
+
+#[test]
+fn test_iter_zip_pairs_elements_in_lockstep() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let w = ["a", "b", "c"];
+    for (n, s) in v.iter().zip(w.iter()) {
+        println(f"{n}:{s}");
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1:a\n2:b\n3:c\n");
+}
+
+#[test]
+fn test_iter_zip_stops_at_shorter_left_side() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let w = ["a", "b", "c", "d"];
+    for (n, s) in v.iter().zip(w.iter()) {
+        println(f"{n}:{s}");
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1:a\n2:b\n");
+}
+
+#[test]
+fn test_iter_zip_stops_at_shorter_right_side() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let w = ["a", "b"];
+    for (n, s) in v.iter().zip(w.iter()) {
+        println(f"{n}:{s}");
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1:a\n2:b\n");
+}
+
+#[test]
+fn test_iter_zip_either_empty_yields_nothing() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v: Vec[i64] = Vec[];
+    let w = ["a", "b"];
+    let mut it = v.iter().zip(w.iter());
+    match it.next() {
+        Some(_) => println("had value"),
+        None => println("empty"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "empty\n");
+}
+
+#[test]
+fn test_iter_zip_preserves_per_side_adaptors() {
+    // Left's filter and right's map both fire while zipping. Filtering
+    // and mapping happen INSIDE each side's iteration; zip pulls from
+    // the post-adaptor stream.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let w = [10, 20, 30, 40];
+    for (a, b) in v.iter().filter(|x| x > 1).zip(w.iter().map(|y| y * 2)) {
+        println(f"{a}+{b}");
+    }
+}
+"#,
+    );
+    // Left filtered: 2, 3, 4, 5. Right mapped: 20, 40, 60, 80.
+    // Zipped: (2,20) (3,40) (4,60) (5,80).
+    assert_eq!(output, "2+20\n3+40\n4+60\n5+80\n");
+}
+
+#[test]
+fn test_iter_zip_with_enumerate_on_one_side() {
+    // Composes with enumerate on the right side — index and value.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = ["a", "b", "c"];
+    let w = [10, 20, 30];
+    for (s, (i, n)) in v.iter().zip(w.iter().enumerate()) {
+        println(f"{s}:{i}={n}");
+    }
+}
+"#,
+    );
+    assert_eq!(output, "a:0=10\nb:1=20\nc:2=30\n");
+}
+
+#[test]
+fn test_iter_chain_state_persists_across_next_calls() {
+    // After exhausting left via two next() calls, the third pull
+    // should switch to right transparently.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let w = [9];
+    let mut it = v.iter().chain(w.iter());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n9\ndone\n");
+}

@@ -95,15 +95,14 @@ pub enum Value {
     /// Set[T: Hash + Eq] — hash set backed by a Vec for interpreter simplicity.
     /// O(n) lookup is fine for testing; the typechecker enforces Hash + Eq.
     Set(Vec<Value>),
-    /// Iterator value produced by `.iter()` / `.into_iter()` on a collection.
-    /// `items` holds the source elements eagerly snapshotted at construction
-    /// (Array as-is, Map as `(K, V)` tuples, Set/SortedSet flattened);
-    /// `cursor` is the next-yield index; `steps` is the lazy adaptor chain
-    /// applied per `next()` pull. The `IteratorStep` enum grows as adaptors
-    /// land. Tracked in `wip-list2.md` § Iterator trait — full adaptor surface.
+    /// Iterator value produced by `.iter()` / `.into_iter()` on a
+    /// collection or by adaptor calls. `source` produces raw items
+    /// (eager snapshot, chained sequence, or zipped pair); `steps` is
+    /// the lazy adaptor chain applied per `next()` pull. The
+    /// `IteratorSource` and `IteratorStep` enums grow as adaptors land.
+    /// Tracked in `wip-list2.md` § Iterator trait — full adaptor surface.
     Iterator {
-        items: Vec<Value>,
-        cursor: usize,
+        source: IteratorSource,
         steps: Vec<IteratorStep>,
     },
     /// Sender[T] end of a Channel[T]. Wraps a shared queue so that cloning a
@@ -239,6 +238,27 @@ pub enum EnumData {
     Struct(HashMap<String, Value>),
 }
 
+/// The raw-item supplier behind a `Value::Iterator`. Eager handles the
+/// usual `coll.iter()` snapshot path; Chain and Zip support the
+/// multi-source combinators landed in `wip-list2.md` subtask 7. Pulling
+/// from an iterator goes: `pull_source` (this enum) → apply each
+/// `IteratorStep` in `steps` → yield (or reject and retry).
+#[derive(Debug, Clone, PartialEq)]
+pub enum IteratorSource {
+    /// Pre-extracted items walked by cursor — Vec/Set/SortedSet/Map/
+    /// Array.iter() use this. Map yields `(K, V)` tuples, SortedSet
+    /// flattens to ascending order.
+    Eager { items: Vec<Value>, cursor: usize },
+    /// Sequential concatenation — drive each part fully (through its
+    /// own step chain) before moving to the next. Each part is itself
+    /// a `Value::Iterator`; `current` is the part being drained.
+    Chain { parts: Vec<Value>, current: usize },
+    /// Synchronous pair — pull from `left` and `right` in lockstep,
+    /// yield `(a, b)` tuples until either side ends. Each side is a
+    /// `Value::Iterator`.
+    Zip { left: Box<Value>, right: Box<Value> },
+}
+
 /// One step in a `Value::Iterator`'s lazy adaptor chain. Each step is a
 /// transform applied per `next()` pull. Some steps carry mutable state
 /// (positional counters for `enumerate` / `take` / `skip`); the per-call
@@ -363,9 +383,15 @@ impl std::fmt::Display for Value {
             }
             Value::Sender(_) => write!(f, "<Sender>"),
             Value::Receiver(_) => write!(f, "<Receiver>"),
-            Value::Iterator { items, cursor, .. } => {
-                write!(f, "<iter {}/{}>", cursor, items.len())
-            }
+            Value::Iterator { source, .. } => match source {
+                IteratorSource::Eager { items, cursor } => {
+                    write!(f, "<iter {}/{}>", cursor, items.len())
+                }
+                IteratorSource::Chain { parts, current } => {
+                    write!(f, "<iter chain {}/{}>", current, parts.len())
+                }
+                IteratorSource::Zip { .. } => write!(f, "<iter zip>"),
+            },
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
             Value::Entry {
                 map_var,
@@ -3174,16 +3200,8 @@ impl<'a> Interpreter<'a> {
             _ => return None,
         };
         let yielded = 'pull: loop {
-            let raw_item = {
-                let Value::Iterator { items, cursor, .. } = iter else {
-                    break 'pull None;
-                };
-                if *cursor >= items.len() {
-                    break 'pull None;
-                }
-                let it = items[*cursor].clone();
-                *cursor += 1;
-                it
+            let Some(raw_item) = self.pull_source(iter) else {
+                break 'pull None;
             };
             let mut item = raw_item;
             let mut keep = true;
@@ -3225,9 +3243,7 @@ impl<'a> Interpreter<'a> {
                 // `take` exhaustion — drain the source so subsequent
                 // calls also return None without touching downstream
                 // adaptor state.
-                if let Value::Iterator { items, cursor, .. } = iter {
-                    *cursor = items.len();
-                }
+                self.drain_source(iter);
                 break 'pull None;
             }
             if keep {
@@ -3244,6 +3260,124 @@ impl<'a> Interpreter<'a> {
             *stored_steps = steps;
         }
         yielded
+    }
+
+    /// Pull the next raw item from an iterator's source layer. Eager
+    /// walks `items[cursor]`; Chain advances through its parts, calling
+    /// `iterator_step` recursively on each so per-part adaptor chains
+    /// fire; Zip pulls from both sides in lockstep, yielding a tuple or
+    /// stopping when either side ends.
+    fn pull_source(&mut self, iter: &mut Value) -> Option<Value> {
+        let Value::Iterator { source, .. } = iter else {
+            return None;
+        };
+        match source {
+            IteratorSource::Eager { items, cursor } => {
+                if *cursor >= items.len() {
+                    return None;
+                }
+                let it = items[*cursor].clone();
+                *cursor += 1;
+                Some(it)
+            }
+            IteratorSource::Chain { .. } => {
+                // Walk the current part until it yields or exhausts; on
+                // exhaust, advance to the next. Take parts out of the
+                // source while recursing so we can pass `&mut self` to
+                // iterator_step without aliasing the iter binding.
+                loop {
+                    let Value::Iterator {
+                        source: IteratorSource::Chain { parts, current },
+                        ..
+                    } = iter
+                    else {
+                        return None;
+                    };
+                    if *current >= parts.len() {
+                        return None;
+                    }
+                    let idx = *current;
+                    let mut part = std::mem::replace(&mut parts[idx], Value::Unit);
+                    let yielded = self.iterator_step(&mut part);
+                    let Value::Iterator {
+                        source: IteratorSource::Chain { parts, current },
+                        ..
+                    } = iter
+                    else {
+                        return None;
+                    };
+                    parts[idx] = part;
+                    if yielded.is_some() {
+                        return yielded;
+                    }
+                    *current += 1;
+                }
+            }
+            IteratorSource::Zip { .. } => {
+                // Take both sides out so we can pass &mut self into
+                // iterator_step twice without aliasing the iter binding.
+                let (mut left, mut right) = if let Value::Iterator {
+                    source: IteratorSource::Zip { left, right },
+                    ..
+                } = iter
+                {
+                    (
+                        std::mem::replace(left.as_mut(), Value::Unit),
+                        std::mem::replace(right.as_mut(), Value::Unit),
+                    )
+                } else {
+                    return None;
+                };
+                let l = self.iterator_step(&mut left);
+                let r = self.iterator_step(&mut right);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::Zip {
+                            left: l_box,
+                            right: r_box,
+                        },
+                    ..
+                } = iter
+                {
+                    **l_box = left;
+                    **r_box = right;
+                }
+                match (l, r) {
+                    (Some(a), Some(b)) => Some(Value::Tuple(vec![a, b])),
+                    _ => None,
+                }
+            }
+        }
+    }
+
+    /// Force an iterator's source to "exhausted" — used by `take(0)` so
+    /// subsequent pulls return None without re-firing downstream adaptors.
+    fn drain_source(&mut self, iter: &mut Value) {
+        let Value::Iterator { source, .. } = iter else {
+            return;
+        };
+        match source {
+            IteratorSource::Eager { items, cursor } => *cursor = items.len(),
+            IteratorSource::Chain { parts, current } => *current = parts.len(),
+            IteratorSource::Zip { left, right } => {
+                let mut l = std::mem::replace(left.as_mut(), Value::Unit);
+                let mut r = std::mem::replace(right.as_mut(), Value::Unit);
+                self.drain_source(&mut l);
+                self.drain_source(&mut r);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::Zip {
+                            left: l_box,
+                            right: r_box,
+                        },
+                    ..
+                } = iter
+                {
+                    **l_box = l;
+                    **r_box = r;
+                }
+            }
+        }
     }
 
     /// Shared body for `Entry.or_insert(default)` and the vacant arm of
@@ -3494,8 +3628,7 @@ impl<'a> Interpreter<'a> {
                     ),
                 };
                 return Value::Iterator {
-                    items,
-                    cursor: 0,
+                    source: IteratorSource::Eager { items, cursor: 0 },
                     steps: Vec::new(),
                 };
             }
@@ -3549,12 +3682,7 @@ impl<'a> Interpreter<'a> {
                             span,
                         );
                     }
-                    let Value::Iterator {
-                        items,
-                        cursor,
-                        mut steps,
-                    } = obj
-                    else {
+                    let Value::Iterator { source, mut steps } = obj else {
                         unreachable!()
                     };
                     steps.push(match method {
@@ -3562,11 +3690,7 @@ impl<'a> Interpreter<'a> {
                         "filter" => IteratorStep::Filter(closure),
                         _ => unreachable!(),
                     });
-                    return Value::Iterator {
-                        items,
-                        cursor,
-                        steps,
-                    };
+                    return Value::Iterator { source, steps };
                 }
             }
             "enumerate" => {
@@ -3574,20 +3698,11 @@ impl<'a> Interpreter<'a> {
                 // chain. iterator_step wraps each yielded item into
                 // `(idx, item)` and bumps the counter.
                 if matches!(obj, Value::Iterator { .. }) {
-                    let Value::Iterator {
-                        items,
-                        cursor,
-                        mut steps,
-                    } = obj
-                    else {
+                    let Value::Iterator { source, mut steps } = obj else {
                         unreachable!()
                     };
                     steps.push(IteratorStep::Enumerate(0));
-                    return Value::Iterator {
-                        items,
-                        cursor,
-                        steps,
-                    };
+                    return Value::Iterator { source, steps };
                 }
             }
             "take" | "skip" => {
@@ -3611,12 +3726,7 @@ impl<'a> Interpreter<'a> {
                             );
                         }
                     };
-                    let Value::Iterator {
-                        items,
-                        cursor,
-                        mut steps,
-                    } = obj
-                    else {
+                    let Value::Iterator { source, mut steps } = obj else {
                         unreachable!()
                     };
                     steps.push(match method {
@@ -3624,10 +3734,62 @@ impl<'a> Interpreter<'a> {
                         "skip" => IteratorStep::Skip(n),
                         _ => unreachable!(),
                     });
+                    return Value::Iterator { source, steps };
+                }
+            }
+            "chain" => {
+                // Lazy two-source combinator. Wraps `self` and `other`
+                // into an `IteratorSource::Chain` so each side keeps
+                // its own (already-applied) step chain. Downstream
+                // adaptors append to the new wrapper's empty steps.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.chain() requires an iterator argument".to_string(),
+                            span,
+                        );
+                    };
+                    let other = self.eval_expr_inner(&arg.value);
+                    if !matches!(other, Value::Iterator { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.chain() expects an iterator; got {}", other),
+                            span,
+                        );
+                    }
                     return Value::Iterator {
-                        items,
-                        cursor,
-                        steps,
+                        source: IteratorSource::Chain {
+                            parts: vec![obj, other],
+                            current: 0,
+                        },
+                        steps: Vec::new(),
+                    };
+                }
+            }
+            "zip" => {
+                // Lazy synchronous-pair combinator. Each pull from the
+                // resulting iterator pulls one item from each side and
+                // yields a `(a, b)` tuple; either side ending stops the
+                // zip. Each side retains its own step chain.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.zip() requires an iterator argument".to_string(),
+                            span,
+                        );
+                    };
+                    let other = self.eval_expr_inner(&arg.value);
+                    if !matches!(other, Value::Iterator { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.zip() expects an iterator; got {}", other),
+                            span,
+                        );
+                    }
+                    return Value::Iterator {
+                        source: IteratorSource::Zip {
+                            left: Box::new(obj),
+                            right: Box::new(other),
+                        },
+                        steps: Vec::new(),
                     };
                 }
             }

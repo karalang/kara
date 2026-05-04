@@ -9027,6 +9027,77 @@ impl<'a> TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "chain" => {
+                // `chain(other: Iterator[T]) -> Iterator[T]` — the
+                // element type must agree on both sides. Push down
+                // `Iterator[T]` so the argument's element type is
+                // checked against ours.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.chain() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![item.clone()],
+                    };
+                }
+                let expected = Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![item.clone()],
+                };
+                self.check_expr(&args[0].value, &expected);
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "zip" => {
+                // `zip(other: Iterator[U]) -> Iterator[(T, U)]` — the
+                // other iterator's element type can differ; we infer
+                // it and use it as the second tuple slot. infer_expr
+                // gives us back the actual `Iterator[U]` from which we
+                // can extract U.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("Iterator.zip() expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Tuple(vec![item.clone(), Type::Error])],
+                    };
+                }
+                let other_ty = self.infer_expr(&args[0].value);
+                let other_item = match &other_ty {
+                    Type::Named { name, args } if name == "Iterator" && args.len() == 1 => {
+                        args[0].clone()
+                    }
+                    _ => {
+                        self.type_error(
+                            format!(
+                                "Iterator.zip() expects an Iterator argument, found {:?}",
+                                other_ty
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        Type::Error
+                    }
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![Type::Tuple(vec![item.clone(), other_item])],
+                }
+            }
             _ => {
                 for arg in args {
                     self.infer_expr(&arg.value);
