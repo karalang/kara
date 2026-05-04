@@ -1315,3 +1315,131 @@ fn test_non_ascii_in_line_comment_skipped() {
     assert_eq!(tokens[2], Token::Equal);
     assert_eq!(tokens[3], Token::Integer(1, None));
 }
+
+// ── Reserved fragment-specifier identifier namespace ──────────────
+// Per design.md § Reserved Fragment-Specifier Identifier Namespace
+// (v60 item 62). `expr_<NNNN>` for NNNN in 2020..=2099 is reserved at v1.
+
+fn reserved_fragment_specifier_error(name: &str) -> Token {
+    Token::Error(format!(
+        "'{name}' is a reserved identifier name; this naming convention is reserved for future edition-versionable syntax categories in macros / comptime fragment specifiers — use 'r#{name}' if you need this exact identifier today, or rename to a non-year-suffixed form"
+    ))
+}
+
+#[test]
+fn test_reserved_fragment_specifier_rejected_in_let() {
+    // Boundary years and a mid-range year all reject.
+    for year in ["2020", "2026", "2099"] {
+        let source = format!("let expr_{year} = 1;");
+        let tokens = tokens_only(&source);
+        let name = format!("expr_{year}");
+        assert_eq!(tokens[0], Token::Let);
+        assert_eq!(
+            tokens[1],
+            reserved_fragment_specifier_error(&name),
+            "expected reservation error for '{name}'",
+        );
+        assert_eq!(tokens[2], Token::Equal);
+        assert_eq!(tokens[3], Token::Integer(1, None));
+        assert_eq!(tokens[4], Token::Semicolon);
+    }
+}
+
+#[test]
+fn test_reserved_fragment_specifier_rejected_at_fn_name() {
+    // The reservation fires at the identifier-token boundary, regardless of
+    // syntactic position. `fn expr_2026() {}` rejects on the function name.
+    let tokens = tokens_only("fn expr_2026() { }");
+    assert_eq!(tokens[0], Token::Fn);
+    assert_eq!(tokens[1], reserved_fragment_specifier_error("expr_2026"),);
+}
+
+#[test]
+fn test_reserved_fragment_specifier_rejected_at_struct_field() {
+    // Struct field names lex as plain identifiers, so the reservation fires
+    // there too.
+    let tokens = tokens_only("struct S { expr_2030: i64 }");
+    assert_eq!(tokens[0], Token::Struct);
+    assert_eq!(tokens[1], ident("S"));
+    assert_eq!(tokens[2], Token::LeftBrace);
+    assert_eq!(tokens[3], reserved_fragment_specifier_error("expr_2030"),);
+}
+
+#[test]
+fn test_reserved_fragment_specifier_diagnostic_contains_both_fix_its() {
+    // Diagnostic shape (slice 5): help line offers the raw-escape fix-it
+    // and the rename fix-it, both inline in the message.
+    let tokens = tokens_only("let expr_2026 = 1;");
+    let Token::Error(msg) = &tokens[1] else {
+        panic!("expected reservation error, got {:?}", tokens[1]);
+    };
+    assert!(
+        msg.contains("'r#expr_2026'"),
+        "missing raw-escape fix-it: {msg}"
+    );
+    assert!(
+        msg.contains("rename to a non-year-suffixed form"),
+        "missing rename fix-it: {msg}",
+    );
+}
+
+#[test]
+fn test_reserved_fragment_specifier_negative_cases_accept() {
+    // Each of these must lex as an ordinary identifier — covering every
+    // exit condition of the namespace check.
+    let cases = [
+        // No `expr_` prefix.
+        ("x", "x"),
+        // Different prefix.
+        ("expression", "expression"),
+        // `expr_` prefix but non-year suffix.
+        ("expr_v2", "expr_v2"),
+        // Different prefix containing a year.
+        ("version_2026", "version_2026"),
+        // `expr_` prefix with year out of reserved range (low).
+        ("expr_1999", "expr_1999"),
+        // `expr_` prefix with year out of reserved range (high).
+        ("expr_3000", "expr_3000"),
+        // 4 digits but not a year-shaped value at boundary just below 2020.
+        ("expr_2019", "expr_2019"),
+        // 4 digits just above 2099.
+        ("expr_2100", "expr_2100"),
+        // Wrong digit count — 3 digits.
+        ("expr_202", "expr_202"),
+        // Wrong digit count — 5 digits.
+        ("expr_20260", "expr_20260"),
+    ];
+    for (source, expected_name) in cases {
+        let tokens = tokens_only(&format!("let {source} = 1;"));
+        assert_eq!(tokens[0], Token::Let);
+        assert_eq!(
+            tokens[1],
+            ident(expected_name),
+            "expected '{source}' to lex as plain identifier",
+        );
+        assert_eq!(tokens[2], Token::Equal);
+    }
+}
+
+#[test]
+fn test_reserved_fragment_specifier_raw_escape_exempted() {
+    // `r#expr_2026` lexes as a raw-escaped identifier with name `expr_2026`
+    // and `raw=true`. The reservation check lives in `identifier()`; the raw
+    // path is structurally separate.
+    let tokens = tokens_only("let r#expr_2026 = 1;");
+    assert_eq!(tokens[0], Token::Let);
+    assert_eq!(tokens[1], raw_ident("expr_2026"));
+    assert_eq!(tokens[2], Token::Equal);
+    assert_eq!(tokens[3], Token::Integer(1, None));
+    assert_eq!(tokens[4], Token::Semicolon);
+}
+
+#[test]
+fn test_reserved_fragment_specifier_fn_with_non_year_suffix_accepts() {
+    // `fn expr_v2()` is the user-facing rename fix-it shape; it must lex
+    // through as a plain identifier with no diagnostic.
+    let tokens = tokens_only("fn expr_v2() { }");
+    assert_eq!(tokens[0], Token::Fn);
+    assert_eq!(tokens[1], ident("expr_v2"));
+    assert_eq!(tokens[2], Token::LeftParen);
+}

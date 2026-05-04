@@ -1023,10 +1023,18 @@ impl<'a> Lexer<'a> {
                 format!("'{text}' is reserved for future use and cannot be used as an identifier"),
             ),
             // Regular identifier
-            _ => Token::Identifier {
-                name: text.to_string(),
-                raw: false,
-            },
+            _ => {
+                if is_reserved_fragment_specifier_namespace(text) {
+                    Token::Error(format!(
+                        "'{text}' is a reserved identifier name; this naming convention is reserved for future edition-versionable syntax categories in macros / comptime fragment specifiers — use 'r#{text}' if you need this exact identifier today, or rename to a non-year-suffixed form"
+                    ))
+                } else {
+                    Token::Identifier {
+                        name: text.to_string(),
+                        raw: false,
+                    }
+                }
+            }
         };
         self.make_spanned(token)
     }
@@ -1272,6 +1280,25 @@ fn utf8_byte_len(lead: u8) -> Option<usize> {
     } else {
         None
     }
+}
+
+// ── Reserved fragment-specifier identifier namespace ──────────────
+
+/// Per design.md § Reserved Fragment-Specifier Identifier Namespace (v60 item 62).
+/// Matches `expr_<NNNN>` where `NNNN` is a 4-digit year in `2020..=2099`.
+/// Reservation is checked only on the `identifier()` path; `r#expr_2026`
+/// flows through `raw_identifier()`, which bypasses this check structurally.
+fn is_reserved_fragment_specifier_namespace(name: &str) -> bool {
+    let Some(rest) = name.strip_prefix("expr_") else {
+        return false;
+    };
+    if rest.len() != 4 || !rest.bytes().all(|b| b.is_ascii_digit()) {
+        return false;
+    }
+    let Ok(year) = rest.parse::<u32>() else {
+        return false;
+    };
+    (2020..=2099).contains(&year)
 }
 
 // ── Identifier case-class ─────────────────────────────────────────
