@@ -296,7 +296,16 @@ impl<'a> Lexer<'a> {
             // Identifiers and keywords
             _ if is_alpha(c) => self.identifier(),
 
-            // Unknown character
+            // Non-ASCII byte: decode the full UTF-8 codepoint and dispatch.
+            // A letter-class codepoint enters the would-be-identifier recovery
+            // path (one focused diagnostic per token); any other codepoint
+            // becomes a clean single-character "Unexpected character" error
+            // (rather than the per-byte cascade the byte-based lexer would
+            // otherwise produce for multi-byte sequences). Non-ASCII identifiers
+            // are deferred per design.md § Identifiers — Unicode subsection.
+            _ if c >= 0x80 => self.non_ascii_at_lead(c),
+
+            // Unknown character (ASCII, not handled above)
             _ => {
                 let msg = format!("Unexpected character: '{}'", c as char);
                 self.make_spanned(Token::Error(msg))
@@ -637,16 +646,14 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     _ => {
-                        let c = self.advance();
+                        let c = self.consume_codepoint();
                         return self.make_spanned(Token::Error(format!(
-                            "Unknown escape sequence: \\{}",
-                            c as char
+                            "Unknown escape sequence: \\{c}"
                         )));
                     }
                 }
             } else {
-                let c = self.advance();
-                value.push(c as char);
+                value.push(self.consume_codepoint());
             }
         }
 
@@ -669,29 +676,49 @@ impl<'a> Lexer<'a> {
                 return self
                     .make_spanned(Token::Error("Unterminated character literal".to_string()));
             }
-            match self.advance() {
-                b'n' => '\n',
-                b't' => '\t',
-                b'r' => '\r',
-                b'\\' => '\\',
-                b'\'' => '\'',
-                b'0' => '\0',
+            // Escape selectors are ASCII; peek to dispatch, then consume.
+            match self.peek() {
+                b'n' => {
+                    self.advance();
+                    '\n'
+                }
+                b't' => {
+                    self.advance();
+                    '\t'
+                }
+                b'r' => {
+                    self.advance();
+                    '\r'
+                }
+                b'\\' => {
+                    self.advance();
+                    '\\'
+                }
+                b'\'' => {
+                    self.advance();
+                    '\''
+                }
+                b'0' => {
+                    self.advance();
+                    '\0'
+                }
                 b'u' => {
+                    self.advance();
                     // Unicode escape: \u{XXXX}
                     match self.parse_unicode_escape() {
                         Ok(c) => c,
                         Err(msg) => return self.make_spanned(Token::Error(msg)),
                     }
                 }
-                other => {
+                _ => {
+                    let other = self.consume_codepoint();
                     return self.make_spanned(Token::Error(format!(
-                        "Unknown escape sequence in character literal: \\{}",
-                        other as char
+                        "Unknown escape sequence in character literal: \\{other}"
                     )));
                 }
             }
         } else {
-            self.advance() as char
+            self.consume_codepoint()
         };
 
         if self.is_at_end() || self.peek() != b'\'' {
@@ -722,7 +749,7 @@ impl<'a> Lexer<'a> {
                 self.line += 1;
                 self.column = 0;
             }
-            value.push(self.advance() as char);
+            value.push(self.consume_codepoint());
         }
         self.make_spanned(Token::MultiStringLiteral(value))
     }
@@ -761,7 +788,7 @@ impl<'a> Lexer<'a> {
                         self.line += 1;
                         self.column = 0;
                     }
-                    expr_text.push(self.advance() as char);
+                    expr_text.push(self.consume_codepoint());
                 }
                 parts.push(InterpolationPart::Expr(expr_text));
             } else if self.peek() == b'\\' {
@@ -807,15 +834,14 @@ impl<'a> Lexer<'a> {
                         }
                     }
                     _ => {
-                        let c = self.advance();
+                        let c = self.consume_codepoint();
                         return self.make_spanned(Token::Error(format!(
-                            "Unknown escape sequence: \\{}",
-                            c as char
+                            "Unknown escape sequence: \\{c}"
                         )));
                     }
                 }
             } else {
-                current_text.push(self.advance() as char);
+                current_text.push(self.consume_codepoint());
             }
         }
 
@@ -870,8 +896,25 @@ impl<'a> Lexer<'a> {
     }
 
     fn identifier(&mut self) -> SpannedToken {
-        while is_alpha(self.peek()) || is_digit(self.peek()) {
-            self.advance();
+        let mut non_ascii_seen: Option<char> = None;
+        loop {
+            if is_alpha(self.peek()) || is_digit(self.peek()) {
+                self.advance();
+                continue;
+            }
+            if let Some(nc) = self.try_consume_non_ascii_ident_continue() {
+                if non_ascii_seen.is_none() {
+                    non_ascii_seen = Some(nc);
+                }
+                continue;
+            }
+            break;
+        }
+
+        if let Some(nc) = non_ascii_seen {
+            return self.make_spanned(Token::Error(format!(
+                "non-ASCII identifier (containing '{nc}') is deferred to a future edition; identifiers must be ASCII in v1"
+            )));
         }
 
         let text = self.token_text();
@@ -1045,6 +1088,94 @@ impl<'a> Lexer<'a> {
         }
     }
 
+    // ── Non-ASCII recovery ────────────────────────────────────
+
+    /// Dispatched from `next_token` when the leading byte is `>= 0x80`. The
+    /// lead byte was already consumed (and `column` advanced by 1); we read
+    /// the remaining UTF-8 continuation bytes without further column bumps so
+    /// the span advances by one *codepoint*, not one byte. A letter-class
+    /// codepoint then enters the would-be-identifier recovery path so the
+    /// diagnostic spans the full token (e.g. all of `αβγ`) rather than firing
+    /// once per codepoint.
+    fn non_ascii_at_lead(&mut self, lead: u8) -> SpannedToken {
+        let len = utf8_byte_len(lead).unwrap_or(1);
+        for _ in 1..len {
+            if self.current < self.source.len() {
+                self.current += 1;
+            }
+        }
+        let cp = std::str::from_utf8(&self.source[self.start..self.current])
+            .ok()
+            .and_then(|s| s.chars().next())
+            .unwrap_or('\u{FFFD}');
+        if cp.is_alphabetic() || cp == '_' {
+            loop {
+                if is_alpha(self.peek()) || is_digit(self.peek()) {
+                    self.advance();
+                    continue;
+                }
+                if self.try_consume_non_ascii_ident_continue().is_some() {
+                    continue;
+                }
+                break;
+            }
+            self.make_spanned(Token::Error(format!(
+                "non-ASCII identifier (containing '{cp}') is deferred to a future edition; identifiers must be ASCII in v1"
+            )))
+        } else {
+            self.make_spanned(Token::Error(format!("Unexpected character: '{cp}'")))
+        }
+    }
+
+    /// Consume the next codepoint (1–4 UTF-8 bytes) and return it. ASCII bytes
+    /// advance via the normal `advance()` path; multi-byte sequences advance
+    /// `current` by their byte length but `column` by exactly one (codepoint).
+    /// Invalid UTF-8 falls back to U+FFFD with a single-byte advance — source
+    /// is already validated UTF-8 at the lib boundary, so this is a defensive
+    /// fallback rather than a normal path. Used by string / char / multi-string
+    /// / interpolated-string body lexers so non-ASCII codepoints land in the
+    /// resulting `String` as one `char`, not a sequence of misinterpreted bytes.
+    fn consume_codepoint(&mut self) -> char {
+        let lead = self.peek();
+        if lead < 0x80 {
+            return self.advance() as char;
+        }
+        let len = utf8_byte_len(lead).unwrap_or(1);
+        let end = (self.current + len).min(self.source.len());
+        let cp = std::str::from_utf8(&self.source[self.current..end])
+            .ok()
+            .and_then(|s| s.chars().next())
+            .unwrap_or('\u{FFFD}');
+        self.current = end;
+        self.column += 1;
+        cp
+    }
+
+    /// If the byte at `current` starts a valid UTF-8 sequence whose codepoint
+    /// is identifier-continue-class (Unicode letter, numeric, or `_`), consume
+    /// the full sequence (advancing `column` by 1 per codepoint, not per byte)
+    /// and return the codepoint. Otherwise leave the cursor untouched and
+    /// return `None`.
+    fn try_consume_non_ascii_ident_continue(&mut self) -> Option<char> {
+        let lead = self.peek();
+        if lead < 0x80 {
+            return None;
+        }
+        let len = utf8_byte_len(lead)?;
+        if self.current + len > self.source.len() {
+            return None;
+        }
+        let s = std::str::from_utf8(&self.source[self.current..self.current + len]).ok()?;
+        let c = s.chars().next()?;
+        if c.is_alphabetic() || c.is_numeric() || c == '_' {
+            self.current += len;
+            self.column += 1;
+            Some(c)
+        } else {
+            None
+        }
+    }
+
     // ── Low-level character operations ────────────────────────
 
     fn advance(&mut self) -> u8 {
@@ -1126,6 +1257,23 @@ fn is_hex_digit(c: u8) -> bool {
 /// a digit, `+`, or `-`.
 fn is_exp_start(c: u8) -> bool {
     is_digit(c) || c == b'+' || c == b'-'
+}
+
+/// UTF-8 byte length implied by a lead byte, or `None` for an invalid lead.
+/// Used by the non-ASCII recovery path so the lexer can advance by whole
+/// codepoints rather than emitting one diagnostic per UTF-8 continuation byte.
+fn utf8_byte_len(lead: u8) -> Option<usize> {
+    if lead < 0x80 {
+        Some(1)
+    } else if lead & 0xE0 == 0xC0 {
+        Some(2)
+    } else if lead & 0xF0 == 0xE0 {
+        Some(3)
+    } else if lead & 0xF8 == 0xF0 {
+        Some(4)
+    } else {
+        None
+    }
 }
 
 // ── Identifier case-class ─────────────────────────────────────────

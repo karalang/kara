@@ -1169,3 +1169,140 @@ fn test_raw_identifier_does_not_intercept_r_string_prefix() {
     let tokens = tokens_only(r#"r"hello""#);
     assert!(matches!(&tokens[0], Token::Error(msg) if msg.contains("reserved")));
 }
+
+// ── Non-ASCII identifier diagnostics (design.md § Identifiers — Unicode) ────
+//
+// Non-ASCII identifiers are deferred to a future edition. The lexer must emit
+// a single focused diagnostic per would-be identifier — not a per-byte cascade
+// of garbage from interpreting UTF-8 continuation bytes as Latin-1 chars.
+
+#[test]
+fn test_non_ascii_identifier_start_emits_one_error() {
+    // `αβγ` — three 2-byte codepoints, all letters. Pre-fix this would emit
+    // six "Unexpected character" tokens with bogus bytes-as-chars. Post-fix it
+    // is a single error that names the actual codepoint.
+    let tokens = tokens_only("αβγ");
+    assert_eq!(tokens.len(), 2, "expected one error + EOF, got {tokens:?}");
+    let Token::Error(msg) = &tokens[0] else {
+        panic!("expected Token::Error, got {:?}", tokens[0]);
+    };
+    assert!(msg.contains("non-ASCII"), "msg = {msg}");
+    assert!(msg.contains('α'), "diagnostic should name the actual codepoint, got {msg}");
+    assert!(msg.contains("deferred") || msg.contains("ASCII"));
+    assert!(matches!(tokens[1], Token::EOF));
+}
+
+#[test]
+fn test_non_ascii_identifier_mid_word_emits_one_error() {
+    // `kāra` — ASCII prefix, non-ASCII letter, ASCII suffix. The whole
+    // would-be identifier must be consumed as one error token.
+    let tokens = tokens_only("kāra");
+    assert_eq!(tokens.len(), 2, "expected one error + EOF, got {tokens:?}");
+    let Token::Error(msg) = &tokens[0] else {
+        panic!("expected Token::Error, got {:?}", tokens[0]);
+    };
+    assert!(msg.contains("non-ASCII"), "msg = {msg}");
+    assert!(msg.contains('ā'), "diagnostic should name the actual codepoint, got {msg}");
+}
+
+#[test]
+fn test_non_ascii_identifier_in_let_recovery() {
+    // `let kāra = 1;` — surrounding tokens must lex normally; only the
+    // identifier produces the diagnostic.
+    let tokens = tokens_only("let kāra = 1;");
+    assert_eq!(tokens[0], Token::Let);
+    assert!(matches!(&tokens[1], Token::Error(msg) if msg.contains("non-ASCII")));
+    assert_eq!(tokens[2], Token::Equal);
+    assert_eq!(tokens[3], Token::Integer(1, None));
+    assert_eq!(tokens[4], Token::Semicolon);
+    assert_eq!(tokens[5], Token::EOF);
+}
+
+#[test]
+fn test_non_ascii_non_letter_emits_clean_unexpected_character() {
+    // `🚀` is a 4-byte UTF-8 codepoint that is not a letter. We must emit a
+    // single "Unexpected character" with the actual codepoint, not four
+    // separate errors interpreting each byte as Latin-1.
+    let tokens = tokens_only("🚀");
+    assert_eq!(tokens.len(), 2, "expected one error + EOF, got {tokens:?}");
+    let Token::Error(msg) = &tokens[0] else {
+        panic!("expected Token::Error, got {:?}", tokens[0]);
+    };
+    assert!(msg.contains("Unexpected character"), "msg = {msg}");
+    assert!(msg.contains('🚀'), "diagnostic should name the actual codepoint, got {msg}");
+}
+
+#[test]
+fn test_non_ascii_in_string_literal_still_lexes() {
+    // String-literal bodies are a separate path — non-ASCII identifiers being
+    // a parse error must not break unrelated literal lexing.
+    let tokens = tokens_only("let s = \"hello\";");
+    assert_eq!(tokens[0], Token::Let);
+    assert_eq!(tokens[1], ident("s"));
+    assert_eq!(tokens[2], Token::Equal);
+    assert!(matches!(&tokens[3], Token::StringLiteral(s) if s == "hello"));
+    assert_eq!(tokens[4], Token::Semicolon);
+}
+
+#[test]
+fn test_string_literal_preserves_non_ascii_codepoints() {
+    // The lexed value must equal the source body verbatim — multi-byte UTF-8
+    // codepoints land as one `char`, not as a sequence of bytes-as-chars.
+    let tokens = tokens_only(r#""Kāra 日本語""#);
+    let Token::StringLiteral(s) = &tokens[0] else {
+        panic!("expected StringLiteral, got {:?}", tokens[0]);
+    };
+    assert_eq!(s, "Kāra 日本語");
+    // K, ā, r, a, ' ', 日, 本, 語 — 8 codepoints (would be 14 bytes pre-fix).
+    assert_eq!(s.chars().count(), 8);
+}
+
+#[test]
+fn test_char_literal_holds_non_ascii_codepoint() {
+    // `'ā'` must yield CharLiteral('ā'), not a per-byte error or a misdecoded char.
+    let tokens = tokens_only("'ā'");
+    assert_eq!(tokens[0], Token::CharLiteral('ā'));
+    assert_eq!(tokens[1], Token::EOF);
+}
+
+#[test]
+fn test_char_literal_emoji() {
+    // 4-byte codepoint in a char literal.
+    let tokens = tokens_only("'🚀'");
+    assert_eq!(tokens[0], Token::CharLiteral('🚀'));
+}
+
+#[test]
+fn test_multi_string_preserves_non_ascii() {
+    // Triple-quoted multi-line strings go through a separate body path.
+    let tokens = tokens_only(r#""""hello αβγ""""#);
+    let Token::MultiStringLiteral(s) = &tokens[0] else {
+        panic!("expected MultiStringLiteral, got {:?}", tokens[0]);
+    };
+    assert_eq!(s, "hello αβγ");
+}
+
+#[test]
+fn test_interpolated_string_preserves_non_ascii() {
+    // Both the text segment and an expr segment must round-trip non-ASCII.
+    use karac::token::InterpolationPart;
+    let tokens = tokens_only(r#"f"hi {名前} 日本語""#);
+    let Token::InterpolatedStringLiteral(parts) = &tokens[0] else {
+        panic!("expected InterpolatedStringLiteral, got {:?}", tokens[0]);
+    };
+    assert_eq!(parts.len(), 3);
+    assert!(matches!(&parts[0], InterpolationPart::Text(s) if s == "hi "));
+    assert!(matches!(&parts[1], InterpolationPart::Expr(s) if s == "名前"));
+    assert!(matches!(&parts[2], InterpolationPart::Text(s) if s == " 日本語"));
+}
+
+#[test]
+fn test_non_ascii_in_line_comment_skipped() {
+    // Comments are byte-skipped through to `\n`; UTF-8 in a comment must not
+    // leak diagnostics into the token stream.
+    let tokens = tokens_only("// Kāra greeting\nlet x = 1;");
+    assert_eq!(tokens[0], Token::Let);
+    assert_eq!(tokens[1], ident("x"));
+    assert_eq!(tokens[2], Token::Equal);
+    assert_eq!(tokens[3], Token::Integer(1, None));
+}
