@@ -3649,11 +3649,9 @@ fn main() {
     #[test]
     fn test_e2e_map_keys_string_keys_len() {
         // Keys are heap-bearing String values. Verify the resulting Vec[String]
-        // reports the correct length. Iterating the Vec[String] and dereferencing
-        // each String's heap data is a separate, pre-existing limitation —
-        // for-loop bindings don't currently propagate String type to method
-        // dispatch, so `for s in vs { s.len() }` reads zeroes regardless of
-        // whether the Vec came from m.keys() or Vec.push. Tracked separately.
+        // reports the correct length. (For-loop element-type propagation —
+        // `for s in vs { s.len() }` — is now wired; see
+        // `test_e2e_for_in_vec_string_calls_len` below.)
         let out = run_program(
             r#"
 fn main() {
@@ -3667,6 +3665,107 @@ fn main() {
         );
         if let Some(out) = out {
             assert_eq!(out.trim(), "2");
+        }
+    }
+
+    // ── For-loop element-type propagation (List 2, item 3) ────────────
+
+    #[test]
+    fn test_e2e_for_in_vec_string_calls_len() {
+        // Iterating Vec[String] should bind `s` as a String so `s.len()`
+        // dispatches through compile_vec_method (String reuses the Vec
+        // shape with elem=u8) and reads the actual length, not the
+        // silent-`0` fall-through. Before the fix, both lines printed `0`.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("alice");
+    v.push("bobby");
+    for s in v {
+        println(s.len());
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["5", "5"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_in_vec_vec_inner_push() {
+        // Iterating Vec[Vec[i64]] should bind `inner` as a Vec[i64] so
+        // inner-Vec method dispatch resolves correctly.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1_i64);
+    a.push(2_i64);
+    v.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(10_i64);
+    b.push(20_i64);
+    b.push(30_i64);
+    v.push(b);
+    for inner in v {
+        println(inner.len());
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_in_map_string_keys_use_len() {
+        // `for (k, _v) in m` where K = String should bind `k` as a String
+        // so `k.len()` dispatches correctly. Map iteration order is
+        // unspecified, so we sum the lengths to make the assertion
+        // order-independent.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    m.insert("alice", 1_i64);
+    m.insert("bobby", 2_i64);
+    let mut total: i64 = 0_i64;
+    for (k, _v) in m {
+        total = total + k.len();
+    }
+    println(total);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_in_slice_string_calls_len() {
+        // Iterating Slice[String] (here from `Array[String, N].as_slice()`)
+        // should bind the loop var as a String for correct method dispatch.
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[String, 2] = ["alice", "bobby"];
+    let s: Slice[String] = a.as_slice();
+    for elem in s {
+        println(elem.len());
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["5", "5"]);
         }
     }
 

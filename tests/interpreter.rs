@@ -4022,3 +4022,19 @@ fn main() {
 "#);
     assert_eq!(output, "42\n");
 }
+
+#[test]
+fn test_for_in_vec_string_calls_len_interp() {
+    // Interpreter parity for List 2 / item 3 (codegen for-loop element-type
+    // propagation). The interpreter already binds runtime-tagged Values, so
+    // dispatch on the bound name routes through Value::String automatically.
+    let output = run(r#"
+fn main() {
+    let v = ["alice", "bobby"];
+    for s in v {
+        println(s.len());
+    }
+}
+"#);
+    assert_eq!(output, "5\n5\n");
+}

@@ -448,6 +448,19 @@ struct Codegen<'ctx> {
     map_val_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Per-variable Map key type name string (e.g. "i64", "String") for hash/eq fn selection.
     map_key_type_names: HashMap<String, String>,
+    /// Per-variable element-`TypeExpr` side-table for collection variables —
+    /// the *element* of a Vec/Slice/Array, or the *value* of a Map. Used by
+    /// `compile_for_*_var` so for-loop bindings inherit the right side-table
+    /// registrations (`vec_elem_types`, `slice_elem_types`, `map_*_types`)
+    /// when the element is itself a Vec/String/Slice/Map. Without this,
+    /// LLVM-type-only tracking can't distinguish `Vec[String]` from
+    /// `Vec[Vec[T]]` (both store `vec_struct_type` as the element LLVM type).
+    var_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// Per-Map-variable key-`TypeExpr` side-table (parallels
+    /// `var_elem_type_exprs` for the key slot). Used by `compile_for_map_var`
+    /// to register the per-iteration `k` binding when iterating with a tuple
+    /// pattern `for (k, v) in m`.
+    map_key_type_exprs: HashMap<String, TypeExpr>,
     karac_map_new_fn: FunctionValue<'ctx>,
     karac_map_free_fn: FunctionValue<'ctx>,
     karac_map_insert_old_fn: FunctionValue<'ctx>,
@@ -705,6 +718,8 @@ impl<'ctx> Codegen<'ctx> {
             map_key_types: HashMap::new(),
             map_val_types: HashMap::new(),
             map_key_type_names: HashMap::new(),
+            var_elem_type_exprs: HashMap::new(),
+            map_key_type_exprs: HashMap::new(),
             karac_map_new_fn,
             karac_map_free_fn,
             karac_map_insert_old_fn,
@@ -1021,6 +1036,80 @@ impl<'ctx> Codegen<'ctx> {
             Some((k, v))
         } else {
             None
+        }
+    }
+
+    /// Register a variable's collection-type metadata in the side-tables
+    /// driven off a Kāra `TypeExpr`. Mirrors the let-statement site at
+    /// `compile_stmt(StmtKind::Let)` so for-loop bindings can inherit the
+    /// same registrations from the source's stored element `TypeExpr`.
+    ///
+    /// Populates whichever subset of `vec_elem_types` / `slice_elem_types` /
+    /// `map_key_types` / `map_val_types` / `map_key_type_names` /
+    /// `var_elem_type_exprs` / `map_key_type_exprs` matches the `TypeExpr`
+    /// shape; primitives (and other shapes we don't track) are no-ops.
+    fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
+        if let Some(elem_ty) = self.extract_vec_elem_type(te) {
+            self.vec_elem_types.insert(var_name.to_string(), elem_ty);
+            if let Some(inner) = vec_inner_type_expr(te) {
+                self.var_elem_type_exprs.insert(var_name.to_string(), inner);
+            }
+            return;
+        }
+        if self.is_string_type_expr(te) {
+            self.vec_elem_types
+                .insert(var_name.to_string(), self.context.i8_type().into());
+            return;
+        }
+        if let Some(elem_ty) = self.extract_slice_elem_type(te) {
+            self.slice_elem_types.insert(var_name.to_string(), elem_ty);
+            if let Some(inner) = slice_inner_type_expr(te) {
+                self.var_elem_type_exprs.insert(var_name.to_string(), inner);
+            }
+            return;
+        }
+        if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
+            self.map_key_types.insert(var_name.to_string(), k_ty);
+            self.map_val_types.insert(var_name.to_string(), v_ty);
+            if let Some(k_name) = Self::extract_map_key_name(te) {
+                self.map_key_type_names.insert(var_name.to_string(), k_name);
+            }
+            if let Some((k_te, v_te)) = map_kv_type_exprs(te) {
+                self.map_key_type_exprs.insert(var_name.to_string(), k_te);
+                self.var_elem_type_exprs.insert(var_name.to_string(), v_te);
+            }
+        }
+    }
+
+    /// Register collection side-tables for the bindings produced by a
+    /// for-loop's destructuring pattern, using the source variable's
+    /// stored element `TypeExpr`. Without this, `for s in vec_of_strings`
+    /// binds `s` only in `self.variables` — method dispatch in
+    /// `compile_expr_method_call` then misses the Vec/Slice/Map side-table
+    /// check and falls through to the silent-`0` default.
+    fn register_for_loop_bindings(&mut self, pattern: &Pattern, source_var: &str) {
+        match &pattern.kind {
+            PatternKind::Binding(name) => {
+                if let Some(elem_te) = self.var_elem_type_exprs.get(source_var).cloned() {
+                    self.register_var_from_type_expr(name, &elem_te);
+                }
+            }
+            // `for (k, v) in m` — only legal tuple iteration shape today
+            // (Map). `for (a, b) in vec_of_tuples` would fall through; the
+            // tuple-element-classification follow-up would extend this arm.
+            PatternKind::Tuple(pats) if pats.len() == 2 => {
+                if let PatternKind::Binding(k_name) = &pats[0].kind {
+                    if let Some(k_te) = self.map_key_type_exprs.get(source_var).cloned() {
+                        self.register_var_from_type_expr(k_name, &k_te);
+                    }
+                }
+                if let PatternKind::Binding(v_name) = &pats[1].kind {
+                    if let Some(v_te) = self.var_elem_type_exprs.get(source_var).cloned() {
+                        self.register_var_from_type_expr(v_name, &v_te);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
@@ -2219,6 +2308,10 @@ impl<'ctx> Codegen<'ctx> {
                     if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &param.ty.kind {
                         if let Some(elem) = self.extract_vec_elem_type(inner) {
                             self.vec_elem_types.insert(param_name.clone(), elem);
+                            if let Some(inner_te) = vec_inner_type_expr(inner) {
+                                self.var_elem_type_exprs
+                                    .insert(param_name.clone(), inner_te);
+                            }
                         }
                         if self.is_string_type_expr(inner) {
                             self.vec_elem_types
@@ -2232,6 +2325,23 @@ impl<'ctx> Codegen<'ctx> {
                 // the slice shape.
                 if let Some(elem) = self.extract_slice_elem_type(&param.ty) {
                     self.slice_elem_types.insert(param_name.clone(), elem);
+                    if let Some(inner_te) = slice_inner_type_expr(&param.ty) {
+                        self.var_elem_type_exprs
+                            .insert(param_name.clone(), inner_te);
+                    }
+                }
+                // Track Map params: both K and V LLVM types + per-position
+                // TypeExprs so `for (k, v) in m` can register each binding.
+                if let Some((k_ty, v_ty)) = self.extract_map_kv_types(&param.ty) {
+                    self.map_key_types.insert(param_name.clone(), k_ty);
+                    self.map_val_types.insert(param_name.clone(), v_ty);
+                    if let Some(k_name) = Self::extract_map_key_name(&param.ty) {
+                        self.map_key_type_names.insert(param_name.clone(), k_name);
+                    }
+                    if let Some((k_te, v_te)) = map_kv_type_exprs(&param.ty) {
+                        self.map_key_type_exprs.insert(param_name.clone(), k_te);
+                        self.var_elem_type_exprs.insert(param_name.clone(), v_te);
+                    }
                 }
                 // Track the declared type name so field/variant lookups work on this param.
                 if let TypeKind::Path(path) = &param.ty.kind {
@@ -2357,6 +2467,9 @@ impl<'ctx> Codegen<'ctx> {
                     if let Some(ref te) = ty {
                         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
                             self.vec_elem_types.insert(var_name.clone(), elem_ty);
+                            if let Some(inner) = vec_inner_type_expr(te) {
+                                self.var_elem_type_exprs.insert(var_name.clone(), inner);
+                            }
                             detected = true;
                         }
                         if self.is_string_type_expr(te) {
@@ -2366,6 +2479,9 @@ impl<'ctx> Codegen<'ctx> {
                         }
                         if let Some(elem_ty) = self.extract_slice_elem_type(te) {
                             self.slice_elem_types.insert(var_name.clone(), elem_ty);
+                            if let Some(inner) = slice_inner_type_expr(te) {
+                                self.var_elem_type_exprs.insert(var_name.clone(), inner);
+                            }
                             detected = true;
                         }
                         if let Some((k_ty, v_ty)) = self.extract_map_kv_types(te) {
@@ -2373,6 +2489,10 @@ impl<'ctx> Codegen<'ctx> {
                             self.map_val_types.insert(var_name.clone(), v_ty);
                             if let Some(k_name) = Self::extract_map_key_name(te) {
                                 self.map_key_type_names.insert(var_name.clone(), k_name);
+                            }
+                            if let Some((k_te, v_te)) = map_kv_type_exprs(te) {
+                                self.map_key_type_exprs.insert(var_name.clone(), k_te);
+                                self.var_elem_type_exprs.insert(var_name.clone(), v_te);
                             }
                             detected = true;
                         }
@@ -4691,10 +4811,7 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let v64 = self.builder.build_int_s_extend(v, i64_t, "v64").unwrap();
-                let fmt = self
-                    .builder
-                    .build_global_string_ptr("%lld", "fi")
-                    .unwrap();
+                let fmt = self.builder.build_global_string_ptr("%lld", "fi").unwrap();
                 self.builder
                     .build_call(
                         self.printf_fn,
@@ -4711,10 +4828,7 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .into_int_value();
                 let v64 = self.builder.build_int_z_extend(v, i64_t, "v64").unwrap();
-                let fmt = self
-                    .builder
-                    .build_global_string_ptr("%llu", "fu")
-                    .unwrap();
+                let fmt = self.builder.build_global_string_ptr("%llu", "fu").unwrap();
                 self.builder
                     .build_call(
                         self.printf_fn,
@@ -4762,14 +4876,8 @@ impl<'ctx> Codegen<'ctx> {
                     .build_load(ty, val_ptr, "v")
                     .unwrap()
                     .into_int_value();
-                let true_s = self
-                    .builder
-                    .build_global_string_ptr("true", "ts")
-                    .unwrap();
-                let false_s = self
-                    .builder
-                    .build_global_string_ptr("false", "fs")
-                    .unwrap();
+                let true_s = self.builder.build_global_string_ptr("true", "ts").unwrap();
+                let false_s = self.builder.build_global_string_ptr("false", "fs").unwrap();
                 let sel = self
                     .builder
                     .build_select(
@@ -4832,18 +4940,11 @@ impl<'ctx> Codegen<'ctx> {
                     .builder
                     .build_int_truncate(len, i32_t, "len32")
                     .unwrap();
-                let fmt = self
-                    .builder
-                    .build_global_string_ptr("%.*s", "fs")
-                    .unwrap();
+                let fmt = self.builder.build_global_string_ptr("%.*s", "fs").unwrap();
                 self.builder
                     .build_call(
                         self.printf_fn,
-                        &[
-                            fmt.as_pointer_value().into(),
-                            len32.into(),
-                            data.into(),
-                        ],
+                        &[fmt.as_pointer_value().into(), len32.into(), data.into()],
                         "p",
                     )
                     .unwrap();
@@ -5181,7 +5282,11 @@ impl<'ctx> Codegen<'ctx> {
             "keys" => key_ty,
             "values" => val_ty,
             "entries" => self.context.struct_type(&[key_ty, val_ty], false).into(),
-            _ => return Err(format!("compile_map_keys_values_entries: unexpected method '{method}'")),
+            _ => {
+                return Err(format!(
+                    "compile_map_keys_values_entries: unexpected method '{method}'"
+                ))
+            }
         };
 
         let elem_size = elem_ty.size_of().unwrap();
@@ -5616,9 +5721,7 @@ impl<'ctx> Codegen<'ctx> {
                 // Map.clear returns Unit — codegen represents Unit as i64 0.
                 Ok(i64_t.const_int(0, false).into())
             }
-            "keys" | "values" | "entries" => {
-                self.compile_map_keys_values_entries(var_name, method)
-            }
+            "keys" | "values" | "entries" => self.compile_map_keys_values_entries(var_name, method),
             _ => Err(format!("codegen: Map.{method} not yet implemented")),
         }
     }
@@ -7358,6 +7461,7 @@ impl<'ctx> Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "for.s.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
+        self.register_for_loop_bindings(pattern, var_name);
         self.compile_block(body)?;
         if self
             .builder
@@ -7468,6 +7572,7 @@ impl<'ctx> Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "for.v.elem")
             .unwrap();
         self.bind_pattern(pattern, elem_val)?;
+        self.register_for_loop_bindings(pattern, var_name);
         self.compile_block(body)?;
         if self
             .builder
@@ -7598,6 +7703,7 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
         self.bind_pattern(pattern, kv.into())?;
+        self.register_for_loop_bindings(pattern, var_name);
         self.compile_block(body)?;
         if self
             .builder
@@ -9635,6 +9741,66 @@ impl<'ctx> Codegen<'ctx> {
             PatternKind::Binding(name) => name.clone(),
             _ => "_".to_string(),
         }
+    }
+}
+
+/// Pull the element `TypeExpr` out of `Vec[T]` — returns `None` for
+/// non-Vec shapes or when generic args aren't a single type.
+fn vec_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+    if let TypeKind::Path(path) = &te.kind {
+        if path.segments.first().map(|s| s.as_str()) == Some("Vec") {
+            if let Some(args) = &path.generic_args {
+                if let Some(GenericArg::Type(elem)) = args.first() {
+                    return Some(elem.clone());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Pull the element `TypeExpr` out of `Slice[T]` or `mut Slice[T]`.
+fn slice_inner_type_expr(te: &TypeExpr) -> Option<TypeExpr> {
+    match &te.kind {
+        TypeKind::Path(path) => {
+            if path.segments.first().map(|s| s.as_str()) != Some("Slice") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if args.len() != 1 {
+                return None;
+            }
+            match &args[0] {
+                GenericArg::Type(t) => Some(t.clone()),
+                _ => None,
+            }
+        }
+        TypeKind::MutSlice(inner) => Some((**inner).clone()),
+        _ => None,
+    }
+}
+
+/// Pull the (key, value) `TypeExpr`s out of `Map[K, V]`.
+fn map_kv_type_exprs(te: &TypeExpr) -> Option<(TypeExpr, TypeExpr)> {
+    if let TypeKind::Path(path) = &te.kind {
+        if path.segments.first().map(|s| s.as_str()) != Some("Map") {
+            return None;
+        }
+        let args = path.generic_args.as_ref()?;
+        if args.len() != 2 {
+            return None;
+        }
+        let k = match &args[0] {
+            GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        let v = match &args[1] {
+            GenericArg::Type(t) => t.clone(),
+            _ => return None,
+        };
+        Some((k, v))
+    } else {
+        None
     }
 }
 

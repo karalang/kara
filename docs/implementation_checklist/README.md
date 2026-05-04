@@ -17,7 +17,7 @@ Sourced from open gaps identified during design review that don't require design
 - [~] **Display for collections (recursive codegen).** _(canonical: [phase-7-codegen.md](phase-7-codegen.md#phase-72-compiled-stdlib-types--layout-codegen), search `Display for collections (recursive codegen)`)_
   - [x] **1. Per-type Display function emission machinery** — `emit_display_fn_for_type` cached by type, parallel to `emit_hash_fn_for_type` (commit `8123a8e`)
   - [x] **2. Primitive Display fns** — i8…i64 / u8…u64 / f32/f64 / bool / char / String (commit `8123a8e`)
-  - [ ] **3. `Vec[T]` Display fn** — `[` + loop with recursive elem call + `]`
+  - [x] **3. `Vec[T]` Display fn** — `[` + loop with recursive elem call + `]`
   - [ ] **4. `Map[K, V]` Display fn** — `{` + iterator loop with recursive K, V calls + `}`
   - [ ] **5. `Set[T]` Display fn** — depends on Set codegen landing; format aligned with interpreter
   - [ ] **6. Tuple Display fn** — `(` + recursive per-field calls + `)`
@@ -50,11 +50,7 @@ These bullets touch files / functions that don't conflict with the active List-1
   **Estimate:** ~3–4 commits (tuples → enums → user `#[derive(Hash)]`).
   **Scope:** 5 subtasks already scoped in canonical.
 
-- [ ] **For-loop bindings don't propagate Vec/String/Slice element type for method dispatch.** _(canonical: [phase-7-codegen.md](phase-7-codegen.md#phase-72-compiled-stdlib-types--layout-codegen), search `For-loop bindings don't propagate`)_
-
-  **Files:** `src/codegen.rs` — modifies `bind_pattern` (`src/codegen.rs:2579`) and the four `compile_for_*_var` family. Distinct functions from Display work and Hash codegen; no overlap.
-  **Estimate:** ~1–2 commits.
-  **Scope:** surfaced 2026-05-04 during `Map.keys()` work. `for s in vec_of_strings { s.len() }` returns 0 because `bind_pattern` doesn't register loop-bound names in side-tables. 5 subtasks already scoped in canonical.
+- [x] ~~**For-loop bindings don't propagate Vec/String/Slice element type for method dispatch.**~~ ✓ DONE (2026-05-04) — `src/codegen.rs` gains `var_elem_type_exprs` / `map_key_type_exprs` side-tables (carrying the element/value `TypeExpr` per collection variable), populated at param + let-stmt sites for `Vec[T]` / `Slice[T]` / `Map[K, V]`. New `register_var_from_type_expr` helper drives the side-tables off a `TypeExpr`, and `register_for_loop_bindings` is called from `compile_for_vec_var` / `compile_for_slice_var` / `compile_for_map_var` after `bind_pattern` so each per-iteration binding inherits the right Vec/String/Slice/Map registrations. 4 new codegen E2E tests (`for s in v: Vec[String]`, `for inner in v: Vec[Vec[i64]]`, `for (k, _v) in m: Map[String, i64]`, `for elem in s: Slice[String]`) + 1 interpreter parity test. _(canonical: [phase-7-codegen.md](phase-7-codegen.md#phase-72-compiled-stdlib-types--layout-codegen), search `For-loop bindings don't propagate`)_
 
 ---
 
