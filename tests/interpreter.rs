@@ -6654,3 +6654,246 @@ fn main() {
     );
     assert_eq!(output, "groups:0\n");
 }
+
+#[test]
+fn test_iter_chunks_groups_into_n_sized_pieces() {
+    // Non-overlapping groups of n consecutive items; trailing
+    // remainder is shorter when source isn't a multiple of n.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6, 7];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(3).collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // 3 chunks: [1,2,3], [4,5,6], [7]. Lengths: 3, 3, 1.
+    assert_eq!(output, "3\n3\n3\n1\n");
+}
+
+#[test]
+fn test_iter_chunks_exact_multiple_yields_no_partial() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(2).collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // 3 chunks of size 2 each.
+    assert_eq!(output, "3\n2\n2\n2\n");
+}
+
+#[test]
+fn test_iter_chunks_n_larger_than_source_yields_one_partial() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(10).collect();
+    println(groups.len());
+    println(groups[0].len());
+}
+"#,
+    );
+    assert_eq!(output, "1\n3\n");
+}
+
+#[test]
+fn test_iter_chunks_zero_clamps_to_one() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(0).collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // n=0 clamps to n=1: 3 singleton chunks.
+    assert_eq!(output, "3\n1\n1\n1\n");
+}
+
+#[test]
+fn test_iter_chunks_state_persists_across_next() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40, 50];
+    let mut it = v.iter().chunks(2);
+    println(it.next().unwrap().len());
+    println(it.next().unwrap().len());
+    println(it.next().unwrap().len());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "2\n2\n1\ndone\n");
+}
+
+#[test]
+fn test_iter_chunks_after_filter_only_groups_kept() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6, 7, 8];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .filter(|x| x % 2 == 0)
+        .chunks(2)
+        .collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // After filter: [2, 4, 6, 8]. Chunks(2): [2,4], [6,8].
+    assert_eq!(output, "2\n2\n2\n");
+}
+
+#[test]
+fn test_iter_windows_slides_by_one() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let wins: Vec[Vec[i64]] = v.iter().windows(3).collect();
+    println(wins.len());
+    for w in wins {
+        let mut s = "[";
+        let mut first = true;
+        for x in w {
+            if not first { s = s + ","; }
+            s = s + f"{x}";
+            first = false;
+        }
+        s = s + "]";
+        println(s);
+    }
+}
+"#,
+    );
+    // 3 windows: [1,2,3], [2,3,4], [3,4,5].
+    assert_eq!(output, "3\n[1,2,3]\n[2,3,4]\n[3,4,5]\n");
+}
+
+#[test]
+fn test_iter_windows_smaller_than_n_yields_nothing() {
+    // No partial windows — when source is shorter than n, windows
+    // emits zero items (matches Rust's [T].windows semantics).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2];
+    let wins: Vec[Vec[i64]] = v.iter().windows(3).collect();
+    println(wins.len());
+}
+"#,
+    );
+    assert_eq!(output, "0\n");
+}
+
+#[test]
+fn test_iter_windows_exactly_n_yields_one() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let wins: Vec[Vec[i64]] = v.iter().windows(3).collect();
+    println(wins.len());
+    println(wins[0].len());
+}
+"#,
+    );
+    assert_eq!(output, "1\n3\n");
+}
+
+#[test]
+fn test_iter_windows_state_persists_across_next() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut it = v.iter().windows(2);
+    println(it.next().unwrap()[0]);
+    println(it.next().unwrap()[0]);
+    println(it.next().unwrap()[0]);
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    // 3 windows of size 2: [1,2], [2,3], [3,4]. First element each.
+    assert_eq!(output, "1\n2\n3\ndone\n");
+}
+
+#[test]
+fn test_iter_windows_after_map_yields_mapped_values() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let wins: Vec[Vec[i64]] = v.iter().map(|x| x * 10).windows(2).collect();
+    for w in wins {
+        let a = w[0];
+        let b = w[1];
+        println(f"{a},{b}");
+    }
+}
+"#,
+    );
+    // Mapped: [10, 20, 30, 40]. Windows(2): [10,20], [20,30], [30,40].
+    assert_eq!(output, "10,20\n20,30\n30,40\n");
+}
+
+#[test]
+fn test_iter_windows_zero_clamps_to_one() {
+    // n=0 clamps to n=1 — degenerates to "each item as its own
+    // singleton window" (still allocates per window).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let wins: Vec[Vec[i64]] = v.iter().windows(0).collect();
+    println(wins.len());
+    for w in wins {
+        println(w[0]);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n1\n2\n3\n");
+}
+
+#[test]
+fn test_iter_chunks_with_take_short_circuits() {
+    // Downstream take(n) limits how many chunks we drain.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6, 7, 8];
+    let groups: Vec[Vec[i64]] = v.iter().chunks(2).take(2).collect();
+    println(groups.len());
+}
+"#,
+    );
+    assert_eq!(output, "2\n");
+}

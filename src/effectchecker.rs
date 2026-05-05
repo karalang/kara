@@ -445,6 +445,8 @@ impl<'a> EffectChecker<'a> {
             "Channel.new",
             "Sender.send",
             "Iterator.chunk_by",
+            "Iterator.chunks",
+            "Iterator.windows",
         ] {
             let mut set = EffectSet::new();
             set.add(
@@ -1440,6 +1442,8 @@ impl<'a> EffectChecker<'a> {
                     ("send", "Sender.send"),
                     ("recv", "Receiver.recv"),
                     ("chunk_by", "Iterator.chunk_by"),
+                    ("chunks", "Iterator.chunks"),
+                    ("windows", "Iterator.windows"),
                 ];
                 for &(method_name, qualified) in STDLIB_METHOD_MAP {
                     if method.as_str() == method_name {

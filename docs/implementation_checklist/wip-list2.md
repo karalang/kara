@@ -300,11 +300,36 @@ reviewable in isolation.
   fires once per item, take(n) short-circuits inner pulls,
   empty-source → no groups, allocates(Heap) propagation.
 
-- [ ] **14. `windows(n)` + `chunks(n)` on Iterator.** Both currently exist as
+- [x] **14. `windows(n)` + `chunks(n)` on Iterator.** Both currently exist as
   inherent methods on `Vec` (`src/interpreter.rs:3491` and `:3505`); this
   subtask adds the Iterator-trait variants. Confirm whether to promote or
   duplicate during implementation — the Vec inherent methods may stay as
   fast-path shortcuts. Both buffer; both `allocates(Heap)`.
+  Closure: kept Vec/Slice inherent methods as eager fast-paths and
+  added Iterator-trait variants alongside them (extending the
+  existing `"chunks"` / `"windows"` interpreter dispatch arms with a
+  `Value::Iterator` fall-through). Both new variants are modeled as
+  Sources (one outer pull consumes many inner pulls). `chunks(n)`:
+  `IteratorSource::Chunks { inner, n, exhausted }` — pulls up to n
+  items per call into a fresh `Vec[T]`; trailing partial chunk is
+  emitted, then sticky-stop. `windows(n)`: `IteratorSource::Windows
+  { inner, n, buffer, primed, exhausted }` — first pull primes the
+  buffer with n items (sticky-stop if source has fewer); subsequent
+  pulls drop front, push back, yield buffer.clone(). Matches Rust's
+  `[T].windows(n)` semantics (no partial windows). n is clamped to
+  `n.max(1)` at the dispatch site, mirroring `step_by`. Effects:
+  `allocates(Heap)` seeded on `Iterator.chunks` and
+  `Iterator.windows` in the effectchecker stdlib alloc list and
+  routed via STDLIB_METHOD_MAP — this also closes a pre-existing
+  under-report for `Vec.chunks` / `Vec.windows` callers (those
+  already allocate but weren't seeded). 8 typechecker tests + 13
+  interpreter tests + 2 effectchecker tests cover Iterator[Vec[T]]
+  return shape, post-map element type, integer-arg validation,
+  arity errors, n-sized chunks with trailing partial, exact
+  multiple, n>source-length partial, n=0 clamp, state across
+  next() pulls, post-filter, sliding by 1, source-too-small yields
+  nothing, exactly-n yields one, post-map values, take(n)
+  short-circuit, allocates(Heap) propagation for both adaptors.
 
 ## Wrap-up
 

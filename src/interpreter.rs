@@ -283,6 +283,33 @@ pub enum IteratorSource {
         current: Box<Value>,
         exhausted: bool,
     },
+    /// `.chunks(n)` — non-overlapping groups of up to `n` consecutive
+    /// items. Each pull collects the next `n` items into a fresh
+    /// `Vec[T]` (`allocates(Heap)`); the trailing group may be
+    /// shorter than `n` if the source length isn't a multiple. `n`
+    /// is clamped to `n.max(1)` at the dispatch site. `exhausted`
+    /// flips sticky-true once the inner exhausts AND the trailing
+    /// group has been emitted.
+    Chunks {
+        inner: Box<Value>,
+        n: usize,
+        exhausted: bool,
+    },
+    /// `.windows(n)` — sliding view of size `n` over the source,
+    /// advancing one item per pull. Each pull yields a fresh
+    /// `Vec[T]` clone of the buffer (`allocates(Heap)`). The first
+    /// pull primes the buffer by collecting `n` items; subsequent
+    /// pulls drop the front and push one new item. If the source
+    /// has fewer than `n` items, the iterator yields nothing
+    /// (matches Rust's `[T].windows(n)` semantics). `primed` is
+    /// false on the first pull.
+    Windows {
+        inner: Box<Value>,
+        n: usize,
+        buffer: Vec<Value>,
+        primed: bool,
+        exhausted: bool,
+    },
     /// `.chunk_by(key_fn)` — buffering adaptor that groups consecutive
     /// elements where `key_fn(item)` produces equal keys. Each pull
     /// yields one `Vec[T]` group; allocates a fresh Vec per group
@@ -490,6 +517,8 @@ impl std::fmt::Display for Value {
                 IteratorSource::FlatMap { .. } => write!(f, "<iter flat_map>"),
                 IteratorSource::Cycle { .. } => write!(f, "<iter cycle>"),
                 IteratorSource::Peekable { .. } => write!(f, "<iter peekable>"),
+                IteratorSource::Chunks { .. } => write!(f, "<iter chunks>"),
+                IteratorSource::Windows { .. } => write!(f, "<iter windows>"),
                 IteratorSource::ChunkBy { .. } => write!(f, "<iter chunk_by>"),
             },
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
@@ -3736,6 +3765,202 @@ impl<'a> Interpreter<'a> {
                 }
                 yielded
             }
+            IteratorSource::Chunks { .. } => {
+                // Pull up to n items from inner; emit a fresh Vec.
+                // Sticky-stop once we get an empty chunk (inner
+                // exhausted with nothing in flight). Heap allocation
+                // is the per-chunk Vec; effect-checker carries
+                // `allocates(Heap)`.
+                if let Value::Iterator {
+                    source: IteratorSource::Chunks { exhausted, .. },
+                    ..
+                } = iter
+                {
+                    if *exhausted {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+                let n = if let Value::Iterator {
+                    source: IteratorSource::Chunks { n, .. },
+                    ..
+                } = iter
+                {
+                    *n
+                } else {
+                    return None;
+                };
+                let mut chunk: Vec<Value> = Vec::with_capacity(n);
+                for _ in 0..n {
+                    let mut inner_taken = if let Value::Iterator {
+                        source: IteratorSource::Chunks { inner, .. },
+                        ..
+                    } = iter
+                    {
+                        std::mem::replace(inner.as_mut(), Value::Unit)
+                    } else {
+                        return None;
+                    };
+                    let pulled = self.iterator_step(&mut inner_taken);
+                    if let Value::Iterator {
+                        source: IteratorSource::Chunks { inner, .. },
+                        ..
+                    } = iter
+                    {
+                        **inner = inner_taken;
+                    }
+                    match pulled {
+                        Some(v) => chunk.push(v),
+                        None => break,
+                    }
+                }
+                if chunk.is_empty() {
+                    if let Value::Iterator {
+                        source: IteratorSource::Chunks { exhausted, .. },
+                        ..
+                    } = iter
+                    {
+                        *exhausted = true;
+                    }
+                    None
+                } else {
+                    if chunk.len() < n {
+                        if let Value::Iterator {
+                            source: IteratorSource::Chunks { exhausted, .. },
+                            ..
+                        } = iter
+                        {
+                            *exhausted = true;
+                        }
+                    }
+                    Some(Value::Array(chunk))
+                }
+            }
+            IteratorSource::Windows { .. } => {
+                // Sliding window of size n. First pull primes the
+                // buffer by collecting n items; subsequent pulls
+                // drop the front and push one new item. If the
+                // source has fewer than n items at any priming /
+                // refill point, sticky-stop (no partial windows).
+                if let Value::Iterator {
+                    source: IteratorSource::Windows { exhausted, .. },
+                    ..
+                } = iter
+                {
+                    if *exhausted {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+                let (n, primed) = if let Value::Iterator {
+                    source: IteratorSource::Windows { n, primed, .. },
+                    ..
+                } = iter
+                {
+                    (*n, *primed)
+                } else {
+                    return None;
+                };
+                if !primed {
+                    // Prime: pull n items.
+                    let mut filled = 0usize;
+                    for _ in 0..n {
+                        let mut inner_taken = if let Value::Iterator {
+                            source: IteratorSource::Windows { inner, .. },
+                            ..
+                        } = iter
+                        {
+                            std::mem::replace(inner.as_mut(), Value::Unit)
+                        } else {
+                            return None;
+                        };
+                        let pulled = self.iterator_step(&mut inner_taken);
+                        if let Value::Iterator {
+                            source: IteratorSource::Windows { inner, .. },
+                            ..
+                        } = iter
+                        {
+                            **inner = inner_taken;
+                        }
+                        match pulled {
+                            Some(v) => {
+                                if let Value::Iterator {
+                                    source: IteratorSource::Windows { buffer, .. },
+                                    ..
+                                } = iter
+                                {
+                                    buffer.push(v);
+                                    filled += 1;
+                                }
+                            }
+                            None => break,
+                        }
+                    }
+                    if filled < n {
+                        if let Value::Iterator {
+                            source: IteratorSource::Windows { exhausted, .. },
+                            ..
+                        } = iter
+                        {
+                            *exhausted = true;
+                        }
+                        return None;
+                    }
+                    if let Value::Iterator {
+                        source: IteratorSource::Windows { primed, buffer, .. },
+                        ..
+                    } = iter
+                    {
+                        *primed = true;
+                        return Some(Value::Array(buffer.clone()));
+                    }
+                    return None;
+                }
+                // Already primed — pull one item and slide.
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::Windows { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return None;
+                };
+                let pulled = self.iterator_step(&mut inner_taken);
+                if let Value::Iterator {
+                    source: IteratorSource::Windows { inner, .. },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                }
+                match pulled {
+                    Some(v) => {
+                        if let Value::Iterator {
+                            source: IteratorSource::Windows { buffer, .. },
+                            ..
+                        } = iter
+                        {
+                            buffer.remove(0);
+                            buffer.push(v);
+                            return Some(Value::Array(buffer.clone()));
+                        }
+                        None
+                    }
+                    None => {
+                        if let Value::Iterator {
+                            source: IteratorSource::Windows { exhausted, .. },
+                            ..
+                        } = iter
+                        {
+                            *exhausted = true;
+                        }
+                        None
+                    }
+                }
+            }
             IteratorSource::ChunkBy { .. } => {
                 // Build one group per pull: seed from any pending
                 // (item, key) carried over from the previous pull
@@ -3927,6 +4152,59 @@ impl<'a> Interpreter<'a> {
                 {
                     **inner = inner_taken;
                     *buffered = None;
+                }
+            }
+            IteratorSource::Chunks { .. } => {
+                // Drain the inner and trip sticky-exhausted.
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::Chunks { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return;
+                };
+                self.drain_source(&mut inner_taken);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::Chunks {
+                            inner, exhausted, ..
+                        },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                    *exhausted = true;
+                }
+            }
+            IteratorSource::Windows { .. } => {
+                // Drain the inner, clear the rolling buffer, trip
+                // sticky-exhausted.
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::Windows { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return;
+                };
+                self.drain_source(&mut inner_taken);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::Windows {
+                            inner,
+                            buffer,
+                            exhausted,
+                            ..
+                        },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                    buffer.clear();
+                    *exhausted = true;
                 }
             }
             IteratorSource::ChunkBy { .. } => {
@@ -5069,6 +5347,35 @@ impl<'a> Interpreter<'a> {
                         return Value::Array(chunks);
                     }
                 }
+                // Iterator-trait variant — lazy chunks; wraps the
+                // receiver into an `IteratorSource::Chunks`. Each
+                // pull yields a freshly allocated `Vec[T]`. n is
+                // clamped to `n.max(1)`, matching `step_by`'s policy.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.chunks() requires an integer argument".to_string(),
+                            span,
+                        );
+                    };
+                    let n = match self.eval_expr_inner(&arg.value) {
+                        Value::Int(n) => n.max(1) as usize,
+                        v => {
+                            return self.record_runtime_error(
+                                format!("Iterator.chunks() expects an integer; got {}", v),
+                                span,
+                            );
+                        }
+                    };
+                    return Value::Iterator {
+                        source: IteratorSource::Chunks {
+                            inner: Box::new(obj),
+                            n,
+                            exhausted: false,
+                        },
+                        steps: Vec::new(),
+                    };
+                }
             }
             "windows" => {
                 if let Value::Array(ref v) = obj {
@@ -5086,6 +5393,39 @@ impl<'a> Interpreter<'a> {
                             v.windows(n).map(|w| Value::Array(w.to_vec())).collect();
                         return Value::Array(wins);
                     }
+                }
+                // Iterator-trait variant — lazy sliding window; each
+                // pull yields a freshly cloned buffer of size n. n=0
+                // and n>source-length both produce zero windows; we
+                // clamp to n.max(1) at the dispatch site so the
+                // first-prime-pull naturally trips the
+                // sticky-exhausted path on a too-small source.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.windows() requires an integer argument".to_string(),
+                            span,
+                        );
+                    };
+                    let n = match self.eval_expr_inner(&arg.value) {
+                        Value::Int(n) => n.max(1) as usize,
+                        v => {
+                            return self.record_runtime_error(
+                                format!("Iterator.windows() expects an integer; got {}", v),
+                                span,
+                            );
+                        }
+                    };
+                    return Value::Iterator {
+                        source: IteratorSource::Windows {
+                            inner: Box::new(obj),
+                            n,
+                            buffer: Vec::with_capacity(n),
+                            primed: false,
+                            exhausted: false,
+                        },
+                        steps: Vec::new(),
+                    };
                 }
             }
             "sort" => {

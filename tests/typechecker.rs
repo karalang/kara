@@ -7047,6 +7047,118 @@ fn test_iter_chunk_by_chains_with_collect() {
 }
 
 #[test]
+fn test_iter_chunks_yields_iterator_of_vec() {
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().chunks(2);
+             let _g: Vec[i64] = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_windows_yields_iterator_of_vec() {
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().windows(3);
+             let _g: Vec[i64] = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_chunks_after_map_uses_mapped_type() {
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter()
+                 .map(|x| if x > 0 { "pos" } else { "neg" })
+                 .chunks(2);
+             let _g: Vec[String] = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_windows_after_map_uses_mapped_type() {
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter()
+                 .map(|x| if x > 0 { "pos" } else { "neg" })
+                 .windows(2);
+             let _g: Vec[String] = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_chunks_argument_must_be_integer() {
+    let errs = typecheck_errors(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chunks("two");
+         }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on string chunks() arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_windows_argument_must_be_integer() {
+    let errs = typecheck_errors(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().windows("two");
+         }"#,
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on string windows() arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_chunks_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chunks();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.chunks()")),
+        "expected WrongNumberOfArgs for chunks() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_windows_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().windows();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.windows()")),
+        "expected WrongNumberOfArgs for windows() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_iter_chunk_by_wrong_arg_count_rejected() {
     let errs = typecheck_errors(
         "fn main() {

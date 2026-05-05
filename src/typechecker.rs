@@ -9314,6 +9314,54 @@ impl<'a> TypeChecker<'a> {
                     args: vec![new_item],
                 }
             }
+            "chunks" | "windows" => {
+                // `chunks(n: i64) -> Iterator[Vec[T]]` — non-overlapping
+                // groups of up to n consecutive items (final group may
+                // be shorter when the source length isn't a multiple
+                // of n).
+                // `windows(n: i64) -> Iterator[Vec[T]]` — sliding view
+                // of size n, advancing by 1 per pull (yields nothing
+                // when source has fewer than n items). Both buffer
+                // and allocate a fresh `Vec[T]` per yielded group; the
+                // effect-checker seeds `allocates(Heap)` on
+                // `Iterator.{chunks,windows}`. Argument is checked
+                // against i64 (clamped at the runtime layer like
+                // `take(n)` / `step_by(n)`).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.{}() expects 1 argument, found {}",
+                            method,
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![item.clone()],
+                        }],
+                    };
+                }
+                let arg_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(
+                    &Type::Int(IntSize::I64),
+                    &arg_ty,
+                    args[0].value.span.clone(),
+                );
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![item.clone()],
+                    }],
+                }
+            }
             "chunk_by" => {
                 // `chunk_by(key_fn: Fn(T) -> K) -> Iterator[Vec[T]]` —
                 // groups consecutive elements where `key_fn(item)`
