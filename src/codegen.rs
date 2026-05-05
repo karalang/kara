@@ -2741,6 +2741,20 @@ impl<'ctx> Codegen<'ctx> {
                         }
                     }
                 }
+                // Zero-init repeat literal fast path: `let buf: Array[T, N] = [0; N]`
+                // (and `[false; N]`, `[0.0; N]`, etc. — any literal-zero RHS) is
+                // lowered to alloca + `llvm.memset`, bypassing the aggregate-value
+                // round-trip. The standard path emits `store [N x T] zeroinitializer`
+                // which LLVM's downstream codegen passes crash on at N≥80K (verified
+                // SIGSEGV in `write_to_file`); the memset path is correct at any N
+                // and is what LLVM would lower the aggregate store to anyway.
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let Some(result) =
+                        self.try_emit_zero_init_array_let(var_name, value, ty.as_ref())
+                    {
+                        return result;
+                    }
+                }
                 // Prefer the explicit type annotation when present — it lets
                 // `let c: Cm = i.into();` (lowered to `Cm.from(i)`, which
                 // `type_name_of` can't classify) still register `c` as a
@@ -4157,7 +4171,12 @@ impl<'ctx> Codegen<'ctx> {
                                 .unwrap();
                             return Ok(is_empty.into());
                         }
-                        _ => {}
+                        _ => {
+                            return Err(format!(
+                                "codegen: no handler for slice method '{}' on '{}'",
+                                method, name
+                            ));
+                        }
                     }
                 }
                 // Map methods
@@ -4191,6 +4210,8 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap();
                 let basic_val = call_site.try_as_basic_value();
                 return if basic_val.is_instruction() {
+                    // Void-return placeholder: callee returns unit, so fill the
+                    // expression slot with const-0 i64. NOT a dispatch fall-through.
                     Ok(self.context.i64_type().const_int(0, false).into())
                 } else {
                     Ok(basic_val.unwrap_basic())
@@ -4198,7 +4219,16 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        Ok(self.context.i64_type().const_int(0, false).into())
+        let receiver_desc = match &object.kind {
+            ExprKind::Identifier(name) => format!("variable '{}'", name),
+            _ => "non-identifier receiver".to_string(),
+        };
+        Err(format!(
+            "codegen: no handler for method '{}' on {} (method dispatch fell through; \
+             this is a codegen bug — add a dispatcher arm in `compile_method_call` \
+             or mark the test `#[ignore]` if the method is genuinely deferred)",
+            method, receiver_desc
+        ))
     }
 
     /// Infer the declared struct/enum type name of a method-call receiver,
@@ -8578,6 +8608,101 @@ impl<'ctx> Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// Let-binding fast path for `let buf: Array[T, N] = [zero; N]`.
+    /// Returns `Some(Ok(()))` on success, `None` if the RHS doesn't match
+    /// the literal-zero repeat pattern (caller falls through to the
+    /// general `compile_expr` path), or `Some(Err)` on a structural
+    /// problem (e.g. unsupported element type).
+    ///
+    /// Lowers to `alloca [N x T]; call @llvm.memset.*(alloca, 0, N*sizeof(T))`,
+    /// bypassing the `store [N x T] zeroinitializer` IR that LLVM's downstream
+    /// codegen passes crash on at large N. The memset is what LLVM would emit
+    /// for the aggregate store anyway — this just sidesteps the codegen path
+    /// that explodes the constant store into per-element machine instructions.
+    ///
+    /// Matched literal-zero shapes: `Integer(0)`, `Bool(false)`, `Float`
+    /// whose IEEE bit pattern is all-zero (`+0.0`, not `-0.0`).
+    fn try_emit_zero_init_array_let(
+        &mut self,
+        name: &str,
+        value: &Expr,
+        ty: Option<&TypeExpr>,
+    ) -> Option<Result<(), String>> {
+        let ExprKind::RepeatLiteral {
+            type_name,
+            value: rep_val,
+            count,
+        } = &value.kind
+        else {
+            return None;
+        };
+        // Vec form has its own heap-alloc shape — out of scope.
+        if matches!(type_name.as_deref(), Some("Vec")) {
+            return None;
+        }
+        // Literal-zero detection. Floats use bit-pattern equality so `-0.0`
+        // doesn't take the path (would lose the sign bit).
+        let is_zero_lit = match &rep_val.kind {
+            ExprKind::Integer(0, _) => true,
+            ExprKind::Bool(false) => true,
+            ExprKind::Float(f, _) => f.to_bits() == 0,
+            _ => false,
+        };
+        if !is_zero_lit {
+            return None;
+        }
+        let n = match &count.kind {
+            ExprKind::Integer(n, _) if *n > 0 => *n as u32,
+            _ => return None,
+        };
+        // Element LLVM type: from `Array[T, N]` annotation if present, else
+        // inferred from the literal's natural type.
+        let elem_llvm_ty: BasicTypeEnum<'ctx> = if let Some(te) = ty {
+            let TypeKind::Path(path) = &te.kind else {
+                return None;
+            };
+            if path.segments.first().map(|s| s.as_str()) != Some("Array") {
+                return None;
+            }
+            let args = path.generic_args.as_ref()?;
+            if args.len() != 2 {
+                return None;
+            }
+            match &args[0] {
+                GenericArg::Type(t) => self.llvm_type_for_type_expr(t),
+                _ => return None,
+            }
+        } else {
+            match &rep_val.kind {
+                ExprKind::Integer(_, _) => self.context.i64_type().into(),
+                ExprKind::Bool(_) => self.context.bool_type().into(),
+                ExprKind::Float(_, _) => self.context.f64_type().into(),
+                _ => return None,
+            }
+        };
+        let arr_ty = elem_llvm_ty.array_type(n);
+        let fn_val = self.current_fn?;
+        let alloca = self.create_entry_alloca(fn_val, name, arr_ty.into());
+        let total_size = arr_ty.size_of()?;
+        let memset_result = self.builder.build_memset(
+            alloca,
+            1, // align 1 — LLVM picks up the alloca's natural alignment
+            self.context.i8_type().const_zero(),
+            total_size,
+        );
+        if let Err(e) = memset_result {
+            return Some(Err(format!("build_memset failed: {:?}", e)));
+        }
+        self.variables.insert(
+            name.to_string(),
+            VarSlot {
+                ptr: alloca,
+                ty: arr_ty.into(),
+            },
+        );
+        Some(Ok(()))
+    }
+
     /// Compile `[value; count]` / `Array[value; count]`. Produces an LLVM
     /// array value `[N x T]` whose every element is the compiled `value`.
     /// `count` must be a non-negative integer literal (mirrors the
@@ -8606,6 +8731,62 @@ impl<'ctx> Codegen<'ctx> {
         let val = self.compile_expr(value)?;
         let elem_ty = val.get_type();
         let arr_ty = elem_ty.array_type(n);
+
+        // Zero-value fast path. When `val` is the zero/null/false value of
+        // its type, emit a single LLVM `zeroinitializer` constant — a
+        // single IR token regardless of N. Covers `[0; N]`, `[false; N]`,
+        // `[0.0; N]`, `[null; N]` — the common stack-array initialization
+        // shapes (lookup tables, sieve buffers, zero-filled work arrays).
+        // O(1) compile time in N; works at any size LLVM can represent.
+        let is_zero = match val {
+            BasicValueEnum::IntValue(iv) => iv.get_zero_extended_constant() == Some(0),
+            BasicValueEnum::FloatValue(fv) => {
+                fv.get_constant().is_some_and(|(v, _)| v.to_bits() == 0)
+            }
+            BasicValueEnum::PointerValue(pv) => pv.is_null(),
+            _ => false,
+        };
+        if is_zero {
+            return Ok(arr_ty.const_zero().into());
+        }
+
+        // Non-zero compile-time constant: emit one LLVM `const_array`,
+        // capped at SAFE_CONST_ARRAY_N. Above that cap LLVM's downstream
+        // passes crash on the giant constant (verified SIGSEGV at
+        // N=80_000+ on i64 / bool); the cap is conservative.
+        const SAFE_CONST_ARRAY_N: u32 = 4096;
+        if n <= SAFE_CONST_ARRAY_N {
+            if let Some(agg) = match val {
+                BasicValueEnum::IntValue(iv) if iv.is_const() => {
+                    Some(iv.get_type().const_array(&vec![iv; n as usize]))
+                }
+                BasicValueEnum::FloatValue(fv) if fv.is_const() => {
+                    Some(fv.get_type().const_array(&vec![fv; n as usize]))
+                }
+                BasicValueEnum::PointerValue(pv) if pv.is_const() => {
+                    Some(pv.get_type().const_array(&vec![pv; n as usize]))
+                }
+                _ => None,
+            } {
+                return Ok(agg.into());
+            }
+        }
+
+        // Above the cap or for runtime values: per-element `insertvalue`.
+        // Also size-capped (each element adds an IR instruction). Beyond
+        // the cap we error with a pointer to the workaround rather than
+        // silently producing pathologically slow IR (or, worse, crashing
+        // LLVM as the previous unbounded const_array path did).
+        const SAFE_INSERT_N: u32 = 1024;
+        if n > SAFE_INSERT_N {
+            return Err(format!(
+                "codegen: repeat literal `[v; {n}]` exceeds the safe size cap ({SAFE_INSERT_N}) \
+                 for non-zero / runtime values. For large arrays, use a zero initializer \
+                 (`[0; {n}]`, `[false; {n}]`, etc.) which compiles in O(1) regardless of size, \
+                 then fill via a runtime for-loop: `let mut buf: Array[T, {n}] = [0; {n}]; \
+                 for i in 0..{n} {{ buf[i] = v; }}`."
+            ));
+        }
         let mut agg = arr_ty.get_undef();
         for idx in 0..n {
             agg = self
@@ -11874,6 +12055,13 @@ impl<'ctx> Codegen<'ctx> {
                         ty: cap_ty,
                     },
                 );
+                // Propagate the outer scope's struct/enum type binding so
+                // method dispatch can route `var.method()` through the
+                // user impl-block path inside the par branch.
+                if let Some(type_name) = saved_var_types.get(var_name) {
+                    self.var_type_names
+                        .insert(var_name.clone(), type_name.clone());
+                }
             }
         }
 
@@ -12077,6 +12265,13 @@ impl<'ctx> Codegen<'ctx> {
                         ty: cap_ty,
                     },
                 );
+                // Propagate the outer scope's struct/enum type binding so
+                // method dispatch inside the closure can route through the
+                // user impl-block path.
+                if let Some(type_name) = saved_var_types.get(var_name) {
+                    self.var_type_names
+                        .insert(var_name.clone(), type_name.clone());
+                }
             }
         }
 
@@ -12379,6 +12574,12 @@ impl<'ctx> Codegen<'ctx> {
             ExprKind::Unary { operand, .. } => self.refs_in_expr(operand, refs, defs),
             ExprKind::Call { callee, args } => {
                 self.refs_in_expr(callee, refs, defs);
+                for a in args {
+                    self.refs_in_expr(&a.value, refs, defs);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                self.refs_in_expr(object, refs, defs);
                 for a in args {
                     self.refs_in_expr(&a.value, refs, defs);
                 }

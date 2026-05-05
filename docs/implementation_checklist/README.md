@@ -11,13 +11,16 @@ Sourced from open gaps identified during design review that don't require design
 WIP entries live in two trackers, split by lane so List-1 and List-2 work
 can be edited and committed independently without merge conflicts.
 
-- **[`wip-list1.md`](wip-list1.md)** — serial work, this session (one agent
-  at a time). Current theme: HashMap / HashSet completion.
-- **[`wip-list2.md`](wip-list2.md)** — parallel-safe work; any agent can
-  pick up without coordination. File / function boundaries are chosen so
-  the work doesn't conflict with the active List-1 bullet.
+- **[`wip-list1.md`](wip-list1.md)** — serial work (one agent at a time
+  owns the in-flight bullet). Currently empty.
+- **`wip-list2.md`** — parallel-safe work (any agent can pick up without
+  coordination; file / function boundaries are chosen so the work doesn't
+  conflict with the active List-1 bullet). Created on demand.
 
-When either tracker empties out, delete the file.
+Each file's bullets get migrated into the relevant `phase-N-*.md` tracker
+when work begins; the tracker is checked off in both places as work
+progresses, and the WIP file's body is cleared once its bullets all close
+(the file itself is kept as a scaffold for the next theme).
 
 ---
 

@@ -5472,4 +5472,161 @@ fn main() {
             assert_eq!(out.trim(), "{k: [1, 2]}");
         }
     }
+
+    // ── Repeat-literal `[v; N]` const-aggregate fast path (regression) ──
+
+    #[test]
+    fn test_repeat_literal_const_zero_uses_memset() {
+        // Regression: `compile_repeat_literal` originally emitted N
+        // `insertvalue` instructions, scaling karac build time linearly
+        // in N. The first fix tried `store [N x T] zeroinitializer` —
+        // O(1) IR, but LLVM's downstream codegen passes crashed on the
+        // aggregate store at N≥80K (verified SIGSEGV in `write_to_file`).
+        // The current fix detects `let buf: Array[T, N] = [0; N]` at the
+        // let-binding site and lowers it to `alloca + llvm.memset.*`,
+        // bypassing the aggregate store entirely. memset is O(1) IR AND
+        // O(1) codegen — it's what LLVM would lower the aggregate store
+        // to anyway, just emitted directly.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let buf: Array[i64, 100] = [0; 100];
+    let _ = buf[0];
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @llvm.memset"),
+            "expected llvm.memset call for `[0; 100]` let-binding; got IR:\n{}",
+            ir
+        );
+        assert!(
+            !ir.contains("insertvalue"),
+            "const-zero repeat literal must not emit per-element insertvalue; got IR:\n{}",
+            ir
+        );
+        assert!(
+            !ir.contains("store [100 x i64] zeroinitializer"),
+            "let-binding fast path must avoid aggregate-store IR \
+             (LLVM crashes on it at large N); got IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_repeat_literal_const_nonzero_skips_insertvalue() {
+        // Same fast path applies to non-zero constants: one constant
+        // aggregate, no per-element ops.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let buf: Array[i64, 8] = [42; 8];
+    let _ = buf[0];
+}
+"#,
+        );
+        assert!(
+            !ir.contains("insertvalue"),
+            "const-nonzero repeat literal must not emit per-element insertvalue; got IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_repeat_literal_large_n_compiles_without_per_element_ir() {
+        // Workload-realistic case: a 64K LUT used to hang the build at
+        // O(N) IR construction; the next iteration crashed LLVM at
+        // codegen time on the giant aggregate store. The let-binding
+        // memset fast path is O(1) at both IR-construction AND codegen
+        // time and works at any N.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let buf: Array[i64, 65536] = [0; 65536];
+    let _ = buf[0];
+}
+"#,
+        );
+        assert!(
+            ir.contains("call void @llvm.memset"),
+            "expected llvm.memset call for the 64K LUT; got IR truncated:\n{}",
+            &ir[..ir.len().min(2000)]
+        );
+        assert!(
+            !ir.contains("insertvalue"),
+            "64K LUT must not emit per-element insertvalue (would hang the build); \
+             grep for insertvalue failed; got IR truncated:\n{}",
+            &ir[..ir.len().min(2000)]
+        );
+        assert!(
+            !ir.contains("store [65536 x i64] zeroinitializer"),
+            "64K LUT must not emit aggregate-store IR (LLVM crashes on it at this size); \
+             got IR truncated:\n{}",
+            &ir[..ir.len().min(2000)]
+        );
+    }
+
+    #[test]
+    fn test_repeat_literal_runtime_value_falls_back_to_insertvalue() {
+        // When `val` is a runtime expression (e.g. function return),
+        // the const fast path doesn't apply and we exercise the
+        // per-element fallback. Locks in that the fallback path is
+        // still reachable — if a future loop-CFG lowering replaces it,
+        // this test should be updated rather than silently regressing.
+        let ir = ir_for(
+            r#"
+fn compute() -> i64 { 7 }
+fn main() {
+    let n = compute();
+    let buf: Array[i64, 4] = [n; 4];
+    let _ = buf[0];
+}
+"#,
+        );
+        assert!(
+            ir.contains("insertvalue"),
+            "runtime-value repeat literal should fall back to insertvalue; got IR:\n{}",
+            ir
+        );
+    }
+
+    // ── Method dispatcher hardening (regression) ────────────────────────
+
+    #[test]
+    fn test_codegen_rejects_unsupported_slice_method() {
+        // Regression: `compile_method_call` used to silently return
+        // const-0 for any method it didn't know how to dispatch (the
+        // 2026-05-04 `Slice.len()` wrong-answer bug came from this).
+        // Both fall-through sites now return a typed `Err`. This test
+        // asserts the inner slice-method fall-through fires for a
+        // typechecker-accepted-but-not-codegened slice method.
+        //
+        // If a future arm adds `first()` codegen support, swap this to
+        // any other typechecker-accepted method without a codegen arm.
+        let src = r#"
+fn main() {
+    let xs: Array[i64, 3] = [1, 2, 3];
+    let s: Slice[i64] = xs.as_slice();
+    let _ = s.first();
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None).expect_err(
+            "expected codegen to Err on unsupported slice method; \
+             the dispatcher silent-zero must not be re-introduced",
+        );
+        assert!(
+            err.contains("no handler for slice method 'first'"),
+            "expected diagnostic to name the missing slice method; got: {}",
+            err
+        );
+    }
 }
