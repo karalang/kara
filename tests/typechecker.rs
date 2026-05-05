@@ -6994,3 +6994,71 @@ fn test_iter_peek_with_arg_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+#[test]
+fn test_iter_chunk_by_yields_iterator_of_vec() {
+    // chunk_by(key_fn: Fn(T) -> K) -> Iterator[Vec[T]]. The yielded
+    // item per pull is a Vec[T] of grouped consecutive elements.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().chunk_by(|x| x % 2);
+             let _g: Vec[i64] = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_chunk_by_after_map_uses_mapped_item_type() {
+    // The Vec elements carry the post-map type; key_fn receives the
+    // post-map element.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter()
+                 .map(|x| if x > 0 { "pos" } else { "neg" })
+                 .chunk_by(|s| s);
+             let _g: Vec[String] = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_chunk_by_key_fn_can_return_any_type() {
+    // K is a free type parameter (TypeParam pushdown) — equality is
+    // a runtime concern. Closure may return tuples / strings / etc.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chunk_by(|x| (x % 2, x > 10));
+         }",
+    );
+}
+
+#[test]
+fn test_iter_chunk_by_chains_with_collect() {
+    // Each group is Vec[T]; collecting yields Vec[Vec[T]].
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _groups: Vec[Vec[i64]] = v.iter().chunk_by(|x| x).collect();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_chunk_by_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chunk_by();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.chunk_by()")),
+        "expected WrongNumberOfArgs for chunk_by() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}

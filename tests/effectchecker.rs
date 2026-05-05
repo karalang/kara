@@ -4503,6 +4503,29 @@ fn empty_closure_body_yields_no_effects_for_any_capture_mode() {
 }
 
 #[test]
+fn test_iter_chunk_by_infers_allocates_heap() {
+    // Iterator.chunk_by() allocates a fresh Vec[T] per group — the
+    // effect-checker seeds `allocates(Heap)` on `Iterator.chunk_by`
+    // so callers transitively pick it up via the
+    // STDLIB_METHOD_MAP-based call collection.
+    let result = effectcheck_ok(
+        "fn group_it() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().chunk_by(|x| x);
+         }",
+    );
+    let inferred = result.inferred_effects.get("group_it").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Allocates && e.effect.resource == "Heap"),
+        "Expected allocates(Heap) for Iterator.chunk_by(), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
 fn mut_ref_capture_does_not_synthesize_writes_effect() {
     // A closure that captures `mut ref` and mutates the captured binding
     // must NOT synthesize a `writes(R)` effect. The mutation is an

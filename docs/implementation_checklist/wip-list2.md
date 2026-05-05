@@ -275,9 +275,30 @@ reviewable in isolation.
   peek-on-drained returns None, count/collect/for-loop drain the
   buffer, peekable+filter chain works at runtime, arity errors.
 
-- [ ] **13. `chunk_by(key_fn)`.** Buffering adaptor — allocates a `Vec[T]`
+- [x] **13. `chunk_by(key_fn)`.** Buffering adaptor — allocates a `Vec[T]`
   per group when consecutive elements share the same key. Carries
   `allocates(Heap)` in its effect set per the canonical scope note.
+  Closure: typechecker uses TypeParam pushdown for the key — `Fn(T)
+  -> __iter_chunk_by_K`, K is left free (equality is enforced at
+  runtime via `Value::PartialEq`, matching the permissive
+  scan/inspect pattern). Returns `Iterator[Vec[T]]`. Interpreter
+  models this as `IteratorSource::ChunkBy { inner, key_fn,
+  pending_item, pending_key, exhausted }` — built as a Source
+  rather than a Step because each pull consumes many inner items
+  and the boundary requires one-item lookahead. The lookahead item
+  that triggered the boundary becomes the seed of the next group
+  via `pending_item`, with its already-computed key cached in
+  `pending_key` so we don't fire the closure twice on the same
+  item. Effect: `allocates(Heap)` seeded on `Iterator.chunk_by` in
+  the effectchecker stdlib alloc list and routed via
+  STDLIB_METHOD_MAP so user fns transitively pick it up. 5
+  typechecker tests + 10 interpreter tests + 1 effectchecker test
+  cover Iterator[Vec[T]] return shape, post-map element type,
+  free K typing, collect to Vec[Vec[T]], consecutive-equal
+  grouping, singleton-per-key, single-group-when-constant-key,
+  state across next() pulls, post-filter only-kept-items, key_fn
+  fires once per item, take(n) short-circuits inner pulls,
+  empty-source → no groups, allocates(Heap) propagation.
 
 - [ ] **14. `windows(n)` + `chunks(n)` on Iterator.** Both currently exist as
   inherent methods on `Vec` (`src/interpreter.rs:3491` and `:3505`); this

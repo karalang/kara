@@ -283,6 +283,29 @@ pub enum IteratorSource {
         current: Box<Value>,
         exhausted: bool,
     },
+    /// `.chunk_by(key_fn)` — buffering adaptor that groups consecutive
+    /// elements where `key_fn(item)` produces equal keys. Each pull
+    /// yields one `Vec[T]` group; allocates a fresh Vec per group
+    /// (effect-checker carries `allocates(Heap)` for
+    /// `Iterator.chunk_by`). Modeled as a Source rather than a Step
+    /// because one outer pull can consume many inner items, and the
+    /// boundary between groups requires a one-item lookahead — when
+    /// the key changes, the trailing item that triggered the change
+    /// becomes the seed of the NEXT group, so we stash it in
+    /// `pending_item` (with its already-computed `pending_key` so we
+    /// don't re-fire the closure) until the following pull.
+    /// `exhausted` flips after the inner returns None and the final
+    /// in-flight group has been drained. `key_fn` is boxed for the
+    /// same reason FlatMap's `f` is — without indirection
+    /// `Value::Iterator → IteratorSource::ChunkBy → Value::Function`
+    /// would make `Value`'s size cycle through itself.
+    ChunkBy {
+        inner: Box<Value>,
+        key_fn: Box<Value>,
+        pending_item: Option<Box<Value>>,
+        pending_key: Option<Box<Value>>,
+        exhausted: bool,
+    },
     /// `.peekable()` — single-element lookahead buffer. `inner` is the
     /// underlying iterator (with all its own steps); `buffered` holds
     /// the next element if `peek()` has been called and not yet
@@ -467,6 +490,7 @@ impl std::fmt::Display for Value {
                 IteratorSource::FlatMap { .. } => write!(f, "<iter flat_map>"),
                 IteratorSource::Cycle { .. } => write!(f, "<iter cycle>"),
                 IteratorSource::Peekable { .. } => write!(f, "<iter peekable>"),
+                IteratorSource::ChunkBy { .. } => write!(f, "<iter chunk_by>"),
             },
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
             Value::Entry {
@@ -3712,6 +3736,121 @@ impl<'a> Interpreter<'a> {
                 }
                 yielded
             }
+            IteratorSource::ChunkBy { .. } => {
+                // Build one group per pull: seed from any pending
+                // (item, key) carried over from the previous pull
+                // (the lookahead element that triggered the last
+                // group boundary), then keep pulling from `inner`
+                // and applying `key_fn` until the key changes (stash
+                // that item as the next pending) or the inner
+                // exhausts (set sticky-exhausted and emit the
+                // trailing group). Heap allocation is the per-group
+                // `Vec`; effect-checker carries `allocates(Heap)`.
+                if let Value::Iterator {
+                    source: IteratorSource::ChunkBy { exhausted, .. },
+                    ..
+                } = iter
+                {
+                    if *exhausted {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+                let mut group: Vec<Value> = Vec::new();
+                let mut group_key: Option<Value> = None;
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::ChunkBy {
+                            pending_item,
+                            pending_key,
+                            ..
+                        },
+                    ..
+                } = iter
+                {
+                    if let (Some(item_box), Some(key_box)) =
+                        (pending_item.take(), pending_key.take())
+                    {
+                        group.push(*item_box);
+                        group_key = Some(*key_box);
+                    }
+                }
+                loop {
+                    let mut inner_taken = if let Value::Iterator {
+                        source: IteratorSource::ChunkBy { inner, .. },
+                        ..
+                    } = iter
+                    {
+                        std::mem::replace(inner.as_mut(), Value::Unit)
+                    } else {
+                        return None;
+                    };
+                    let pulled = self.iterator_step(&mut inner_taken);
+                    if let Value::Iterator {
+                        source: IteratorSource::ChunkBy { inner, .. },
+                        ..
+                    } = iter
+                    {
+                        **inner = inner_taken;
+                    }
+                    let Some(item) = pulled else {
+                        // Inner exhausted — sticky-stop and emit the
+                        // final group if non-empty.
+                        if let Value::Iterator {
+                            source: IteratorSource::ChunkBy { exhausted, .. },
+                            ..
+                        } = iter
+                        {
+                            *exhausted = true;
+                        }
+                        if group.is_empty() {
+                            return None;
+                        } else {
+                            return Some(Value::Array(group));
+                        }
+                    };
+                    let key_fn = if let Value::Iterator {
+                        source: IteratorSource::ChunkBy { key_fn, .. },
+                        ..
+                    } = iter
+                    {
+                        (**key_fn).clone()
+                    } else {
+                        return None;
+                    };
+                    let key = self.invoke_function_value(key_fn, vec![item.clone()]);
+                    match &group_key {
+                        None => {
+                            // First element of a fresh group.
+                            group.push(item);
+                            group_key = Some(key);
+                        }
+                        Some(prev) if *prev == key => {
+                            group.push(item);
+                        }
+                        Some(_) => {
+                            // Key change — stash this item (with its
+                            // already-computed key) as the seed for
+                            // the next pull, return current group.
+                            if let Value::Iterator {
+                                source:
+                                    IteratorSource::ChunkBy {
+                                        pending_item,
+                                        pending_key,
+                                        ..
+                                    },
+                                ..
+                            } = iter
+                            {
+                                *pending_item = Some(Box::new(item));
+                                *pending_key = Some(Box::new(key));
+                            }
+                            return Some(Value::Array(group));
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -3788,6 +3927,38 @@ impl<'a> Interpreter<'a> {
                 {
                     **inner = inner_taken;
                     *buffered = None;
+                }
+            }
+            IteratorSource::ChunkBy { .. } => {
+                // Drain the inner and trip the sticky-exhausted flag;
+                // also clear any in-flight pending so the trailing
+                // group isn't emitted after a forced drain.
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::ChunkBy { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return;
+                };
+                self.drain_source(&mut inner_taken);
+                if let Value::Iterator {
+                    source:
+                        IteratorSource::ChunkBy {
+                            inner,
+                            pending_item,
+                            pending_key,
+                            exhausted,
+                            ..
+                        },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                    *pending_item = None;
+                    *pending_key = None;
+                    *exhausted = true;
                 }
             }
         }
@@ -4387,6 +4558,37 @@ impl<'a> Interpreter<'a> {
                         done: false,
                     });
                     return Value::Iterator { source, steps };
+                }
+            }
+            "chunk_by" => {
+                // Lazy buffering adaptor — wraps the receiver into a
+                // ChunkBy source. Each pull yields a freshly allocated
+                // `Vec[T]` containing the next run of consecutive
+                // items whose `key_fn(item)` produces equal keys.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.chunk_by() requires a closure argument".to_string(),
+                            span,
+                        );
+                    };
+                    let closure = self.eval_expr_inner(&arg.value);
+                    if !matches!(closure, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.chunk_by() expects a closure; got {}", closure),
+                            span,
+                        );
+                    }
+                    return Value::Iterator {
+                        source: IteratorSource::ChunkBy {
+                            inner: Box::new(obj),
+                            key_fn: Box::new(closure),
+                            pending_item: None,
+                            pending_key: None,
+                            exhausted: false,
+                        },
+                        steps: Vec::new(),
+                    };
                 }
             }
             "peekable" => {

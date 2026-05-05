@@ -9314,6 +9314,48 @@ impl<'a> TypeChecker<'a> {
                     args: vec![new_item],
                 }
             }
+            "chunk_by" => {
+                // `chunk_by(key_fn: Fn(T) -> K) -> Iterator[Vec[T]]` —
+                // groups consecutive elements where `key_fn(item)`
+                // produces equal keys. Each group is allocated as a
+                // fresh `Vec[T]` (the effect-checker seeds
+                // `allocates(Heap)` on `Iterator.chunk_by`). K is left
+                // free via TypeParam pushdown — equality is enforced
+                // at runtime via `Value::PartialEq`, matching the
+                // permissive pattern used by scan/inspect.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.chunk_by() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Named {
+                            name: "Vec".to_string(),
+                            args: vec![item.clone()],
+                        }],
+                    };
+                }
+                let key_fn_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_chunk_by_K".to_string())),
+                };
+                self.check_expr(&args[0].value, &key_fn_ty);
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![Type::Named {
+                        name: "Vec".to_string(),
+                        args: vec![item.clone()],
+                    }],
+                }
+            }
             "chain" => {
                 // `chain(other: Iterator[T]) -> Iterator[T]` — the
                 // element type must agree on both sides. Push down

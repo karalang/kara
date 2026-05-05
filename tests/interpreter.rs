@@ -6440,3 +6440,217 @@ fn main() {
     );
     assert_eq!(output, "1\n3\n5\n");
 }
+
+#[test]
+fn test_iter_chunk_by_groups_consecutive_equal_keys() {
+    // Consecutive items with the same parity group together.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 3, 5, 2, 4, 7, 9];
+    for g in v.iter().chunk_by(|x| x % 2) {
+        let mut s = "[";
+        let mut first = true;
+        for x in g {
+            if not first { s = s + ","; }
+            s = s + f"{x}";
+            first = false;
+        }
+        s = s + "]";
+        println(s);
+    }
+}
+"#,
+    );
+    // Groups: [1,3,5] (odd), [2,4] (even), [7,9] (odd).
+    assert_eq!(output, "[1,3,5]\n[2,4]\n[7,9]\n");
+}
+
+#[test]
+fn test_iter_chunk_by_singleton_groups_when_all_keys_differ() {
+    // Each item is its own group when key_fn returns a unique key.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut count = 0;
+    for g in v.iter().chunk_by(|x| x) {
+        for x in g {
+            println(x);
+        }
+        count = count + 1;
+    }
+    println(f"groups:{count}");
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n3\n4\ngroups:4\n");
+}
+
+#[test]
+fn test_iter_chunk_by_one_group_when_all_keys_equal() {
+    // Constant key — single group containing every element.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40];
+    let mut count = 0;
+    for g in v.iter().chunk_by(|x| 0) {
+        for x in g {
+            println(x);
+        }
+        count = count + 1;
+    }
+    println(f"groups:{count}");
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\n40\ngroups:1\n");
+}
+
+#[test]
+fn test_iter_chunk_by_collects_into_vec_of_vec() {
+    // Terminal collect() yields Vec[Vec[T]] — exercises the heap
+    // allocation per group end-to-end.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 1, 2, 2, 2, 3];
+    let groups: Vec[Vec[i64]] = v.iter().chunk_by(|x| x).collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // 3 groups: lengths 2, 3, 1.
+    assert_eq!(output, "3\n2\n3\n1\n");
+}
+
+#[test]
+fn test_iter_chunk_by_state_persists_across_next_calls() {
+    // Calling next() one group at a time threads pending-item state
+    // correctly across pulls.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 1, 2, 3, 3];
+    let mut it = v.iter().chunk_by(|x| x);
+    println(it.next().unwrap().len());
+    println(it.next().unwrap().len());
+    println(it.next().unwrap().len());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "2\n1\n2\ndone\n");
+}
+
+#[test]
+fn test_iter_chunk_by_after_map_uses_mapped_item() {
+    // Map runs before chunk_by — the groups carry mapped values.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .map(|x| x * 10)
+        .chunk_by(|x| x > 25)
+        .collect();
+    for g in groups {
+        let first = g[0];
+        println(first);
+    }
+}
+"#,
+    );
+    // Mapped: [10, 20, 30, 40]. Keys: false, false, true, true.
+    // Groups: [10, 20], [30, 40]. First-elements: 10, 30.
+    assert_eq!(output, "10\n30\n");
+}
+
+#[test]
+fn test_iter_chunk_by_after_filter_only_groups_kept_items() {
+    // Filter first, then chunk_by — the groups only include items
+    // that passed the filter.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6, 7, 8];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .filter(|x| x != 4)
+        .chunk_by(|x| x < 5)
+        .collect();
+    println(groups.len());
+    for g in groups {
+        println(g.len());
+    }
+}
+"#,
+    );
+    // After filter: [1, 2, 3, 5, 6, 7, 8]. Keys: T, T, T, F, F, F, F.
+    // Groups: [1, 2, 3] (len 3), [5, 6, 7, 8] (len 4).
+    assert_eq!(output, "2\n3\n4\n");
+}
+
+#[test]
+fn test_iter_chunk_by_key_fn_fires_once_per_item() {
+    // Side-effect prefix proves key_fn is called exactly once per
+    // inner item — even though the same item's key is consulted
+    // twice (when ending a group and when seeding the next).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 1, 2, 2];
+    let groups: Vec[Vec[i64]] = v.iter()
+        .chunk_by(|x| {
+            println(f"k:{x}");
+            x
+        })
+        .collect();
+    println(groups.len());
+}
+"#,
+    );
+    // key_fn fires once per element (not twice per boundary item).
+    assert_eq!(output, "k:1\nk:1\nk:2\nk:2\n2\n");
+}
+
+#[test]
+fn test_iter_chunk_by_with_take_short_circuits() {
+    // Downstream take(n) limits how many groups we drain, so
+    // chunk_by's inner pulls stop early.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 1, 2, 2, 3, 3, 4, 4];
+    for g in v.iter().chunk_by(|x| x).take(2) {
+        for x in g {
+            println(x);
+        }
+    }
+}
+"#,
+    );
+    // First two groups only: [1, 1], [2, 2].
+    assert_eq!(output, "1\n1\n2\n2\n");
+}
+
+#[test]
+fn test_iter_chunk_by_on_empty_yields_no_groups() {
+    // Empty source → no groups; for-loop body never runs.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1];
+    let groups: Vec[Vec[i64]] = v.iter().take(0).chunk_by(|x| x).collect();
+    println(f"groups:{groups.len()}");
+}
+"#,
+    );
+    assert_eq!(output, "groups:0\n");
+}
