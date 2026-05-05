@@ -326,6 +326,22 @@ pub enum IteratorStep {
     /// (clamped at the dispatch site); n = 0 would underflow on the
     /// post-yield reset.
     StepBy { n: usize, remaining_skip: usize },
+    /// `.inspect(f)` — invoke `f` on each item for its side effects,
+    /// then pass the item through unchanged. The closure's return
+    /// value is discarded.
+    Inspect(Value),
+    /// `.scan(init, f)` — thread mutable state through the iterator.
+    /// `f` has signature `Fn(A, T) -> Option<(A, U)>`: returns
+    /// `Some((new_state, yielded))` to advance and yield, or `None`
+    /// to stop. The `done` flag flips sticky-true after the first
+    /// `None` so subsequent pulls short-circuit without re-firing
+    /// the closure. Note: this departs from Rust's
+    /// `Fn(&mut St, T) -> Option<B>` because tree-walk closures
+    /// snapshot captures and there's no `mut ref` parameter mode at
+    /// the value layer; threading state via the return tuple is
+    /// the simplest fix and matches the existing fold pattern
+    /// (closure returns the new accumulator).
+    Scan { f: Value, state: Value, done: bool },
 }
 
 impl std::fmt::Display for Value {
@@ -3324,6 +3340,49 @@ impl<'a> Interpreter<'a> {
                         // so the subtraction never underflows.
                         *remaining_skip = *n - 1;
                     }
+                    IteratorStep::Inspect(f) => {
+                        // Side-effect-only step: invoke f and discard
+                        // the result; the item passes through.
+                        self.invoke_function_value(f.clone(), vec![item.clone()]);
+                    }
+                    IteratorStep::Scan { f, state, done } => {
+                        if *done {
+                            stop = true;
+                            keep = false;
+                            break;
+                        }
+                        let result = self
+                            .invoke_function_value(f.clone(), vec![state.clone(), item.clone()]);
+                        // Closure returns Option<(A, U)>: Some carries
+                        // (new_state, yielded); None signals stop.
+                        let parsed = match result {
+                            Value::EnumVariant {
+                                variant,
+                                data: EnumData::Tuple(mut vals),
+                                ..
+                            } if variant == "Some" && vals.len() == 1 => match vals.remove(0) {
+                                Value::Tuple(mut tuple) if tuple.len() == 2 => {
+                                    let yielded = tuple.remove(1);
+                                    let new_state = tuple.remove(0);
+                                    Some((new_state, yielded))
+                                }
+                                _ => None,
+                            },
+                            _ => None,
+                        };
+                        match parsed {
+                            Some((new_state, yielded)) => {
+                                *state = new_state;
+                                item = yielded;
+                            }
+                            None => {
+                                *done = true;
+                                stop = true;
+                                keep = false;
+                                break;
+                            }
+                        }
+                    }
                 }
             }
             if stop {
@@ -4143,6 +4202,64 @@ impl<'a> Interpreter<'a> {
                         },
                         steps: Vec::new(),
                     };
+                }
+            }
+            "inspect" => {
+                // Lazy side-effect adaptor — appends an
+                // `IteratorStep::Inspect(closure)` that fires `f` on
+                // each yielded item and passes the item through
+                // unchanged.
+                if matches!(obj, Value::Iterator { .. }) {
+                    let Some(arg) = args.first() else {
+                        return self.record_runtime_error(
+                            "Iterator.inspect() requires a closure argument".to_string(),
+                            span,
+                        );
+                    };
+                    let closure = self.eval_expr_inner(&arg.value);
+                    if !matches!(closure, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.inspect() expects a closure; got {}", closure),
+                            span,
+                        );
+                    }
+                    let Value::Iterator { source, mut steps } = obj else {
+                        unreachable!()
+                    };
+                    steps.push(IteratorStep::Inspect(closure));
+                    return Value::Iterator { source, steps };
+                }
+            }
+            "scan" => {
+                // Lazy stateful adaptor — appends an
+                // `IteratorStep::Scan { f, state, done }`. Closure
+                // signature is `Fn(A, T) -> Option<(A, U)>`; the
+                // first arg is the initial state, the second is the
+                // closure.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if args.len() != 2 {
+                        return self.record_runtime_error(
+                            format!("Iterator.scan() requires 2 arguments, got {}", args.len()),
+                            span,
+                        );
+                    }
+                    let init = self.eval_expr_inner(&args[0].value);
+                    let closure = self.eval_expr_inner(&args[1].value);
+                    if !matches!(closure, Value::Function { .. }) {
+                        return self.record_runtime_error(
+                            format!("Iterator.scan() expects a closure; got {}", closure),
+                            span,
+                        );
+                    }
+                    let Value::Iterator { source, mut steps } = obj else {
+                        unreachable!()
+                    };
+                    steps.push(IteratorStep::Scan {
+                        f: closure,
+                        state: init,
+                        done: false,
+                    });
+                    return Value::Iterator { source, steps };
                 }
             }
             "chain" => {

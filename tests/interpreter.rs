@@ -6007,3 +6007,229 @@ fn main() {
     // step_by(2) → 1, 3, 5. cycle.take(7) → 1, 3, 5, 1, 3, 5, 1.
     assert_eq!(output, "1\n3\n5\n1\n3\n5\n1\n");
 }
+
+#[test]
+fn test_iter_inspect_passes_through_unchanged() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    let xs: Vec[i64] = v.iter().inspect(|x| println(f"saw:{x}")).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // For-loop drains: inspect fires on each item during drain
+    // (saw:10, saw:20, saw:30), then the body iterates the
+    // collected Vec.
+    assert_eq!(output, "saw:10\nsaw:20\nsaw:30\n10\n20\n30\n");
+}
+
+#[test]
+fn test_iter_inspect_after_filter_only_fires_on_kept() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let xs: Vec[i64] = v.iter()
+        .filter(|x| x > 2)
+        .inspect(|x| println(f"saw:{x}"))
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Filter keeps 3, 4. inspect fires on 3, 4 only.
+    assert_eq!(output, "saw:3\nsaw:4\n3\n4\n");
+}
+
+#[test]
+fn test_iter_inspect_composes_with_downstream_steps() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let xs: Vec[i64] = v.iter()
+        .inspect(|x| println(f"raw:{x}"))
+        .map(|x| x * 10)
+        .inspect(|x| println(f"mapped:{x}"))
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // First inspect sees raw items; map transforms; second inspect
+    // sees mapped items. All firing during the drain phase.
+    assert_eq!(
+        output,
+        "raw:1\nmapped:10\nraw:2\nmapped:20\nraw:3\nmapped:30\n10\n20\n30\n"
+    );
+}
+
+#[test]
+fn test_iter_scan_yields_running_sum() {
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    for x in v.iter().scan(0, |state, item| {
+        let new = state + item;
+        Some((new, new))
+    }) {
+        println(x);
+    }
+}
+"#,
+    );
+    // 0+1=1, 1+2=3, 3+3=6, 6+4=10.
+    assert_eq!(output, "1\n3\n6\n10\n");
+}
+
+#[test]
+fn test_iter_scan_short_circuits_on_none() {
+    // scan returning None stops iteration; subsequent items are
+    // not visited.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 100, 4, 5];
+    for x in v.iter().scan(0, |state, item| {
+        if item > 50 {
+            None
+        } else {
+            let new = state + item;
+            Some((new, new))
+        }
+    }) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Stops at 100; running sums of 1, 2, 3 are 1, 3, 6.
+    assert_eq!(output, "1\n3\n6\n");
+}
+
+#[test]
+fn test_iter_scan_short_circuit_does_not_re_fire() {
+    // Side-effect prefix proves scan does NOT call closure on items
+    // after the first None.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 100, 3, 4];
+    for x in v.iter().scan(0, |state, item| {
+        println(f"c:{item}");
+        if item > 50 {
+            None
+        } else {
+            let new = state + item;
+            Some((new, new))
+        }
+    }) {
+        println(f"y:{x}");
+    }
+}
+"#,
+    );
+    // Closure fires on 1, 2, 100. None on 100 → stop. 3 and 4 are
+    // never visited. Yields: 1 (=0+1), 3 (=1+2).
+    assert_eq!(output, "c:1\nc:2\nc:100\ny:1\ny:3\n");
+}
+
+#[test]
+fn test_iter_scan_state_persists_across_next_calls() {
+    // next() pulls one item at a time; scan's state survives
+    // between pulls.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    let mut it = v.iter().scan(0, |state, item| {
+        let new = state + item;
+        Some((new, new))
+    });
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    println(it.next().unwrap());
+    match it.next() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "10\n30\n60\ndone\n");
+}
+
+#[test]
+fn test_iter_scan_with_string_state() {
+    // State can be any type — String here.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = ["a", "b", "c"];
+    for x in v.iter().scan("", |state, item| {
+        let new = state + item;
+        Some((new, new))
+    }) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Concatenating: "" + "a" = "a", "a" + "b" = "ab", "ab" + "c" = "abc".
+    assert_eq!(output, "a\nab\nabc\n");
+}
+
+#[test]
+fn test_iter_scan_after_filter() {
+    // Filter first, then scan — the scan closure only sees kept
+    // items.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5, 6];
+    let xs: Vec[i64] = v.iter()
+        .filter(|x| x % 2 == 0)
+        .scan(0, |state, item| {
+            let new = state + item;
+            Some((new, new))
+        })
+        .collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    // Filter yields 2, 4, 6. Running sum: 2, 6, 12.
+    assert_eq!(output, "2\n6\n12\n");
+}
+
+#[test]
+fn test_iter_scan_state_independent_of_yielded_value() {
+    // State and yielded value can differ — useful for "yield index
+    // of running max" patterns.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [3, 1, 4, 1, 5, 9, 2, 6];
+    for x in v.iter().scan(0, |state, item| {
+        let new_state = if item > state { item } else { state };
+        Some((new_state, new_state))
+    }) {
+        println(x);
+    }
+}
+"#,
+    );
+    // Running max: 3, 3, 4, 4, 5, 9, 9, 9.
+    assert_eq!(output, "3\n3\n4\n4\n5\n9\n9\n9\n");
+}

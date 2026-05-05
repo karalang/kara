@@ -222,10 +222,28 @@ reviewable in isolation.
   uniformly across cycles, composition (`step_by.cycle`,
   `enumerate.cycle`), and arity / non-int errors.
 
-- [ ] **11. `inspect(f)` + `scan(state, f)`.** `inspect` runs the closure on
-  each element for side effects; passes the element through. `scan` threads
-  mutable state through the closure, yielding what the closure returns;
-  closure returns `Option[U]` so the iterator can short-circuit.
+- [x] **11. `inspect(f)` + `scan(state, f)`.** Two new `IteratorStep`
+  variants — `Inspect(closure)` (invokes f on each item then passes
+  through unchanged; closure return is discarded) and `Scan { f,
+  state, done }` (thread mutable state, yield + short-circuit on
+  None). Closure signature for scan is `Fn(A, T) -> Option<(A, U)>` —
+  closure returns the new state in the first tuple slot and the
+  yielded value in the second. This deviates from Rust's
+  `Fn(&mut St, T) -> Option<B>` because tree-walk closures snapshot
+  captures and there's no `mut ref` parameter mode at the value
+  layer; threading state via the return tuple matches the existing
+  `fold` "closure returns new accumulator" pattern. The `done` flag
+  flips sticky-true after the first None so subsequent pulls
+  short-circuit without re-firing the closure. Typechecker for
+  `inspect` leaves the closure return free via `TypeParam` pushdown
+  (any return type accepted, all discarded). For `scan`, A is
+  inferred from `init`; the closure body's actual return is
+  pattern-matched for `Option<(A, U)>` with explicit TypeMismatch on
+  non-Option / wrong-shape returns. 7 typechecker tests + 10
+  interpreter tests cover passthrough, post-filter inspect, scan
+  running-sum / running-max / String state / short-circuit on None /
+  no-re-fire after stop / state independent of yielded value /
+  composition with filter / arity errors.
 
 - [ ] **12. `peekable()`.** Wraps the source so `peek()` returns the next
   element without consuming it. Implementation buffers one element. The

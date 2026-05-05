@@ -9211,6 +9211,104 @@ impl<'a> TypeChecker<'a> {
                     args: vec![item.clone()],
                 }
             }
+            "inspect" => {
+                // `inspect(f: Fn(T) -> R) -> Iterator[T]` — closure's
+                // return is discarded so we leave R free via TypeParam
+                // pushdown. Element type passes through unchanged.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!(
+                            "Iterator.inspect() expects 1 argument, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![item.clone()],
+                    };
+                }
+                let f_ty = Type::Function {
+                    params: vec![item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_inspect_R".to_string())),
+                };
+                self.check_expr(&args[0].value, &f_ty);
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "scan" => {
+                // `scan(init: A, f: Fn(A, T) -> Option<(A, U)>) ->
+                // Iterator[U]`. A is inferred from init; the closure's
+                // return is constrained via post-hoc unwrap of
+                // Option<(A, U)>. U becomes the new Item.
+                if args.len() != 2 {
+                    self.type_error(
+                        format!("Iterator.scan() expects 2 arguments, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Named {
+                        name: "Iterator".to_string(),
+                        args: vec![Type::Error],
+                    };
+                }
+                let acc_ty = self.infer_expr(&args[0].value);
+                let f_ty = Type::Function {
+                    params: vec![acc_ty.clone(), item.clone()],
+                    return_type: Box::new(Type::TypeParam("__iter_scan_R".to_string())),
+                };
+                let actual_ty = self.check_expr(&args[1].value, &f_ty);
+                let new_item = match actual_ty {
+                    Type::Function { return_type, .. } => match *return_type {
+                        Type::Named {
+                            name,
+                            args: mut opt_args,
+                        } if name == "Option" && opt_args.len() == 1 => match opt_args.remove(0) {
+                            Type::Tuple(mut tuple_args) if tuple_args.len() == 2 => {
+                                let actual_acc = tuple_args.remove(0);
+                                self.check_assignable(&acc_ty, &actual_acc, span.clone());
+                                tuple_args.remove(0)
+                            }
+                            other => {
+                                self.type_error(
+                                    format!(
+                                        "Iterator.scan() closure must return Option<(A, U)>, found Option<{:?}>",
+                                        other
+                                    ),
+                                    span.clone(),
+                                    TypeErrorKind::TypeMismatch,
+                                );
+                                Type::Error
+                            }
+                        },
+                        other => {
+                            self.type_error(
+                                format!(
+                                    "Iterator.scan() closure must return Option<(A, U)>, found {:?}",
+                                    other
+                                ),
+                                span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            Type::Error
+                        }
+                    },
+                    _ => Type::Error,
+                };
+                Type::Named {
+                    name: "Iterator".to_string(),
+                    args: vec![new_item],
+                }
+            }
             "chain" => {
                 // `chain(other: Iterator[T]) -> Iterator[T]` — the
                 // element type must agree on both sides. Push down

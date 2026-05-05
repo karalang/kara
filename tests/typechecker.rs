@@ -6778,3 +6778,107 @@ fn test_iter_cycle_with_arg_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+#[test]
+fn test_iter_inspect_returns_same_item_type() {
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().inspect(|x| println(x));
+             let _x: i64 = it.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_inspect_after_map_uses_mapped_type() {
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().map(|x| if x > 0 { "pos" } else { "neg" }).inspect(|s| println(s));
+             let _s: String = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_inspect_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().inspect();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.inspect()")),
+        "expected WrongNumberOfArgs for inspect() with no args, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_scan_yields_inner_value_type() {
+    // scan(init: i64, f: |state, item| -> Option<(i64, String)>) →
+    // Iterator[String]. The yielded item is the second tuple slot.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().scan(0, |state, item| {
+                 let new_state = state + item;
+                 Some((new_state, "tick"))
+             });
+             let _s: String = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_scan_state_type_inferred_from_init() {
+    // The state type is locked from `init`. Closure's first
+    // parameter must agree.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().scan("", |state, item| {
+                 let new_state = state;
+                 Some((new_state, item))
+             });
+             let _x: i64 = it.next().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_scan_non_option_return_rejected() {
+    // Closure returns i64 directly instead of Option — TypeMismatch.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().scan(0, |state, item| state + item);
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected TypeMismatch on non-Option scan return, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_scan_wrong_arg_count_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _it = v.iter().scan(0);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.scan()")),
+        "expected WrongNumberOfArgs for scan() with 1 arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
