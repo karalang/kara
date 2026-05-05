@@ -6233,3 +6233,210 @@ fn main() {
     // Running max: 3, 3, 4, 4, 5, 9, 9, 9.
     assert_eq!(output, "3\n3\n4\n4\n5\n9\n9\n9\n");
 }
+
+#[test]
+fn test_iter_peek_returns_next_without_consuming() {
+    // peek() returns the upcoming element; the next next() call
+    // returns the SAME element (the buffer is what gets consumed).
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30];
+    let mut p = v.iter().peekable();
+    println(p.peek().unwrap());
+    println(p.next().unwrap());
+    println(p.next().unwrap());
+}
+"#,
+    );
+    assert_eq!(output, "10\n10\n20\n");
+}
+
+#[test]
+fn test_iter_peek_idempotent_until_next() {
+    // Multiple peek()s in a row see the same element; only next()
+    // drains the buffer.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().peekable();
+    println(p.peek().unwrap());
+    println(p.peek().unwrap());
+    println(p.peek().unwrap());
+    println(p.next().unwrap());
+    println(p.peek().unwrap());
+}
+"#,
+    );
+    assert_eq!(output, "1\n1\n1\n1\n2\n");
+}
+
+#[test]
+fn test_iter_peek_at_end_returns_none() {
+    // After draining, peek returns None; subsequent peeks stay None.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1];
+    let mut p = v.iter().peekable();
+    println(p.next().unwrap());
+    match p.peek() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match p.peek() {
+        Some(_) => println("more"),
+        None => println("done"),
+    }
+    match p.next() {
+        Some(_) => println("more"),
+        None => println("done-next"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\ndone\ndone\ndone-next\n");
+}
+
+#[test]
+fn test_iter_peek_on_drained_iterator() {
+    // After draining a single-element iterator with .take(0), peek
+    // sees no element on a freshly constructed Peekable.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().take(0).peekable();
+    match p.peek() {
+        Some(_) => println("yes"),
+        None => println("none"),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "none\n");
+}
+
+#[test]
+fn test_iter_peek_does_not_re_pull_after_buffered() {
+    // peek() pulls from inner exactly once per buffered slot.
+    // Side-effect prefix proves the closure does NOT fire on
+    // repeated peek() calls — only the first peek() pulls.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().inspect(|x| println(f"pull:{x}")).peekable();
+    println(f"peek1:{p.peek().unwrap()}");
+    println(f"peek2:{p.peek().unwrap()}");
+    println(f"next:{p.next().unwrap()}");
+    println(f"peek3:{p.peek().unwrap()}");
+}
+"#,
+    );
+    // Drain order: first peek() triggers inner pull (pull:1) and
+    // buffers; second peek() returns from buffer (no pull); next()
+    // drains buffer (no pull); third peek() pulls again (pull:2).
+    assert_eq!(
+        output,
+        "pull:1\npeek1:1\npeek2:1\nnext:1\npull:2\npeek3:2\n"
+    );
+}
+
+#[test]
+fn test_iter_peek_sees_post_inner_step_value() {
+    // When map is applied BEFORE peekable(), the buffered (and peeked)
+    // value is the mapped value — peek and next agree.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().map(|x| x * 10).peekable();
+    println(p.peek().unwrap());
+    println(p.next().unwrap());
+    println(p.peek().unwrap());
+}
+"#,
+    );
+    assert_eq!(output, "10\n10\n20\n");
+}
+
+#[test]
+fn test_iter_peekable_drains_in_for_loop() {
+    // A Peekable iterator is still iterable; for-loop drains it
+    // including any element already buffered by a prior peek().
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4];
+    let mut p = v.iter().peekable();
+    println(p.peek().unwrap());
+    for x in p {
+        println(x);
+    }
+}
+"#,
+    );
+    // Buffered 1 from peek; for-loop drains 1, 2, 3, 4.
+    assert_eq!(output, "1\n1\n2\n3\n4\n");
+}
+
+#[test]
+fn test_iter_peekable_count_drains_buffer() {
+    // Terminal `count()` on a Peekable counts the buffered element
+    // plus the rest of the inner iterator.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [10, 20, 30, 40, 50];
+    let mut p = v.iter().peekable();
+    println(p.peek().unwrap());
+    println(p.count());
+}
+"#,
+    );
+    assert_eq!(output, "10\n5\n");
+}
+
+#[test]
+fn test_iter_peekable_collect_includes_buffered() {
+    // Round-trip: Peekable.collect() yields the same Vec as the
+    // underlying iterator, even after a peek() has buffered an
+    // element.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3];
+    let mut p = v.iter().peekable();
+    let _ = p.peek();
+    let xs: Vec[i64] = p.collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n2\n3\n");
+}
+
+#[test]
+fn test_iter_peekable_then_filter_drops_peek_capability_at_runtime() {
+    // After .filter() the type is Iterator[T] (not Peekable), but
+    // the underlying source chain still routes correctly — the
+    // resulting iterator drains as if peekable() were a no-op
+    // wrapper. This guards the runtime path that wraps the inner
+    // for downstream adaptors.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let v = [1, 2, 3, 4, 5];
+    let xs: Vec[i64] = v.iter().peekable().filter(|x| x % 2 == 1).collect();
+    for x in xs {
+        println(x);
+    }
+}
+"#,
+    );
+    assert_eq!(output, "1\n3\n5\n");
+}

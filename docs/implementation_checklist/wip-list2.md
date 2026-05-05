@@ -245,10 +245,35 @@ reviewable in isolation.
   no-re-fire after stop / state independent of yielded value /
   composition with filter / arity errors.
 
-- [ ] **12. `peekable()`.** Wraps the source so `peek()` returns the next
+- [x] **12. `peekable()`.** Wraps the source so `peek()` returns the next
   element without consuming it. Implementation buffers one element. The
   resulting iterator type exposes `peek()` as an additional method beyond the
   Iterator trait.
+  Closure: typechecker uses a distinct `Peekable[T]` named type
+  (registered alongside Iterator in `register_builtin_types`) so
+  `peek()` is dispatchable only on the result of `peekable()`. Adaptor
+  methods (`map`, `filter`, `take`, …) on a `Peekable[T]` return
+  `Iterator[U]` (peekable-ness is lost), which makes `peek()`
+  type-unavailable downstream — matching Rust's Peekable<I> semantics
+  via `Map<Peekable<I>>`. The dispatch route at `infer_method_call`
+  matches both `Iterator` and `Peekable` names and forwards to
+  `infer_iterator_method` with an `is_peekable` flag; the `peek` arm
+  rejects with TypeMismatch when `is_peekable=false`. Interpreter
+  models the wrapper as a new `IteratorSource::Peekable { inner,
+  buffered }` variant — pull_source drains `buffered` first then falls
+  through to `iterator_step(inner)`, so any inner steps (map / filter
+  / etc.) run before peek/next observe the value. The new
+  `peek_value` helper buffers one element and returns
+  `Option<T>` (cloned), with binding writeback identical to `next()`.
+  Because the typechecker forbids adaptors after peekable() (they
+  return Iterator[U]), the wrapping Value::Iterator's `steps` field
+  is always empty — peek and next see the same item type without
+  walking outer steps. 7 typechecker tests + 10 interpreter tests
+  cover Peekable[T] type, peek-after-map sees mapped value,
+  peek-on-bare-Iterator rejected, peek-after-adaptor-chain rejected,
+  peek-idempotent-until-next, peek-no-re-pull-after-buffered,
+  peek-on-drained returns None, count/collect/for-loop drain the
+  buffer, peekable+filter chain works at runtime, arity errors.
 
 - [ ] **13. `chunk_by(key_fn)`.** Buffering adaptor — allocates a `Vec[T]`
   per group when consecutive elements share the same key. Carries

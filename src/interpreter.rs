@@ -283,6 +283,20 @@ pub enum IteratorSource {
         current: Box<Value>,
         exhausted: bool,
     },
+    /// `.peekable()` — single-element lookahead buffer. `inner` is the
+    /// underlying iterator (with all its own steps); `buffered` holds
+    /// the next element if `peek()` has been called and not yet
+    /// consumed by `next()`. Pulls drain from the buffer first; when
+    /// empty, fall through to `iterator_step(inner)`. The wrapping
+    /// `Value::Iterator`'s `steps` is always empty in well-typed
+    /// programs because adaptors after `.peekable()` return
+    /// `Iterator[U]` (not `Peekable[U]`), so `peek()` becomes
+    /// type-unavailable downstream — meaning peek and next agree on
+    /// the item type without needing to walk steps.
+    Peekable {
+        inner: Box<Value>,
+        buffered: Option<Box<Value>>,
+    },
 }
 
 /// One step in a `Value::Iterator`'s lazy adaptor chain. Each step is a
@@ -452,6 +466,7 @@ impl std::fmt::Display for Value {
                 IteratorSource::Zip { .. } => write!(f, "<iter zip>"),
                 IteratorSource::FlatMap { .. } => write!(f, "<iter flat_map>"),
                 IteratorSource::Cycle { .. } => write!(f, "<iter cycle>"),
+                IteratorSource::Peekable { .. } => write!(f, "<iter peekable>"),
             },
             Value::SharedCell(cell) => write!(f, "{}", cell.lock().unwrap()),
             Value::Entry {
@@ -3664,6 +3679,39 @@ impl<'a> Interpreter<'a> {
                 }
                 None
             }
+            IteratorSource::Peekable { .. } => {
+                // Drain the buffered slot first; on miss, recurse into
+                // `inner` via iterator_step. `mem::replace` ceremony
+                // mirrors Chain/Zip so we can pass `&mut self` into
+                // iterator_step without aliasing the iter binding.
+                if let Value::Iterator {
+                    source: IteratorSource::Peekable { buffered, .. },
+                    ..
+                } = iter
+                {
+                    if let Some(boxed) = buffered.take() {
+                        return Some(*boxed);
+                    }
+                }
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::Peekable { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return None;
+                };
+                let yielded = self.iterator_step(&mut inner_taken);
+                if let Value::Iterator {
+                    source: IteratorSource::Peekable { inner, .. },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                }
+                yielded
+            }
         }
     }
 
@@ -3719,6 +3767,85 @@ impl<'a> Interpreter<'a> {
                 // first check returns None on every subsequent call.
                 *exhausted = true;
             }
+            IteratorSource::Peekable { .. } => {
+                // Drain the inner and clear any buffered element. After
+                // this, pull_source: buffered is None → falls through
+                // to the inner pull which returns None forever.
+                let mut inner_taken = if let Value::Iterator {
+                    source: IteratorSource::Peekable { inner, .. },
+                    ..
+                } = iter
+                {
+                    std::mem::replace(inner.as_mut(), Value::Unit)
+                } else {
+                    return;
+                };
+                self.drain_source(&mut inner_taken);
+                if let Value::Iterator {
+                    source: IteratorSource::Peekable { inner, buffered },
+                    ..
+                } = iter
+                {
+                    **inner = inner_taken;
+                    *buffered = None;
+                }
+            }
+        }
+    }
+
+    /// `Peekable.peek()` — look one element ahead without consuming.
+    /// Returns `Option<T>` (Some/None Value::EnumVariant). Pulls from
+    /// the buffered slot if present; otherwise pulls one element from
+    /// the inner iterator via `iterator_step`, stores it in the
+    /// buffer, and returns a clone. The buffer stays populated so the
+    /// next `peek()` (or `next()`) sees the same element. Once the
+    /// inner is exhausted and the buffer is empty, returns
+    /// `None` on every subsequent call.
+    fn peek_value(&mut self, iter: &mut Value) -> Value {
+        let some = |v: Value| Value::EnumVariant {
+            enum_name: "Option".to_string(),
+            variant: "Some".to_string(),
+            data: EnumData::Tuple(vec![v]),
+        };
+        let none = || Value::EnumVariant {
+            enum_name: "Option".to_string(),
+            variant: "None".to_string(),
+            data: EnumData::Unit,
+        };
+        if let Value::Iterator {
+            source: IteratorSource::Peekable { buffered, .. },
+            ..
+        } = iter
+        {
+            if let Some(boxed) = buffered.as_ref() {
+                return some((**boxed).clone());
+            }
+        }
+        let mut inner_taken = if let Value::Iterator {
+            source: IteratorSource::Peekable { inner, .. },
+            ..
+        } = iter
+        {
+            std::mem::replace(inner.as_mut(), Value::Unit)
+        } else {
+            return none();
+        };
+        let yielded = self.iterator_step(&mut inner_taken);
+        if let Value::Iterator {
+            source: IteratorSource::Peekable { inner, buffered },
+            ..
+        } = iter
+        {
+            **inner = inner_taken;
+            match yielded {
+                Some(v) => {
+                    *buffered = Some(Box::new(v.clone()));
+                    some(v)
+                }
+                None => none(),
+            }
+        } else {
+            none()
         }
     }
 
@@ -4260,6 +4387,58 @@ impl<'a> Interpreter<'a> {
                         done: false,
                     });
                     return Value::Iterator { source, steps };
+                }
+            }
+            "peekable" => {
+                // Wraps the receiver into a Peekable source with an
+                // empty buffer. Adaptor calls after this return
+                // Iterator[U] at the type layer (peekable-ness lost),
+                // so the wrapping iterator's `steps` stays empty in
+                // well-typed programs and pull_source can route
+                // straight to the inner iterator without re-running
+                // outer steps.
+                if matches!(obj, Value::Iterator { .. }) {
+                    if !args.is_empty() {
+                        return self.record_runtime_error(
+                            format!("Iterator.peekable() takes no arguments, got {}", args.len()),
+                            span,
+                        );
+                    }
+                    return Value::Iterator {
+                        source: IteratorSource::Peekable {
+                            inner: Box::new(obj),
+                            buffered: None,
+                        },
+                        steps: Vec::new(),
+                    };
+                }
+            }
+            "peek" => {
+                // Look one element ahead without consuming. Pull from
+                // the buffer if present; otherwise pull one item from
+                // the inner iterator, store it in the buffer, and
+                // return a clone wrapped in `Some`. Sticky-empty
+                // (returns None forever once the inner is exhausted
+                // and the buffer is empty). Writeback to the binding
+                // mirrors `next()` so subsequent calls observe the
+                // populated buffer.
+                if let Value::Iterator {
+                    source: IteratorSource::Peekable { .. },
+                    ..
+                } = &obj
+                {
+                    if !args.is_empty() {
+                        return self.record_runtime_error(
+                            format!("Peekable.peek() takes no arguments, got {}", args.len()),
+                            span,
+                        );
+                    }
+                    let mut iter_val = obj;
+                    let result = self.peek_value(&mut iter_val);
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, iter_val);
+                    }
+                    return result;
                 }
             }
             "chain" => {

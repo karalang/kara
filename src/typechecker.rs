@@ -2145,11 +2145,14 @@ impl<'a> TypeChecker<'a> {
         let k = || Type::TypeParam("K".to_string());
         let v = || Type::TypeParam("V".to_string());
 
-        for name in &["Vec", "Array", "SortedSet", "Set", "Iterator"] {
+        for name in &["Vec", "Array", "SortedSet", "Set", "Iterator", "Peekable"] {
             // Register in env.structs so element_type_of can find generic_params.
             // `Iterator` is a trait per design.md but is treated as a parametric
             // pseudo-type at this layer so `for x in v.iter()` resolves the
             // bound element via the same impl_assoc_types path as collections.
+            // `Peekable[T]` is the result type of `Iterator.peekable()` — same
+            // shape as Iterator (single Item type) plus an extra `peek()`
+            // method dispatched only when the receiver carries this name.
             // See `wip-list2.md` § Iterator trait — full adaptor surface.
             self.env
                 .structs
@@ -7964,9 +7967,10 @@ impl<'a> TypeChecker<'a> {
             args: type_args,
         } = &obj_ty
         {
-            if name == "Iterator" {
+            if name == "Iterator" || name == "Peekable" {
                 let item_ty = type_args.first().cloned().unwrap_or(Type::Error);
-                return self.infer_iterator_method(&item_ty, method, args, span);
+                let is_peekable = name == "Peekable";
+                return self.infer_iterator_method(&item_ty, method, args, span, is_peekable);
             }
         }
 
@@ -8864,6 +8868,7 @@ impl<'a> TypeChecker<'a> {
         method: &str,
         args: &[CallArg],
         span: &Span,
+        is_peekable: bool,
     ) -> Type {
         match method {
             "next" => {
@@ -9378,6 +9383,63 @@ impl<'a> TypeChecker<'a> {
                 Type::Named {
                     name: "Iterator".to_string(),
                     args: vec![Type::Tuple(vec![item.clone(), other_item])],
+                }
+            }
+            "peekable" => {
+                // `peekable() -> Peekable[T]` — wraps the receiver into a
+                // distinct named type that exposes `peek()` in addition
+                // to the rest of the Iterator surface. Idempotent on
+                // a Peekable receiver (still returns Peekable[T]).
+                if !args.is_empty() {
+                    self.type_error(
+                        format!(
+                            "Iterator.peekable() takes no arguments, found {}",
+                            args.len()
+                        ),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Named {
+                    name: "Peekable".to_string(),
+                    args: vec![item.clone()],
+                }
+            }
+            "peek" => {
+                // `peek() -> Option<T>` — only valid on `Peekable[T]`. The
+                // distinct receiver name is the type-level signal that
+                // peekable() has been called; on a plain Iterator we
+                // emit UnknownMethod (via Type::Error) so adaptor pipelines
+                // that drop the Peekable wrapper (e.g. `peekable().map(f)`
+                // returning Iterator[U]) reject downstream `.peek()`.
+                if !is_peekable {
+                    self.type_error(
+                        "peek() is only available on Peekable[T] (call .peekable() first)"
+                            .to_string(),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
+                if !args.is_empty() {
+                    self.type_error(
+                        "Peekable.peek() takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                }
+                Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![item.clone()],
                 }
             }
             _ => {

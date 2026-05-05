@@ -6882,3 +6882,115 @@ fn test_iter_scan_wrong_arg_count_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+#[test]
+fn test_iter_peekable_returns_peekable_of_same_item_type() {
+    // peekable() on Iterator[T] yields Peekable[T]; both peek() and
+    // next() then yield Option<T>.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut p = v.iter().peekable();
+             let _peeked: i64 = p.peek().unwrap();
+             let _consumed: i64 = p.next().unwrap();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_peekable_after_map_uses_mapped_type() {
+    // The Item type that flows through peekable is the post-map type.
+    typecheck_ok(
+        r#"fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut p = v.iter().map(|x| if x > 0 { "pos" } else { "neg" }).peekable();
+             let _s: String = p.peek().unwrap();
+         }"#,
+    );
+}
+
+#[test]
+fn test_iter_peek_on_plain_iterator_rejected() {
+    // peek() is only on Peekable[T] — calling it on a bare Iterator
+    // should raise a type error rather than silently dispatching.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter();
+             let _x = it.peek();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch && e.message.contains("peek()")),
+        "expected TypeMismatch for peek() on non-Peekable, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_peek_after_adaptor_chain_loses_peekable() {
+    // After .map() on a Peekable, the result is Iterator[U] (NOT
+    // Peekable[U]) — so .peek() further down the chain is rejected.
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut it = v.iter().peekable().map(|x| x * 2);
+             let _x = it.peek();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch && e.message.contains("peek()")),
+        "expected TypeMismatch for peek() after map(), got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_peekable_supports_iterator_methods() {
+    // Adaptor / terminal methods dispatch normally on Peekable since
+    // it's still an iterator. count, collect, map, filter, etc.
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _n: i64 = v.iter().peekable().count();
+             let _xs: Vec[i64] = v.iter().peekable().filter(|x| x > 0).collect();
+         }",
+    );
+}
+
+#[test]
+fn test_iter_peekable_with_arg_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let _p = v.iter().peekable(1);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Iterator.peekable()")),
+        "expected WrongNumberOfArgs for peekable() with arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_iter_peek_with_arg_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let mut p = v.iter().peekable();
+             let _x = p.peek(1);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs
+                && e.message.contains("Peekable.peek()")),
+        "expected WrongNumberOfArgs for peek() with arg, got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
+    );
+}
