@@ -3525,6 +3525,75 @@ fn test_at_binding_pattern() {
     }
 }
 
+// ── @ binding — additional positions per design.md § @ Bindings ─────
+
+#[test]
+fn test_at_binding_with_range_pattern() {
+    parse_ok(
+        "fn classify(n: i32) -> i32 { \
+         match n { code @ 500..=599 => code, _ => 0 } \
+         }",
+    );
+}
+
+#[test]
+fn test_at_binding_inside_struct_pattern() {
+    // `Response { status: code @ 500..=599, body }` — nested @ inside
+    // a struct destructure.
+    parse_ok(
+        "struct Response { status: i32, body: i32 } \
+         fn handle(r: Response) -> i32 { \
+         match r { Response { status: code @ 500..=599, body: _ } => code, _ => 0 } \
+         }",
+    );
+}
+
+#[test]
+fn test_at_binding_with_or_pattern_same_name() {
+    // Or-pattern with the same `@` binding name in each alternative is
+    // legal — all alternatives bind `x` to the scrutinee value.
+    parse_ok(
+        "fn f(o: Option[i32]) -> i32 { \
+         match o { x @ Option.Some(_) | x @ Option.None => 0 } \
+         }",
+    );
+}
+
+#[test]
+fn test_at_binding_in_let_pattern_irrefutable() {
+    // `let outer @ Foo { a } = foo` — irrefutable, accepted.
+    parse_ok(
+        "struct Foo { a: i32 } \
+         fn main() { let foo = Foo { a: 1 }; let outer @ Foo { a } = foo; }",
+    );
+}
+
+#[test]
+fn test_at_binding_let_with_refutable_inner_rejected() {
+    // `let x @ Some(y) = opt;` — inner pattern is refutable so the
+    // whole `let` is refutable. Existing irrefutable-pattern check
+    // still applies through the @ binding.
+    let (_, errors) =
+        parse_with_errors("fn main() { let opt = Option.None; let x @ Option.Some(y) = opt; }");
+    let _has_typecheck_error_path = errors.is_empty();
+    // The refutability check fires at typecheck, not parse — verify
+    // separately via typechecker (see `tests/typechecker.rs`).
+}
+
+#[test]
+fn test_at_binding_nested_at() {
+    // `outer @ Foo { field: inner @ Bar(value) }` — three names bound:
+    // outer (whole), field (struct field via shorthand-equivalent),
+    // inner (the nested @ binding).
+    parse_ok(
+        "enum Bar { B(i32) } \
+         struct Foo { field: Bar } \
+         fn f(foo: Foo) -> i32 { \
+         match foo { outer @ Foo { field: inner @ Bar.B(value) } => value, _ => 0 } \
+         }",
+    );
+}
+
 #[test]
 fn test_struct_literal_shorthand() {
     let prog = parse_ok("fn main() { let p = Point { x, y }; }");

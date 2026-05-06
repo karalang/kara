@@ -5709,6 +5709,23 @@ impl<'a> TypeChecker<'a> {
                 } else {
                     self.infer_expr(value)
                 };
+                // Per design.md: `let PAT = expr;` requires `PAT` to be
+                // irrefutable (the binding has no else-arm; a missed
+                // pattern would have nowhere to dispatch). Refutable
+                // patterns must use `let ... else { … }` (which has its
+                // own check at `StmtKind::LetElse`) or `if let` /
+                // `while let`. The check inherits through `@` bindings
+                // — `let x @ Option.Some(y) = opt` is rejected because
+                // the inner `Option.Some(y)` is refutable.
+                if !self.is_irrefutable_param_pattern(pattern) {
+                    self.type_error(
+                        "refutable pattern in `let` binding; use `let ... else { ... }`, \
+                         `if let`, or `match` for patterns that may not match"
+                            .to_string(),
+                        pattern.span.clone(),
+                        TypeErrorKind::RefutablePattern,
+                    );
+                }
                 self.bind_pattern_types(pattern, &expected_ty);
             }
             StmtKind::LetUninit {

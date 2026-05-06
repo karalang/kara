@@ -3086,6 +3086,69 @@ fn cast_int_as_int_still_works() {
     typecheck_ok("fn main() { let _ = 300i32 as i8; let _ = (-1i8) as u8; }");
 }
 
+// ── @ binding semantics — typechecker coverage ──────────────────────
+
+#[test]
+fn at_binding_inherits_scrutinee_type() {
+    // The @-bound name takes the type of the scrutinee at its position.
+    typecheck_ok(
+        "fn classify(n: i32) -> i32 { \
+         match n { code @ 500..=599 => code, _ => 0 } \
+         }",
+    );
+}
+
+#[test]
+fn at_binding_let_with_refutable_inner_rejected_at_typecheck() {
+    // `let x @ Option.Some(y) = opt;` — the inner pattern is refutable
+    // (Option could be None); the whole binding is refutable; the
+    // existing irrefutable-pattern check fires.
+    let errors = typecheck_errors(
+        "fn main() { \
+         let opt: Option[i32] = Option.None; \
+         let x @ Option.Some(y) = opt; \
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected refutable-pattern type error, got none"
+    );
+}
+
+#[test]
+fn at_binding_irrefutable_struct_pattern_in_let_accepted() {
+    typecheck_ok(
+        "struct Foo { a: i32 } \
+         fn main() { let foo = Foo { a: 1 }; let outer @ Foo { a } = foo; \
+         let _ = outer; let _ = a; }",
+    );
+}
+
+#[test]
+fn refutable_let_with_enum_variant_rejected() {
+    let errors = typecheck_errors(
+        "fn main() { let opt: Option[i32] = Option.None; let Option.Some(x) = opt; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("refutable pattern")),
+        "expected refutable-pattern error, got: {errors:?}"
+    );
+}
+
+#[test]
+fn refutable_let_with_literal_pattern_rejected() {
+    let errors = typecheck_errors("fn main() { let n: i32 = 1; let 1 = n; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("refutable pattern")),
+        "expected refutable-pattern error, got: {errors:?}"
+    );
+}
+
+
 #[test]
 fn match_with_full_range_pattern_set_typechecks() {
     // Five-form range pattern coverage: `..lo`, `lo..hi`, `lo..=hi`,
