@@ -272,6 +272,13 @@ impl<'a> Lexer<'a> {
                 self.interpolated_string()
             }
 
+            // C-string literals (v60 item 18). The opening `c` has been
+            // consumed; advance past the `"` and parse the body.
+            b'c' if self.peek() == b'"' => {
+                self.advance(); // consume `"`
+                self.c_string()
+            }
+
             // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers).
             // `r"` is the reserved-string-prefix path (handled below); `r#"..."#`
             // is the reserved hash-string form (caught later via the lone `r`
@@ -563,12 +570,9 @@ impl<'a> Lexer<'a> {
     /// `prefix` letter has been consumed; the next byte is the opening `"`.
     /// We consume the string body — handling escape sequences identically to
     /// the regular string lexer — so the error token replaces the entire
-    /// prefix-string construct, not just the prefix.
-    ///
-    /// `c"..."` (v60 item 18) is specced at v1 but lex acceptance ships in
-    /// Phase 5.2 alongside parser handling and the stdlib `CStr` type; until
-    /// then it gets a focused diagnostic pointing at design.md rather than the
-    /// generic reserved-prefix message.
+    /// prefix-string construct, not just the prefix. `f"..."` and `c"..."`
+    /// have dedicated dispatch arms higher up; this path catches every
+    /// other ASCII-alphabetic single-letter prefix and the underscore form.
     fn reserved_prefix_string(&mut self, prefix: u8) -> SpannedToken {
         self.advance(); // consume opening `"`
         while self.peek() != b'"' && !self.is_at_end() {
@@ -588,15 +592,147 @@ impl<'a> Lexer<'a> {
         if self.peek() == b'"' {
             self.advance(); // closing quote
         }
-        let msg = if prefix == b'c' {
-            "string prefix 'c\"...\"' (C-string literal) is specced for v1 but lex acceptance lands in Phase 5.2; see design.md § C-String Literals".to_string()
-        } else {
-            format!(
-                "string prefix '{}\"...\"' is reserved for future use; only `f\"...\"` is recognized in v1",
-                prefix as char
-            )
-        };
+        let msg = format!(
+            "string prefix '{}\"...\"' is reserved for future use; only `f\"...\"` and `c\"...\"` are recognized in v1",
+            prefix as char
+        );
         self.make_spanned(Token::Error(msg))
+    }
+
+    /// Parse a `c"..."` C-string literal body. The opening `c` and `"`
+    /// have been consumed. Produces a `Token::CStringLiteral` with the
+    /// raw byte sequence (no trailing NUL — codegen appends one) plus the
+    /// textual `source_len` so `len()` / `as_bytes()` can answer without
+    /// re-walking the source. Supports `\n`, `\t`, `\r`, `\\`, `\"`,
+    /// `\xHH` hex byte, and `\u{...}` Unicode-codepoint escapes (the last
+    /// encoded as UTF-8 bytes). Any escape that produces an interior `0x00`
+    /// byte is rejected with `error[E_INTERIOR_NUL_IN_C_STRING]` per
+    /// design.md § C-String Literals.
+    fn c_string(&mut self) -> SpannedToken {
+        let body_start = self.current;
+        let mut bytes: Vec<u8> = Vec::new();
+        while self.peek() != b'"' && !self.is_at_end() {
+            if self.peek() == b'\n' {
+                self.line += 1;
+                self.column = 0;
+            }
+            if self.peek() == b'\\' {
+                self.advance(); // consume backslash
+                if self.is_at_end() {
+                    return self.make_spanned(Token::Error(
+                        "Unterminated C-string: trailing backslash".to_string(),
+                    ));
+                }
+                match self.peek() {
+                    b'n' => {
+                        self.advance();
+                        bytes.push(b'\n');
+                    }
+                    b't' => {
+                        self.advance();
+                        bytes.push(b'\t');
+                    }
+                    b'r' => {
+                        self.advance();
+                        bytes.push(b'\r');
+                    }
+                    b'\\' => {
+                        self.advance();
+                        bytes.push(b'\\');
+                    }
+                    b'"' => {
+                        self.advance();
+                        bytes.push(b'"');
+                    }
+                    b'0' => {
+                        return self.make_spanned(Token::Error(
+                            "error[E_INTERIOR_NUL_IN_C_STRING]: \
+                             interior NUL bytes are not permitted in C-string literals; \
+                             remove the `\\0` escape"
+                                .to_string(),
+                        ));
+                    }
+                    b'x' => {
+                        self.advance(); // consume `x`
+                        match self.parse_hex_byte_escape() {
+                            Ok(0) => {
+                                return self.make_spanned(Token::Error(
+                                    "error[E_INTERIOR_NUL_IN_C_STRING]: \
+                                     interior NUL bytes are not permitted in C-string literals; \
+                                     remove the `\\x00` escape"
+                                        .to_string(),
+                                ));
+                            }
+                            Ok(b) => bytes.push(b),
+                            Err(msg) => return self.make_spanned(Token::Error(msg)),
+                        }
+                    }
+                    b'u' => {
+                        self.advance();
+                        match self.parse_unicode_escape() {
+                            Ok('\0') => {
+                                return self.make_spanned(Token::Error(
+                                    "error[E_INTERIOR_NUL_IN_C_STRING]: \
+                                     interior NUL bytes are not permitted in C-string literals; \
+                                     remove the `\\u{0}` escape"
+                                        .to_string(),
+                                ));
+                            }
+                            Ok(c) => {
+                                let mut buf = [0u8; 4];
+                                let s = c.encode_utf8(&mut buf);
+                                bytes.extend_from_slice(s.as_bytes());
+                            }
+                            Err(msg) => return self.make_spanned(Token::Error(msg)),
+                        }
+                    }
+                    _ => {
+                        let c = self.consume_codepoint();
+                        return self.make_spanned(Token::Error(format!(
+                            "Unknown escape sequence in C-string: \\{c}"
+                        )));
+                    }
+                }
+            } else {
+                // Multi-byte codepoints encode as their UTF-8 bytes; ASCII
+                // copies through verbatim. NUL bytes in source text are
+                // not reachable here because the lexer rejects literal
+                // unescaped NUL bytes upstream of all string lexers.
+                let c = self.consume_codepoint();
+                let mut buf = [0u8; 4];
+                let s = c.encode_utf8(&mut buf);
+                bytes.extend_from_slice(s.as_bytes());
+            }
+        }
+        if self.is_at_end() {
+            return self.make_spanned(Token::Error("Unterminated C-string".to_string()));
+        }
+        let source_len = self.current - body_start;
+        self.advance(); // closing `"`
+        self.make_spanned(Token::CStringLiteral { bytes, source_len })
+    }
+
+    /// Parse a `\xHH` hex byte escape. The opening `\x` has been consumed;
+    /// expect exactly two hex digits and return the resulting byte.
+    fn parse_hex_byte_escape(&mut self) -> Result<u8, String> {
+        let mut digits = [0u8; 2];
+        for slot in &mut digits {
+            if self.is_at_end() {
+                return Err("\\xHH escape requires exactly two hex digits".to_string());
+            }
+            let b = self.peek();
+            if !b.is_ascii_hexdigit() {
+                return Err(format!(
+                    "\\xHH escape requires two hex digits; found `{}`",
+                    b as char
+                ));
+            }
+            *slot = b;
+            self.advance();
+        }
+        let hex = std::str::from_utf8(&digits).expect("ASCII hex digits");
+        u8::from_str_radix(hex, 16)
+            .map_err(|_| "\\xHH escape: hex digit parse failed".to_string())
     }
 
     fn string(&mut self) -> SpannedToken {

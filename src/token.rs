@@ -222,6 +222,15 @@ pub enum Token {
     StringLiteral(String),
     MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec<InterpolationPart>),
+    /// `c"..."` — C-string literal. `bytes` excludes the trailing NUL (the
+    /// codegen layer appends it); `source_len` records the textual length
+    /// of the source-form body so `len()` / `as_bytes()` can answer
+    /// without re-walking. Interior NUL bytes are rejected at lex time.
+    /// See design.md § C-String Literals (v60 item 18).
+    CStringLiteral {
+        bytes: Vec<u8>,
+        source_len: usize,
+    },
 
     // ── Special ───────────────────────────────────────────────
     DocComment(String),

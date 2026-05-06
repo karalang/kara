@@ -953,11 +953,9 @@ fn test_v60_reserved_hash_guarded_string() {
 fn test_v60_reserved_string_prefix_diagnostic() {
     // Per design.md § Reserved Single-Letter String-Prefix Syntax (v60 item 10).
     // Every ASCII single-letter prefix immediately followed by `"` is reserved
-    // at v1, except `f"..."` (interpolated strings, already shipped) and
-    // `c"..."` (C-string literals — specced at v1 per v60 item 18, lex
-    // acceptance lands in Phase 5.2). The lexer emits a focused
-    // reserved-prefix diagnostic and consumes the string body for clean error
-    // recovery.
+    // at v1, except `f"..."` (interpolated strings) and `c"..."` (C-string
+    // literals). The lexer emits a focused reserved-prefix diagnostic and
+    // consumes the string body for clean error recovery.
     for prefix in ['a', 'b', 'g', 'r', 'x', 'z', '_'] {
         let source = format!(r#"{prefix}"hello""#);
         let tokens = tokens_only(&source);
@@ -965,14 +963,14 @@ fn test_v60_reserved_string_prefix_diagnostic() {
             tokens,
             vec![
                 Token::Error(format!(
-                    "string prefix '{prefix}\"...\"' is reserved for future use; only `f\"...\"` is recognized in v1"
+                    "string prefix '{prefix}\"...\"' is reserved for future use; only `f\"...\"` and `c\"...\"` are recognized in v1"
                 )),
                 Token::EOF,
             ],
             "expected reserved-prefix error for '{prefix}\"...\"'",
         );
     }
-    // `f"..."` is the one recognized prefix — it must continue to lex as
+    // `f"..."` is one recognized prefix — it must continue to lex as
     // an interpolated string, not as a reserved-prefix error.
     let tokens = tokens_only(r#"f"hello""#);
     assert!(
@@ -980,18 +978,152 @@ fn test_v60_reserved_string_prefix_diagnostic() {
         "expected f\"...\" to lex as InterpolatedStringLiteral, got {:?}",
         tokens[0]
     );
-    // `c"..."` is specced (v60 item 18) but lex acceptance is gated to
-    // Phase 5.2 — until then it gets a focused diagnostic that points at
-    // the spec, not the generic reserved-prefix message.
+    // `c"..."` is the other recognized prefix — it lexes to
+    // Token::CStringLiteral. Detailed coverage below.
     let tokens = tokens_only(r#"c"hello""#);
-    assert_eq!(
-        tokens,
-        vec![
-            Token::Error(
-                "string prefix 'c\"...\"' (C-string literal) is specced for v1 but lex acceptance lands in Phase 5.2; see design.md § C-String Literals".to_string()
-            ),
-            Token::EOF,
-        ],
+    assert!(
+        matches!(tokens[0], Token::CStringLiteral { .. }),
+        "expected c\"...\" to lex as CStringLiteral, got {:?}",
+        tokens[0]
+    );
+}
+
+#[test]
+fn test_c_string_literal_ascii_body() {
+    let tokens = tokens_only(r#"c"hello""#);
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, source_len } => {
+            assert_eq!(bytes, b"hello");
+            assert_eq!(*source_len, 5, "source_len excludes prefix and quotes");
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_empty() {
+    let tokens = tokens_only(r#"c"""#);
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, source_len } => {
+            assert!(bytes.is_empty());
+            assert_eq!(*source_len, 0);
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_basic_escapes() {
+    let tokens = tokens_only(r#"c"a\nb\tc\\d\"e""#);
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, .. } => {
+            assert_eq!(bytes, b"a\nb\tc\\d\"e");
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_hex_byte_escape() {
+    // \xHH lets the user inject arbitrary bytes — including non-UTF-8
+    // sequences a regular `String` couldn't carry.
+    let tokens = tokens_only(r#"c"\x7F\xFF""#);
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, .. } => {
+            assert_eq!(bytes, &[0x7F, 0xFF]);
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_unicode_escape_encodes_utf8() {
+    // U+00E9 (é) → 2 bytes (0xC3 0xA9) in UTF-8.
+    let tokens = tokens_only(r#"c"caf\u{00E9}""#);
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, .. } => {
+            assert_eq!(bytes, &[b'c', b'a', b'f', 0xC3, 0xA9]);
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_multibyte_codepoint_in_body() {
+    // A non-escaped multi-byte codepoint in the body encodes to its UTF-8
+    // bytes (parity with regular `String`).
+    let tokens = tokens_only("c\"é\"");
+    match &tokens[0] {
+        Token::CStringLiteral { bytes, .. } => {
+            assert_eq!(bytes, &[0xC3, 0xA9]);
+        }
+        other => panic!("expected CStringLiteral, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_interior_nul_escape_zero_rejected() {
+    let tokens = tokens_only(r#"c"a\0b""#);
+    match &tokens[0] {
+        Token::Error(msg) => {
+            assert!(
+                msg.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected Error token, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_interior_nul_hex_escape_rejected() {
+    let tokens = tokens_only(r#"c"a\x00b""#);
+    match &tokens[0] {
+        Token::Error(msg) => {
+            assert!(
+                msg.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected Error token, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_interior_nul_unicode_escape_rejected() {
+    let tokens = tokens_only(r#"c"a\u{0}b""#);
+    match &tokens[0] {
+        Token::Error(msg) => {
+            assert!(
+                msg.contains("E_INTERIOR_NUL_IN_C_STRING"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected Error token, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_invalid_hex_escape() {
+    let tokens = tokens_only(r#"c"\xZZ""#);
+    match &tokens[0] {
+        Token::Error(msg) => {
+            assert!(
+                msg.contains("hex digit") || msg.contains("hex digits"),
+                "got: {msg}"
+            );
+        }
+        other => panic!("expected Error token, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_c_string_literal_unterminated() {
+    let tokens = tokens_only(r#"c"hello"#);
+    assert!(
+        matches!(tokens[0], Token::Error(ref msg) if msg.contains("Unterminated")),
+        "got {:?}",
+        tokens[0]
     );
 }
 
