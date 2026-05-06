@@ -2934,7 +2934,12 @@ impl<'a> TypeChecker<'a> {
         let k = || Type::TypeParam("K".to_string());
         let v = || Type::TypeParam("V".to_string());
 
-        for name in &["Vec", "Array", "SortedSet", "Set", "Iterator", "Peekable"] {
+        // `Vec` was previously registered in this loop; CR-202 slice 4b
+        // moved its shape to `runtime/stdlib/vec.kara` (baked-source pass
+        // at the top of this function). The `("Vec", "Item")` entry in
+        // `impl_assoc_types` is restored explicitly below so the iterator
+        // element-type resolution keeps working.
+        for name in &["Array", "SortedSet", "Set", "Iterator", "Peekable"] {
             // Register in env.structs so element_type_of can find generic_params.
             // `Iterator` is a trait per design.md but is treated as a parametric
             // pseudo-type at this layer so `for x in v.iter()` resolves the
@@ -2957,6 +2962,9 @@ impl<'a> TypeChecker<'a> {
                 .impl_assoc_types
                 .insert((name.to_string(), "Item".to_string()), t());
         }
+        self.env
+            .impl_assoc_types
+            .insert(("Vec".to_string(), "Item".to_string()), t());
         // Map[K, V] yields (K, V) tuples
         self.env.impl_assoc_types.insert(
             ("Map".to_string(), "Item".to_string()),

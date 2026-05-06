@@ -177,6 +177,7 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
 pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("option.kara", include_str!("../runtime/stdlib/option.kara")),
     ("result.kara", include_str!("../runtime/stdlib/result.kara")),
+    ("vec.kara", include_str!("../runtime/stdlib/vec.kara")),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -463,6 +464,17 @@ mod tests {
     }
 
     #[test]
+    fn stdlib_sources_contains_vec_kara() {
+        // CR-202 slice 4b: `Vec` joins the baked surface.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"vec.kara"),
+            "STDLIB_SOURCES should contain vec.kara, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
     fn stdlib_sources_have_nonempty_bodies() {
         for &(name, src) in STDLIB_SOURCES {
             assert!(
@@ -591,6 +603,31 @@ mod tests {
     }
 
     #[test]
+    fn synthetic_prelude_items_returns_baked_vec_as_struct_def() {
+        // CR-202 slice 4b: Vec joins the baked surface as a struct.
+        // Pre-4b Vec was a `stub_struct` with synthetic span; post-4b it
+        // is the real `struct Vec[T] { }` from baked source.
+        let items = synthetic_prelude_items();
+        let v = find_prelude_item(&items, "Vec").expect("synthetic prelude exposes Vec");
+        let Item::StructDef(s) = v else {
+            panic!("Vec should be spliced as StructDef (baked), got {:?}", v);
+        };
+        assert!(s.span.line > 0, "baked Vec should carry a real source span");
+        assert!(
+            s.stdlib_origin,
+            "baked Vec should be tagged stdlib_origin = true"
+        );
+        let params = s
+            .generic_params
+            .as_ref()
+            .expect("baked Vec should declare a generic param list");
+        assert_eq!(
+            params.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["T"],
+        );
+    }
+
+    #[test]
     fn baked_option_has_real_source_span_not_synthetic() {
         // The placeholder stubs use `synthetic_span()` (line 0, column 0,
         // offset 0). The baked source's span is set by the parser based
@@ -629,16 +666,17 @@ mod tests {
 
     #[test]
     fn placeholder_stub_for_unbaked_prelude_type_keeps_synthetic_span() {
-        // Slice-3 contract: only types with a baked source file get the
-        // real-source treatment. Other prelude names (Vec, Result, etc.)
-        // continue to use `stub_struct` with a synthetic span. This pins
-        // the partial-migration property until slice 4+ broadens the
-        // baked surface.
+        // CR-202 contract: only types with a baked source file get the
+        // real-source treatment; everything else continues to use
+        // `stub_struct` with a synthetic span. This pins the
+        // partial-migration property until the remaining types migrate.
+        // `Map` is explicitly deferred (its trait bounds depend on slice
+        // 5's trait materialization), so it's a stable picker for this
+        // test even as slice 4 widens the baked surface.
         let items = synthetic_prelude_items();
-        // Pick a name that's in PRELUDE_TYPES but has no baked source today.
-        let vec_item = find_prelude_item(&items, "Vec")
-            .expect("Vec is still a prelude name");
-        match vec_item {
+        let map_item = find_prelude_item(&items, "Map")
+            .expect("Map is still a prelude name");
+        match map_item {
             Item::StructDef(s) => {
                 assert_eq!(
                     s.span.line, 0,
@@ -650,7 +688,7 @@ mod tests {
                      (the synthetic prelude module IS stdlib origin)"
                 );
             }
-            other => panic!("Vec should still be a stub StructDef, got {:?}", other),
+            other => panic!("Map should still be a stub StructDef, got {:?}", other),
         }
     }
 }

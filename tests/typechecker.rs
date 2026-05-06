@@ -8888,3 +8888,61 @@ fn baked_result_question_operator_still_desugars() {
     );
 }
 
+// ── Baked Vec (CR-202 slice 4b verification) ───────────────────
+// Vec moves from the collective `["Vec", "Array", ...]` loop in
+// `register_builtin_types` to `runtime/stdlib/vec.kara`. The collective
+// loop's `impl_assoc_types` insert for `("Vec", "Item")` is preserved
+// explicitly outside the loop so `for x in v.iter()` element-type
+// resolution keeps working. The legacy collective-loop entry set
+// `derived_traits = empty`; the baked source has no `#[derive(...)]`
+// to match.
+
+#[test]
+fn baked_vec_registers_correct_struct_shape() {
+    let result = typecheck_ok("");
+    let info = result
+        .struct_info
+        .get("Vec")
+        .expect("Vec must be registered in struct_info from baked source");
+    assert_eq!(info.generic_params, vec!["T".to_string()]);
+    assert!(info.fields.is_empty(), "Vec[T] is opaque (no public fields)");
+    assert!(
+        info.derived_traits.is_empty(),
+        "Vec carries no structural derives at the type level (matches the legacy hardcoded path)"
+    );
+    assert!(!info.is_shared, "Vec is not declared `shared`");
+    assert!(!info.no_rc, "Vec is not declared `@no_rc`");
+}
+
+#[test]
+fn baked_vec_user_code_still_typechecks() {
+    // Existing Vec methods (`new`, `push`, `len`, `iter`) dispatch
+    // through the hardcoded `infer_vec_method`. They reference
+    // `env.structs["Vec"].generic_params` for receiver-arity checks.
+    // If the baked-source registration produced a different shape,
+    // these calls would fail.
+    typecheck_ok(
+        "fn build() -> Vec[i64] {\n\
+             let v: Vec[i64] = Vec.new();\n\
+             v\n\
+         }",
+    );
+}
+
+#[test]
+fn baked_vec_for_loop_resolves_element_type() {
+    // `for x in v.iter()` walks `impl_assoc_types[("Vec", "Item")]` to
+    // find T. CR-202 slice 4b restores this entry explicitly outside
+    // the collective loop after pulling Vec out of it. This test fails
+    // if that explicit insert is dropped.
+    typecheck_ok(
+        "fn sum(v: Vec[i64]) -> i64 {\n\
+             let mut total = 0;\n\
+             for x in v.iter() {\n\
+                 total = total + x;\n\
+             }\n\
+             total\n\
+         }",
+    );
+}
+

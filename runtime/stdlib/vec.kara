@@ -1,0 +1,21 @@
+// runtime/stdlib/vec.kara
+//
+// CR-202 slice 4b. The type shape moves to baked source while the
+// method surface (`new`, `push`, `pop`, `len`, `iter`, `map`,
+// indexing, etc.) continues to dispatch through the hardcoded
+// `infer_vec_method` / interpreter `eval_vec_method` paths until a
+// later CR migrates the impl-block surface.
+//
+// Vec is the prelude's primary growable collection — its in-memory
+// representation is opaque to user code (no public fields). Pre-slice
+// 4b the type was registered programmatically alongside `Array`,
+// `SortedSet`, etc. via a collective loop in `register_builtin_types`;
+// slice 4b retires the Vec entry from that loop.
+//
+// No `#[derive(...)]` — the legacy collective loop set
+// `derived_traits = HashSet::new()`, so no structural traits flow
+// from this declaration. Equality / hashing on a `Vec[T]` go through
+// per-method dispatch keyed on `T`'s capabilities, not on derived
+// traits at the Vec level.
+
+struct Vec[T] { }
