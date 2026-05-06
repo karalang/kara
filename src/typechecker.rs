@@ -749,6 +749,12 @@ pub struct TypeEnv {
     /// stub. Bound substitution lands in P1 (see `docs/deferred.md` §
     /// Trait Aliases — Expansion).
     pub trait_aliases: HashSet<String>,
+    /// Names of declared marker traits (`marker trait NAME;`). Marker
+    /// traits register in `traits` alongside ordinary traits so bound
+    /// resolution and impl coherence work uniformly; this side-set
+    /// records the marker-ness so impl-body checks (no methods allowed)
+    /// can look it up. v60 item 55 / design.md § Marker Traits.
+    pub marker_traits: HashSet<String>,
     pub impls: Vec<ImplInfo>,
     /// Indices into `impls` keyed by trait name. Trait-less inherent impls
     /// are not indexed here.
@@ -776,6 +782,7 @@ impl TypeEnv {
             type_aliases: HashMap::new(),
             traits: HashMap::new(),
             trait_aliases: HashSet::new(),
+            marker_traits: HashSet::new(),
             impls: Vec::new(),
             impls_by_trait: HashMap::new(),
             impl_assoc_types: HashMap::new(),
@@ -2145,6 +2152,7 @@ impl<'a> TypeChecker<'a> {
                 Item::Function(f) => self.env_add_function(f),
                 Item::TraitDef(t) => self.env_add_trait(t),
                 Item::TraitAlias(t) => self.env_add_trait_alias(t),
+                Item::MarkerTrait(t) => self.env_add_marker_trait(t),
                 Item::ImplBlock(i) => self.env_add_impl(i),
                 Item::ConstDecl(c) => self.env_add_const(c),
                 Item::TypeAlias(t) => self.env_add_type_alias(t),
@@ -3897,6 +3905,25 @@ impl<'a> TypeChecker<'a> {
         self.env.trait_aliases.insert(t.name.clone());
     }
 
+    fn env_add_marker_trait(&mut self, t: &MarkerTraitDef) {
+        // Register in `traits` so bound resolution treats the marker
+        // identically to an ordinary trait. The companion entry in
+        // `marker_traits` records the marker-ness for impl-body checks.
+        let supertraits: Vec<String> = t
+            .supertraits
+            .iter()
+            .map(|b| b.path.last().cloned().unwrap_or_default())
+            .collect();
+        self.env.traits.insert(
+            t.name.clone(),
+            TraitInfo {
+                assoc_types: Vec::new(),
+                supertraits,
+            },
+        );
+        self.env.marker_traits.insert(t.name.clone());
+    }
+
     fn env_add_type_alias(&mut self, t: &TypeAliasDef) {
         let gp = Self::generic_param_names(&t.generic_params);
         let ty = self.lower_type_expr(&t.ty, &gp);
@@ -5395,6 +5422,28 @@ impl<'a> TypeChecker<'a> {
         // and that all supertrait impls exist for the same target type.
         if let Some(ref trait_path) = imp.trait_name {
             let trait_name = trait_path.segments.last().cloned().unwrap_or_default();
+            // `impl MarkerTrait for T { fn ... }` — the body of an impl
+            // for a marker trait must be empty. Per design.md § Marker
+            // Traits.
+            if self.env.marker_traits.contains(&trait_name) {
+                let has_items = imp.items.iter().any(|item| {
+                    matches!(
+                        item,
+                        ImplItem::Method(_) | ImplItem::AssocType(_)
+                    )
+                });
+                if has_items {
+                    self.type_error(
+                        format!(
+                            "error[E_MARKER_IMPL_HAS_METHOD]: impl of marker trait \
+                             '{trait_name}' cannot contain methods or items; \
+                             the body must be empty"
+                        ),
+                        imp.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
             // `impl TraitAlias for T` is rejected at v1: trait aliases are
             // not implementable directly. Per design.md § Trait Aliases —
             // implement each component trait separately. The bound list is

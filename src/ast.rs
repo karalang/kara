@@ -113,6 +113,11 @@ pub enum Item {
     /// typechecker emits a stub diagnostic (`E_TRAIT_ALIAS_NOT_IMPLEMENTED_YET`)
     /// at every use site. Bound substitution lands in P1.
     TraitAlias(TraitAliasDef),
+    /// `marker trait NAME[GENERICS] [: SUPERTRAITS] [where ...] ;` (or
+    /// `{ }`). Method-less trait used as a typing tag — the body must be
+    /// empty, and impls of the trait must be empty. v60 item 55 /
+    /// design.md § Marker Traits.
+    MarkerTrait(MarkerTraitDef),
     ImplBlock(ImplBlock),
     EffectResource(EffectResourceDecl),
     EffectGroup(EffectGroupDecl),
@@ -315,6 +320,30 @@ pub struct TraitAliasDef {
     pub generic_params: Option<GenericParams>,
     pub bounds: Vec<TraitBound>,
     pub where_clause: Option<WhereClause>,
+}
+
+/// `marker trait NAME[GENERICS] [: SUPERTRAITS] [where ...] (";" | "{" "}")`
+/// (v60 item 55 / design.md § Marker Traits). The body is structurally
+/// empty — methods, associated types, and associated consts are
+/// rejected at parse with a focused diagnostic. The `body_brace`
+/// flag preserves whether the user wrote the empty-brace form
+/// (`marker trait Foo { }`) or the canonical short form
+/// (`marker trait Foo;`) for round-trip-faithful formatting.
+#[derive(Debug, Clone)]
+pub struct MarkerTraitDef {
+    pub span: Span,
+    pub attributes: Vec<Attribute>,
+    pub doc_comment: Option<String>,
+    pub is_pub: bool,
+    pub is_private: bool,
+    pub name: String,
+    pub generic_params: Option<GenericParams>,
+    pub supertraits: Vec<TraitBound>,
+    pub where_clause: Option<WhereClause>,
+    /// `true` when the user wrote `marker trait Foo { }`; `false` when
+    /// they wrote the canonical `marker trait Foo;`. Drives
+    /// formatter round-trip; the resolver treats both forms identically.
+    pub body_brace: bool,
 }
 
 #[derive(Debug, Clone)]

@@ -130,6 +130,10 @@ pub enum Token {
     /// (?-retargeting + error-type unification) lands in P1. See
     /// design.md § Error Handling > Try Blocks (try { ... }).
     Try,
+    /// `marker trait NAME;` — marker-trait declaration. Per design.md §
+    /// Marker Traits (v60 item 55). Users with a local binding named
+    /// `marker` must rename or use `r#marker`.
+    Marker,
     // Assembly
     Asm,
     GlobalAsm,

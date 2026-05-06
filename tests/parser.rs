@@ -1027,6 +1027,92 @@ fn test_try_block_no_longer_reserved_keyword_error() {
     parse_ok("fn main() { let _ = try { 0 }; }");
 }
 
+// ── Marker traits ───────────────────────────────────────────────────
+//
+// `marker trait NAME;` per design.md § Marker Traits (v60 item 55).
+// Body must be empty; impl bodies must also be empty (typechecker).
+
+#[test]
+fn test_marker_trait_basic() {
+    let prog = parse_ok("marker trait Pod;");
+    let m = match &prog.items[0] {
+        Item::MarkerTrait(t) => t,
+        other => panic!("expected MarkerTrait, got {other:?}"),
+    };
+    assert_eq!(m.name, "Pod");
+    assert!(m.supertraits.is_empty());
+    assert!(!m.body_brace);
+}
+
+#[test]
+fn test_marker_trait_pub() {
+    let prog = parse_ok("pub marker trait Sealed;");
+    if let Item::MarkerTrait(t) = &prog.items[0] {
+        assert!(t.is_pub);
+    } else {
+        panic!("expected MarkerTrait");
+    }
+}
+
+#[test]
+fn test_marker_trait_with_supertrait() {
+    let prog = parse_ok("marker trait Concurrent: Sized;");
+    if let Item::MarkerTrait(t) = &prog.items[0] {
+        assert_eq!(t.supertraits.len(), 1);
+        assert_eq!(t.supertraits[0].path, vec!["Sized".to_string()]);
+    } else {
+        panic!("expected MarkerTrait");
+    }
+}
+
+#[test]
+fn test_marker_trait_with_generics() {
+    let prog = parse_ok("marker trait Storeable[T];");
+    if let Item::MarkerTrait(t) = &prog.items[0] {
+        assert!(t.generic_params.is_some());
+    } else {
+        panic!("expected MarkerTrait");
+    }
+}
+
+#[test]
+fn test_marker_trait_empty_brace_form() {
+    let prog = parse_ok("marker trait Pod { }");
+    if let Item::MarkerTrait(t) = &prog.items[0] {
+        assert!(t.body_brace);
+    } else {
+        panic!("expected MarkerTrait");
+    }
+}
+
+#[test]
+fn test_marker_trait_with_method_in_body_rejected() {
+    let (_, errors) = parse_with_errors("marker trait Pod { fn bar(self); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MARKER_TRAIT_HAS_METHOD")),
+        "expected E_MARKER_TRAIT_HAS_METHOD, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_marker_trait_with_assoc_type_rejected() {
+    let (_, errors) = parse_with_errors("marker trait Pod { type Item; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MARKER_TRAIT_HAS_ITEM")),
+        "expected E_MARKER_TRAIT_HAS_ITEM, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_marker_trait_does_not_break_regular_trait() {
+    parse_ok("trait Foo { fn bar(self); }");
+    parse_ok("trait Foo: Bar { fn baz(self); }");
+}
+
 #[test]
 fn test_trait_default_method() {
     let prog = parse_ok(

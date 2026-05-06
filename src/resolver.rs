@@ -502,6 +502,7 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
             Item::EnumDef(e) => names.push(e.name.clone()),
             Item::TraitDef(t) => names.push(t.name.clone()),
             Item::TraitAlias(t) => names.push(t.name.clone()),
+            Item::MarkerTrait(t) => names.push(t.name.clone()),
             Item::ConstDecl(c) => names.push(c.name.clone()),
             Item::TypeAlias(t) => names.push(t.name.clone()),
             Item::DistinctType(d) => names.push(d.name.clone()),
@@ -695,6 +696,7 @@ impl<'a> Resolver<'a> {
                 Item::EnumDef(e) => self.collect_enum(e),
                 Item::TraitDef(t) => self.collect_trait(t),
                 Item::TraitAlias(t) => self.collect_trait_alias(t),
+                Item::MarkerTrait(t) => self.collect_marker_trait(t),
                 Item::ImplBlock(i) => self.collect_impl(i),
                 Item::EffectResource(e) => self.collect_effect_resource(e),
                 Item::EffectGroup(e) => self.collect_effect_group(e),
@@ -1037,6 +1039,24 @@ impl<'a> Resolver<'a> {
         if let Err(e) = self.table.define(
             t.name.clone(),
             SymbolKind::TraitAlias,
+            t.span.clone(),
+            t.is_pub,
+        ) {
+            self.errors.push(e);
+        }
+    }
+
+    fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
+        // Marker traits register in the trait namespace alongside ordinary
+        // traits; no methods to track, so the symbol carries an empty
+        // method list. Trait-bound resolution and impl coherence treat
+        // markers identically to ordinary traits — the marker-ness is a
+        // definition-site property, not a use-site property.
+        if let Err(e) = self.table.define(
+            t.name.clone(),
+            SymbolKind::Trait {
+                method_names: Vec::new(),
+            },
             t.span.clone(),
             t.is_pub,
         ) {

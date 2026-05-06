@@ -2982,6 +2982,44 @@ fn trait_alias_declaration_alone_typechecks() {
 
 // ── Try block v1 stub diagnostic ────────────────────────────────────
 
+// ── Marker trait impl-body rejection ────────────────────────────────
+
+#[test]
+fn impl_marker_trait_with_method_rejected() {
+    let errors = typecheck_errors(
+        "marker trait Pod; \
+         struct Foo { x: i64 } \
+         impl Pod for Foo { fn extra(self) { } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_MARKER_IMPL_HAS_METHOD")
+                && e.message.contains("Pod")),
+        "expected E_MARKER_IMPL_HAS_METHOD, got: {errors:?}"
+    );
+}
+
+#[test]
+fn impl_marker_trait_empty_body_accepted() {
+    typecheck_ok(
+        "marker trait Pod; \
+         struct Foo { x: i64 } \
+         impl Pod for Foo { }",
+    );
+}
+
+#[test]
+fn marker_trait_used_as_bound_works() {
+    // Marker traits participate in bound resolution like ordinary traits.
+    typecheck_ok(
+        "marker trait Pod; \
+         struct Foo { x: i64 } \
+         impl Pod for Foo { } \
+         fn need_pod[T: Pod](x: T) -> T { x }",
+    );
+}
+
 #[test]
 fn try_block_emits_v1_stub_diagnostic() {
     let errors = typecheck_errors("fn main() { let _ = try { 42 }; }");

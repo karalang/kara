@@ -1058,6 +1058,7 @@ impl<'a> Lexer<'a> {
             "struct" => Token::Struct,
             "enum" => Token::Enum,
             "trait" => Token::Trait,
+            "marker" => Token::Marker,
             "impl" => Token::Impl,
             "mod" => Token::Mod,
             "use" => Token::Use,

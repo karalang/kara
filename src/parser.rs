@@ -229,6 +229,9 @@ impl Parser {
                 }
             }
             Token::Trait => self.parse_trait_or_alias(attributes, is_pub, is_private),
+            Token::Marker => Some(Item::MarkerTrait(self.parse_marker_trait(
+                attributes, is_pub, is_private,
+            )?)),
             Token::Impl => Some(Item::ImplBlock(self.parse_impl_block(attributes)?)),
             Token::Effect => self.parse_effect_decl(is_pub, false, false),
             Token::Stable => {
@@ -796,6 +799,96 @@ impl Parser {
     }
 
     // ── Traits ───────────────────────────────────────────────────
+
+    /// Parse `marker trait NAME[GENERICS] [: SUPERTRAITS] [where ...]
+    /// (";" | "{" "}")` per syntax.md §3.4 / design.md § Marker Traits.
+    /// The body must be empty — methods, associated types, and
+    /// associated consts inside the body are rejected with a focused
+    /// diagnostic. `body_brace` records whether the user wrote `{ }`
+    /// (so the formatter can round-trip) or the canonical `;`.
+    fn parse_marker_trait(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<MarkerTraitDef> {
+        let start = self.current_span();
+        self.expect(&Token::Marker)?;
+        self.expect(&Token::Trait)?;
+        let name = self.expect_identifier()?;
+        let name_span = self.span_from(&start);
+        self.check_ident_class(&name, IdentClass::Type, "marker trait", name_span);
+        let doc_comment = self.take_pending_doc();
+        let generic_params = self.parse_optional_generic_params();
+
+        let mut supertraits = Vec::new();
+        if self.eat(&Token::Colon) {
+            loop {
+                let bound = self.parse_trait_bound()?;
+                supertraits.push(bound);
+                if !self.eat(&Token::Plus) {
+                    break;
+                }
+            }
+        }
+
+        let where_clause = self.parse_optional_where_clause();
+
+        let body_brace = if self.eat(&Token::LeftBrace) {
+            // Empty-brace form `marker trait Foo { }`. Any item inside is
+            // rejected with a focused diagnostic; we recover by skipping
+            // to the closing brace so the rest of the file parses.
+            while !self.check(&Token::RightBrace) && !self.is_at_end() {
+                let body_span = self.current_span();
+                let (code, msg) = if self.check(&Token::Fn) {
+                    (
+                        "E_MARKER_TRAIT_HAS_METHOD",
+                        "marker traits cannot declare methods; \
+                         remove the method or change `marker trait` to `trait`",
+                    )
+                } else if self.check(&Token::Type) || self.check(&Token::Const) {
+                    (
+                        "E_MARKER_TRAIT_HAS_ITEM",
+                        "marker traits cannot declare associated types or consts; \
+                         remove the item or change `marker trait` to `trait`",
+                    )
+                } else {
+                    (
+                        "E_MARKER_TRAIT_HAS_ITEM",
+                        "marker traits cannot have a body; \
+                         remove the item or change `marker trait` to `trait`",
+                    )
+                };
+                self.errors.push(ParseError {
+                    message: format!("error[{code}]: {msg}"),
+                    span: body_span,
+                });
+                // Skip the offending item — advance one token at a time
+                // until we see a `}` or matched-fn end (recovery is
+                // intentionally conservative; a marker trait body is
+                // expected to be empty in practice).
+                self.advance();
+            }
+            self.expect(&Token::RightBrace)?;
+            true
+        } else {
+            self.expect(&Token::Semicolon)?;
+            false
+        };
+
+        Some(MarkerTraitDef {
+            span: self.span_from(&start),
+            attributes,
+            doc_comment,
+            is_pub,
+            is_private,
+            name,
+            generic_params,
+            supertraits,
+            where_clause,
+            body_brace,
+        })
+    }
 
     /// Top-level dispatch for the `trait` keyword. Reads the trait header
     /// (name + optional generic params), then peeks the next token: `=`

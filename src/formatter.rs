@@ -161,6 +161,7 @@ impl Formatter {
             Item::EnumDef(e) => self.format_enum(e),
             Item::TraitDef(t) => self.format_trait(t),
             Item::TraitAlias(t) => self.format_trait_alias(t),
+            Item::MarkerTrait(t) => self.format_marker_trait(t),
             Item::ImplBlock(i) => self.format_impl(i),
             Item::EffectResource(e) => self.format_effect_resource(e),
             Item::EffectGroup(e) => self.format_effect_group(e),
@@ -490,6 +491,34 @@ impl Formatter {
     }
 
     // ── Traits ──────────────────────────────────────────────────
+
+    fn format_marker_trait(&mut self, t: &MarkerTraitDef) {
+        self.format_attributes(&t.attributes);
+        self.write_indent();
+        if t.is_pub {
+            self.write_str("pub ");
+        } else if t.is_private {
+            self.write_str("private ");
+        }
+        self.write_str("marker trait ");
+        self.write_ident(&t.name);
+        self.format_generic_params(&t.generic_params);
+        if !t.supertraits.is_empty() {
+            self.write_str(": ");
+            for (i, bound) in t.supertraits.iter().enumerate() {
+                if i > 0 {
+                    self.write_str(" + ");
+                }
+                self.write_path(&bound.path);
+            }
+        }
+        self.format_where_clause(&t.where_clause);
+        if t.body_brace {
+            self.write_str(" { }\n");
+        } else {
+            self.write_str(";\n");
+        }
+    }
 
     fn format_trait_alias(&mut self, t: &TraitAliasDef) {
         self.format_attributes(&t.attributes);
