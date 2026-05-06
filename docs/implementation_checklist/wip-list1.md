@@ -13,7 +13,7 @@ ship as its own commit. Original tracker entries get checked off as
 each one closes.
 
 
-- [ ] **Bench script: wire `build_kara` step into `bench/bench.sh`.** Add a `build_kara()` function next to the existing `build_rust()` in `kata-katas/leetcode/1-100/1-two-sum/bench/bench.sh`, invoke `karac build` to produce native binaries, add `kara brute_force (codegen)` and `kara hash_map (codegen)` rows to the hyperfine command. Source: v62 brainstorm decision #8 (execution-only, no design fork).
+- [x] **Bench script: wire `build_kara` step into `bench/bench.sh`.** Add a `build_kara()` function next to the existing `build_rust()` in `kata-katas/leetcode/1-100/1-two-sum/bench/bench.sh`, invoke `karac build` to produce native binaries, add `kara brute_force (codegen)` and `kara hash_map (codegen)` rows to the hyperfine command. Source: v62 brainstorm decision #8 (execution-only, no design fork).
 
 - [ ] **README §Benchmarks rewrite.** Once the bench script change above lands, rewrite `kata-katas/leetcode/1-100/1-two-sum/README.md` §Benchmarks to lead with codegen numbers; demote interpreter row to "what the compile pipeline costs today" context. Source: v62 brainstorm decision #9.
 
