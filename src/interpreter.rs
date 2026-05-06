@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use regex::Regex as RustRegex;
 use ureq;
@@ -66,6 +66,15 @@ pub enum Value {
         name: String,
         fields: HashMap<String, Value>,
     },
+    /// A `shared struct` allocation — RC-backed, multi-holder, with
+    /// per-field interior mutability for `mut` fields per design.md
+    /// § Part 5: Shared Types. Aliasing a binding clones the `Arc`
+    /// (refcount bump); mutations through any holder are visible to
+    /// all holders. Immutable fields are stored once at construction;
+    /// `mut` fields each carry their own borrow flag (RwLock here as
+    /// a semantic stand-in — the codegen lowers to a 1-byte flag per
+    /// design.md § cost notes).
+    SharedStruct(Arc<SharedStructInner>),
     EnumVariant {
         enum_name: String,
         variant: String,
@@ -145,6 +154,42 @@ pub enum Value {
     },
 }
 
+/// One mutable field on a `shared struct` instance. The spec
+/// (design.md § Part 5: Shared Types) requires per-field borrow
+/// tracking: reads are shared (multiple simultaneous readers OK),
+/// writes are exclusive — if any other borrow (read or write) is
+/// active when a write begins, the runtime panics. Tracking is
+/// per field so mutating `node.left` does not conflict with reading
+/// `node.right`. `RwLock::try_read` / `try_write` mirror these
+/// semantics directly. Codegen lowers this to a 1-byte borrow flag
+/// per the cost notes; the interpreter uses `RwLock<Value>` as a
+/// semantic stand-in.
+#[derive(Debug)]
+pub struct FieldCell {
+    pub value: RwLock<Value>,
+}
+
+impl FieldCell {
+    pub fn new(v: Value) -> Self {
+        FieldCell {
+            value: RwLock::new(v),
+        }
+    }
+}
+
+/// Allocation backing a `shared struct` instance. Multiple holders
+/// (each a `Value::SharedStruct(Arc::clone(...))`) share one inner;
+/// mutation through any holder is visible to all. Aliasing is by
+/// `Arc` clone — `let b = a` bumps the refcount, no deep copy.
+#[derive(Debug)]
+pub struct SharedStructInner {
+    pub name: String,
+    /// Fields without `mut` — fixed at construction, never replaced.
+    pub immutable_fields: HashMap<String, Value>,
+    /// Fields declared `mut` — each carries its own borrow flag.
+    pub mut_fields: HashMap<String, FieldCell>,
+}
+
 /// Newtype wrapping [`Value`] that implements [`Ord`] via [`value_compare`]
 /// so `Value` elements can key a `BTreeMap` without `Value` itself needing
 /// to implement `Ord` globally (NaN semantics on floats make global Ord
@@ -202,6 +247,37 @@ impl PartialEq for Value {
                     fields: b2,
                 },
             ) => a1 == b1 && a2 == b2,
+            // `shared struct` equality is structural per design.md
+            // § Equality Semantics — the `Eq` impl is dispatched
+            // regardless of representation. `Arc::ptr_eq` is the
+            // fast path for identical allocations (always equal).
+            (Value::SharedStruct(a), Value::SharedStruct(b)) => {
+                if Arc::ptr_eq(a, b) {
+                    return true;
+                }
+                if a.name != b.name {
+                    return false;
+                }
+                if a.immutable_fields != b.immutable_fields {
+                    return false;
+                }
+                if a.mut_fields.len() != b.mut_fields.len() {
+                    return false;
+                }
+                a.mut_fields.iter().all(|(k, fa)| {
+                    b.mut_fields
+                        .get(k)
+                        .map(|fb| {
+                            let va = fa.value.try_read().ok();
+                            let vb = fb.value.try_read().ok();
+                            match (va, vb) {
+                                (Some(x), Some(y)) => *x == *y,
+                                _ => false,
+                            }
+                        })
+                        .unwrap_or(false)
+                })
+            }
             // TotalFloat uses total ordering: NaN == NaN, -0.0 < +0.0
             (Value::TotalFloat32(a), Value::TotalFloat32(b)) => a.total_cmp(b).is_eq(),
             (Value::TotalFloat64(a), Value::TotalFloat64(b)) => a.total_cmp(b).is_eq(),
@@ -457,6 +533,28 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, " }}")
             }
+            Value::SharedStruct(inner) => {
+                write!(f, "{} {{ ", inner.name)?;
+                let mut first = true;
+                for (k, v) in &inner.immutable_fields {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    first = false;
+                    write!(f, "{}: {}", k, v)?;
+                }
+                for (k, cell) in &inner.mut_fields {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    first = false;
+                    let v = cell.value.try_read().expect(
+                        "shared struct field write-locked during Display — unreachable in single-task interpreter",
+                    );
+                    write!(f, "{}: {}", k, *v)?;
+                }
+                write!(f, " }}")
+            }
             Value::EnumVariant { variant, data, .. } => match data {
                 EnumData::Unit => write!(f, "{}", variant),
                 EnumData::Tuple(vals) => {
@@ -568,6 +666,20 @@ impl Value {
                     .collect();
                 format!("{} {{ {} }}", name, field_strs.join(", "))
             }
+            Value::SharedStruct(inner) => {
+                let mut parts: Vec<String> = inner
+                    .immutable_fields
+                    .iter()
+                    .map(|(k, v)| format!("{}: {}", k, v.debug_fmt()))
+                    .collect();
+                for (k, cell) in &inner.mut_fields {
+                    let v = cell.value.try_read().expect(
+                        "shared struct field write-locked during debug_fmt — unreachable in single-task interpreter",
+                    );
+                    parts.push(format!("{}: {}", k, v.debug_fmt()));
+                }
+                format!("{} {{ {} }}", inner.name, parts.join(", "))
+            }
             Value::EnumVariant { variant, data, .. } => match data {
                 EnumData::Unit => variant.clone(),
                 EnumData::Tuple(vals) => {
@@ -618,9 +730,108 @@ enum ControlFlow {
     /// A user-triggered runtime error. The error details are in
     /// `Interpreter::runtime_errors`; this variant is the unwind signal.
     RuntimeError,
+    /// A `par {}` sibling branch observed the shared cancel flag at
+    /// a between-statement effect-boundary check. The propagating
+    /// branch's `errdefer` phase fires with `e = Cancelled` per
+    /// design.md § Drop ordering within a branch. `eval_par_block`
+    /// silences this on the result side — the originating branch's
+    /// real `Err` is the scope's return value under fail-fast.
+    Cancelled,
 }
 
 type EvalResult = Result<Value, ControlFlow>;
+
+// ── Unified drop+defer cleanup stack ────────────────────────────
+
+/// One entry in a block's unified drop+defer cleanup stack. Per
+/// design.md § Drop ordering within a branch, destructors and
+/// `defer` blocks interleave in a single program-order LIFO stack.
+enum CleanupAction {
+    /// A `defer { ... }` block.
+    Defer(Block),
+    /// A binding's destructor slot. The action is a no-op today — the
+    /// Phase 6 user-`Drop` and Rc/Arc-decrement wiring attaches here
+    /// without disturbing program-order LIFO position.
+    #[allow(dead_code)]
+    Drop { name: String },
+}
+
+/// One entry in a block's `errdefer` stack (phase-1 cleanup, error
+/// paths only). Kept separate from the unified drop+defer stack
+/// because `errdefer` always fires before any destructor or `defer`.
+struct ErrDeferEntry {
+    binding: Option<String>,
+    body: Block,
+}
+
+/// Classification of a block's exit path, used to drive `errdefer`
+/// behavior. Param-less `errdefer` fires on every error path;
+/// `errdefer(e)` only binds when a payload is available.
+enum ExitPath {
+    Normal,
+    Err(Value),
+    NoneProp,
+    Panic,
+    /// `par {}` cancellation — sub-step 4 emits this from cancelled
+    /// siblings so `errdefer(e)` binds `e` to `Cancelled`.
+    #[allow(dead_code)]
+    Cancelled(Value),
+}
+
+impl ExitPath {
+    fn classify(cf: &ControlFlow) -> ExitPath {
+        match cf {
+            ControlFlow::Return(Value::EnumVariant { variant, data, .. }) if variant == "Err" => {
+                let payload = match data {
+                    EnumData::Tuple(vs) => vs.first().cloned().unwrap_or(Value::Unit),
+                    _ => Value::Unit,
+                };
+                ExitPath::Err(payload)
+            }
+            ControlFlow::Return(Value::EnumVariant { variant, .. }) if variant == "None" => {
+                ExitPath::NoneProp
+            }
+            ControlFlow::Cancelled => ExitPath::Cancelled(cancelled_sentinel()),
+            ControlFlow::RuntimeError | ControlFlow::ExitUnwind { .. } => ExitPath::Panic,
+            _ => ExitPath::Normal,
+        }
+    }
+
+    fn is_error(&self) -> bool {
+        !matches!(self, ExitPath::Normal)
+    }
+}
+
+/// Sentinel value bound to `errdefer(e)` in cancelled `par {}` siblings.
+/// Per design.md § Drop ordering within a branch, the real value should
+/// come from `E::cancelled()` where `E` is the function's `Err` type and
+/// `E: Cancellable`; until that trait + factory wiring lands in the
+/// typechecker, a placeholder unit-variant carries the right shape.
+fn cancelled_sentinel() -> Value {
+    Value::EnumVariant {
+        enum_name: "Cancelled".to_string(),
+        variant: "Cancelled".to_string(),
+        data: EnumData::Unit,
+    }
+}
+
+/// Push a `Drop` action for each binding the statement introduced.
+/// Called after the statement evaluates successfully, so the drop
+/// slot lands at the program-order LIFO position the binding
+/// claims in the unified stack.
+fn push_drops_for_stmt(stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+    match &stmt.kind {
+        StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+            for name in pattern.binding_names() {
+                cleanup.push(CleanupAction::Drop { name });
+            }
+        }
+        StmtKind::LetUninit { name, .. } => {
+            cleanup.push(CleanupAction::Drop { name: name.clone() });
+        }
+        _ => {}
+    }
+}
 
 // ── Scoped Environment ──────────────────────────────────────────
 
@@ -1056,6 +1267,14 @@ pub struct Interpreter<'a> {
     /// resolution: a callee's `T → "U"` where `U` is itself a generic param
     /// of the caller resolves via the next frame down).
     type_subs_stack: Vec<HashMap<String, String>>,
+    /// `par {}` shared cancellation flag. Set by `eval_par_block` on
+    /// each branch interpreter; observed by `eval_block_inner` between
+    /// top-level statements as a minimal effect-boundary check. When
+    /// observed, the running branch raises `ControlFlow::Cancelled`,
+    /// which classifies as `ExitPath::Cancelled(sentinel)` so any
+    /// `errdefer(e)` in the active scope binds `e` to the sentinel
+    /// during the errdefer phase. None outside `par {}` branches.
+    cancel_flag: Option<Arc<AtomicBool>>,
 }
 
 /// Convert a PascalCase identifier to lower_snake_case.
@@ -1101,6 +1320,7 @@ impl<'a> Interpreter<'a> {
             effect_resources: HashSet::new(),
             rand_state: seed_rand_state(),
             type_subs_stack: Vec::new(),
+            cancel_flag: None,
         }
     }
 
@@ -1505,7 +1725,11 @@ impl<'a> Interpreter<'a> {
                     Err(ControlFlow::Continue { .. }) => {
                         unreachable!("continue outside of loop; should be caught by resolver")
                     }
-                    Err(cf @ (ControlFlow::ExitUnwind { .. } | ControlFlow::RuntimeError)) => {
+                    Err(
+                        cf @ (ControlFlow::ExitUnwind { .. }
+                        | ControlFlow::RuntimeError
+                        | ControlFlow::Cancelled),
+                    ) => {
                         // Propagate unwind up the stack (defers already ran in eval_block_inner)
                         self.pending_cf = Some(cf);
                         Value::Unit
@@ -1654,45 +1878,12 @@ impl<'a> Interpreter<'a> {
                 path,
                 fields,
                 spread,
-            } => {
-                let name = path.last().cloned().unwrap_or_default();
-                let mut field_vals = HashMap::new();
-                if let Some(ref spread_expr) = spread {
-                    if let Value::Struct {
-                        fields: base_fields,
-                        ..
-                    } = self.eval_expr_inner(spread_expr)
-                    {
-                        field_vals = base_fields;
-                    }
-                }
-                for field in fields {
-                    let val = self.eval_expr_inner(&field.value);
-                    field_vals.insert(field.name.clone(), val);
-                }
-                Value::Struct {
-                    name,
-                    fields: field_vals,
-                }
-            }
+            } => self.eval_struct_literal(path, fields, spread.as_deref()),
 
             // Field access
             ExprKind::FieldAccess { object, field } => {
                 let obj = self.eval_expr_inner(object);
-                match obj {
-                    Value::Struct { fields, .. } => {
-                        fields.get(field).cloned().unwrap_or_else(|| {
-                            unreachable!(
-                                "field '{}' not found at {}:{}; should be caught by typechecker",
-                                field, expr.span.line, expr.span.column
-                            )
-                        })
-                    }
-                    _ => unreachable!(
-                        "field access on non-struct at {}:{}; should be caught by typechecker",
-                        expr.span.line, expr.span.column
-                    ),
-                }
+                self.read_field(obj, field, &expr.span)
             }
 
             // Tuple index
@@ -2306,37 +2497,80 @@ impl<'a> Interpreter<'a> {
     #[allow(clippy::result_large_err)]
     fn eval_block_inner(&mut self, block: &Block) -> EvalResult {
         self.env.push_scope();
-        let mut defers: Vec<Block> = Vec::new();
-        let mut errdefers: Vec<Block> = Vec::new();
-        let mut is_err = false;
+        // Unified drop+defer cleanup stack — entries pushed in program-order
+        // as control flow reaches each binding/defer statement, drained LIFO
+        // at scope exit. Per design.md § Drop ordering within a branch:
+        // destructors and `defer` blocks interleave in this single stack,
+        // ordered by program-order of introduction. `errdefer` lives on a
+        // separate phase-1 stack that drains first on error paths.
+        let mut cleanup: Vec<CleanupAction> = Vec::new();
+        let mut errdefers: Vec<ErrDeferEntry> = Vec::new();
 
         for stmt in &block.stmts {
-            // Collect defer/errdefer blocks
+            // `defer` / `errdefer` register their bodies at the moment
+            // control flow reaches the statement — *not* at block start.
+            // A defer below an early `return` is therefore never registered,
+            // matching design.md (and Go/Zig semantics).
             match &stmt.kind {
                 StmtKind::Defer { body } => {
-                    defers.push(body.clone());
+                    cleanup.push(CleanupAction::Defer(body.clone()));
                     continue;
                 }
-                StmtKind::ErrDefer { body, .. } => {
-                    errdefers.push(body.clone());
+                StmtKind::ErrDefer { binding, body } => {
+                    errdefers.push(ErrDeferEntry {
+                        binding: binding.clone(),
+                        body: body.clone(),
+                    });
                     continue;
                 }
                 _ => {}
             }
-            self.eval_stmt_cf(stmt)?;
-            if let Some(cf) = self.pending_cf.take() {
-                is_err = matches!(&cf, ControlFlow::Return(Value::EnumVariant { variant, .. }) if variant == "Err");
-                // Run defers before leaving scope
-                self.run_defers(&defers, &errdefers, is_err);
+            // par {}-cancellation effect-boundary check. When this
+            // interpreter is acting as a sibling branch and another
+            // sibling has signalled fail-fast, raise Cancelled so the
+            // active scope's errdefer phase fires with e = Cancelled.
+            if self.observed_cancellation() {
+                let cf = ControlFlow::Cancelled;
+                let path = ExitPath::classify(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
                 self.env.pop_scope();
                 return Err(cf);
             }
+            let stmt_result = self.eval_stmt_cf(stmt);
+            let cf_opt = match stmt_result {
+                Ok(_) => self.pending_cf.take(),
+                Err(cf) => Some(cf),
+            };
+            if let Some(cf) = cf_opt {
+                let path = ExitPath::classify(&cf);
+                // Notify sibling par-branches as soon as the error
+                // path is detected, not after the branch finishes —
+                // that way a still-running sibling can observe the
+                // flag at its next between-statement check.
+                self.signal_cancellation_if_error(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
+                self.env.pop_scope();
+                return Err(cf);
+            }
+            // After a successful let-binding, push a Drop slot for each
+            // name the pattern introduced. The action is a no-op today —
+            // the Phase 6 / user-defined-Drop wiring slots in here without
+            // disturbing the program-order LIFO position.
+            push_drops_for_stmt(stmt, &mut cleanup);
         }
         let result = if let Some(ref expr) = block.final_expr {
+            if self.observed_cancellation() {
+                let cf = ControlFlow::Cancelled;
+                let path = ExitPath::classify(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
+                self.env.pop_scope();
+                return Err(cf);
+            }
             let v = self.eval_expr_inner(expr);
             if let Some(cf) = self.pending_cf.take() {
-                is_err = matches!(&cf, ControlFlow::Return(Value::EnumVariant { variant, .. }) if variant == "Err");
-                self.run_defers(&defers, &errdefers, is_err);
+                let path = ExitPath::classify(&cf);
+                self.signal_cancellation_if_error(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -2344,8 +2578,8 @@ impl<'a> Interpreter<'a> {
         } else {
             Value::Unit
         };
-        // Run defers on normal exit
-        self.run_defers(&defers, &errdefers, is_err);
+        // Normal exit — drop+defer phase only.
+        self.run_cleanup(&cleanup, &errdefers, &ExitPath::Normal);
         self.env.pop_scope();
         Ok(result)
     }
@@ -2364,7 +2598,7 @@ impl<'a> Interpreter<'a> {
 
         // Snapshot current environment for all branches
         let env_snapshot = self.env.snapshot();
-        let cancel_flag = AtomicBool::new(false);
+        let cancel_flag = Arc::new(AtomicBool::new(false));
         let program = self.program;
         let typecheck_result = self.typecheck_result;
         let sequential_mode = self.sequential_mode;
@@ -2383,13 +2617,16 @@ impl<'a> Interpreter<'a> {
         std::thread::scope(|s| {
             for (i, stmt) in stmts.iter().enumerate() {
                 let env_snap = &env_snapshot;
-                let cancel = &cancel_flag;
+                let cancel = Arc::clone(&cancel_flag);
                 let prog = &program;
                 let tc = &typecheck_result;
                 let results_ref = &results;
                 let stmt_clone = stmt.clone();
                 s.spawn(move || {
-                    // Check cancel before starting
+                    // Pre-start cancellation observation: a sibling already
+                    // failed before this branch was scheduled. The branch
+                    // never enters its body, so no errdefers are registered
+                    // and no cleanup runs — push nothing.
                     if cancel.load(Ordering::Relaxed) {
                         return;
                     }
@@ -2399,6 +2636,7 @@ impl<'a> Interpreter<'a> {
                     branch_interp.captured_output = Some(Vec::new());
                     branch_interp.sequential_mode = sequential_mode;
                     branch_interp.source_filename = source_filename.clone();
+                    branch_interp.cancel_flag = Some(Arc::clone(&cancel));
 
                     // Restore environment snapshot
                     for (k, v) in env_snap {
@@ -2466,9 +2704,15 @@ impl<'a> Interpreter<'a> {
             }
         }
 
-        // 3. Check for errors (fail-fast: first error in source order)
+        // 3. Check for errors (fail-fast: first error in source order).
+        // `ControlFlow::Cancelled` is silenced — a cancelled sibling's
+        // cleanup already ran with `e = Cancelled`, but the originating
+        // branch's real `Err` is what propagates as the scope's value.
         for (_, _, _, result) in branch_results {
             if let Err(cf) = result {
+                if matches!(cf, ControlFlow::Cancelled) {
+                    continue;
+                }
                 self.env.pop_scope();
                 return Err(cf);
             }
@@ -2489,16 +2733,90 @@ impl<'a> Interpreter<'a> {
         Ok(result)
     }
 
-    fn run_defers(&mut self, defers: &[Block], errdefers: &[Block], is_err: bool) {
-        // On error: errdefers first (LIFO), then defers (LIFO)
-        // On normal: defers only (LIFO)
-        if is_err {
-            for block in errdefers.iter().rev() {
-                let _ = self.eval_block_inner(block);
+    /// True iff this interpreter is acting as a `par {}` sibling branch
+    /// and a peer has signalled fail-fast cancellation.
+    fn observed_cancellation(&self) -> bool {
+        self.cancel_flag
+            .as_ref()
+            .map(|f| f.load(Ordering::Relaxed))
+            .unwrap_or(false)
+    }
+
+    /// Set the shared `par {}` cancel flag (if any) when the active
+    /// scope is unwinding on an error path. Cancellation is itself an
+    /// error path but the store is idempotent.
+    fn signal_cancellation_if_error(&self, cf: &ControlFlow) {
+        let is_error_path = matches!(
+            cf,
+            ControlFlow::Return(Value::EnumVariant { variant, .. })
+                if variant == "Err" || variant == "None"
+        ) || matches!(
+            cf,
+            ControlFlow::RuntimeError | ControlFlow::ExitUnwind { .. } | ControlFlow::Cancelled
+        );
+        if is_error_path {
+            if let Some(ref flag) = self.cancel_flag {
+                flag.store(true, Ordering::Relaxed);
             }
         }
-        for block in defers.iter().rev() {
-            let _ = self.eval_block_inner(block);
+    }
+
+    /// Drain the unified drop+defer cleanup stack at scope exit per
+    /// design.md § Drop ordering within a branch. Two phases:
+    ///
+    /// 1. `errdefer` phase (error paths only). Param-less `errdefer { ... }`
+    ///    runs on every error path. `errdefer(e) { ... }` binds `e` to the
+    ///    propagating `Err` payload (or `Cancelled` in cancelled siblings —
+    ///    sub-step 4 wires that branch). `errdefer(e)` is skipped on panic
+    ///    per the language rules.
+    /// 2. drop+defer phase (always). Drains the unified stack LIFO so
+    ///    `let x = ...; defer foo();` cleans up as `foo()` then `drop(x)`.
+    ///    `Drop` actions are no-ops today — the structural slot is kept
+    ///    so user-defined `Drop` and `Rc`/`Arc` decrements drop in at
+    ///    the program-order LIFO position when those features land.
+    fn run_cleanup(
+        &mut self,
+        cleanup: &[CleanupAction],
+        errdefers: &[ErrDeferEntry],
+        path: &ExitPath,
+    ) {
+        // Phase 1: errdefer. Reverse declaration order; param-less runs on
+        // every error path, errdefer(e) binds the Err payload (skipped on
+        // panic — only param-less fires there).
+        if path.is_error() {
+            for entry in errdefers.iter().rev() {
+                match &entry.binding {
+                    Some(name) => match path {
+                        ExitPath::Err(payload) | ExitPath::Cancelled(payload) => {
+                            self.env.push_scope();
+                            self.env.define(name.clone(), payload.clone());
+                            let _ = self.eval_block_inner(&entry.body);
+                            self.env.pop_scope();
+                        }
+                        ExitPath::Panic | ExitPath::NoneProp | ExitPath::Normal => {
+                            // errdefer(e) is skipped on panic and on bare
+                            // None propagation (no payload to bind).
+                        }
+                    },
+                    None => {
+                        let _ = self.eval_block_inner(&entry.body);
+                    }
+                }
+            }
+        }
+        // Phase 2: drop+defer interleaved LIFO.
+        for action in cleanup.iter().rev() {
+            match action {
+                CleanupAction::Defer(body) => {
+                    let _ = self.eval_block_inner(body);
+                }
+                CleanupAction::Drop { name: _ } => {
+                    // No-op slot. Sub-step 3 (NLL placement) and the
+                    // future user-Drop / Rc-Arc-decrement work attach
+                    // observable behavior here without changing the
+                    // program-order LIFO position.
+                }
+            }
         }
     }
 
@@ -6920,6 +7238,7 @@ impl<'a> Interpreter<'a> {
     fn value_type_name(&self, val: &Value) -> String {
         match val {
             Value::Struct { name, .. } => name.clone(),
+            Value::SharedStruct(inner) => inner.name.clone(),
             Value::EnumVariant { enum_name, .. } => enum_name.clone(),
             Value::Int(_) => "i64".to_string(),
             Value::Float(_) => "f64".to_string(),
@@ -6932,6 +7251,17 @@ impl<'a> Interpreter<'a> {
             Value::Set(_) => "Set".to_string(),
             _ => "unknown".to_string(),
         }
+    }
+
+    fn find_struct_def(&self, name: &str) -> Option<&StructDef> {
+        for item in &self.program.items {
+            if let Item::StructDef(s) = item {
+                if s.name == name {
+                    return Some(s);
+                }
+            }
+        }
+        None
     }
 
     fn find_enum_for_variant(&self, variant_name: &str) -> Option<String> {
@@ -6947,12 +7277,173 @@ impl<'a> Interpreter<'a> {
         None
     }
 
+    /// Read a field from a struct value. Out of line from `eval_expr_inner`
+    /// to keep the recursive evaluator's stack frame small.
+    fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {
+        match obj {
+            Value::Struct { fields, .. } => fields.get(field).cloned().unwrap_or_else(|| {
+                unreachable!(
+                    "field '{}' not found at {}:{}; should be caught by typechecker",
+                    field, span.line, span.column
+                )
+            }),
+            Value::SharedStruct(inner) => {
+                if let Some(v) = inner.immutable_fields.get(field) {
+                    return v.clone();
+                }
+                if let Some(cell) = inner.mut_fields.get(field) {
+                    // Spec: reads are shared; multiple simultaneous
+                    // readers OK. `try_read` fails iff a writer is
+                    // active — runtime panic on conflict.
+                    match cell.value.try_read() {
+                        Ok(guard) => return guard.clone(),
+                        Err(_) => {
+                            return self.record_runtime_error(
+                                format!(
+                                    "shared struct field '{}.{}' read while a write borrow is active",
+                                    inner.name, field
+                                ),
+                                span,
+                            );
+                        }
+                    }
+                }
+                unreachable!(
+                    "field '{}' not found on shared struct '{}' at {}:{}; should be caught by typechecker",
+                    field, inner.name, span.line, span.column
+                )
+            }
+            _ => unreachable!(
+                "field access on non-struct at {}:{}; should be caught by typechecker",
+                span.line, span.column
+            ),
+        }
+    }
+
+    /// Build a struct literal value, dispatching on `is_shared` from the
+    /// struct's definition. Out of line from `eval_expr_inner` to keep
+    /// the recursive evaluator's stack frame small (debug builds default
+    /// test stack is 2 MB; deep `fib`-style recursion is sensitive).
+    fn eval_struct_literal(
+        &mut self,
+        path: &[String],
+        fields: &[FieldInit],
+        spread: Option<&Expr>,
+    ) -> Value {
+        let name = path.last().cloned().unwrap_or_default();
+        let mut field_vals: HashMap<String, Value> = HashMap::new();
+        if let Some(spread_expr) = spread {
+            match self.eval_expr_inner(spread_expr) {
+                Value::Struct {
+                    fields: base_fields,
+                    ..
+                } => {
+                    field_vals = base_fields;
+                }
+                Value::SharedStruct(inner) => {
+                    for (k, v) in &inner.immutable_fields {
+                        field_vals.insert(k.clone(), v.clone());
+                    }
+                    for (k, cell) in &inner.mut_fields {
+                        let v = cell.value.try_read().expect(
+                            "shared struct field write-locked during spread — unreachable in single-task interpreter",
+                        );
+                        field_vals.insert(k.clone(), v.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        for field in fields {
+            let val = self.eval_expr_inner(&field.value);
+            field_vals.insert(field.name.clone(), val);
+        }
+        if let Some(def) = self.find_struct_def(&name) {
+            if def.is_shared {
+                let mut_field_names: HashSet<String> = def
+                    .fields
+                    .iter()
+                    .filter(|f| f.is_mut)
+                    .map(|f| f.name.clone())
+                    .collect();
+                let mut immutable_fields: HashMap<String, Value> = HashMap::new();
+                let mut mut_fields: HashMap<String, FieldCell> = HashMap::new();
+                for (k, v) in field_vals {
+                    if mut_field_names.contains(&k) {
+                        mut_fields.insert(k, FieldCell::new(v));
+                    } else {
+                        immutable_fields.insert(k, v);
+                    }
+                }
+                return Value::SharedStruct(Arc::new(SharedStructInner {
+                    name,
+                    immutable_fields,
+                    mut_fields,
+                }));
+            }
+        }
+        Value::Struct {
+            name,
+            fields: field_vals,
+        }
+    }
+
     fn set_field(&mut self, object: &Expr, field: &str, val: Value) {
-        if let ExprKind::Identifier(name) = &object.kind {
-            if let Some(Value::Struct { name: sn, fields }) = self.env.get(name) {
-                let mut fields = fields;
-                fields.insert(field.to_string(), val);
-                self.env.set(name, Value::Struct { name: sn, fields });
+        let target_name: Option<&str> = match &object.kind {
+            ExprKind::Identifier(name) => Some(name.as_str()),
+            ExprKind::SelfValue => Some("self"),
+            _ => None,
+        };
+        if let Some(name) = target_name {
+            match self.env.get(name) {
+                Some(Value::Struct { name: sn, fields }) => {
+                    let mut fields = fields;
+                    fields.insert(field.to_string(), val);
+                    self.env.set(name, Value::Struct { name: sn, fields });
+                }
+                Some(Value::SharedStruct(inner)) => {
+                    // Aliasing: `inner` is a clone of the Arc held by `name`'s
+                    // slot. Both point to the same allocation; mutating
+                    // through `inner` is visible to every other holder.
+                    if inner.immutable_fields.contains_key(field) {
+                        // Defense-in-depth: typechecker already rejects
+                        // writes to non-`mut` fields. If we reach here,
+                        // the static check missed.
+                        self.record_runtime_error(
+                            format!(
+                                "shared struct field '{}.{}' is not declared mut",
+                                inner.name, field
+                            ),
+                            &object.span,
+                        );
+                        return;
+                    }
+                    if let Some(cell) = inner.mut_fields.get(field) {
+                        // Spec: writes are exclusive — panic if any other
+                        // borrow (read or write) of the same field is
+                        // active when a write begins.
+                        match cell.value.try_write() {
+                            Ok(mut guard) => {
+                                *guard = val;
+                            }
+                            Err(_) => {
+                                self.record_runtime_error(
+                                    format!(
+                                        "shared struct field '{}.{}' write while another borrow is active",
+                                        inner.name, field
+                                    ),
+                                    &object.span,
+                                );
+                            }
+                        }
+                    } else {
+                        unreachable!(
+                            "shared struct field '{}.{}' not found at {}:{}; should be caught by typechecker",
+                            inner.name, field, object.span.line, object.span.column
+                        );
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -7649,5 +8140,50 @@ fn eval_http_post(url: &str, body: &str) -> Value {
     match ureq::post(url).send_string(body) {
         Ok(resp) => wrap_ok_response(resp),
         Err(e) => make_http_error(e.to_string()),
+    }
+}
+
+impl std::fmt::Debug for ExitPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExitPath::Normal => write!(f, "Normal"),
+            ExitPath::Err(_) => write!(f, "Err(_)"),
+            ExitPath::NoneProp => write!(f, "NoneProp"),
+            ExitPath::Panic => write!(f, "Panic"),
+            ExitPath::Cancelled(_) => write!(f, "Cancelled(_)"),
+        }
+    }
+}
+
+#[cfg(test)]
+mod cleanup_tests {
+    use super::*;
+
+    #[test]
+    fn cancelled_cf_classifies_with_sentinel_payload() {
+        // Sub-step 4 wiring: ControlFlow::Cancelled must map to
+        // ExitPath::Cancelled with the Cancelled-sentinel value,
+        // so errdefer(e) binds e to the sentinel during the
+        // errdefer phase. Deterministic — does not rely on threading.
+        let path = ExitPath::classify(&ControlFlow::Cancelled);
+        match path {
+            ExitPath::Cancelled(Value::EnumVariant {
+                enum_name,
+                variant,
+                data,
+            }) => {
+                assert_eq!(enum_name, "Cancelled");
+                assert_eq!(variant, "Cancelled");
+                assert!(matches!(data, EnumData::Unit));
+            }
+            other => panic!("expected Cancelled(EnumVariant), got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn cancelled_path_is_an_error_path() {
+        // Drives the errdefer phase in run_cleanup. Sub-step 4 sets
+        // is_error()=true so the errdefer drain executes.
+        assert!(ExitPath::Cancelled(cancelled_sentinel()).is_error());
     }
 }

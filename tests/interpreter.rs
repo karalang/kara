@@ -651,6 +651,272 @@ fn test_defer_lifo_order() {
     );
 }
 
+// Unified drop+defer cleanup stack — design.md § Drop ordering within a branch.
+
+#[test]
+fn test_defer_registers_when_reached_not_at_block_start() {
+    // The `defer` after the early `return` is never registered, so
+    // its body must not fire. Pre-walk collection (the old bug)
+    // would have run "late" anyway because the defer was hoisted to
+    // block start.
+    assert_eq!(
+        run("fn early(go: bool) {\n\
+                 print(\"a\");\n\
+                 if go { return; }\n\
+                 defer { print(\"late\"); }\n\
+                 print(\"b\");\n\
+             }\n\
+             fn main() {\n\
+                 early(true);\n\
+                 print(\"|\");\n\
+                 early(false);\n\
+             }"),
+        "a|ablate"
+    );
+}
+
+#[test]
+fn test_defer_runs_on_early_return() {
+    // A defer registered before the early return must fire — the
+    // pre-walk impl had a bug where the `?` in eval_stmt_cf
+    // short-circuited past the cleanup drain.
+    assert_eq!(
+        run("fn body() {\n\
+                 defer { print(\"d\"); }\n\
+                 print(\"a\");\n\
+                 return;\n\
+                 print(\"unreached\");\n\
+             }\n\
+             fn main() { body(); }"),
+        "ad"
+    );
+}
+
+#[test]
+fn test_errdefer_fires_on_err_return() {
+    // Param-less errdefer fires on Err return; defer always fires.
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 return Err(\"boom\");\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "ed"
+    );
+}
+
+#[test]
+fn test_errdefer_skipped_on_normal_return() {
+    // errdefer must NOT fire on Ok; defer always fires.
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d\"); }\n\
+                 errdefer { print(\"e\"); }\n\
+                 return Ok(1);\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "d"
+    );
+}
+
+#[test]
+fn test_errdefer_with_binding_sees_err_payload() {
+    // errdefer(e) binds `e` to the Err payload during the errdefer phase.
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 errdefer(e) { print(e); }\n\
+                 return Err(\"oops\");\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "oops"
+    );
+}
+
+#[test]
+fn test_errdefer_runs_before_defer_on_error_path() {
+    // Phase 1 (errdefer) drains LIFO, then phase 2 (drop+defer) drains LIFO.
+    assert_eq!(
+        run("fn body() -> Result[i64, String] {\n\
+                 defer { print(\"d1\"); }\n\
+                 errdefer { print(\"e1\"); }\n\
+                 defer { print(\"d2\"); }\n\
+                 errdefer { print(\"e2\"); }\n\
+                 return Err(\"x\");\n\
+             }\n\
+             fn main() { let _ = body(); }"),
+        "e2e1d2d1"
+    );
+}
+
+#[test]
+fn test_unified_stack_program_order_lifo() {
+    // The drop+defer stack interleaves bindings and defers in
+    // program order; LIFO drain means later items pop first.
+    // Drop slots are no-ops today, but defer ordering relative to
+    // them must respect program order. The test pins the defer-vs-defer
+    // ordering across interleaved `let` statements.
+    assert_eq!(
+        run("fn main() {\n\
+                 let _x = 1;\n\
+                 defer { print(\"d1\"); }\n\
+                 let _y = 2;\n\
+                 defer { print(\"d2\"); }\n\
+             }"),
+        "d2d1"
+    );
+}
+
+#[test]
+fn test_par_cancellation_does_not_propagate_as_scope_error() {
+    // Sub-step 4: a `par` sibling that observed cancel mid-execution
+    // raises ControlFlow::Cancelled. `eval_par_block` must silence
+    // that on the result side — the originating branch's real `Err`
+    // is the scope's return value under fail-fast. Threading races
+    // are tolerated by checking the OUTCOME (real Err propagates)
+    // rather than asserting on whether observation actually fired.
+    assert_eq!(
+        run("fn attempt() -> Result[i64, String] {\n\
+                 par {\n\
+                     {\n\
+                         let _a = 0;\n\
+                         let _b = 0;\n\
+                         let _c = 0;\n\
+                         let _d = 0;\n\
+                         let _e = 0;\n\
+                         let _f = 0;\n\
+                         let _g = 0;\n\
+                         let _h = 0;\n\
+                     }\n\
+                     {\n\
+                         return Err(\"r-fail\");\n\
+                     }\n\
+                 };\n\
+                 Ok(0)\n\
+             }\n\
+             fn main() {\n\
+                 match attempt() {\n\
+                     Ok(_) => print(\"ok\"),\n\
+                     Err(e) => print(e),\n\
+                 }\n\
+             }"),
+        "r-fail"
+    );
+}
+
+// ── Shared struct interior mutability ───────────────────────────
+
+#[test]
+fn test_shared_struct_aliasing_propagates_mutation() {
+    // Per design.md § Part 5: Shared Types — `shared struct` values
+    // have reference semantics. `let b = a` clones the Arc; mutations
+    // through `b.field` are visible at `a.field` because both bindings
+    // point to the same allocation.
+    assert_eq!(
+        run("shared struct Counter { mut value: i64 }\n\
+             fn main() {\n\
+                 let a = Counter { value: 1 };\n\
+                 let b = a;\n\
+                 b.value = 42;\n\
+                 println(a.value);\n\
+             }"),
+        "42\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_per_field_independence() {
+    // Per design.md § Part 5: \"mutating `node.left` does not conflict
+    // with reading `node.right`\". Per-field tracking is the entire
+    // point of the spec choosing per-field over struct-wide.
+    assert_eq!(
+        run("shared struct Node { mut left: i64, mut right: i64 }\n\
+             fn main() {\n\
+                 let n = Node { left: 1, right: 2 };\n\
+                 n.left = 10;\n\
+                 println(n.left + n.right);\n\
+             }"),
+        "12\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_immutable_field_persists() {
+    // An immutable field set at construction is visible across all
+    // holders and is never mutated afterwards.
+    assert_eq!(
+        run("shared struct Node { id: i64, mut value: i64 }\n\
+             fn main() {\n\
+                 let n = Node { id: 7, value: 0 };\n\
+                 let m = n;\n\
+                 m.value = 99;\n\
+                 println(n.id);\n\
+                 println(m.value);\n\
+             }"),
+        "7\n99\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_mutation_through_method() {
+    // Method dispatch on `shared struct` binds `self` to a SharedStruct
+    // value (Arc clone). `self.field = x` inside the method writes
+    // through the shared allocation.
+    assert_eq!(
+        run("shared struct Counter { mut value: i64 }\n\
+             impl Counter {\n\
+                 fn bump(ref self) { self.value = self.value + 1; }\n\
+             }\n\
+             fn main() {\n\
+                 let c = Counter { value: 0 };\n\
+                 c.bump();\n\
+                 c.bump();\n\
+                 c.bump();\n\
+                 println(c.value);\n\
+             }"),
+        "3\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_aliased_through_method_argument() {
+    // Passing a `shared struct` to a function that mutates through it
+    // is visible at the caller — same Arc allocation.
+    assert_eq!(
+        run("shared struct Box { mut value: i64 }\n\
+             fn bump(b: ref Box) { b.value = b.value + 100; }\n\
+             fn main() {\n\
+                 let x = Box { value: 5 };\n\
+                 bump(x);\n\
+                 bump(x);\n\
+                 println(x.value);\n\
+             }"),
+        "205\n"
+    );
+}
+
+#[test]
+fn test_shared_struct_per_field_independence_across_methods() {
+    // Pins the canonical spec example from design.md:8186 —
+    // \"mutating `node.left` does not conflict with reading `node.right`\".
+    // Independent methods touching different fields never see a
+    // borrow-conflict panic.
+    assert_eq!(
+        run("shared struct Node { mut left: i64, mut right: i64 }\n\
+             impl Node {\n\
+                 fn write_left(ref self, x: i64) { self.left = x; }\n\
+                 fn read_right(ref self) -> i64 { self.right }\n\
+             }\n\
+             fn main() {\n\
+                 let n = Node { left: 0, right: 7 };\n\
+                 n.write_left(99);\n\
+                 println(n.read_right());\n\
+                 println(n.left);\n\
+             }"),
+        "7\n99\n"
+    );
+}
+
 // ── Array methods ──────────────────────────────────────────────
 
 #[test]
