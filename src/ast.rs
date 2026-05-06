@@ -154,6 +154,14 @@ pub struct Function {
     pub ensures: Vec<EnsuresClause>,
     pub where_clause: Option<WhereClause>,
     pub body: Block,
+    /// True iff this item came from baked stdlib source (CR-202 slice 3b).
+    /// The parser writes `false`; the bake step in `prelude.rs` flips it
+    /// to `true` after parsing. The resolver's `#[compiler_builtin]` gate
+    /// (`E0237`) bypasses items where this is `true` so stdlib source can
+    /// use the attribute even when the resolver's session-wide
+    /// `is_stdlib_source` flag is unset (e.g. when the bake AST is
+    /// spliced into a user-mode program tree).
+    pub stdlib_origin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -229,6 +237,8 @@ pub struct StructDef {
     pub where_clause: Option<WhereClause>,
     pub fields: Vec<StructField>,
     pub invariants: Vec<Expr>,
+    /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
+    pub stdlib_origin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -260,6 +270,8 @@ pub struct EnumDef {
     pub generic_params: Option<GenericParams>,
     pub where_clause: Option<WhereClause>,
     pub variants: Vec<Variant>,
+    /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
+    pub stdlib_origin: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -297,6 +309,8 @@ pub struct TraitDef {
     pub trait_effects: Option<EffectList>,
     pub where_clause: Option<WhereClause>,
     pub items: Vec<TraitItem>,
+    /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
+    pub stdlib_origin: bool,
 }
 
 #[derive(Debug, Clone)]

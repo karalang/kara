@@ -4651,6 +4651,7 @@ impl<'a> TypeChecker<'a> {
                         ensures: method.ensures.clone(),
                         where_clause: method.where_clause.clone(),
                         body: body.clone(),
+                        stdlib_origin: t.stdlib_origin,
                     };
                     self.check_function(&synthesized, Some(&self_type), &enclosing);
                 }

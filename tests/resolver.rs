@@ -1581,3 +1581,92 @@ fn test_compiler_builtin_rejection_does_not_block_definition() {
         "expected CompilerBuiltinReserved among errors"
     );
 }
+
+// ── Per-item stdlib-origin tag (CR-202 slice 3b) ────────────────
+// The bake step in slice 3c flips `Item::*.stdlib_origin = true` on
+// items spliced from `runtime/stdlib/*.kara`. The resolver runs in
+// user-mode for the spliced program tree (`is_stdlib_source == false`),
+// so the gate must consult per-item origin to let baked items use
+// `#[compiler_builtin]` even when the session-wide flag is unset.
+
+fn flip_stdlib_origin_on_first_item(prog: &mut karac::ast::Program) {
+    use karac::ast::Item;
+    match prog.items.first_mut().expect("program has at least one item") {
+        Item::Function(f) => f.stdlib_origin = true,
+        Item::StructDef(s) => s.stdlib_origin = true,
+        Item::EnumDef(e) => e.stdlib_origin = true,
+        Item::TraitDef(t) => t.stdlib_origin = true,
+        other => panic!("first item is not a kind we tag: {:?}", other),
+    }
+}
+
+fn assert_per_item_origin_bypasses_gate(source: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let mut program = parsed.program;
+    flip_stdlib_origin_on_first_item(&mut program);
+    // is_stdlib_source defaults to false — per-item tag is the only thing
+    // that can suppress the gate here.
+    let result = Resolver::new(&program).resolve();
+    let blocked: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::CompilerBuiltinReserved)
+        .collect();
+    assert!(
+        blocked.is_empty(),
+        "per-item stdlib_origin should suppress CompilerBuiltinReserved, got: {:?}",
+        blocked.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compiler_builtin_per_item_origin_bypasses_gate_on_function() {
+    assert_per_item_origin_bypasses_gate("#[compiler_builtin]\nfn dbg[T](v: T) -> T { v }");
+}
+
+#[test]
+fn test_compiler_builtin_per_item_origin_bypasses_gate_on_struct() {
+    assert_per_item_origin_bypasses_gate("#[compiler_builtin]\nstruct Vec[T] { }");
+}
+
+#[test]
+fn test_compiler_builtin_per_item_origin_bypasses_gate_on_enum() {
+    assert_per_item_origin_bypasses_gate(
+        "#[compiler_builtin]\nenum Option[T] { Some(T), None }",
+    );
+}
+
+#[test]
+fn test_compiler_builtin_per_item_origin_bypasses_gate_on_trait() {
+    assert_per_item_origin_bypasses_gate(
+        "#[compiler_builtin]\ntrait Display { fn fmt(ref self) -> String; }",
+    );
+}
+
+#[test]
+fn test_compiler_builtin_per_item_tag_is_per_item_not_global() {
+    // Two items with `#[compiler_builtin]`. The first is tagged with
+    // stdlib_origin = true (bypasses the gate). The second is left at
+    // stdlib_origin = false (still rejected). Confirms the tag is
+    // per-item, not implicitly applied to siblings.
+    let parsed = parse(
+        "#[compiler_builtin]\nfn baked[T](v: T) -> T { v }\n\
+         #[compiler_builtin]\nfn user_attempt[T](v: T) -> T { v }",
+    );
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let mut program = parsed.program;
+    flip_stdlib_origin_on_first_item(&mut program);
+    let result = Resolver::new(&program).resolve();
+    let rejections: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::CompilerBuiltinReserved)
+        .collect();
+    assert_eq!(
+        rejections.len(),
+        1,
+        "expected exactly one rejection (the untagged sibling), got: {:?}",
+        rejections.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

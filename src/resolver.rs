@@ -969,8 +969,15 @@ impl<'a> Resolver<'a> {
         }
     }
 
-    fn check_compiler_builtin_attr(&mut self, attrs: &[Attribute]) {
-        if self.is_stdlib_source {
+    fn check_compiler_builtin_attr(&mut self, attrs: &[Attribute], item_stdlib_origin: bool) {
+        // The gate bypasses (a) when the whole resolver session is in
+        // stdlib-source mode (CR-202 slice 1's `with_stdlib_source(true)`
+        // builder), or (b) when the individual item carries the per-item
+        // stdlib-origin tag (CR-202 slice 3b). The per-item tag is what
+        // 3c uses to flip baked stdlib items spliced into a user-mode
+        // program tree — the resolver session for that tree stays
+        // user-mode, but individual baked items get an exemption.
+        if self.is_stdlib_source || item_stdlib_origin {
             return;
         }
         for attr in attrs {
@@ -988,7 +995,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_function(&mut self, f: &Function) {
-        self.check_compiler_builtin_attr(&f.attributes);
+        self.check_compiler_builtin_attr(&f.attributes, f.stdlib_origin);
         let param_names: Vec<String> = f
             .params
             .iter()
@@ -1005,7 +1012,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_struct(&mut self, s: &StructDef) {
-        self.check_compiler_builtin_attr(&s.attributes);
+        self.check_compiler_builtin_attr(&s.attributes, s.stdlib_origin);
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
         if let Err(e) = self.table.define(
             s.name.clone(),
@@ -1018,7 +1025,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_enum(&mut self, e: &EnumDef) {
-        self.check_compiler_builtin_attr(&e.attributes);
+        self.check_compiler_builtin_attr(&e.attributes, e.stdlib_origin);
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
         let enum_id = match self.table.define(
             e.name.clone(),
@@ -1057,7 +1064,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_trait(&mut self, t: &TraitDef) {
-        self.check_compiler_builtin_attr(&t.attributes);
+        self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         let method_names: Vec<String> = t
             .items
             .iter()

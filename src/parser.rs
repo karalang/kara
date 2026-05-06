@@ -351,6 +351,7 @@ impl Parser {
             ensures,
             where_clause,
             body,
+            stdlib_origin: false,
         })
     }
 
@@ -674,6 +675,7 @@ impl Parser {
             where_clause,
             fields,
             invariants,
+            stdlib_origin: false,
         })
     }
 
@@ -750,6 +752,7 @@ impl Parser {
             generic_params,
             where_clause,
             variants,
+            stdlib_origin: false,
         })
     }
 
@@ -988,6 +991,7 @@ impl Parser {
             trait_effects,
             where_clause,
             items,
+            stdlib_origin: false,
         })
     }
 

@@ -287,6 +287,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         where_clause: None,
         fields: Vec::new(),
         invariants: Vec::new(),
+        stdlib_origin: true,
     })
 }
 
@@ -333,6 +334,7 @@ fn stub_trait(name: &str, span: &Span) -> Item {
         trait_effects: None,
         where_clause: None,
         items: Vec::new(),
+        stdlib_origin: true,
     })
 }
 
@@ -357,6 +359,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
             final_expr: None,
             span: span.clone(),
         },
+        stdlib_origin: true,
     })
 }
 

@@ -989,6 +989,7 @@ impl<'a> EffectChecker<'a> {
                             ensures: m.ensures.clone(),
                             where_clause: m.where_clause.clone(),
                             body,
+                            stdlib_origin: t.stdlib_origin,
                         };
                         self.method_bodies.insert(key, stub);
                     }
@@ -2003,6 +2004,7 @@ impl<'a> EffectChecker<'a> {
                                     final_expr: None,
                                     span: m.span.clone(),
                                 }),
+                                stdlib_origin: t.stdlib_origin,
                             };
                             let by_var = scan(&stub);
                             if !by_var.is_empty() {
