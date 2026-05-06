@@ -290,7 +290,7 @@ Ship-list targets **medium stdlib scope**: numerical core + scripting-critical u
 
 - [x] **`String.sorted()` method.** ✓ DONE (2026-04-27) — `infer_str_method` dispatch in typechecker (`Type::Str` branch before generic fallthrough); `sorted`/`sorted_by` arms in interpreter `eval_method_call` (char-level sort for strings, `value_compare` fallback for arrays). 3 typechecker tests + 4 interpreter tests added.
 
-- [ ] **Built-in `Display` for collections.** `Vec[T]`, `Map[K, V]`, and nested collections (e.g. `Vec[Vec[String]]`) should implement `Display` automatically when their element types implement `Display`. Enables `println(f"{my_vec}")` without manual formatting helpers. Add in Phase 8 with `Display` trait implementations. Discovered while writing LeetCode group anagrams example.
+- [x] **Built-in `Display` for collections.** Already in place — `type_supports_display` in `typechecker.rs:1596` recursively recognises `Vec[T]`, `Set[T]`, `SortedSet[T]`, `Option[T]`, `Map[K, V]`, `Result[T, E]`, `Tuple[..]`, `Array[T, N]`, `Slice[T]`, `Ref[T]`, `MutRef[T]` when their element types support Display; the `Value::Display` impl in `interpreter.rs:411` mirrors the recursion for runtime formatting. Codegen path lands separately under [phase-7-codegen.md § Phase 7.2 § Display for collections](phase-7-codegen.md). Regression tests in `tests/typechecker.rs` (`fstring_accepts_*`) cover Vec, nested Vec, Map, Set, Option, Result.
 
 ### Book Documentation
 

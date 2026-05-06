@@ -2994,6 +2994,53 @@ fn try_block_emits_v1_stub_diagnostic() {
     );
 }
 
+// ── Built-in Display for collections ────────────────────────────────
+//
+// Regression: `f"{my_vec}"` and friends must accept `Vec[T]`, `Map[K, V]`,
+// `Set[T]`, `Option[T]`, `Result[T, E]`, and arbitrary nesting when the
+// leaf element types support Display. Verified via `type_supports_display`
+// in the typechecker. Discovered while writing LeetCode group anagrams.
+
+#[test]
+fn fstring_accepts_vec_of_display_type() {
+    typecheck_ok(
+        "fn main() { let v: Vec[i64] = Vec[]; let s = f\"{v}\"; }",
+    );
+}
+
+#[test]
+fn fstring_accepts_nested_vec_of_display_type() {
+    typecheck_ok(
+        "fn main() { let v: Vec[Vec[String]] = Vec[]; let s = f\"{v}\"; }",
+    );
+}
+
+#[test]
+fn fstring_accepts_map_of_display_types() {
+    typecheck_ok(
+        "fn main() { let m: Map[String, Vec[i32]] = Map[]; let s = f\"{m}\"; }",
+    );
+}
+
+#[test]
+fn fstring_accepts_set_of_display_type() {
+    typecheck_ok(
+        "fn main() { let s: Set[i64] = Set[]; let _ = f\"{s}\"; }",
+    );
+}
+
+#[test]
+fn fstring_accepts_option_and_result_of_display_types() {
+    typecheck_ok(
+        "fn main() { \
+         let o: Option[i64] = Option.Some(1); \
+         let r: Result[i64, String] = Result.Ok(1); \
+         let _ = f\"{o}\"; \
+         let _ = f\"{r}\"; \
+         }",
+    );
+}
+
 #[test]
 fn try_block_still_walks_body_for_inner_errors() {
     // The stub walks the body so unrelated errors inside still surface.
