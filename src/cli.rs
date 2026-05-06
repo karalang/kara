@@ -7,7 +7,7 @@ use crate::ast::EffectVerbKind;
 use crate::ast::{Item, Program};
 use crate::concurrency::ConcurrencyAnalysis;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectErrorKind};
-use crate::interpreter::{ErrorTraceFrame, Interpreter, TestOutcome};
+use crate::interpreter::{DbgOutputMode, ErrorTraceFrame, Interpreter, TestOutcome};
 use crate::manifest;
 use crate::module::{
     self, BuildTreeError, BuildTreeOk, BuildTreeOpts, Cycle, ModuleId, ModuleParseErrors,
@@ -1955,6 +1955,11 @@ fn cmd_run(filename: &str, output: OutputMode, sequential: bool) {
     // Run
     let mut interp = Interpreter::new(&pipeline.parsed.program, pipeline.typed.as_ref().unwrap());
     interp.set_source_filename(filename);
+    interp.set_source_text(&source);
+    interp.set_dbg_output_mode(match output {
+        OutputMode::Json | OutputMode::Jsonl => DbgOutputMode::Json,
+        OutputMode::Text => DbgOutputMode::Terminal,
+    });
     interp.sequential_mode = sequential;
     interp.run();
 

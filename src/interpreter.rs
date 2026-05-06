@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 
 use regex::Regex as RustRegex;
@@ -8,7 +8,7 @@ use ureq;
 use crate::ast::*;
 use crate::resolver::SpanKey;
 use crate::token::Span;
-use crate::typechecker::TypeCheckResult;
+use crate::typechecker::{type_display, TypeCheckResult};
 
 // ── Error Return Trace ─────────────────────────────────────────
 
@@ -1531,6 +1531,72 @@ pub struct Interpreter<'a> {
     /// (cheap; small in real programs) — a public accessor is exposed
     /// so test harness functions can read it after `run()`.
     pub drop_trace: Vec<String>,
+    /// Full source text of the program being executed. Used by
+    /// `eval_builtin_dbg` to slice the argument's `Span.offset/length`
+    /// for the `expr` field (terminal mode) and `"expr":"…"` field
+    /// (structured mode). Empty until [`set_source_text`] is called by
+    /// the CLI; tests may leave it empty in which case `dbg()` falls
+    /// back to a placeholder.
+    source_text: String,
+    /// Format mode for `dbg()` output. `Terminal` (default) prints a
+    /// human-readable line; `Json` prints a single JSON object per
+    /// call. Selected by the CLI based on `--output=…`. See design.md
+    /// § dbg() — Output formats.
+    dbg_output_mode: DbgOutputMode,
+    /// Per-task identifier for `dbg()` tagging in `par {}` regions.
+    /// `None` outside `par {}`; `Some(N)` inside a branch. Allocated
+    /// from `task_id_counter` on branch entry; nested `par {}` inside
+    /// a branch shadows the parent's id so each `dbg()` reports the
+    /// innermost task.
+    pub current_task_id: Option<u64>,
+    /// Shared monotonic counter for `par {}` task ids. Cloned across
+    /// every branch interpreter so nested `par {}` regions allocate
+    /// from the same sequence.
+    task_id_counter: Arc<AtomicU64>,
+    /// Test-only capture buffer for `dbg()` output. When `Some`,
+    /// `eval_builtin_dbg` pushes its formatted line here instead of
+    /// writing to stderr. Tests inspect this to assert the exact
+    /// terminal-mode or JSON-mode output. In `par {}` branches the
+    /// parent's buffer is mirrored into each branch and merged on
+    /// join (same pattern as `captured_output`).
+    pub captured_dbg: Option<Vec<String>>,
+}
+
+/// Format mode for [`Interpreter`]'s `dbg()` output. See design.md §
+/// dbg() — Output formats.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DbgOutputMode {
+    /// Human-readable single line: `[task:N file:line] expr = value`
+    /// (task prefix omitted outside `par {}`).
+    Terminal,
+    /// One JSON object per call:
+    /// `{"kind":"dbg","task_id":N,"file":"…","line":N,"expr":"…","type":"…","value":"…"}`.
+    Json,
+}
+
+/// JSON-string escape with surrounding quotes. Used by the `dbg()`
+/// structured output mode. Kept private to interpreter.rs; the cli /
+/// doc modules each carry their own copies for the same reason
+/// (decoupling, tiny helper).
+fn dbg_json_escape(s: &str) -> String {
+    use std::fmt::Write;
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for ch in s.chars() {
+        match ch {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                write!(out, "\\u{:04x}", c as u32).unwrap();
+            }
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// Convert a PascalCase identifier to lower_snake_case.
@@ -1578,6 +1644,11 @@ impl<'a> Interpreter<'a> {
             type_subs_stack: Vec::new(),
             cancel_flag: None,
             drop_trace: Vec::new(),
+            source_text: String::new(),
+            dbg_output_mode: DbgOutputMode::Terminal,
+            current_task_id: None,
+            task_id_counter: Arc::new(AtomicU64::new(0)),
+            captured_dbg: None,
         }
     }
 
@@ -1621,6 +1692,18 @@ impl<'a> Interpreter<'a> {
     /// Set the source filename used in error trace frames.
     pub fn set_source_filename(&mut self, filename: &str) {
         self.source_filename = filename.to_string();
+    }
+
+    /// Set the program's full source text. Used by `dbg()` to slice
+    /// the argument's source span into the `expr` field. The CLI
+    /// supplies this from the file already read into memory.
+    pub fn set_source_text(&mut self, src: &str) {
+        self.source_text = src.to_string();
+    }
+
+    /// Select `dbg()` output format. Defaults to [`DbgOutputMode::Terminal`].
+    pub fn set_dbg_output_mode(&mut self, mode: DbgOutputMode) {
+        self.dbg_output_mode = mode;
     }
 
     /// Get the error return trace frames collected during execution.
@@ -2875,12 +2958,25 @@ impl<'a> Interpreter<'a> {
         let typecheck_result = self.typecheck_result;
         let sequential_mode = self.sequential_mode;
         let source_filename = &self.source_filename;
+        let source_text = &self.source_text;
+        let dbg_output_mode = self.dbg_output_mode;
+        let task_id_counter = Arc::clone(&self.task_id_counter);
+        let parent_captures_dbg = self.captured_dbg.is_some();
+        // Pre-allocate task ids in source order so a given branch always
+        // reports the same task_id regardless of OS scheduling. The
+        // counter is a monotonic Arc shared across nested par blocks; we
+        // claim a contiguous range here, then each branch reads its
+        // pre-assigned slot below.
+        let branch_task_ids: Vec<u64> = (0..stmts.len())
+            .map(|_| task_id_counter.fetch_add(1, Ordering::Relaxed) + 1)
+            .collect();
 
         // Collect results from each branch
-        // Each branch result: (index, defined_vars, output_lines, control_flow_or_value)
+        // Each branch result: (index, defined_vars, output_lines, dbg_lines, control_flow_or_value)
         type BranchResult = (
             usize,
             HashMap<String, Value>,
+            Vec<String>,
             Vec<String>,
             Result<Value, ControlFlow>,
         );
@@ -2894,6 +2990,8 @@ impl<'a> Interpreter<'a> {
                 let tc = &typecheck_result;
                 let results_ref = &results;
                 let stmt_clone = stmt.clone();
+                let task_id_counter = Arc::clone(&task_id_counter);
+                let task_id = branch_task_ids[i];
                 s.spawn(move || {
                     // Pre-start cancellation observation: a sibling already
                     // failed before this branch was scheduled. The branch
@@ -2909,6 +3007,18 @@ impl<'a> Interpreter<'a> {
                     branch_interp.sequential_mode = sequential_mode;
                     branch_interp.source_filename = source_filename.clone();
                     branch_interp.cancel_flag = Some(Arc::clone(&cancel));
+                    branch_interp.source_text = source_text.clone();
+                    branch_interp.dbg_output_mode = dbg_output_mode;
+                    branch_interp.task_id_counter = Arc::clone(&task_id_counter);
+                    // Task id is pre-assigned in source order above so
+                    // dbg() output reports a stable id for a given
+                    // branch regardless of OS scheduling. Counter
+                    // starts at 1 (id 0 is the "no par" sentinel,
+                    // never reported as an actual task tag).
+                    branch_interp.current_task_id = Some(task_id);
+                    if parent_captures_dbg {
+                        branch_interp.captured_dbg = Some(Vec::new());
+                    }
 
                     // Restore environment snapshot
                     for (k, v) in env_snap {
@@ -2939,22 +3049,23 @@ impl<'a> Interpreter<'a> {
                     };
 
                     let output = branch_interp.captured_output.unwrap_or_default();
+                    let dbg_lines = branch_interp.captured_dbg.unwrap_or_default();
 
                     results_ref
                         .lock()
                         .unwrap()
-                        .push((i, defined_vars, output, cf_result));
+                        .push((i, defined_vars, output, dbg_lines, cf_result));
                 });
             }
         });
 
         // Sort results by source order (deterministic)
         let mut branch_results = results.into_inner().unwrap();
-        branch_results.sort_by_key(|(i, _, _, _)| *i);
+        branch_results.sort_by_key(|(i, _, _, _, _)| *i);
 
         // Merge results back into the parent interpreter
         // 1. Merge output in source order
-        for (_, _, output, _) in &branch_results {
+        for (_, _, output, _, _) in &branch_results {
             for line in output {
                 if let Some(ref mut cap) = self.captured_output {
                     cap.push(line.clone());
@@ -2964,9 +3075,19 @@ impl<'a> Interpreter<'a> {
             }
         }
 
+        // 1b. Merge dbg lines in source order (test-only; only present
+        // when the parent has an active capture buffer).
+        if let Some(ref mut cap) = self.captured_dbg {
+            for (_, _, _, dbg_lines, _) in &branch_results {
+                for line in dbg_lines {
+                    cap.push(line.clone());
+                }
+            }
+        }
+
         // 2. Merge defined variables
         self.env.push_scope();
-        for (_, vars, _, _) in &branch_results {
+        for (_, vars, _, _, _) in &branch_results {
             for (name, val) in vars {
                 // Skip prelude/function definitions
                 if matches!(val, Value::Function { .. } | Value::EnumVariant { .. }) {
@@ -2980,7 +3101,7 @@ impl<'a> Interpreter<'a> {
         // `ControlFlow::Cancelled` is silenced — a cancelled sibling's
         // cleanup already ran with `e = Cancelled`, but the originating
         // branch's real `Err` is what propagates as the scope's value.
-        for (_, _, _, result) in branch_results {
+        for (_, _, _, _, result) in branch_results {
             if let Err(cf) = result {
                 if matches!(cf, ControlFlow::Cancelled) {
                     continue;
@@ -7408,13 +7529,92 @@ impl<'a> Interpreter<'a> {
     }
 
     fn eval_builtin_dbg(&mut self, args: &[CallArg], span: &Span) -> Value {
+        // dbg() uses the transparent `debugs` effect (design.md § dbg() —
+        // transparent and stripped in release builds), but the underlying
+        // I/O still writes stderr. The track_effect call records that for
+        // any future runtime instrumentation; transparency is enforced by
+        // the static effect checker, not here.
         self.track_effect("writes(Stderr)");
-        let val = if let Some(arg) = args.first() {
-            self.eval_expr_inner(&arg.value)
+        let arg_expr = args.first().map(|a| &a.value);
+        let val = if let Some(expr) = arg_expr {
+            self.eval_expr_inner(expr)
         } else {
             Value::Unit
         };
-        eprintln!("[{}:{}] = {}", span.line, span.column, val.debug_fmt());
+
+        // Source slice for the `expr` field. Falls back to "<expr>" when
+        // the interpreter was constructed without a source-text setter
+        // (some unit tests bypass the CLI) or the slice would be empty.
+        let expr_text = arg_expr
+            .and_then(|e| {
+                let off = e.span.offset;
+                let end = off.saturating_add(e.span.length);
+                self.source_text.get(off..end)
+            })
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| "<expr>".to_string());
+
+        // Type lookup via the typecheck side table. "?" when unavailable;
+        // not all expression kinds reach the typechecker's recording path,
+        // and ad-hoc test harnesses sometimes synthesize a TypeCheckResult
+        // without populating expr_types.
+        let type_text = arg_expr
+            .and_then(|e| {
+                self.typecheck_result
+                    .expr_types
+                    .get(&SpanKey::from_span(&e.span))
+            })
+            .map(type_display)
+            .unwrap_or_else(|| "?".to_string());
+
+        let file = if self.source_filename.is_empty() {
+            "<unknown>".to_string()
+        } else {
+            self.source_filename.clone()
+        };
+        let value_str = val.debug_fmt();
+
+        let line = match self.dbg_output_mode {
+            DbgOutputMode::Terminal => match self.current_task_id {
+                Some(tid) => format!(
+                    "[task:{} {}:{}] {} = {}\n",
+                    tid, file, span.line, expr_text, value_str
+                ),
+                None => format!(
+                    "[{}:{}] {} = {}\n",
+                    file, span.line, expr_text, value_str
+                ),
+            },
+            DbgOutputMode::Json => {
+                let task_id = match self.current_task_id {
+                    Some(tid) => tid.to_string(),
+                    None => "null".to_string(),
+                };
+                format!(
+                    "{{\"kind\":\"dbg\",\"task_id\":{},\"file\":{},\"line\":{},\"expr\":{},\"type\":{},\"value\":{}}}\n",
+                    task_id,
+                    dbg_json_escape(&file),
+                    span.line,
+                    dbg_json_escape(&expr_text),
+                    dbg_json_escape(&type_text),
+                    dbg_json_escape(&value_str),
+                )
+            }
+        };
+
+        if let Some(ref mut cap) = self.captured_dbg {
+            cap.push(line);
+        } else {
+            // Single atomic write — POSIX guarantees writes up to
+            // PIPE_BUF bytes (4096 on Linux) are atomic at the
+            // syscall level, so sibling-task lines never tear.
+            use std::io::Write;
+            let stderr = std::io::stderr();
+            let mut handle = stderr.lock();
+            let _ = handle.write_all(line.as_bytes());
+        }
+
         val
     }
 

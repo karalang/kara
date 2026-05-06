@@ -254,6 +254,43 @@ pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
     (output, drops)
 }
 
+/// Run a program with `dbg()` output capture enabled. Returns
+/// `(stdout_lines, dbg_lines)`. The interpreter is configured with
+/// `source_text` set so `dbg()` can slice expression text from the
+/// source. `mode` selects terminal-format vs JSON-format dbg lines —
+/// see [`interpreter::DbgOutputMode`]. Each dbg line includes the
+/// trailing `\n`. Used by `tests/interpreter.rs` to assert exact dbg
+/// formatting.
+pub fn run_program_with_dbg(
+    source: &str,
+    mode: interpreter::DbgOutputMode,
+) -> (Vec<String>, Vec<String>) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &typed);
+    let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+    interp.captured_output = Some(Vec::new());
+    interp.captured_dbg = Some(Vec::new());
+    interp.set_source_text(source);
+    interp.set_source_filename("test.kara");
+    interp.set_dbg_output_mode(mode);
+    interp.run();
+    let stdout = interp.captured_output.take().unwrap_or_default();
+    let dbg = interp.captured_dbg.take().unwrap_or_default();
+    (stdout, dbg)
+}
+
 /// Run a program and return output, runtime errors, error trace, and truncation flag.
 /// Used by tests that need to assert on user-triggered runtime errors (division by
 /// zero, integer overflow, unwrap of None, index out of bounds, etc.) without

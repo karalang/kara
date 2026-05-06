@@ -1,6 +1,10 @@
 // tests/interpreter.rs
 
-use karac::{run_program, run_program_full, run_program_with_drops, run_program_with_trace};
+use karac::interpreter::DbgOutputMode;
+use karac::{
+    run_program, run_program_full, run_program_with_dbg, run_program_with_drops,
+    run_program_with_trace,
+};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -7490,4 +7494,109 @@ fn main() {
     );
     // 'g' is in [a, h) — should match.
     assert_eq!(output, "1\n");
+}
+
+// ── dbg() task-id tagging and structured output (item 129) ────
+
+#[test]
+fn test_dbg_terminal_no_par_omits_task_prefix() {
+    // Spec: `dbg(compute(x))` reports `compute(x)` as the expr — the
+    // argument's source text, not the whole dbg call.
+    let src = r#"fn main() {
+    let _ = dbg(7);
+}
+"#;
+    let (_stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Terminal);
+    assert_eq!(dbg.len(), 1, "expected one dbg line, got {:?}", dbg);
+    let line = &dbg[0];
+    assert_eq!(line, "[test.kara:2] 7 = 7\n");
+    assert!(!line.contains("task:"), "outside par {{}} should not include task tag");
+}
+
+#[test]
+fn test_dbg_terminal_in_par_tags_each_branch() {
+    let src = r#"fn main() {
+    par {
+        let _ = dbg(1);
+        let _ = dbg(2);
+    }
+}
+"#;
+    let (_stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Terminal);
+    assert_eq!(dbg.len(), 2, "expected two dbg lines, got {:?}", dbg);
+    // Branch 0 → task:1, branch 1 → task:2 (assigned in source order
+    // before spawn, so deterministic regardless of OS scheduling).
+    assert_eq!(dbg[0], "[task:1 test.kara:3] 1 = 1\n");
+    assert_eq!(dbg[1], "[task:2 test.kara:4] 2 = 2\n");
+}
+
+#[test]
+fn test_dbg_json_no_par_emits_null_task_id() {
+    let src = r#"fn main() {
+    let _ = dbg(42);
+}
+"#;
+    let (_stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Json);
+    assert_eq!(dbg.len(), 1);
+    let line = &dbg[0];
+    assert!(line.starts_with("{\"kind\":\"dbg\","));
+    assert!(line.contains("\"task_id\":null"), "got {:?}", line);
+    assert!(line.contains("\"file\":\"test.kara\""));
+    assert!(line.contains("\"line\":2"));
+    assert!(line.contains("\"expr\":\"42\""), "got {:?}", line);
+    // Bare integer literal infers as i64 in the typechecker; the spec
+    // example uses i32 because there `compute(x)` returns explicit i32.
+    // The contract is "Display of the inferred type"; i64 is correct here.
+    assert!(line.contains("\"type\":\"i64\""), "got {:?}", line);
+    assert!(line.contains("\"value\":\"42\""));
+    assert!(line.ends_with("}\n"));
+}
+
+#[test]
+fn test_dbg_json_in_par_emits_numeric_task_id() {
+    let src = r#"fn main() {
+    par {
+        let _ = dbg(10);
+        let _ = dbg(20);
+    }
+}
+"#;
+    let (_stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Json);
+    assert_eq!(dbg.len(), 2, "got {:?}", dbg);
+    assert!(dbg[0].contains("\"task_id\":1"), "got {:?}", dbg[0]);
+    assert!(dbg[0].contains("\"value\":\"10\""));
+    assert!(dbg[1].contains("\"task_id\":2"), "got {:?}", dbg[1]);
+    assert!(dbg[1].contains("\"value\":\"20\""));
+}
+
+#[test]
+fn test_dbg_json_value_uses_debug_fmt_quoting() {
+    // The `value` field must use `Debug` formatting: strings get
+    // quoted as `"hello"` not `hello`. The whole field is then JSON-
+    // escaped, so the inner quotes show up as `\"`.
+    let src = r#"fn main() {
+    let _ = dbg("hi");
+}
+"#;
+    let (_stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Json);
+    assert_eq!(dbg.len(), 1);
+    // Inner Debug form: `"hi"`. JSON-escaped: `"\"hi\""`.
+    assert!(
+        dbg[0].contains("\"value\":\"\\\"hi\\\"\""),
+        "expected JSON-escaped quoted string, got {:?}",
+        dbg[0]
+    );
+}
+
+#[test]
+fn test_dbg_returns_its_argument() {
+    // dbg() is an identity function — the value flows through.
+    let src = r#"fn main() {
+    let x = dbg(3) + dbg(4);
+    println(x);
+}
+"#;
+    let (stdout, dbg) = run_program_with_dbg(src, DbgOutputMode::Terminal);
+    assert_eq!(stdout.join(""), "7\n");
+    assert_eq!(dbg.len(), 2);
 }
