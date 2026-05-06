@@ -6017,6 +6017,64 @@ impl<'a> TypeChecker<'a> {
             // Arity mismatch: fall through to the synth path so the existing
             // `check_assignable` produces a normal `Fn` arity diagnostic.
         }
+
+        // Block at check position: thread `expected` through to the
+        // trailing expression so closures inside `let x: T = { ...; |a| body }`
+        // see `T`'s shape. `check_block_against` already routes the final
+        // expression through `check_expr`.
+        if let ExprKind::Block(block) = &expr.kind {
+            let ty = self.check_block_against(block, expected);
+            self.record_expr_type(&expr.span, &ty);
+            return ty;
+        }
+
+        // If/IfLet at check position: push `expected` into both branches.
+        // Each branch's `check_expr` enforces assignability against the
+        // expected type independently, so divergent branches surface a
+        // per-branch TypeMismatch rather than the synth-mode aggregate
+        // BranchTypeMismatch (more specific, points at the offending
+        // branch). Condition typing is unchanged.
+        if let ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        {
+            let ty = self.check_if_against(
+                condition,
+                then_block,
+                else_branch.as_deref(),
+                expected,
+                &expr.span,
+            );
+            return ty;
+        }
+        if let ExprKind::IfLet {
+            pattern,
+            value,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        {
+            let ty = self.check_if_let_against(
+                pattern,
+                value,
+                then_block,
+                else_branch.as_deref(),
+                expected,
+                &expr.span,
+            );
+            return ty;
+        }
+
+        // Match at check position: each arm body is checked against
+        // `expected` so closures in arm bodies (and other check-mode-
+        // sensitive shapes) see the target type.
+        if let ExprKind::Match { scrutinee, arms } = &expr.kind {
+            let ty = self.check_match_against(scrutinee, arms, expected, &expr.span);
+            return ty;
+        }
+
         let actual = self.infer_expr(expr);
         // Expected-type-driven generic resolution: when a generic call's
         // return type came back as `TypeParam(T)` (the solver had no arg
@@ -10573,6 +10631,134 @@ impl<'a> TypeChecker<'a> {
     }
 
     // ── Match ───────────────────────────────────────────────────
+
+    /// Check-mode form of `if`. Threads `expected` into both branches so
+    /// closures and other check-sensitive shapes inside arms see the
+    /// target type. The condition is still synthesized + asserted Bool.
+    /// When the `else` branch is missing, the expected type must accept
+    /// `Unit` (the synth path's behavior); we delegate to
+    /// `check_assignable` for that diagnostic so the message is uniform
+    /// with non-branching cases.
+    fn check_if_against(
+        &mut self,
+        condition: &Expr,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+        expected: &Type,
+        span: &Span,
+    ) -> Type {
+        let cond_ty = self.infer_expr(condition);
+        if cond_ty != Type::Bool && cond_ty != Type::Error {
+            self.type_error(
+                format!(
+                    "condition must be 'bool', found '{}'",
+                    type_display(&cond_ty)
+                ),
+                condition.span.clone(),
+                TypeErrorKind::ConditionNotBool,
+            );
+        }
+        let then_ty = self.check_block_against(then_block, expected);
+        if let Some(else_expr) = else_branch {
+            let else_ty = self.check_expr(else_expr, expected);
+            // Each branch's check_expr already reported a TypeMismatch
+            // against `expected` if it didn't comply; no need to re-check
+            // cross-branch compatibility (it's transitive through expected).
+            // Pick a non-Never type as the recorded result.
+            let result_ty = if then_ty != Type::Never {
+                then_ty
+            } else {
+                else_ty
+            };
+            self.record_expr_type(span, &result_ty);
+            result_ty
+        } else {
+            // No else: the if returns Unit. Surface the standard
+            // assignability diagnostic if the caller expected non-Unit.
+            self.check_assignable(expected, &Type::Unit, span.clone());
+            self.record_expr_type(span, &Type::Unit);
+            Type::Unit
+        }
+    }
+
+    /// Check-mode form of `if let`. Same shape as `check_if_against`
+    /// but binds the pattern's variables in the then-block scope before
+    /// checking it. Pattern type-checking against the value's type is
+    /// deferred to the synthesis-mode `infer_expr` arm — we mirror its
+    /// current behavior (synth value, no pattern type check) so this
+    /// slice doesn't change diagnostics around irrefutable-let.
+    fn check_if_let_against(
+        &mut self,
+        _pattern: &Pattern,
+        value: &Expr,
+        then_block: &Block,
+        else_branch: Option<&Expr>,
+        expected: &Type,
+        span: &Span,
+    ) -> Type {
+        self.infer_expr(value);
+        let then_ty = self.check_block_against(then_block, expected);
+        if let Some(else_expr) = else_branch {
+            let else_ty = self.check_expr(else_expr, expected);
+            let result_ty = if then_ty != Type::Never {
+                then_ty
+            } else {
+                else_ty
+            };
+            self.record_expr_type(span, &result_ty);
+            result_ty
+        } else {
+            self.check_assignable(expected, &Type::Unit, span.clone());
+            self.record_expr_type(span, &Type::Unit);
+            Type::Unit
+        }
+    }
+
+    /// Check-mode form of `match`. Each arm body is checked against
+    /// `expected`. Mirrors `infer_match` for scrutinee/guard/pattern
+    /// machinery and exhaustiveness; only the arm-body inference is
+    /// replaced with check-mode dispatch. Per-arm assignability
+    /// diagnostics from `check_expr` replace the synth path's aggregate
+    /// `BranchTypeMismatch` (more specific — points at the offending
+    /// arm rather than the whole match).
+    fn check_match_against(
+        &mut self,
+        scrutinee: &Expr,
+        arms: &[MatchArm],
+        expected: &Type,
+        span: &Span,
+    ) -> Type {
+        let scrut_ty = self.infer_expr(scrutinee);
+        let mut arm_types: Vec<Type> = Vec::new();
+        for arm in arms {
+            self.local_scope.push();
+            self.check_pattern_against(&arm.pattern, &scrut_ty);
+            if let Some(guard) = &arm.guard {
+                let guard_ty = self.infer_expr(guard);
+                if guard_ty != Type::Bool && guard_ty != Type::Error {
+                    self.type_error(
+                        format!(
+                            "match guard must be 'bool', found '{}'",
+                            type_display(&guard_ty)
+                        ),
+                        guard.span.clone(),
+                        TypeErrorKind::ConditionNotBool,
+                    );
+                }
+            }
+            let arm_ty = self.check_expr(&arm.body, expected);
+            arm_types.push(arm_ty);
+            self.local_scope.pop();
+        }
+        self.check_exhaustiveness(&scrut_ty, arms, span.clone());
+        let result_ty = arm_types
+            .iter()
+            .find(|t| **t != Type::Never)
+            .cloned()
+            .unwrap_or(Type::Never);
+        self.record_expr_type(span, &result_ty);
+        result_ty
+    }
 
     fn infer_match(&mut self, scrutinee: &Expr, arms: &[MatchArm], span: &Span) -> Type {
         let scrut_ty = self.infer_expr(scrutinee);

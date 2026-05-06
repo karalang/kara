@@ -8202,3 +8202,109 @@ fn test_iter_chunk_by_wrong_arg_count_rejected() {
         errs.iter().map(|e| e.to_string()).collect::<Vec<_>>(),
     );
 }
+
+// ── Bidirectional sub-step 1: branch check-mode pushdown (item 131) ─
+
+#[test]
+fn test_branch_pushdown_if_else_closure_at_typed_let() {
+    // Both branches are unannotated closures; the typed let pushes
+    // `Fn(i64) -> i64` into both, so each `|x| ...` body sees `x: i64`.
+    // Without the If check arm, infer_expr would give each closure
+    // fresh TypeVars and the trailing check_assignable would fail.
+    typecheck_ok(
+        "fn main() {\n\
+             let cond: bool = true;\n\
+             let f: Fn(i64) -> i64 = if cond { |x| x + 1 } else { |x| x - 1 };\n\
+         }",
+    );
+}
+
+#[test]
+fn test_branch_pushdown_match_closure_at_typed_let() {
+    // Same shape as the if/else test, but for match arms.
+    typecheck_ok(
+        "fn main() {\n\
+             let n: i64 = 0;\n\
+             let f: Fn(i64) -> i64 = match n {\n\
+                 0 => |x| x + 1,\n\
+                 _ => |x| x - 1,\n\
+             };\n\
+         }",
+    );
+}
+
+#[test]
+fn test_branch_pushdown_block_trailing_closure() {
+    // Block at check position: the trailing closure literal should
+    // see the let's expected type.
+    typecheck_ok(
+        "fn main() {\n\
+             let f: Fn(i64) -> i64 = { |x| x + 1 };\n\
+         }",
+    );
+}
+
+#[test]
+fn test_branch_pushdown_if_else_at_function_return() {
+    // The function's declared return type flows into the tail
+    // expression via check_block_against; from there, the new If
+    // arm pushes it into both branches.
+    typecheck_ok(
+        "fn make_adder(cond: bool) -> Fn(i64) -> i64 {\n\
+             if cond { |x| x + 1 } else { |x| x - 1 }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_branch_pushdown_match_at_call_argument() {
+    // Match at a call-argument position; the parameter's type
+    // pushes into each arm's body.
+    typecheck_ok(
+        "fn apply(f: Fn(i64) -> i64) -> i64 { f(10) }\n\
+         fn main() {\n\
+             let n: i64 = 1;\n\
+             let _ = apply(match n {\n\
+                 0 => |x| x + 1,\n\
+                 _ => |x| x * 2,\n\
+             });\n\
+         }",
+    );
+}
+
+#[test]
+fn test_branch_pushdown_arm_mismatch_diagnoses_offending_arm() {
+    // One match arm doesn't comply with the expected closure shape.
+    // Each arm's check_expr emits its own TypeMismatch, so the
+    // diagnostic names the offending arm (first/second-class via
+    // span) rather than the synth path's aggregate
+    // BranchTypeMismatch on the whole match expression.
+    let errors = typecheck_errors(
+        "fn main() {\n\
+             let n: i64 = 1;\n\
+             let _f: Fn(i64) -> i64 = match n {\n\
+                 0 => |x| x + 1,\n\
+                 _ => 42,\n\
+             };\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::TypeMismatch)),
+        "expected TypeMismatch from non-Fn arm, got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_branch_pushdown_if_let_else_closure() {
+    // IfLet at check position: both the then-block and the else
+    // expression see the expected type.
+    typecheck_ok(
+        "fn main() {\n\
+             let opt: Option[i64] = Some(7);\n\
+             let f: Fn(i64) -> i64 = if let Some(_v) = opt { |x| x + 1 } else { |x| x };\n\
+         }",
+    );
+}
+
