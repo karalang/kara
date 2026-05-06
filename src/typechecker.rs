@@ -300,6 +300,26 @@ fn is_integer(ty: &Type) -> bool {
     matches!(ty, Type::Int(_) | Type::UInt(_))
 }
 
+/// Width of an integer type in bits, for the char→int narrowing check.
+/// `usize` / `isize` are conservatively treated as 32-bit so a 32-bit
+/// target rejects `char as usize`; on 64-bit targets the cast is still
+/// allowed via the wider-int path. The actual address-width of `usize`
+/// is platform-dependent and folded in at codegen.
+fn integer_width_bits(ty: &Type) -> Option<u32> {
+    match ty {
+        Type::Int(IntSize::I8) => Some(8),
+        Type::Int(IntSize::I16) => Some(16),
+        Type::Int(IntSize::I32) => Some(32),
+        Type::Int(IntSize::I64) => Some(64),
+        Type::UInt(UIntSize::U8) => Some(8),
+        Type::UInt(UIntSize::U16) => Some(16),
+        Type::UInt(UIntSize::U32) => Some(32),
+        Type::UInt(UIntSize::U64) => Some(64),
+        Type::UInt(UIntSize::Usize) => Some(64),
+        _ => None,
+    }
+}
+
 /// Map a typechecked receiver type to the receiver-name segment used in the
 /// `Type.method` keys of `EffectCheckResult.{inferred,declared}_effects`
 /// (and therefore in `Program.callee_effectful`). Returns `None` for
@@ -1345,6 +1365,126 @@ impl<'a> TypeChecker<'a> {
             span,
             kind,
         });
+    }
+
+    /// Validate an `as` cast (`from as to`) and emit a focused diagnostic
+    /// when the pair is rejected. Per design.md § Numeric Semantics > as-
+    /// cast semantics (v60 item 49):
+    ///
+    /// Accepted: numeric → numeric (saturating float→int, sign-/zero-
+    /// extending int→int, IEEE 754 int→float, fptrunc / fpext for
+    /// float→float); `bool → iN/uN` (zero-extends from i1); `char → uN`
+    /// for `N >= 32` and `char → iN` for `N >= 32` (Unicode scalar value
+    /// fits in 21 bits).
+    ///
+    /// Rejected with focused diagnostics:
+    /// - `char → iN/uN` with `N < 32` → `E_CHAR_AS_NARROW_INT`.
+    /// - `iN/uN → char` → `E_INT_AS_CHAR`.
+    /// - `iN/uN → bool` → `E_INT_AS_BOOL`.
+    /// - `f32/f64 → bool` → `E_FLOAT_AS_BOOL`.
+    ///
+    /// All other unsupported pairs fall through to the generic
+    /// `cannot cast` diagnostic.
+    fn check_cast_pair(&mut self, from_ty: &Type, to_ty: &Type, span: &Span) {
+        // Type::Error is a wildcard — silently accept; the original error
+        // already surfaced elsewhere.
+        if matches!(from_ty, Type::Error) || matches!(to_ty, Type::Error) {
+            return;
+        }
+
+        // Numeric → numeric: always accepted (existing rule).
+        if is_numeric(from_ty) && is_numeric(to_ty) {
+            return;
+        }
+
+        // Bool → integer: produces 0/1.
+        if matches!(from_ty, Type::Bool) && is_integer(to_ty) {
+            return;
+        }
+
+        // Char → wide integer (>= 32 bits): Unicode scalar value fits.
+        if matches!(from_ty, Type::Char) {
+            if let Some(width) = integer_width_bits(to_ty) {
+                if width >= 32 {
+                    return;
+                }
+                // Char → narrow integer: rejected with focused diagnostic.
+                self.type_error(
+                    format!(
+                        "error[E_CHAR_AS_NARROW_INT]: cannot cast `char` to \
+                         `{}` directly because the Unicode scalar range \
+                         (`0..=0x10FFFF`) does not fit in {width} bits; \
+                         help: `c as u32 as {}` for explicit truncation, or \
+                         `c.encode_utf8(buf)` for proper UTF-8 encoding",
+                        type_display(to_ty),
+                        type_display(to_ty)
+                    ),
+                    span.clone(),
+                    TypeErrorKind::InvalidCast,
+                );
+                return;
+            }
+        }
+
+        // Integer → char: rejected (use char.try_from for fallible
+        // construction).
+        if is_integer(from_ty) && matches!(to_ty, Type::Char) {
+            self.type_error(
+                format!(
+                    "error[E_INT_AS_CHAR]: cannot cast `{}` to `char` \
+                     directly because not every integer is a valid \
+                     Unicode scalar (surrogate range, values above \
+                     `0x10FFFF`); help: `char.try_from(n)` returns \
+                     `Result[char, _]`",
+                    type_display(from_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
+        // Integer → bool: rejected (use `n != 0`).
+        if is_integer(from_ty) && matches!(to_ty, Type::Bool) {
+            self.type_error(
+                format!(
+                    "error[E_INT_AS_BOOL]: cannot cast `{}` to `bool`; \
+                     help: write `n != 0` for the explicit non-zero \
+                     check",
+                    type_display(from_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
+        // Float → bool: rejected (the operation is meaningless).
+        if matches!(from_ty, Type::Float(_)) && matches!(to_ty, Type::Bool) {
+            self.type_error(
+                format!(
+                    "error[E_FLOAT_AS_BOOL]: cannot cast `{}` to `bool`; \
+                     a float-to-bool conversion is not well-defined \
+                     (NaN? denormal? -0?); decide on a predicate \
+                     explicitly (e.g., `f != 0.0`) before casting",
+                    type_display(from_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
+        // Anything else falls through to the generic diagnostic.
+        self.type_error(
+            format!(
+                "cannot cast '{}' to '{}'",
+                type_display(from_ty),
+                type_display(to_ty)
+            ),
+            span.clone(),
+            TypeErrorKind::InvalidCast,
+        );
     }
 
     /// Emit `error[E_EMPTY_PREFIX_LITERAL_NEEDS_ANNOTATION]` for an empty
@@ -6637,23 +6777,7 @@ impl<'a> TypeChecker<'a> {
             ExprKind::Cast { expr: inner, ty } => {
                 let from_ty = self.infer_expr(inner);
                 let to_ty = self.lower_type_expr(ty, &[]);
-                // Allow numeric casts
-                if (is_numeric(&from_ty) && is_numeric(&to_ty))
-                    || from_ty == Type::Error
-                    || to_ty == Type::Error
-                {
-                    // ok
-                } else {
-                    self.type_error(
-                        format!(
-                            "cannot cast '{}' to '{}'",
-                            type_display(&from_ty),
-                            type_display(&to_ty)
-                        ),
-                        inner.span.clone(),
-                        TypeErrorKind::InvalidCast,
-                    );
-                }
+                self.check_cast_pair(&from_ty, &to_ty, &inner.span);
                 to_ty
             }
 

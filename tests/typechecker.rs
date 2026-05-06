@@ -3009,6 +3009,88 @@ fn impl_marker_trait_empty_body_accepted() {
     );
 }
 
+// ── Cast-pair rejections (slice 1 of saturating-float→int) ──────────
+
+#[test]
+fn cast_char_as_narrow_int_rejected() {
+    let errors = typecheck_errors("fn main() { let _ = 'A' as u8; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_CHAR_AS_NARROW_INT")),
+        "expected E_CHAR_AS_NARROW_INT, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cast_char_as_i16_rejected() {
+    let errors = typecheck_errors("fn main() { let _ = 'A' as i16; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_CHAR_AS_NARROW_INT")),
+        "expected E_CHAR_AS_NARROW_INT, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cast_char_as_u32_accepted() {
+    typecheck_ok("fn main() { let _ = 'A' as u32; }");
+}
+
+#[test]
+fn cast_char_as_i32_accepted() {
+    typecheck_ok("fn main() { let _ = 'A' as i32; }");
+}
+
+#[test]
+fn cast_int_as_char_rejected() {
+    let errors = typecheck_errors("fn main() { let _ = 65u32 as char; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_INT_AS_CHAR")),
+        "expected E_INT_AS_CHAR, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cast_int_as_bool_rejected() {
+    let errors = typecheck_errors("fn main() { let _ = 1i32 as bool; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_INT_AS_BOOL")),
+        "expected E_INT_AS_BOOL, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cast_float_as_bool_rejected() {
+    let errors = typecheck_errors("fn main() { let _ = 1.0f64 as bool; }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_FLOAT_AS_BOOL")),
+        "expected E_FLOAT_AS_BOOL, got: {errors:?}"
+    );
+}
+
+#[test]
+fn cast_bool_as_int_accepted() {
+    typecheck_ok("fn main() { let _ = false as u8; let _ = true as u32; }");
+}
+
+#[test]
+fn cast_int_as_int_still_works() {
+    typecheck_ok("fn main() { let _ = 300i32 as i8; let _ = (-1i8) as u8; }");
+}
+
+#[test]
+fn cast_float_as_int_still_works() {
+    typecheck_ok("fn main() { let _ = 3.7f64 as i32; let _ = 1.5f32 as u8; }");
+}
+
 #[test]
 fn marker_trait_used_as_bound_works() {
     // Marker traits participate in bound resolution like ordinary traits.
