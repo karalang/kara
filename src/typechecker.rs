@@ -423,6 +423,12 @@ fn contains_type_param(ty: &Type) -> bool {
 /// `Type::TypeParam(name)` on the param side, record `name -> arg_ty` in
 /// `solutions`. First solution wins — conflicts are left to later
 /// `check_assignable` calls on the substituted signature to diagnose.
+/// **Deprecated** — superseded by `unify_types` + `resolve_type_vars`
+/// in item 131 sub-step 2b. The free-function call-site solver was
+/// replaced in `check_call_args_with_substitution`. Kept for slice
+/// 2c (method dispatch) until that migration lands; deletion happens
+/// in slice 2d.
+#[allow(dead_code)]
 fn solve_type_params(param_ty: &Type, arg_ty: &Type, solutions: &mut HashMap<String, Type>) {
     match (param_ty, arg_ty) {
         (Type::TypeParam(name), _) => {
@@ -524,6 +530,331 @@ fn substitute_type_params(ty: &Type, subs: &HashMap<String, Type>) -> Type {
             }
         }
         _ => ty.clone(),
+    }
+}
+
+/// Replace every `Type::TypeParam(name)` in `params` and `return_type`
+/// with a fresh `Type::TypeVar(id)`, allocating ids out of the supplied
+/// `next_type_var` counter. Returns the substituted (params, return)
+/// alongside both directions of the name↔id mapping. Used by item 131
+/// sub-step 2b at generic call sites: each call gets its own fresh
+/// metavariables so cross-call collisions are impossible (`id(id(7))`
+/// gets `?M0` for outer T and `?M1` for inner T even though both have
+/// the spelling `T`). Names appear once in the order they're first
+/// encountered; this stability isn't required by callers but keeps
+/// diagnostic output deterministic.
+fn instantiate_signature_with_fresh_vars(
+    params: &[Type],
+    return_type: &Type,
+    next_type_var: &mut u32,
+) -> (
+    Vec<Type>,
+    Type,
+    HashMap<String, TypeVarId>,
+    HashMap<TypeVarId, String>,
+) {
+    fn collect(ty: &Type, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+        match ty {
+            Type::TypeParam(n) if seen.insert(n.clone()) => {
+                names.push(n.clone());
+            }
+            Type::TypeParam(_) => {}
+            Type::Tuple(es) => {
+                for e in es {
+                    collect(e, names, seen);
+                }
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                collect(element, names, seen)
+            }
+            Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => collect(i, names, seen),
+            Type::Pointer { inner, .. } => collect(inner, names, seen),
+            Type::Named { args, .. } => {
+                for a in args {
+                    collect(a, names, seen);
+                }
+            }
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => {
+                for p in params {
+                    collect(p, names, seen);
+                }
+                collect(return_type, names, seen);
+            }
+            // AssocProjection.param is a String holding the resolved
+            // concrete type name; not a TypeParam introduction site.
+            _ => {}
+        }
+    }
+    let mut names: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    for p in params {
+        collect(p, &mut names, &mut seen);
+    }
+    collect(return_type, &mut names, &mut seen);
+
+    let mut name_to_id: HashMap<String, TypeVarId> = HashMap::new();
+    let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
+    for name in &names {
+        let id = TypeVarId(*next_type_var);
+        *next_type_var += 1;
+        name_to_id.insert(name.clone(), id);
+        id_to_name.insert(id, name.clone());
+    }
+
+    fn substitute(ty: &Type, name_to_id: &HashMap<String, TypeVarId>) -> Type {
+        match ty {
+            Type::TypeParam(n) => name_to_id
+                .get(n)
+                .map(|&id| Type::TypeVar(id))
+                .unwrap_or_else(|| ty.clone()),
+            Type::Tuple(es) => Type::Tuple(es.iter().map(|e| substitute(e, name_to_id)).collect()),
+            Type::Array { element, size } => Type::Array {
+                element: Box::new(substitute(element, name_to_id)),
+                size: *size,
+            },
+            Type::Slice { element, mutable } => Type::Slice {
+                element: Box::new(substitute(element, name_to_id)),
+                mutable: *mutable,
+            },
+            Type::Ref(inner) => Type::Ref(Box::new(substitute(inner, name_to_id))),
+            Type::MutRef(inner) => Type::MutRef(Box::new(substitute(inner, name_to_id))),
+            Type::Weak(inner) => Type::Weak(Box::new(substitute(inner, name_to_id))),
+            Type::Pointer { is_mut, inner } => Type::Pointer {
+                is_mut: *is_mut,
+                inner: Box::new(substitute(inner, name_to_id)),
+            },
+            Type::Named { name, args } => Type::Named {
+                name: name.clone(),
+                args: args.iter().map(|a| substitute(a, name_to_id)).collect(),
+            },
+            Type::Function {
+                params,
+                return_type,
+            } => Type::Function {
+                params: params.iter().map(|p| substitute(p, name_to_id)).collect(),
+                return_type: Box::new(substitute(return_type, name_to_id)),
+            },
+            Type::OnceFunction {
+                params,
+                return_type,
+            } => Type::OnceFunction {
+                params: params.iter().map(|p| substitute(p, name_to_id)).collect(),
+                return_type: Box::new(substitute(return_type, name_to_id)),
+            },
+            _ => ty.clone(),
+        }
+    }
+    let new_params: Vec<Type> = params.iter().map(|p| substitute(p, &name_to_id)).collect();
+    let new_ret = substitute(return_type, &name_to_id);
+    (new_params, new_ret, name_to_id, id_to_name)
+}
+
+/// Walk `ty` and replace every `Type::TypeVar(id)` with the
+/// substitution recorded for `id` in `substitutions`, recursively
+/// resolving chains. Unresolved TypeVars are converted back to
+/// `Type::TypeParam(original_name)` via `id_to_name` so the existing
+/// `find_unbound_type_param` (slice 2a) detects them at the consuming
+/// context. Each substitution result is itself recursively resolved so
+/// `?M0 → ?M1 → i32` collapses to `i32`.
+fn resolve_type_vars(
+    ty: &Type,
+    substitutions: &HashMap<TypeVarId, Type>,
+    id_to_name: &HashMap<TypeVarId, String>,
+) -> Type {
+    match ty {
+        Type::TypeVar(id) => {
+            if let Some(resolved) = substitutions.get(id) {
+                resolve_type_vars(resolved, substitutions, id_to_name)
+            } else if let Some(name) = id_to_name.get(id) {
+                Type::TypeParam(name.clone())
+            } else {
+                ty.clone()
+            }
+        }
+        Type::Tuple(es) => Type::Tuple(
+            es.iter()
+                .map(|e| resolve_type_vars(e, substitutions, id_to_name))
+                .collect(),
+        ),
+        Type::Array { element, size } => Type::Array {
+            element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
+            size: *size,
+        },
+        Type::Slice { element, mutable } => Type::Slice {
+            element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
+            mutable: *mutable,
+        },
+        Type::Ref(inner) => Type::Ref(Box::new(resolve_type_vars(
+            inner,
+            substitutions,
+            id_to_name,
+        ))),
+        Type::MutRef(inner) => Type::MutRef(Box::new(resolve_type_vars(
+            inner,
+            substitutions,
+            id_to_name,
+        ))),
+        Type::Weak(inner) => Type::Weak(Box::new(resolve_type_vars(
+            inner,
+            substitutions,
+            id_to_name,
+        ))),
+        Type::Pointer { is_mut, inner } => Type::Pointer {
+            is_mut: *is_mut,
+            inner: Box::new(resolve_type_vars(inner, substitutions, id_to_name)),
+        },
+        Type::Named { name, args } => Type::Named {
+            name: name.clone(),
+            args: args
+                .iter()
+                .map(|a| resolve_type_vars(a, substitutions, id_to_name))
+                .collect(),
+        },
+        Type::Function {
+            params,
+            return_type,
+        } => Type::Function {
+            params: params
+                .iter()
+                .map(|p| resolve_type_vars(p, substitutions, id_to_name))
+                .collect(),
+            return_type: Box::new(resolve_type_vars(return_type, substitutions, id_to_name)),
+        },
+        Type::OnceFunction {
+            params,
+            return_type,
+        } => Type::OnceFunction {
+            params: params
+                .iter()
+                .map(|p| resolve_type_vars(p, substitutions, id_to_name))
+                .collect(),
+            return_type: Box::new(resolve_type_vars(return_type, substitutions, id_to_name)),
+        },
+        _ => ty.clone(),
+    }
+}
+
+/// Resolve only the top-level `Type::TypeVar(id)` chain — leaves
+/// nested TypeVars in compound types untouched. Used by `unify_types`
+/// to peel one level of indirection before structurally comparing.
+fn resolve_type_var_top(ty: &Type, substitutions: &HashMap<TypeVarId, Type>) -> Type {
+    match ty {
+        Type::TypeVar(id) => {
+            if let Some(resolved) = substitutions.get(id) {
+                resolve_type_var_top(resolved, substitutions)
+            } else {
+                ty.clone()
+            }
+        }
+        _ => ty.clone(),
+    }
+}
+
+/// Structural unification with substitution side-effects. When either
+/// side is an unresolved `TypeVar`, record the binding and return
+/// success; otherwise recurse structurally on compound types
+/// (tuple/named/function/array/slice/ref/etc) and fall through to
+/// `types_compatible` for terminal cases. Symmetric: order of `a`/`b`
+/// doesn't change the result, except that the chosen substitution
+/// always points the unresolved TypeVar at its sibling. Returns false
+/// if the structural shapes don't match (caller's `check_assignable`
+/// pass surfaces the diagnostic; this function is silent so a single
+/// shape mismatch at depth doesn't poison higher-level recovery).
+fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>) -> bool {
+    let a = resolve_type_var_top(a, substitutions);
+    let b = resolve_type_var_top(b, substitutions);
+    match (&a, &b) {
+        (Type::TypeVar(id_a), Type::TypeVar(id_b)) if id_a == id_b => true,
+        (Type::TypeVar(id), _) => {
+            substitutions.insert(*id, b.clone());
+            true
+        }
+        (_, Type::TypeVar(id)) => {
+            substitutions.insert(*id, a.clone());
+            true
+        }
+        (Type::Error, _) | (_, Type::Error) => true,
+        (Type::Tuple(as_), Type::Tuple(bs)) if as_.len() == bs.len() => as_
+            .iter()
+            .zip(bs.iter())
+            .all(|(x, y)| unify_types(x, y, substitutions)),
+        (
+            Type::Named {
+                name: an,
+                args: aa,
+            },
+            Type::Named {
+                name: bn,
+                args: bb,
+            },
+        ) if an == bn && aa.len() == bb.len() => aa
+            .iter()
+            .zip(bb.iter())
+            .all(|(x, y)| unify_types(x, y, substitutions)),
+        (Type::Ref(x), Type::Ref(y))
+        | (Type::MutRef(x), Type::MutRef(y))
+        | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions),
+        (
+            Type::Array {
+                element: xe,
+                size: xs,
+            },
+            Type::Array {
+                element: ye,
+                size: ys,
+            },
+        ) if xs == ys => unify_types(xe, ye, substitutions),
+        (
+            Type::Slice {
+                element: xe,
+                mutable: xm,
+            },
+            Type::Slice {
+                element: ye,
+                mutable: ym,
+            },
+        ) if xm == ym => unify_types(xe, ye, substitutions),
+        (
+            Type::Function {
+                params: xp,
+                return_type: xr,
+            },
+            Type::Function {
+                params: yp,
+                return_type: yr,
+            },
+        ) if xp.len() == yp.len() => {
+            xp.iter()
+                .zip(yp.iter())
+                .all(|(x, y)| unify_types(x, y, substitutions))
+                && unify_types(xr, yr, substitutions)
+        }
+        (
+            Type::OnceFunction {
+                params: xp,
+                return_type: xr,
+            },
+            Type::OnceFunction {
+                params: yp,
+                return_type: yr,
+            },
+        ) if xp.len() == yp.len() => {
+            xp.iter()
+                .zip(yp.iter())
+                .all(|(x, y)| unify_types(x, y, substitutions))
+                && unify_types(xr, yr, substitutions)
+        }
+        // Terminal / cross-shape cases handled by the existing
+        // structural compatibility check (covers integer-coercion,
+        // never, slice/vec coercions, etc).
+        _ => types_compatible(&a, &b),
     }
 }
 
@@ -6371,11 +6702,24 @@ impl<'a> TypeChecker<'a> {
             }
             return return_type.clone();
         }
-        // Generic case: types-first / effects-second per design.md § Monomorphization
-        // order for compound polymorphism. Pass 1 infers non-closure args to
-        // solve `T`s; pass 2 checks each arg against the substituted slot, with
-        // closures hitting `check_expr`'s pushdown so their params see the
-        // solved `T` rather than a fresh var.
+        // Generic case: types-first / effects-second per design.md
+        // § Monomorphization order for compound polymorphism. Item 131
+        // sub-step 2b — replaces the per-call ad-hoc `solve_type_params`
+        // with fresh-metavariable instantiation: each `TypeParam(T)` in
+        // the callee's signature becomes a fresh `TypeVar(?M_n)` for
+        // this call only, so cross-call collisions are impossible.
+        // Pass 1 infers non-closure args and unifies them against the
+        // instantiated slot types; pass 2 checks each arg (including
+        // closures) against the resolved slot, with check_expr's
+        // pushdown seeing concrete (i.e. solved) slot types when
+        // available.
+        let (sub_params, sub_ret, name_to_id, id_to_name) =
+            instantiate_signature_with_fresh_vars(
+                params,
+                return_type,
+                &mut self.env.next_type_var,
+            );
+
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
         for arg in args {
             if matches!(arg.value.kind, ExprKind::Closure { .. }) {
@@ -6384,32 +6728,62 @@ impl<'a> TypeChecker<'a> {
                 arg_tys.push(Some(self.infer_expr(&arg.value)));
             }
         }
-        let mut solutions: HashMap<String, Type> = HashMap::new();
-        for (param_ty, arg_ty_opt) in params.iter().zip(arg_tys.iter()) {
+        // Pass 1: unify non-closure arg types into the instantiated
+        // slot types so the metavars get bound from arguments. Failure
+        // is silent here — pass 2's `check_assignable` produces the
+        // user-facing diagnostic, and unify already records partial
+        // structural matches.
+        for (sub_param_ty, arg_ty_opt) in sub_params.iter().zip(arg_tys.iter()) {
             if let Some(arg_ty) = arg_ty_opt {
-                solve_type_params(param_ty, arg_ty, &mut solutions);
+                unify_types(sub_param_ty, arg_ty, &mut self.env.substitutions);
             }
         }
-        for ((arg, param_ty), arg_ty_opt) in args.iter().zip(params.iter()).zip(arg_tys.iter()) {
-            let substituted = substitute_type_params(param_ty, &solutions);
-            let substituted = self.resolve_assoc_projections(&substituted);
+        // Pass 2: check each arg against the resolved slot. For
+        // closure args, the resolved slot may be a concrete
+        // `Fn(i64) -> i64` (when T solved) and check_expr's pushdown
+        // gives the closure params their types.
+        for ((arg, sub_param_ty), arg_ty_opt) in
+            args.iter().zip(sub_params.iter()).zip(arg_tys.iter())
+        {
+            let resolved = resolve_type_vars(sub_param_ty, &self.env.substitutions, &id_to_name);
+            let resolved = self.resolve_assoc_projections(&resolved);
             match arg_ty_opt {
                 Some(arg_ty) => {
-                    self.check_assignable(&substituted, arg_ty, arg.value.span.clone());
+                    self.check_assignable(&resolved, arg_ty, arg.value.span.clone());
                     if apply_call_site_marker {
-                        self.check_call_site_marker(arg, &substituted, arg_ty);
+                        self.check_call_site_marker(arg, &resolved, arg_ty);
                     }
                 }
                 None => {
-                    let arg_ty = self.check_expr(&arg.value, &substituted);
+                    let arg_ty = self.check_expr(&arg.value, &resolved);
                     if apply_call_site_marker {
-                        self.check_call_site_marker(arg, &substituted, &arg_ty);
+                        self.check_call_site_marker(arg, &resolved, &arg_ty);
                     }
                 }
             }
         }
+        // Translate solved metavars back to the original `T → ConcreteType`
+        // shape `record_call_type_subs` expects — this is what the
+        // interpreter's runtime dispatch consumes for generic-method
+        // resolution. Only entries that resolved to something other
+        // than the originating TypeParam are recorded; unsolved ones
+        // are skipped so the interpreter's resolution stack doesn't
+        // see a self-referential `T → T` binding.
+        let mut solutions: HashMap<String, Type> = HashMap::new();
+        for (name, &id) in &name_to_id {
+            let resolved =
+                resolve_type_vars(&Type::TypeVar(id), &self.env.substitutions, &id_to_name);
+            if !matches!(&resolved, Type::TypeParam(n) if n == name) {
+                solutions.insert(name.clone(), resolved);
+            }
+        }
         self.record_call_type_subs(record_subs_for_span, &solutions);
-        let ret = substitute_type_params(return_type, &solutions);
+
+        // Resolve the return type. Unsolved metavars come back as
+        // `TypeParam(originating_name)` so the caller's
+        // `find_unbound_type_param` (slice 2a) still surfaces the
+        // unsolved-T diagnostic.
+        let ret = resolve_type_vars(&sub_ret, &self.env.substitutions, &id_to_name);
         self.resolve_assoc_projections(&ret)
     }
 

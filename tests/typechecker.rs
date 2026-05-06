@@ -8407,4 +8407,84 @@ fn test_unsolved_t_in_enclosing_generic_does_not_fire() {
     );
 }
 
+// ── Bidirectional sub-step 2b: fresh-metavar instantiation (item 131) ─
+
+#[test]
+fn test_fresh_metavar_nested_id_calls_distinct_metavars() {
+    // `id(id(7))` — outer T and inner T have the same name but each
+    // call site instantiates a fresh metavariable (`?M_n`), so the
+    // two never collide. Both resolve to `i64` from the literal `7`.
+    typecheck_ok(
+        "fn id[T](x: T) -> T { x }\n\
+         fn main() { let v: i64 = id(id(7)); }",
+    );
+}
+
+#[test]
+fn test_fresh_metavar_closure_arg_sees_solved_slot() {
+    // `apply` takes a `Fn(T) -> T` and a `T`. The `T` is solved
+    // from the second arg (`5`); the closure's `Fn(T) -> T` slot
+    // resolves to `Fn(i64) -> i64` and check_expr's pushdown gives
+    // the closure param `x` type `i64`. Pre-sub-2b this worked
+    // through `solve_type_params`; verifying it still works after
+    // the fresh-metavar migration.
+    typecheck_ok(
+        "fn apply[T](f: Fn(T) -> T, x: T) -> T { f(x) }\n\
+         fn main() {\n\
+             let v: i64 = apply(|x| x + 1, 5);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_fresh_metavar_two_call_sites_independent() {
+    // Two independent call sites of the same generic function.
+    // Sub-step 2b's per-call instantiation guarantees the metavar
+    // for site 1 (i64) doesn't pollute site 2 (String). Pre-2b
+    // this also worked because `solutions` was a fresh HashMap per
+    // call; preserved here.
+    typecheck_ok(
+        "fn id[T](x: T) -> T { x }\n\
+         fn main() {\n\
+             let a = id(7);\n\
+             let b = id(\"hi\");\n\
+         }",
+    );
+}
+
+#[test]
+fn test_fresh_metavar_unsolved_metavar_surfaces_via_2a() {
+    // Unsolved metavar in the return type comes back as
+    // `TypeParam(originating_name)` so slice 2a's
+    // `find_unbound_type_param` still detects it. This verifies the
+    // resolve_type_vars → TypeParam fallback works end-to-end.
+    let errors = typecheck_errors(
+        "fn empty[T]() -> Vec[T] { todo() }\n\
+         fn main() { let v = empty(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::CannotInferTypeParam)
+                && e.message.contains("'T'")),
+        "expected CannotInferTypeParam naming 'T' (from resolve_type_vars TypeVar→TypeParam fallback), got: {errors:?}"
+    );
+}
+
+#[test]
+fn test_fresh_metavar_multi_param_solved_independently() {
+    // `swap[A, B](a: A, b: B) -> Tuple[B, A]` — each call instantiates
+    // two distinct metavars; both are solved from their respective
+    // args. Tuples thread generics correctly so the result-type
+    // recovery is end-to-end testable here without depending on the
+    // struct-literal generic-threading gap.
+    typecheck_ok(
+        "fn swap[A, B](a: A, b: B) -> (B, A) { (b, a) }\n\
+         fn main() {\n\
+             let p: (bool, i64) = swap(7, true);\n\
+         }",
+    );
+}
+
+
 
