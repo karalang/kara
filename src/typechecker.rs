@@ -3046,36 +3046,12 @@ impl<'a> TypeChecker<'a> {
             },
         );
 
-        // CR-202 slice 3c: `Option` is now provided by
-        // `runtime/stdlib/option.kara` via the baked-source pass at the top
-        // of this function. The structural derives (`Eq`, `PartialEq`,
-        // `Hash`, `Ord`, `PartialOrd`) come from `#[derive(...)]` on the
-        // baked `enum Option[T]`. `Result` and the rest stay hardcoded
-        // until slice 4 migrates them.
-        let structural_traits: HashSet<String> = ["Eq", "PartialEq", "Hash", "Ord", "PartialOrd"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-
-        // Prelude enum `Result[T, E]`
-        self.env.enums.insert(
-            "Result".to_string(),
-            EnumInfo {
-                generic_params: vec!["T".to_string(), "E".to_string()],
-                variants: vec![
-                    (
-                        "Ok".to_string(),
-                        VariantTypeInfo::Tuple(vec![Type::TypeParam("T".to_string())]),
-                    ),
-                    (
-                        "Err".to_string(),
-                        VariantTypeInfo::Tuple(vec![Type::TypeParam("E".to_string())]),
-                    ),
-                ],
-                derived_traits: structural_traits,
-                is_shared: false,
-            },
-        );
+        // CR-202: `Option` (slice 3c) and `Result` (slice 4a) are now
+        // provided by `runtime/stdlib/{option,result}.kara` via the
+        // baked-source pass at the top of this function. Structural
+        // derives (`Eq`, `PartialEq`, `Hash`, `Ord`, `PartialOrd`) flow
+        // through `#[derive(...)]` on the baked enums. `Entry` and the
+        // rest stay hardcoded until later slices migrate them.
 
         // Prelude enum `Entry[K, V]` — view returned by `Map.entry(k)` for
         // O(1) insert-or-modify without double-hashing. See design.md

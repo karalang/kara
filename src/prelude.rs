@@ -174,10 +174,10 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
 /// Embedded stdlib sources, keyed by their on-disk basename (relative to
 /// `runtime/stdlib/`). Sources are baked at compile time via `include_str!`
 /// so the resulting binary is self-contained.
-pub const STDLIB_SOURCES: &[(&str, &str)] = &[(
-    "option.kara",
-    include_str!("../runtime/stdlib/option.kara"),
-)];
+pub const STDLIB_SOURCES: &[(&str, &str)] = &[
+    ("option.kara", include_str!("../runtime/stdlib/option.kara")),
+    ("result.kara", include_str!("../runtime/stdlib/result.kara")),
+];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
 /// access and cached for the lifetime of the process. The vector preserves
@@ -452,6 +452,17 @@ mod tests {
     }
 
     #[test]
+    fn stdlib_sources_contains_result_kara() {
+        // CR-202 slice 4a: `Result` joins the baked surface.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"result.kara"),
+            "STDLIB_SOURCES should contain result.kara, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
     fn stdlib_sources_have_nonempty_bodies() {
         for &(name, src) in STDLIB_SOURCES {
             assert!(
@@ -552,6 +563,30 @@ mod tests {
             matches!(opt, Item::EnumDef(_)),
             "Option should be spliced as EnumDef (baked), got {:?}",
             opt
+        );
+    }
+
+    #[test]
+    fn synthetic_prelude_items_returns_baked_result_as_enum_def() {
+        // CR-202 slice 4a: same splice path, second file. Confirms the
+        // multi-file `STDLIB_SOURCES` path resolves Result through
+        // `baked_item_for` rather than falling back to the stub.
+        let items = synthetic_prelude_items();
+        let res = find_prelude_item(&items, "Result")
+            .expect("synthetic prelude exposes Result");
+        assert!(
+            matches!(res, Item::EnumDef(_)),
+            "Result should be spliced as EnumDef (baked), got {:?}",
+            res
+        );
+        let Item::EnumDef(e) = res else { unreachable!() };
+        assert!(
+            e.span.line > 0,
+            "baked Result should carry a real source span"
+        );
+        assert!(
+            e.stdlib_origin,
+            "baked Result should be tagged stdlib_origin = true"
         );
     }
 

@@ -8792,3 +8792,99 @@ fn baked_option_user_code_still_typechecks() {
     );
 }
 
+// ── Baked Result (CR-202 slice 4a verification) ────────────────
+// Mirrors the slice-3d Option pins. `Result[T, E]`'s shape now lives
+// in `runtime/stdlib/result.kara`; the hardcoded `EnumInfo` arm in
+// `register_builtin_types` is gone. These tests confirm that the swap
+// preserved the contract the typechecker depends on — particularly
+// the `Ok` / `Err` variant names, which several non-method paths
+// (`?`-operator desugaring, `From`-on-error coercion) name-match.
+
+#[test]
+fn baked_result_registers_correct_variant_shape_in_enum_info() {
+    let result = typecheck_ok("");
+    let info = result
+        .enum_info
+        .get("Result")
+        .expect("Result must be registered in enum_info from baked source");
+    assert_eq!(info.generic_params, vec!["T".to_string(), "E".to_string()]);
+    assert_eq!(info.variants.len(), 2, "Result has exactly two variants");
+
+    let ok = info
+        .variants
+        .iter()
+        .find(|(n, _)| n == "Ok")
+        .expect("Ok variant present");
+    match &ok.1 {
+        VariantTypeInfo::Tuple(types) => {
+            assert_eq!(types.len(), 1, "Ok carries one payload type");
+            assert_eq!(
+                types[0],
+                Type::TypeParam("T".to_string()),
+                "Ok(T) payload should be the generic param T"
+            );
+        }
+        other => panic!("Ok should be Tuple-shaped, got {:?}", other),
+    }
+
+    let err = info
+        .variants
+        .iter()
+        .find(|(n, _)| n == "Err")
+        .expect("Err variant present");
+    match &err.1 {
+        VariantTypeInfo::Tuple(types) => {
+            assert_eq!(types.len(), 1, "Err carries one payload type");
+            assert_eq!(
+                types[0],
+                Type::TypeParam("E".to_string()),
+                "Err(E) payload should be the generic param E"
+            );
+        }
+        other => panic!("Err should be Tuple-shaped, got {:?}", other),
+    }
+}
+
+#[test]
+fn baked_result_carries_structural_derived_traits() {
+    let result = typecheck_ok("");
+    let info = result.enum_info.get("Result").expect("Result registered");
+    for trait_name in ["Eq", "PartialEq", "Hash", "Ord", "PartialOrd"] {
+        assert!(
+            info.derived_traits.contains(trait_name),
+            "Result should derive {}, derived_traits = {:?}",
+            trait_name,
+            info.derived_traits
+        );
+    }
+    assert!(!info.is_shared);
+}
+
+#[test]
+fn baked_result_user_code_still_typechecks() {
+    // Construction + pattern-match end-to-end behavioral pin.
+    typecheck_ok(
+        "fn use_result() -> i64 {\n\
+             let x: Result[i64, String] = Ok(42);\n\
+             match x {\n\
+                 Ok(v) => v,\n\
+                 Err(_) => 0,\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn baked_result_question_operator_still_desugars() {
+    // The `?` operator name-matches `Ok` / `Err` variant names. If the
+    // baked source used different names (or the swap registered them
+    // wrong), `?` desugaring would fail to typecheck. Pin the contract.
+    typecheck_ok(
+        "fn inner() -> Result[i64, String] { Ok(7) }\n\
+         fn outer() -> Result[i64, String] {\n\
+             let v = inner()?;\n\
+             Ok(v + 1)\n\
+         }",
+    );
+}
+

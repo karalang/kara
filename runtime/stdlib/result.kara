@@ -1,0 +1,24 @@
+// runtime/stdlib/result.kara
+//
+// CR-202 slice 4a. Mirrors `option.kara`: the type shape moves to baked
+// source while the method surface (`is_ok`, `is_err`, `unwrap`, `map`,
+// `map_err`, the `?`-operator desugar, etc.) continues to dispatch
+// through the hardcoded `infer_result_method` / interpreter paths until
+// slice 5+ migrates the impl-block surface alongside the trait
+// materialization.
+//
+// Variant names are load-bearing: several typechecker paths name-match
+// `Ok` / `Err` to drive `?` desugaring and `From`-on-error coercion.
+// The names below are the contract — do not rename without updating
+// `infer_question_op` and `question_conversions`.
+//
+// Structural derives match what the legacy `register_builtin_types`
+// arm inserted directly. They flow into `EnumInfo.derived_traits` via
+// `extract_derived_traits` during `env_add_enum`, preserving Result's
+// participation in `==`, `Hash`, `Ord`, etc.
+
+#[derive(Eq, PartialEq, Hash, Ord, PartialOrd)]
+enum Result[T, E] {
+    Ok(T),
+    Err(E),
+}
