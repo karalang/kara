@@ -453,6 +453,10 @@ pub enum ResolveErrorKind {
     /// `effect resource CompileTimeEnv;` or `effect resource CompileTimeHeap;`
     /// — these names are reserved for the deferred comptime feature (`E0228`).
     ReservedEffectResource,
+    /// `#[compiler_builtin]` on an item in user code. The attribute is
+    /// reserved for stdlib source baked into the compiler binary
+    /// (CR-202 slice 1). `E0237`.
+    CompilerBuiltinReserved,
 }
 
 impl std::fmt::Display for ResolveError {
@@ -595,6 +599,12 @@ pub struct Resolver<'a> {
     current_impl_type: Option<String>,
     /// Stack of loop labels for validating break/continue targets.
     loop_labels: Vec<Option<String>>,
+    /// True iff the program being resolved is the synthetic stdlib package
+    /// (baked into the compiler binary by CR-202 slice 3). When false,
+    /// `#[compiler_builtin]` on any item is rejected with `E0237`. The flag
+    /// has no other effect — name resolution semantics are otherwise
+    /// identical between user code and stdlib source.
+    is_stdlib_source: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -608,6 +618,7 @@ impl<'a> Resolver<'a> {
             errors: Vec::new(),
             current_impl_type: None,
             loop_labels: Vec::new(),
+            is_stdlib_source: false,
         }
     }
 
@@ -618,6 +629,14 @@ impl<'a> Resolver<'a> {
     pub fn with_tree(mut self, tree: &'a ProgramTree, module_id: ModuleId) -> Self {
         self.tree = Some(tree);
         self.current_module = Some(module_id);
+        self
+    }
+
+    /// Mark the program as stdlib source (the synthetic package baked into
+    /// the compiler binary by CR-202 slice 3). When set, `#[compiler_builtin]`
+    /// is permitted; when unset (the default), it is rejected with `E0237`.
+    pub fn with_stdlib_source(mut self, is_stdlib: bool) -> Self {
+        self.is_stdlib_source = is_stdlib;
         self
     }
 
@@ -950,7 +969,26 @@ impl<'a> Resolver<'a> {
         }
     }
 
+    fn check_compiler_builtin_attr(&mut self, attrs: &[Attribute]) {
+        if self.is_stdlib_source {
+            return;
+        }
+        for attr in attrs {
+            if attr.name == "compiler_builtin" {
+                self.errors.push(ResolveError {
+                    message: "`#[compiler_builtin]` is reserved for stdlib source baked into the compiler binary"
+                        .to_string(),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::CompilerBuiltinReserved,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
+    }
+
     fn collect_function(&mut self, f: &Function) {
+        self.check_compiler_builtin_attr(&f.attributes);
         let param_names: Vec<String> = f
             .params
             .iter()
@@ -967,6 +1005,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_struct(&mut self, s: &StructDef) {
+        self.check_compiler_builtin_attr(&s.attributes);
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
         if let Err(e) = self.table.define(
             s.name.clone(),
@@ -979,6 +1018,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_enum(&mut self, e: &EnumDef) {
+        self.check_compiler_builtin_attr(&e.attributes);
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
         let enum_id = match self.table.define(
             e.name.clone(),
@@ -1017,6 +1057,7 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_trait(&mut self, t: &TraitDef) {
+        self.check_compiler_builtin_attr(&t.attributes);
         let method_names: Vec<String> = t
             .items
             .iter()

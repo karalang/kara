@@ -1679,6 +1679,60 @@ fn test_attribute_string_value() {
     }
 }
 
+// ── #[compiler_builtin] (CR-202 slice 1) ─────────────────────────
+// The attribute is the marker the stdlib bake step (slice 3+) will use to
+// tag intrinsic-bodied items. Slice 1 only proves parse + AST round-trip;
+// resolver-level rejection in user code is exercised by tests/resolver.rs.
+
+#[test]
+fn test_compiler_builtin_on_function() {
+    let prog = parse_ok("#[compiler_builtin]\nfn dbg[T](value: T) -> T { value }");
+    if let Item::Function(f) = &prog.items[0] {
+        assert_eq!(f.attributes.len(), 1);
+        assert_eq!(f.attributes[0].name, "compiler_builtin");
+        assert!(f.attributes[0].args.is_empty());
+        assert!(f.attributes[0].string_value.is_none());
+    } else {
+        panic!("Expected Function");
+    }
+}
+
+#[test]
+fn test_compiler_builtin_on_struct() {
+    let prog = parse_ok("#[compiler_builtin]\nstruct Vec[T] { }");
+    if let Item::StructDef(s) = &prog.items[0] {
+        assert_eq!(s.attributes.len(), 1);
+        assert_eq!(s.attributes[0].name, "compiler_builtin");
+        assert!(s.attributes[0].args.is_empty());
+    } else {
+        panic!("Expected StructDef");
+    }
+}
+
+#[test]
+fn test_compiler_builtin_on_enum() {
+    let prog = parse_ok("#[compiler_builtin]\nenum Option[T] { Some(T), None }");
+    if let Item::EnumDef(e) = &prog.items[0] {
+        assert_eq!(e.attributes.len(), 1);
+        assert_eq!(e.attributes[0].name, "compiler_builtin");
+        assert!(e.attributes[0].args.is_empty());
+    } else {
+        panic!("Expected EnumDef");
+    }
+}
+
+#[test]
+fn test_compiler_builtin_on_trait() {
+    let prog = parse_ok("#[compiler_builtin]\ntrait Display { fn fmt(ref self) -> String; }");
+    if let Item::TraitDef(t) = &prog.items[0] {
+        assert_eq!(t.attributes.len(), 1);
+        assert_eq!(t.attributes[0].name, "compiler_builtin");
+        assert!(t.attributes[0].args.is_empty());
+    } else {
+        panic!("Expected TraitDef");
+    }
+}
+
 #[test]
 fn test_const_generic_args() {
     let prog = parse_ok("fn dot(a: Array[f64, 3], b: Array[f64, 3]) -> f64 { 0.0 }");

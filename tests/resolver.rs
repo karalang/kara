@@ -1482,3 +1482,102 @@ fn test_impl_block_generic_bound_recorded() {
         bounds
     );
 }
+
+// ── #[compiler_builtin] gate (CR-202 slice 1, E0237) ─────────────
+// The attribute is reserved for stdlib source baked into the compiler
+// binary. User code is rejected at the resolver layer; the synthetic
+// stdlib package opts in via `Resolver::with_stdlib_source(true)` (slice 3
+// will wire that path through the bake step).
+
+fn assert_compiler_builtin_rejected(source: &str) {
+    let errs = resolve_errors(source);
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::CompilerBuiltinReserved),
+        "expected CompilerBuiltinReserved error, got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compiler_builtin_rejected_on_function_in_user_code() {
+    assert_compiler_builtin_rejected("#[compiler_builtin]\nfn dbg[T](v: T) -> T { v }");
+}
+
+#[test]
+fn test_compiler_builtin_rejected_on_struct_in_user_code() {
+    assert_compiler_builtin_rejected("#[compiler_builtin]\nstruct Vec[T] { }");
+}
+
+#[test]
+fn test_compiler_builtin_rejected_on_enum_in_user_code() {
+    assert_compiler_builtin_rejected("#[compiler_builtin]\nenum Option[T] { Some(T), None }");
+}
+
+#[test]
+fn test_compiler_builtin_rejected_on_trait_in_user_code() {
+    assert_compiler_builtin_rejected(
+        "#[compiler_builtin]\ntrait Display { fn fmt(ref self) -> String; }",
+    );
+}
+
+#[test]
+fn test_compiler_builtin_permitted_with_stdlib_source_flag() {
+    // `with_stdlib_source(true)` is the opt-in path the bake step (slice 3)
+    // will use. The attribute should pass cleanly through the resolver and
+    // produce no diagnostic of any kind.
+    let parsed = parse(
+        "#[compiler_builtin]\nfn dbg[T](v: T) -> T { v }\n\
+         #[compiler_builtin]\nstruct Vec[T] { }\n\
+         #[compiler_builtin]\nenum Option[T] { Some(T), None }\n\
+         #[compiler_builtin]\ntrait Display { fn fmt(ref self) -> String; }",
+    );
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let result = Resolver::new(&parsed.program)
+        .with_stdlib_source(true)
+        .resolve();
+    let unrelated: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind != ResolveErrorKind::CompilerBuiltinReserved)
+        .collect();
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.kind != ResolveErrorKind::CompilerBuiltinReserved),
+        "stdlib-source flag should suppress CompilerBuiltinReserved",
+    );
+    assert!(
+        unrelated.is_empty(),
+        "expected no other resolver errors, got: {:?}",
+        unrelated.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compiler_builtin_rejection_does_not_block_definition() {
+    // The error fires alongside symbol definition — downstream references
+    // to the rejected name should still resolve, so users see the gating
+    // diagnostic in isolation rather than a cascade of "undefined name".
+    let parsed = parse(
+        "#[compiler_builtin]\nfn dbg[T](v: T) -> T { v }\n\
+         fn use_it() { let _ = dbg(1); }",
+    );
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    let undef: Vec<_> = errs
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::UndefinedName)
+        .collect();
+    assert!(
+        undef.is_empty(),
+        "rejected #[compiler_builtin] item should still be defined; got UndefinedName: {:?}",
+        undef.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::CompilerBuiltinReserved),
+        "expected CompilerBuiltinReserved among errors"
+    );
+}
