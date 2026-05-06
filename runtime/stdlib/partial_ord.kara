@@ -1,0 +1,14 @@
+// runtime/stdlib/partial_ord.kara
+//
+// CR-202 slice 5c. Per design.md § Operator Traits — `PartialOrd`
+// covers types where some value pairs are incomparable (floats: NaN
+// vs. anything). `None` from `partial_cmp` means "these two values are
+// not comparable."
+//
+// Pre-5c the hardcoded `register_stdlib_traits` array did not list
+// PartialOrd. Slice 5c adds it as a registered trait with the
+// `partial_cmp` method and the `: PartialEq` supertrait edge.
+
+trait PartialOrd: PartialEq {
+    fn partial_cmp(ref self, other: ref Self) -> Option[Ordering];
+}

@@ -9005,6 +9005,21 @@ fn baked_eq_user_impl_with_partial_eq_companion_typechecks() {
 }
 
 #[test]
+fn baked_partial_ord_user_impl_typechecks() {
+    typecheck_ok(
+        "struct Tag { value: i64 }\n\
+         impl PartialEq for Tag {\n\
+             fn eq(ref self, other: ref Tag) -> bool { self.value == other.value }\n\
+         }\n\
+         impl PartialOrd for Tag {\n\
+             fn partial_cmp(ref self, other: ref Tag) -> Option[Ordering] {\n\
+                 Some(self.value.cmp(other.value))\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
 fn baked_eq_user_impl_without_partial_eq_companion_fails() {
     // The supertrait check fires here; pre-5b this snippet would have
     // typechecked clean.

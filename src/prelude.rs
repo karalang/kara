@@ -120,6 +120,9 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // `impl PartialEq for ...` and reference the bound in
     // `where T: PartialEq`.
     "PartialEq",
+    // CR-202 slice 5c: `PartialOrd` joins as the partial-ordering
+    // counterpart to PartialEq.
+    "PartialOrd",
     "Ord",
     "BitAnd",
     "BitOr",
@@ -187,6 +190,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("vec.kara", include_str!("../runtime/stdlib/vec.kara")),
     ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
     ("eq.kara", include_str!("../runtime/stdlib/eq.kara")),
+    ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -506,6 +510,17 @@ mod tests {
         assert!(
             names.contains(&"eq.kara"),
             "STDLIB_SOURCES should contain eq.kara, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn stdlib_sources_contains_partial_ord_kara() {
+        // CR-202 slice 5c: `PartialOrd: PartialEq` joins the baked surface.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"partial_ord.kara"),
+            "STDLIB_SOURCES should contain partial_ord.kara, got: {:?}",
             names
         );
     }
