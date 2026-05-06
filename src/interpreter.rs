@@ -815,6 +815,142 @@ fn cancelled_sentinel() -> Value {
     }
 }
 
+/// Per-binding last-use index map used by `eval_block_inner` to
+/// fire `Drop` slots at the live-range end (NLL placement) instead
+/// of waiting for scope exit. Per design.md § Drop ordering within
+/// a branch, NLL drops happen at the binding's last-use program
+/// point; this map tells the block evaluator which statement to
+/// fire each binding's `Drop` after.
+///
+/// Sentinel: `stmts.len()` means "scope exit" — the binding is
+/// referenced in the block's `final_expr`, in any registered
+/// defer/errdefer body, or in any nested-block construct that the
+/// shallow walker conservatively treats as opaque. Drops with this
+/// sentinel stay in `cleanup` and drain via the unified LIFO at
+/// scope exit, preserving defer/drop interleave for that case.
+///
+/// The walker is intentionally conservative — it only fires NLL
+/// drops when it can prove the binding is dead. Cross-block
+/// liveness (CFG dataflow) is out of scope for this round.
+fn compute_block_last_use(block: &Block) -> HashMap<String, usize> {
+    // Collect every binding the block introduces.
+    let mut owned: HashSet<String> = HashSet::new();
+    for stmt in &block.stmts {
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                for n in pattern.binding_names() {
+                    owned.insert(n);
+                }
+            }
+            StmtKind::LetUninit { name, .. } => {
+                owned.insert(name.clone());
+            }
+            _ => {}
+        }
+    }
+    if owned.is_empty() {
+        return HashMap::new();
+    }
+    let scope_exit = block.stmts.len();
+    let mut last_use: HashMap<String, usize> = HashMap::new();
+
+    // Per-statement free-idents walk. We only care which `owned`
+    // bindings each statement *references* — outer-block bindings
+    // shadowed by inner constructs already get filtered by the
+    // walker's `bound` tracking when it descends into nested blocks.
+    // We pass a fresh empty `bound` set per stmt so the OUTER `owned`
+    // names always show up as free idents.
+    let record_use = |name: String,
+                      idx: usize,
+                      owned: &HashSet<String>,
+                      last_use: &mut HashMap<String, usize>,
+                      scope_exit: usize| {
+        if !owned.contains(&name) {
+            return;
+        }
+        // Pinned-to-scope-exit wins; otherwise advance to the latest idx.
+        match last_use.get(&name).copied() {
+            Some(prev) if prev == scope_exit => {}
+            _ => {
+                last_use.insert(name, idx);
+            }
+        }
+    };
+    for (idx, stmt) in block.stmts.iter().enumerate() {
+        let mut idents: Vec<String> = Vec::new();
+        match &stmt.kind {
+            // A defer/errdefer body executes at scope exit. Any
+            // binding it references must remain live until then —
+            // pin those to `scope_exit`.
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                let mut bound: HashSet<String> = HashSet::new();
+                collect_free_idents_block(body, &mut bound, &mut idents);
+                for name in idents {
+                    if owned.contains(&name) {
+                        last_use.insert(name, scope_exit);
+                    }
+                }
+                continue;
+            }
+            // Let RHS uses outer scope; the new pattern binding takes
+            // effect for subsequent statements.
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                let mut bound: HashSet<String> = HashSet::new();
+                collect_free_idents_expr(value, &mut bound, &mut idents);
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Assign { target, value } => {
+                let mut bound: HashSet<String> = HashSet::new();
+                collect_free_idents_expr(target, &mut bound, &mut idents);
+                collect_free_idents_expr(value, &mut bound, &mut idents);
+            }
+            StmtKind::CompoundAssign { target, value, .. } => {
+                let mut bound: HashSet<String> = HashSet::new();
+                collect_free_idents_expr(target, &mut bound, &mut idents);
+                collect_free_idents_expr(value, &mut bound, &mut idents);
+            }
+            StmtKind::Expr(expr) => {
+                let mut bound: HashSet<String> = HashSet::new();
+                collect_free_idents_expr(expr, &mut bound, &mut idents);
+            }
+        }
+        for name in idents {
+            record_use(name, idx, &owned, &mut last_use, scope_exit);
+        }
+    }
+    // The block's `final_expr` (if any) runs after the last stmt
+    // but before scope-exit cleanup drains. A binding referenced
+    // there must stay live until scope exit so the unified LIFO
+    // drain interleaves it with any Defers correctly.
+    if let Some(final_expr) = &block.final_expr {
+        let mut idents: Vec<String> = Vec::new();
+        let mut bound: HashSet<String> = HashSet::new();
+        collect_free_idents_expr(final_expr, &mut bound, &mut idents);
+        for name in idents {
+            if owned.contains(&name) {
+                last_use.insert(name, scope_exit);
+            }
+        }
+    }
+    // Bindings introduced but never read: NLL says they die
+    // immediately after the let — last_use = the let's own index.
+    for stmt_idx in 0..block.stmts.len() {
+        let stmt = &block.stmts[stmt_idx];
+        match &stmt.kind {
+            StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                for n in pattern.binding_names() {
+                    last_use.entry(n).or_insert(stmt_idx);
+                }
+            }
+            StmtKind::LetUninit { name, .. } => {
+                last_use.entry(name.clone()).or_insert(stmt_idx);
+            }
+            _ => {}
+        }
+    }
+    last_use
+}
+
 /// Push a `Drop` action for each binding the statement introduced.
 /// Called after the statement evaluates successfully, so the drop
 /// slot lands at the program-order LIFO position the binding
@@ -1275,6 +1411,15 @@ pub struct Interpreter<'a> {
     /// `errdefer(e)` in the active scope binds `e` to the sentinel
     /// during the errdefer phase. None outside `par {}` branches.
     cancel_flag: Option<Arc<AtomicBool>>,
+    /// Records the order in which `CleanupAction::Drop` slots fire —
+    /// both NLL early-drops (mid-block, after a binding's last use)
+    /// and scope-exit drops drained from the unified cleanup stack.
+    /// Each entry is the binding's name; tests inspect this trace to
+    /// verify drop placement and ordering since the interpreter has
+    /// no observable user-`impl Drop` dispatch yet. Always populated
+    /// (cheap; small in real programs) — a public accessor is exposed
+    /// so test harness functions can read it after `run()`.
+    pub drop_trace: Vec<String>,
 }
 
 /// Convert a PascalCase identifier to lower_snake_case.
@@ -1321,6 +1466,7 @@ impl<'a> Interpreter<'a> {
             rand_state: seed_rand_state(),
             type_subs_stack: Vec::new(),
             cancel_flag: None,
+            drop_trace: Vec::new(),
         }
     }
 
@@ -2505,8 +2651,18 @@ impl<'a> Interpreter<'a> {
         // separate phase-1 stack that drains first on error paths.
         let mut cleanup: Vec<CleanupAction> = Vec::new();
         let mut errdefers: Vec<ErrDeferEntry> = Vec::new();
+        // Sub-step 3 (NLL placement): pre-compute each owned binding's
+        // last-use statement index. After every successful statement,
+        // any `Drop` slot whose binding's last use was that statement
+        // fires immediately (and is removed from `cleanup`), instead
+        // of waiting for scope exit. Bindings whose last-use is the
+        // sentinel `stmts.len()` (referenced in `final_expr` or in a
+        // defer/errdefer body) stay in `cleanup` and drain via the
+        // unified LIFO at scope exit, preserving the program-order
+        // interleave with Defers for that case.
+        let last_use = compute_block_last_use(block);
 
-        for stmt in &block.stmts {
+        for (stmt_idx, stmt) in block.stmts.iter().enumerate() {
             // `defer` / `errdefer` register their bodies at the moment
             // control flow reaches the statement — *not* at block start.
             // A defer below an early `return` is therefore never registered,
@@ -2553,10 +2709,15 @@ impl<'a> Interpreter<'a> {
                 return Err(cf);
             }
             // After a successful let-binding, push a Drop slot for each
-            // name the pattern introduced. The action is a no-op today —
-            // the Phase 6 / user-defined-Drop wiring slots in here without
-            // disturbing the program-order LIFO position.
+            // name the pattern introduced.
             push_drops_for_stmt(stmt, &mut cleanup);
+            // NLL placement: fire any Drop slot whose binding's last
+            // use was this statement, then remove it from `cleanup`
+            // so it does not fire again at scope exit. A binding that
+            // is never read (last_use == its own let stmt_idx) drops
+            // here too — that's the "let _ = expensive(); …" case
+            // where NLL says the value dies at its declaration.
+            self.fire_due_drops(&mut cleanup, &last_use, stmt_idx);
         }
         let result = if let Some(ref expr) = block.final_expr {
             if self.observed_cancellation() {
@@ -2771,9 +2932,9 @@ impl<'a> Interpreter<'a> {
     ///    per the language rules.
     /// 2. drop+defer phase (always). Drains the unified stack LIFO so
     ///    `let x = ...; defer foo();` cleans up as `foo()` then `drop(x)`.
-    ///    `Drop` actions are no-ops today — the structural slot is kept
-    ///    so user-defined `Drop` and `Rc`/`Arc` decrements drop in at
-    ///    the program-order LIFO position when those features land.
+    ///    `Drop` actions record on `drop_trace`; once user-`impl Drop`
+    ///    dispatch lands, observable side effects attach here without
+    ///    changing the program-order LIFO position.
     fn run_cleanup(
         &mut self,
         cleanup: &[CleanupAction],
@@ -2810,12 +2971,48 @@ impl<'a> Interpreter<'a> {
                 CleanupAction::Defer(body) => {
                     let _ = self.eval_block_inner(body);
                 }
-                CleanupAction::Drop { name: _ } => {
-                    // No-op slot. Sub-step 3 (NLL placement) and the
-                    // future user-Drop / Rc-Arc-decrement work attach
-                    // observable behavior here without changing the
-                    // program-order LIFO position.
+                CleanupAction::Drop { name } => {
+                    // The drop itself is a no-op until user-`impl Drop`
+                    // dispatch lands. The trace records the firing for
+                    // sub-step 3 (NLL placement) test verification.
+                    self.drop_trace.push(name.clone());
                 }
+            }
+        }
+    }
+
+    /// Fire any `Drop` slot whose binding's last use was the just-
+    /// finished statement, and remove it from `cleanup` so it does
+    /// not fire again at scope exit. NLL placement per design.md §
+    /// Drop ordering within a branch (sub-step 3). `Defer` slots
+    /// always stay in `cleanup` and drain at scope exit. Walks
+    /// `cleanup` front-to-back so program-order is preserved on
+    /// in-place removal; the relative LIFO order of remaining
+    /// entries is unchanged. Drop firings are recorded on
+    /// `drop_trace` directly here (rather than via `run_cleanup`)
+    /// so test traces include NLL and scope-exit firings in their
+    /// actual program order.
+    fn fire_due_drops(
+        &mut self,
+        cleanup: &mut Vec<CleanupAction>,
+        last_use: &HashMap<String, usize>,
+        stmt_idx: usize,
+    ) {
+        let mut i = 0;
+        while i < cleanup.len() {
+            let should_fire = match &cleanup[i] {
+                CleanupAction::Drop { name } => {
+                    last_use.get(name).copied() == Some(stmt_idx)
+                }
+                CleanupAction::Defer(_) => false,
+            };
+            if should_fire {
+                let action = cleanup.remove(i);
+                if let CleanupAction::Drop { name } = action {
+                    self.drop_trace.push(name);
+                }
+            } else {
+                i += 1;
             }
         }
     }

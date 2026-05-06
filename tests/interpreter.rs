@@ -1,6 +1,6 @@
 // tests/interpreter.rs
 
-use karac::{run_program, run_program_full, run_program_with_trace};
+use karac::{run_program, run_program_full, run_program_with_drops, run_program_with_trace};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -802,6 +802,124 @@ fn test_par_cancellation_does_not_propagate_as_scope_error() {
              }"),
         "r-fail"
     );
+}
+
+// ── Sub-step 3: NLL drop placement ─────────────────────────────
+
+fn drops_in(source: &str) -> Vec<String> {
+    let (_out, drops) = run_program_with_drops(source);
+    drops
+}
+
+#[test]
+fn test_nll_drop_fires_after_last_use_not_at_scope_exit() {
+    // Per design.md § Drop ordering within a branch: NLL drops fire
+    // at the binding's last-use program point, not at scope exit.
+    // `x` is read on line 3; subsequent statements never reference it.
+    // Drop(x) must fire after stmt 3, before the later prints — and
+    // before Drop(y) which dies later.
+    let drops = drops_in(
+        "fn main() {\n\
+             let x = 1;\n\
+             let y = 2;\n\
+             println(x);\n\
+             println(y);\n\
+             println(99);\n\
+         }",
+    );
+    assert_eq!(drops, vec!["x", "y"]);
+}
+
+#[test]
+fn test_nll_drop_orders_by_last_use_not_declaration_order() {
+    // Declaration order: a, b, c. Last-use order: c (idx 1), a (idx 2),
+    // b (idx 3). Drops fire in last-use order, NOT declaration LIFO.
+    let drops = drops_in(
+        "fn main() {\n\
+             let a = 1;\n\
+             let b = 2;\n\
+             let c = 3;\n\
+             println(c);\n\
+             println(a);\n\
+             println(b);\n\
+         }",
+    );
+    assert_eq!(drops, vec!["c", "a", "b"]);
+}
+
+#[test]
+fn test_nll_unread_binding_drops_at_its_let() {
+    // A binding never read after its declaration drops immediately
+    // (last_use == its own let-stmt index). Subsequent let-and-drop
+    // chains the same way.
+    let drops = drops_in(
+        "fn main() {\n\
+             let _a = 1;\n\
+             let _b = 2;\n\
+             let _c = 3;\n\
+         }",
+    );
+    assert_eq!(drops, vec!["_a", "_b", "_c"]);
+}
+
+#[test]
+fn test_nll_binding_used_in_final_expr_drops_at_scope_exit() {
+    // A binding referenced by `final_expr` stays live until the
+    // expression evaluates; its Drop drains via the unified LIFO at
+    // scope exit (sentinel: `last_use == stmts.len()`).
+    let drops = drops_in(
+        "fn main() {\n\
+             let result = {\n\
+                 let x = 7;\n\
+                 x + 1\n\
+             };\n\
+             println(result);\n\
+         }",
+    );
+    // `x` drops at the inner block's scope exit; `result` is the
+    // outer-block binding and drops at outer scope exit. Both reach
+    // the LIFO drain because they're referenced after the let.
+    assert_eq!(drops, vec!["x", "result"]);
+}
+
+#[test]
+fn test_nll_defer_referencing_binding_extends_live_range() {
+    // Per design.md § Drop ordering within a branch: a defer body
+    // that references a binding extends the binding's live range to
+    // scope exit. The defer fires first under LIFO, with the binding
+    // still alive; Drop fires after.
+    let drops = drops_in(
+        "fn main() {\n\
+             let x = 7;\n\
+             defer { println(x); }\n\
+             println(\"middle\");\n\
+         }",
+    );
+    // `x` is referenced in the defer body, so its last_use is the
+    // sentinel. Drop(x) drains at scope exit, after the defer body.
+    assert_eq!(drops, vec!["x"]);
+}
+
+#[test]
+fn test_nll_drop_ordering_with_defer_interleave() {
+    // Bindings whose direct last-use is mid-block fire NLL early,
+    // *before* any defer (registered later) drains at scope exit.
+    // The unified LIFO ordering only kicks in for slots still in
+    // `cleanup` at scope exit.
+    let drops = drops_in(
+        "fn main() {\n\
+             let a = 1;\n\
+             println(a);\n\
+             defer { println(\"d\"); }\n\
+             let b = 2;\n\
+             println(b);\n\
+         }",
+    );
+    // a's last use is stmt 1 → fires NLL after println(a).
+    // b's last use is stmt 4 → fires NLL after println(b).
+    // The defer body still drains at scope exit; it carries no
+    // binding-name that would land on drop_trace.
+    assert_eq!(drops, vec!["a", "b"]);
 }
 
 // ── Shared struct interior mutability ───────────────────────────

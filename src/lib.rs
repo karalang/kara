@@ -9,6 +9,7 @@ pub mod doc;
 pub mod dominator;
 pub mod edit_distance;
 pub mod effectchecker;
+pub mod exhaustive;
 pub mod ffi_lint;
 pub mod formatter;
 pub mod interpreter;
@@ -222,6 +223,35 @@ pub fn run_program_with_trace(
 ) -> (Vec<String>, Vec<interpreter::ErrorTraceFrame>, bool) {
     let (output, _errors, trace, truncated) = run_program_full(source);
     (output, trace, truncated)
+}
+
+/// Run a program and return (output_lines, drop_trace). The drop trace
+/// records the order in which `CleanupAction::Drop` slots fire — both
+/// NLL early-drops (mid-block, after a binding's last use) and scope-exit
+/// drops drained from the unified cleanup stack. Used by sub-step 3
+/// (live-range-end placement) tests since the interpreter has no
+/// observable user-`impl Drop` dispatch yet.
+pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &typed);
+    let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+    interp.captured_output = Some(Vec::new());
+    interp.run();
+    let output = interp.captured_output.take().unwrap_or_default();
+    let drops = std::mem::take(&mut interp.drop_trace);
+    (output, drops)
 }
 
 /// Run a program and return output, runtime errors, error trace, and truncation flag.
