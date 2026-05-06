@@ -8946,3 +8946,43 @@ fn baked_vec_for_loop_resolves_element_type() {
     );
 }
 
+// ── Baked PartialEq (CR-202 slice 5a verification) ─────────────
+// Slice 5a is the first baked stdlib *trait*. PartialEq isn't
+// registered in `register_stdlib_traits` today (only Eq is), so this
+// is a strictly additive change: `env.traits["PartialEq"]` becomes
+// queryable, and user code can write `impl PartialEq for MyType` as a
+// real trait impl rather than relying on `#[derive(PartialEq)]`.
+//
+// Tests are behavioral: a user struct that declares an impl block for
+// PartialEq must typecheck against the registered trait. If the bake
+// walk failed to register the trait, `impl PartialEq for ...` would
+// fail with an unresolved-trait error.
+
+#[test]
+fn baked_partial_eq_user_impl_typechecks() {
+    typecheck_ok(
+        "struct Point { x: i64, y: i64 }\n\
+         impl PartialEq for Point {\n\
+             fn eq(ref self, other: ref Point) -> bool {\n\
+                 self.x == other.x and self.y == other.y\n\
+             }\n\
+         }",
+    );
+}
+
+#[test]
+fn baked_partial_eq_method_signature_uses_self_correctly() {
+    // The method declares `other: ref Self`. Inside the impl, the user
+    // writes the concrete receiver type (`ref Point`). If the trait
+    // declaration's `Self` substitution is wrong, this fails.
+    typecheck_ok(
+        "struct Tag { value: i64 }\n\
+         impl PartialEq for Tag {\n\
+             fn eq(ref self, other: ref Tag) -> bool {\n\
+                 self.value == other.value\n\
+             }\n\
+         }\n\
+         fn check(a: ref Tag, b: ref Tag) -> bool { a.eq(b) }",
+    );
+}
+

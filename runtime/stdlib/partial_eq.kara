@@ -1,0 +1,17 @@
+// runtime/stdlib/partial_eq.kara
+//
+// CR-202 slice 5a. First baked stdlib trait. Per design.md § Operator
+// Traits — `PartialEq` covers types where equality may not be reflexive
+// (floats: NaN != NaN); `Eq` is a marker for the reflexive subset.
+//
+// The hardcoded `register_stdlib_traits` array does not list
+// PartialEq today — derived-trait checking (`type_supports_partial_eq`)
+// consults `derived_traits` on the bearer's `EnumInfo` / `StructInfo`,
+// not `env.traits["PartialEq"]`. Slice 5a's behavioral change is
+// strictly additive: it makes `PartialEq` a registered trait so impls
+// can carry it as a real `impl PartialEq for ...` block in user code,
+// matching how `Eq` already works.
+
+trait PartialEq {
+    fn eq(ref self, other: ref Self) -> bool;
+}

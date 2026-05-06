@@ -113,6 +113,13 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Rem",
     "Neg",
     "Eq",
+    // CR-202 slice 5a: `PartialEq` is now a real registered trait
+    // (via baked `runtime/stdlib/partial_eq.kara`) rather than a
+    // side-set name consulted only through `derived_traits`. Listing
+    // it here makes it visible at scope-0 so user code can write
+    // `impl PartialEq for ...` and reference the bound in
+    // `where T: PartialEq`.
+    "PartialEq",
     "Ord",
     "BitAnd",
     "BitOr",
@@ -178,6 +185,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("option.kara", include_str!("../runtime/stdlib/option.kara")),
     ("result.kara", include_str!("../runtime/stdlib/result.kara")),
     ("vec.kara", include_str!("../runtime/stdlib/vec.kara")),
+    ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -270,7 +278,12 @@ pub fn synthetic_prelude_items() -> Vec<Item> {
         }
     }
     for &name in PRELUDE_TRAITS {
-        items.push(stub_trait(name, &span));
+        // Slice 5a extends the same bake-or-stub split to traits.
+        if let Some(item) = baked_item_for(name) {
+            items.push(item);
+        } else {
+            items.push(stub_trait(name, &span));
+        }
     }
     for &name in PRELUDE_FUNCTIONS {
         items.push(stub_function(name, &span));
@@ -475,6 +488,17 @@ mod tests {
     }
 
     #[test]
+    fn stdlib_sources_contains_partial_eq_kara() {
+        // CR-202 slice 5a: first baked trait file.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"partial_eq.kara"),
+            "STDLIB_SOURCES should contain partial_eq.kara, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
     fn stdlib_sources_have_nonempty_bodies() {
         for &(name, src) in STDLIB_SOURCES {
             assert!(
@@ -625,6 +649,38 @@ mod tests {
             params.params.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
             vec!["T"],
         );
+    }
+
+    #[test]
+    fn synthetic_prelude_items_returns_baked_partial_eq_as_trait_def() {
+        // CR-202 slice 5a: first baked trait. Pre-5a `PartialEq` did not
+        // appear in `PRELUDE_TRAITS` and was therefore not exposed
+        // through the synthetic prelude module at all. After 5a it is a
+        // real `Item::TraitDef` from `runtime/stdlib/partial_eq.kara`.
+        let items = synthetic_prelude_items();
+        let pe = find_prelude_item(&items, "PartialEq")
+            .expect("synthetic prelude exposes PartialEq");
+        let Item::TraitDef(t) = pe else {
+            panic!("PartialEq should be spliced as TraitDef (baked), got {:?}", pe);
+        };
+        assert!(
+            t.span.line > 0,
+            "baked PartialEq should carry a real source span"
+        );
+        assert!(
+            t.stdlib_origin,
+            "baked PartialEq should be tagged stdlib_origin = true"
+        );
+        // Should declare exactly one method (`eq`), no associated types.
+        let method_names: Vec<&str> = t
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                crate::ast::TraitItem::Method(m) => Some(m.name.as_str()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(method_names, vec!["eq"]);
     }
 
     #[test]
