@@ -1,0 +1,17 @@
+// runtime/stdlib/display.kara
+//
+// CR-202 slice 5f. Per design.md § f-strings — `Display` provides the
+// user-facing string conversion that f-strings dispatch through. The
+// compiler desugars `f"{expr}"` to `expr.to_string()` (UFCS via the
+// Display impl).
+//
+// Pre-5f the trait was registered via `register_stdlib_traits` with
+// no method signatures (just the name in `env.traits`). Slice 5f
+// declares the `to_string` method explicitly. Existing Display
+// satisfaction paths (`type_supports_display` matching primitives,
+// `has_impl("Display", name)`, `derived_traits.contains("Display")`)
+// keep working untouched.
+
+trait Display {
+    fn to_string(ref self) -> String;
+}

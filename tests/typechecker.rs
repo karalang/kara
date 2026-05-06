@@ -9040,6 +9040,31 @@ fn baked_ord_user_impl_with_full_companion_chain_typechecks() {
 }
 
 #[test]
+fn baked_display_resolvable_as_trait_bound() {
+    // `impl Display for X` for user types is rejected by the resolver
+    // (`OperatorTraitImplRestricted` carve-out — Display is stdlib-only),
+    // so this test confirms Display is a *resolvable* name in trait
+    // bound position rather than at impl head. If the slice-5f swap
+    // dropped Display from `env.traits`, this would fail with a
+    // missing-trait diagnostic at the bound check.
+    typecheck_ok(
+        "fn show[T: Display](v: T) -> String { v.to_string() }",
+    );
+}
+
+#[test]
+fn baked_debug_user_impl_typechecks() {
+    // Debug is not on the operator-trait restriction list, so user
+    // impls go through.
+    typecheck_ok(
+        "struct Tag { value: i64 }\n\
+         impl Debug for Tag {\n\
+             fn fmt_debug(ref self) -> String { self.value.to_string() }\n\
+         }",
+    );
+}
+
+#[test]
 fn baked_hash_user_impl_typechecks() {
     // CR-202 slice 5e: `Hash` is now a real registered trait. The
     // method has a method-level generic param `H` for the hasher type.

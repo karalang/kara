@@ -135,6 +135,8 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Index",
     "IndexMut",
     "Display",
+    // CR-202 slice 5g.
+    "Debug",
     "Iterator",
     "IntoIterator",
 ];
@@ -195,6 +197,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),
     ("ord.kara", include_str!("../runtime/stdlib/ord.kara")),
     ("hash.kara", include_str!("../runtime/stdlib/hash.kara")),
+    ("display.kara", include_str!("../runtime/stdlib/display.kara")),
+    ("debug.kara", include_str!("../runtime/stdlib/debug.kara")),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first
@@ -550,6 +554,15 @@ mod tests {
             "STDLIB_SOURCES should contain hash.kara, got: {:?}",
             names
         );
+    }
+
+    #[test]
+    fn stdlib_sources_contains_display_and_debug_kara() {
+        // CR-202 slices 5f/5g: Display moves to baked (replacing the
+        // entry in register_stdlib_traits); Debug joins as a new entry.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(names.contains(&"display.kara"));
+        assert!(names.contains(&"debug.kara"));
     }
 
     #[test]

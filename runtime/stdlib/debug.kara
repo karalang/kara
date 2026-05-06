@@ -1,0 +1,13 @@
+// runtime/stdlib/debug.kara
+//
+// CR-202 slice 5g. Per design.md § Debug trait — Debug is the
+// programmer-facing formatting counterpart to Display. The split is
+// committed but enforcement lands with format specifiers (`{:?}` /
+// `{:#?}`); v1 still routes f-string `{expr}` through Display.
+//
+// Pre-5g Debug was not in `env.traits` (register_stdlib_traits's
+// array doesn't list it). Strictly additive registration.
+
+trait Debug {
+    fn fmt_debug(ref self) -> String;
+}

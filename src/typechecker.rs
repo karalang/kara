@@ -3687,8 +3687,9 @@ impl<'a> TypeChecker<'a> {
             // Indexing — Output is the element type
             ("Index", &["Output"]),
             ("IndexMut", &["Output"]),
-            // String conversion (used by f-string interpolation)
-            ("Display", &[]),
+            // String conversion (used by f-string interpolation) — now
+            // provided by `runtime/stdlib/display.kara` (CR-202 slice 5f);
+            // the bake walk registers it via `env_add_trait`.
         ];
         for (name, assoc) in traits {
             self.env
