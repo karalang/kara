@@ -2864,37 +2864,10 @@ impl<'a> TypeChecker<'a> {
         // hardcoded since `(K, V)` tuples don't have a syntactic
         // representation in baked struct source today.
 
-        // SortedSet[T: Ord] — B-tree–backed ordered set. Registered as a
-        // generic struct with one type param so the typechecker accepts
-        // `SortedSet[i64]` in type positions. Method dispatch is handled by
-        // `infer_sorted_set_method` rather than the impl table.
-        self.env.structs.insert(
-            "SortedSet".to_string(),
-            StructInfo {
-                generic_params: vec!["T".to_string()],
-                fields: vec![],
-                derived_traits: HashSet::new(),
-                no_rc: false,
-                is_shared: false,
-            },
-        );
-
-        // Channel[T] / Sender[T] / Receiver[T] — concurrency primitives.
-        // Channel is only used at construction time (Channel.new()); Sender
-        // and Receiver are the values users hold and pass around. Method
-        // dispatch is handled by `infer_channel_method`.
-        for name in &["Channel", "Sender", "Receiver"] {
-            self.env.structs.insert(
-                name.to_string(),
-                StructInfo {
-                    generic_params: vec!["T".to_string()],
-                    fields: vec![],
-                    derived_traits: HashSet::new(),
-                    no_rc: false,
-                    is_shared: false,
-                },
-            );
-        }
+        // SortedSet, Channel, Sender, Receiver are now provided by
+        // `runtime/stdlib/{sorted_set,channel,sender,receiver}.kara`
+        // (CR-202 slice 6.1b). Method dispatch stays in
+        // `infer_sorted_set_method` / `infer_channel_method`.
 
         // ── Iterator and IntoIterator traits ──────────────────────────────
         //
