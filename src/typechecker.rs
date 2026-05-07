@@ -2956,72 +2956,22 @@ impl<'a> TypeChecker<'a> {
         }
 
         // ── Standard I/O function signatures ───────────────────────────────────
+        //
+        // The capitalized I/O resource methods (`Stdin.read_line`,
+        // `Stdout.println`, `FileSystem.write`, `Env.args`, …) live in baked
+        // stdlib source (`runtime/stdlib/io.kara`) as
+        // `impl <Resource> { #[compiler_builtin] fn ... }` blocks. The
+        // signatures flow through `register_baked_stdlib` → `env_add_impl` →
+        // `env.impls`, found by `resolve_path_type`'s impl lookup
+        // (`infer_path_type` line ~7227) before the
+        // `env.functions.get("Resource.method")` fallback.
+        //
+        // The lowercase module-path forms `env.args()` / `env.var(name)` stay
+        // here — they're aliases that share dispatch with the capitalized
+        // form (interpreter routes `env` → `Env` via the alias map at
+        // `eval_method_call`) but the lowercase surface has no syntactic
+        // representation as an `impl Env { fn args() }` block.
 
-        let io_error_ty = Type::Named {
-            name: "IoError".to_string(),
-            args: vec![],
-        };
-        let result_str_io = Type::Named {
-            name: "Result".to_string(),
-            args: vec![Type::Str, io_error_ty.clone()],
-        };
-        let result_unit_io = Type::Named {
-            name: "Result".to_string(),
-            args: vec![Type::Unit, io_error_ty],
-        };
-
-        // Stdin.read_line / Stdin.read_to_string — migrated to baked source
-        // (`runtime/stdlib/io.kara`, slice 1 of the I/O resource namespace
-        // CR). The signatures now flow through `register_baked_stdlib` →
-        // `env_add_impl` → `env.impls`, found by `resolve_path_type`'s impl
-        // lookup (`infer_path_type` line ~7227) before the
-        // `env.functions.get("Stdin.read_line")` fallback that backed them
-        // before. `result_str_io` is still used by the FileSystem entries
-        // below; cleanup follows when those migrate too.
-        // Stdout.flush() -> Unit
-        self.env.functions.insert(
-            "Stdout.flush".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![],
-                params: vec![],
-                return_type: Type::Unit,
-            },
-        );
-        // Stderr.flush() -> Unit
-        self.env.functions.insert(
-            "Stderr.flush".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![],
-                params: vec![],
-                return_type: Type::Unit,
-            },
-        );
-        // FileSystem.read_to_string(path: str) -> Result[str, IoError]
-        self.env.functions.insert(
-            "FileSystem.read_to_string".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![Some("path".to_string())],
-                params: vec![Type::Str],
-                return_type: result_str_io,
-            },
-        );
-        // FileSystem.write(path: str, contents: str) -> Result[Unit, IoError]
-        self.env.functions.insert(
-            "FileSystem.write".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![Some("path".to_string()), Some("contents".to_string())],
-                params: vec![Type::Str, Type::Str],
-                return_type: result_unit_io,
-            },
-        );
-
-        // Env.args() -> Vec[String] with reads(Env)
-        // Registered under both "Env.args" (capitalized, for Env.args() form)
-        // and "env.args" (lowercase module path, design.md § I/O).
         let vec_string = Type::Named {
             name: "Vec".to_string(),
             args: vec![Type::Str],
@@ -3032,12 +2982,8 @@ impl<'a> TypeChecker<'a> {
             params: vec![],
             return_type: vec_string,
         };
-        self.env
-            .functions
-            .insert("Env.args".to_string(), args_sig.clone());
         self.env.functions.insert("env.args".to_string(), args_sig);
 
-        // Env.var(name: String) -> Result[String, VarError] with reads(Env)
         let result_str_var = Type::Named {
             name: "Result".to_string(),
             args: vec![
@@ -3054,9 +3000,6 @@ impl<'a> TypeChecker<'a> {
             params: vec![Type::Str],
             return_type: result_str_var,
         };
-        self.env
-            .functions
-            .insert("Env.var".to_string(), var_sig.clone());
         self.env.functions.insert("env.var".to_string(), var_sig);
 
         // Register process.exit in the function table
@@ -8204,15 +8147,26 @@ impl<'a> TypeChecker<'a> {
         // These use lowercase module names (design.md § I/O), distinct from
         // the capitalized resource names used by the effect system. Map each
         // lowercase module to its capitalized resource equivalent so the
-        // shared "Resource.method" function-table entries are found.
+        // shared method signatures are found — first in the baked-impl table
+        // (`env.impls`, where the slice-2 migration moved `Env.args` /
+        // `Env.var`), then in `env.functions` for any future entries that
+        // can't be expressed as impl methods.
         if let ExprKind::Identifier(mod_name) = &object.kind {
             let resource_name = match mod_name.as_str() {
                 "env" => Some("Env"),
                 _ => None,
             };
             if let Some(resource) = resource_name {
+                let impl_sig = self.env.impls.iter().find_map(|imp| {
+                    if imp.target_type == resource {
+                        imp.methods.get(method).cloned()
+                    } else {
+                        None
+                    }
+                });
                 let dotted = format!("{}.{}", resource, method);
-                if let Some(sig) = self.env.functions.get(&dotted).cloned() {
+                let sig_opt = impl_sig.or_else(|| self.env.functions.get(&dotted).cloned());
+                if let Some(sig) = sig_opt {
                     if args.len() != sig.params.len() {
                         self.type_error(
                             format!(
