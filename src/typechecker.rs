@@ -2744,8 +2744,16 @@ impl<'a> TypeChecker<'a> {
     // ── Build Type Environment (Pass 1) ─────────────────────────
 
     fn build_type_env(&mut self) {
-        // Register built-in stdlib types
-        self.register_builtin_types();
+        // Two-step stdlib seeding (CR-202):
+        //   1. Walk every item in `runtime/stdlib/*.kara` (baked into
+        //      the binary via `prelude::STDLIB_PROGRAMS`) and register
+        //      it through the same `env_add_*` paths user items use.
+        //   2. Register the residual compiler-internal entries that
+        //      have no syntactic representation in baked source —
+        //      `impl_assoc_types` mappings, the `Iterator` parametric
+        //      pseudo-struct, primitive operator impls, etc.
+        self.register_baked_stdlib();
+        self.register_compiler_intrinsic_env();
 
         let items: Vec<Item> = self.program.items.clone();
         for item in &items {
@@ -2807,26 +2815,16 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    /// Register built-in stdlib types (F32, F64, Atomic, Ordering, etc.)
+    /// Walk every item in `runtime/stdlib/*.kara` (baked into the
+    /// binary via [`crate::prelude::STDLIB_PROGRAMS`]) and register it
+    /// through the same `env_add_*` paths user items use.
     ///
-    /// CR-24 slice 8: this was originally the *shim* that backs the synthetic
-    /// `std.prelude` module added by `module::build_program_tree`. The
-    /// stub items in `crate::prelude::synthetic_prelude_items` exist only
-    /// so cross-module resolution can find a path for `import std.prelude.X;`;
-    /// the real type-environment entries live here.
-    ///
-    /// CR-202 is incrementally migrating the prelude surface to real
-    /// `runtime/stdlib/*.kara` source. The first pass below walks every
-    /// item in `prelude::STDLIB_PROGRAMS` and registers it via the same
-    /// `env_add_*` path that user items use; the hardcoded blocks below
-    /// stay in place for everything not yet migrated, and are deleted in
-    /// per-type slice 4+ commits as the bake surface grows. The pilot
-    /// (`Option`, slice 3) is the first deletion.
-    fn register_builtin_types(&mut self) {
-        // ── Baked stdlib source (CR-202 source-of-truth swap) ─────────────
-        // For every item in `runtime/stdlib/*.kara`, register it through
-        // the same path user items use. This replaces the corresponding
-        // hardcoded blocks below as each prelude type is migrated.
+    /// CR-202 incrementally migrated the prelude surface to baked
+    /// source; this function is the single entry point that pulls
+    /// every type, trait, and impl declaration out of stdlib source
+    /// files into the typechecker's environment. See
+    /// `runtime/stdlib/` for the authoritative declarations.
+    fn register_baked_stdlib(&mut self) {
         let baked: Vec<Item> = crate::prelude::STDLIB_PROGRAMS
             .iter()
             .flat_map(|(_, p)| p.items.iter().cloned())
@@ -2852,50 +2850,50 @@ impl<'a> TypeChecker<'a> {
                 | Item::LayoutDef(_)
                 | Item::AliasDecl(_)
                 | Item::IndependentDecl(_) => {
-                    // Not yet exercised by baked stdlib source — slice 4+
-                    // will broaden this match as the surface grows.
+                    // Not yet exercised by baked stdlib source — broaden
+                    // the match if a future stdlib file uses one of these
+                    // item kinds.
                 }
             }
         }
+    }
 
-        // Map[K, V] is now provided by `runtime/stdlib/map.kara` (CR-202
-        // slice 6.1a) — the bake walk registers it via `env_add_struct`.
-        // The `impl_assoc_types[("Map", "Item")]` entry below stays
-        // hardcoded since `(K, V)` tuples don't have a syntactic
-        // representation in baked struct source today.
-
-        // SortedSet, Channel, Sender, Receiver are now provided by
-        // `runtime/stdlib/{sorted_set,channel,sender,receiver}.kara`
-        // (CR-202 slice 6.1b). Method dispatch stays in
-        // `infer_sorted_set_method` / `infer_channel_method`.
-
-        // `Iterator` and `IntoIterator` trait registrations now come
-        // from `runtime/stdlib/{iterator,into_iterator}.kara` (CR-202
-        // slice 6.2d). The parametric pseudo-struct registration for
-        // `Iterator` (used by `element_type_of` for the
-        // `for x in v.iter()` lookup) stays in code below — it has no
-        // syntactic representation in baked source.
-
-        // ── Builtin IntoIterator / Iterator impls for stdlib collections ──
-        //
-        // Stored in `impl_assoc_types` as `(concrete_type_name, assoc_name) → Type`
-        // where the type still contains `TypeParam` placeholders. `element_type_of`
-        // resolves those against the struct's `generic_params` and the concrete
-        // type arguments at use-site. Range* use segment 0 as the element type.
+    /// Register the residual compiler-internal entries that have no
+    /// syntactic representation in baked source. CR-202 slice 6.5
+    /// scrubbed this function down from the original
+    /// `register_builtin_types` once the migratable surface had moved
+    /// to `runtime/stdlib/*.kara`. What remains is:
+    ///
+    /// - `impl_assoc_types` mappings keyed `(type, assoc_name) -> Type`
+    ///   that thread collection types to their iterator element type.
+    ///   `Map[K, V]` yields `(K, V)`, the rest yield `T`.
+    /// - The `Iterator` and `Array` parametric pseudo-structs in
+    ///   `env.structs`. `Iterator` is a trait per design.md but is
+    ///   also treated as a parametric pseudo-type at this layer so
+    ///   `for x in v.iter()` resolves through the same
+    ///   `impl_assoc_types` path as concrete collections. `Array[T]`
+    ///   is a built-in primitive (lowered specially in
+    ///   `lower_path_type`); a separate primitive-vs-struct design CR
+    ///   would migrate it to baked source.
+    /// - The `Range*` family of typechecker-internal iteration types.
+    ///   Constructed from `a..b` syntax; never user-referenced as
+    ///   `Range[T]`, so a baked struct adds no value.
+    /// - Resource-method signatures (`Stdin.read_line`,
+    ///   `FileSystem.read_to_string`, `Stats.sum`, `Regex.compile`,
+    ///   `Client.get`, …) — slice 6.3's deferred surface. These could
+    ///   migrate as `impl Type { #[compiler_builtin] fn method(...) }`
+    ///   blocks if a concrete motivator surfaces.
+    /// - The primitive operator impl table via [`Self::register_stdlib_impls`]
+    ///   (`impl Add for i32`, `impl Eq for u8`, the numeric widening
+    ///   `From` impls, …). Documented as permanently programmatic — a
+    ///   compiler-internal dispatch table, not user-readable type
+    ///   declarations.
+    fn register_compiler_intrinsic_env(&mut self) {
         let t = || Type::TypeParam("T".to_string());
         let k = || Type::TypeParam("K".to_string());
         let v = || Type::TypeParam("V".to_string());
 
-        // `Vec` (slice 4b), `SortedSet` (6.1b), `Set` and `Peekable`
-        // (6.1c) are now provided by their respective baked source
-        // files. `Array` stays in this loop because it is a built-in
-        // primitive (lowered specially in `lower_path_type`) and
-        // migrating it would be a separate primitive-vs-struct design
-        // call. `Iterator` is treated as a parametric pseudo-type at
-        // this layer so `for x in v.iter()` resolves the bound element
-        // via the same `impl_assoc_types` path as collections; slice
-        // 6.2d migrates the trait-shape registration but the
-        // pseudo-type entry stays.
+        // Iterator / Array parametric pseudo-structs (see fn doc).
         for name in &["Array", "Iterator"] {
             self.env
                 .structs
@@ -2911,22 +2909,23 @@ impl<'a> TypeChecker<'a> {
                 .impl_assoc_types
                 .insert((name.to_string(), "Item".to_string()), t());
         }
-        // `impl_assoc_types[(name, "Item")] = T` for the now-baked
-        // collection types — preserved explicitly outside the loop so
-        // `for x in coll.iter()` element-type resolution keeps working.
-        for name in &["Vec", "SortedSet", "Set", "Peekable"] {
+
+        // Iterator-element-type (`Item`) mappings for baked collection
+        // types. The structs themselves are baked; the assoc-type
+        // mapping has no syntactic representation in baked source.
+        for name in &["Vec", "SortedSet", "Set", "Peekable", "Slice"] {
             self.env
                 .impl_assoc_types
                 .insert((name.to_string(), "Item".to_string()), t());
         }
-        // Map[K, V] yields (K, V) tuples
         self.env.impl_assoc_types.insert(
             ("Map".to_string(), "Item".to_string()),
             Type::Tuple(vec![k(), v()]),
         );
-        // Range types yield the element type (stored at args[0]).
-        // Register both the struct (so element_type_of can find generic_params)
-        // and the impl_assoc_types entry.
+
+        // Range family — typechecker-internal types constructed from
+        // `a..b` syntax. Both struct shape and assoc-type mapping
+        // registered here.
         for name in &[
             "Range",
             "RangeInclusive",
@@ -2948,47 +2947,6 @@ impl<'a> TypeChecker<'a> {
                 .impl_assoc_types
                 .insert((name.to_string(), "Item".to_string()), t());
         }
-        // Slice[T] — iteration yields T
-        self.env
-            .impl_assoc_types
-            .insert(("Slice".to_string(), "Item".to_string()), t());
-        // Set[T] (unordered) — yields T
-        self.env
-            .impl_assoc_types
-            .insert(("Set".to_string(), "Item".to_string()), t());
-
-        // F32 / F64 / Atomic are now provided by their respective baked
-        // source files (CR-202 slice 6.1d). Float wrappers carry
-        // `Eq`/`Ord`/`Hash`/`PartialEq`/`PartialOrd`/`Copy` derives;
-        // `Atomic[T]` is opaque.
-
-        // `Ordering` is now provided by `runtime/stdlib/ordering.kara`
-        // (CR-202 slice 6.1h). Variants are memory-ordering names
-        // (Relaxed/Acquire/Release/AcqRel/SeqCst); see the file's
-        // header for the design-vs-implementation note.
-
-        // CR-202: `Option` (slice 3c) and `Result` (slice 4a) are now
-        // provided by `runtime/stdlib/{option,result}.kara` via the
-        // baked-source pass at the top of this function. Structural
-        // derives (`Eq`, `PartialEq`, `Hash`, `Ord`, `PartialOrd`) flow
-        // through `#[derive(...)]` on the baked enums. `Entry` and the
-        // rest stay hardcoded until later slices migrate them.
-
-        // `Entry[K, V]` is now provided by `runtime/stdlib/entry.kara`
-        // (CR-202 slice 6.1i). First baked enum with struct-style
-        // variants and `mut ref` payload fields.
-
-        // `VarError` — error type returned by `env.var(name)`. Resolved as
-        // `std.env.VarError` per brainstorming v49 (Q2=B): not part of the
-        // prelude (so it stays out of `PRELUDE_TYPES` / `PRELUDE_VARIANTS`),
-        // but registered here in the same shim as `Option`/`Result` per Q3=A
-        // until real stdlib materialisation lands. Single `NotPresent` variant
-        // (Q1=B): `Result[String, VarError]` stays forward-compatible if we
-        // ever add reasons (e.g. permission errors), but no payload today —
-        // Kāra's strict-UTF-8 `String` rules out a Rust-style
-        // `NotUnicode(OsString)` carrier.
-        // `VarError` and `IoError` are now provided by their respective
-        // baked source files (CR-202 slice 6.1j).
 
         // ── Standard I/O function signatures ───────────────────────────────────
 
@@ -3232,12 +3190,6 @@ impl<'a> TypeChecker<'a> {
                 return_type: Type::Str,
             },
         );
-        // Regex / RegexError / Match are now provided by
-        // `runtime/stdlib/regex.kara` (CR-202 slice 6.1f). Method
-        // signatures (compile, is_match, find, find_all, replace_all)
-        // stay in `register_builtin_types` until slice 6.3 migrates
-        // them.
-
         // ── std.http namespace ────────────────────────────────────────────────
         // Interpreter-only. Backed by the `ureq` crate at runtime.
         // Effects: Client.get / Client.post carry sends(Network) + receives(Network).
@@ -4199,7 +4151,7 @@ impl<'a> TypeChecker<'a> {
     }
 
     /// Register a built-in stdlib impl programmatically (no AST source).
-    /// Used by `register_builtin_types` to seed primitive operator impls.
+    /// Used by `register_stdlib_impls` to seed primitive operator impls.
     #[allow(dead_code)]
     fn register_builtin_impl(
         &mut self,
