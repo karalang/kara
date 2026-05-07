@@ -3915,7 +3915,8 @@ impl<'a> TypeChecker<'a> {
     /// Walk every struct/enum that derives `trait_name`; emit a diagnostic for
     /// each field whose type fails `supports`. Skips types that aren't in the
     /// program AST — those are compiler-provided built-ins (`F32`, `F64`,
-    /// `Ordering`) whose derived-trait bundles are hand-verified.
+    /// `Ordering`, `MemoryOrdering`) whose derived-trait bundles are
+    /// hand-verified.
     fn validate_derived_trait(
         &mut self,
         trait_name: &str,

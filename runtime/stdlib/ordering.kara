@@ -1,18 +1,21 @@
 // runtime/stdlib/ordering.kara
 //
-// CR-202 slice 6.1h. The variant names below match what the legacy
-// `register_builtin_types` arm registered. Note: the variant names
-// are the *memory ordering* set used by `Atomic` operations — the
-// design.md `Ord.cmp` return-type description (Less/Equal/Greater)
-// is not yet implemented as a separate type. Whether to split into
-// two distinct types is a pre-existing design question outside this
-// slice's scope; this commit preserves the current registration.
+// Comparison ordering. Returned by `Ord.cmp` and as the inner payload
+// of `PartialOrd.partial_cmp`'s `Option`. Per design.md § Comparison
+// Traits.
+//
+// The memory-ordering set used by `Atomic` operations (Relaxed,
+// Acquire, Release, AcqRel, SeqCst) lives in a separate type
+// `MemoryOrdering` (see `memory_ordering.kara`); the two semantics
+// previously shared this name, which made `Ord.cmp(a, b) ==
+// Ordering.Less` fail to typecheck. The `impl Ordering { fn is_lt …
+// }` helper block from design.md lines 5162–5168 is a separate
+// follow-up (the interpreter currently doesn't walk baked stdlib
+// impl blocks; helper-method bodies wouldn't run).
 
 #[derive(Eq, Copy)]
 enum Ordering {
-    Relaxed,
-    Acquire,
-    Release,
-    AcqRel,
-    SeqCst,
+    Less,
+    Equal,
+    Greater,
 }

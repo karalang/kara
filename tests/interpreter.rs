@@ -2296,7 +2296,7 @@ fn test_into_drives_user_from_impl() {
 fn test_atomic_new_and_load() {
     let output = run("fn main() {\n\
              let a = Atomic.new(42);\n\
-             println(a.load(Ordering.SeqCst));\n\
+             println(a.load(MemoryOrdering.SeqCst));\n\
          }");
     assert_eq!(output, "42\n");
 }
@@ -2305,8 +2305,8 @@ fn test_atomic_new_and_load() {
 fn test_atomic_store_and_load() {
     let output = run("fn main() {\n\
              let mut a = Atomic.new(0);\n\
-             a.store(99, Ordering.Relaxed);\n\
-             println(a.load(Ordering.Relaxed));\n\
+             a.store(99, MemoryOrdering.Relaxed);\n\
+             println(a.load(MemoryOrdering.Relaxed));\n\
          }");
     assert_eq!(output, "99\n");
 }
@@ -2315,19 +2315,35 @@ fn test_atomic_store_and_load() {
 fn test_atomic_bool() {
     let output = run("fn main() {\n\
              let flag = Atomic.new(false);\n\
-             println(flag.load(Ordering.SeqCst));\n\
+             println(flag.load(MemoryOrdering.SeqCst));\n\
          }");
     assert_eq!(output, "false\n");
 }
 
-// ── Ordering Enum ─────────────────────────────────────────────
+// ── Ordering / MemoryOrdering Enums ───────────────────────────
 
 #[test]
 fn test_ordering_variants() {
+    // Comparison-Ordering variants (Less / Equal / Greater)
     let output = run("fn main() {\n\
-             let r = Ordering.Relaxed;\n\
-             let a = Ordering.Acquire;\n\
-             let rel = Ordering.Release;\n\
+             let lt = Ordering.Less;\n\
+             let eq = Ordering.Equal;\n\
+             let gt = Ordering.Greater;\n\
+             println(lt);\n\
+             println(eq);\n\
+             println(gt);\n\
+         }");
+    assert!(output.contains("Less"));
+    assert!(output.contains("Equal"));
+    assert!(output.contains("Greater"));
+}
+
+#[test]
+fn test_memory_ordering_variants() {
+    let output = run("fn main() {\n\
+             let r = MemoryOrdering.Relaxed;\n\
+             let a = MemoryOrdering.Acquire;\n\
+             let rel = MemoryOrdering.Release;\n\
              println(r);\n\
              println(a);\n\
              println(rel);\n\

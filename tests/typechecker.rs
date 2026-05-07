@@ -2949,14 +2949,42 @@ fn test_no_rc_false_by_default() {
     assert!(!info.no_rc, "Point should have no_rc = false by default");
 }
 
-// ── Ordering Enum ──────────────────────────────────────────────
+// ── Ordering / MemoryOrdering Enums ────────────────────────────
 
 #[test]
 fn test_ordering_enum_resolves() {
-    // Ordering variants are recognized as valid enum variants
+    // Comparison-Ordering variants (Less / Equal / Greater) — returned by Ord.cmp
     typecheck_ok(
         "fn main() {\n\
-             let ord = Ordering.Relaxed;\n\
+             let lt = Ordering.Less;\n\
+             let eq = Ordering.Equal;\n\
+             let gt = Ordering.Greater;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_memory_ordering_enum_resolves() {
+    // MemoryOrdering variants — used by Atomic[T] operations
+    typecheck_ok(
+        "fn main() {\n\
+             let ord = MemoryOrdering.Relaxed;\n\
+         }",
+    );
+}
+
+#[test]
+fn test_ord_cmp_returns_comparison_ordering() {
+    // The original motivator for the disambiguation CR: `Ord.cmp(a, b)` on
+    // primitives returns `Ordering`, and `Ordering.Less` is now a registered
+    // variant of that type. Pre-rename this would have failed because
+    // `Ordering` carried memory-ordering variants only.
+    typecheck_ok(
+        "fn main() {\n\
+             let a: i32 = 1;\n\
+             let b: i32 = 2;\n\
+             let r = a.cmp(b);\n\
+             let _eq: bool = r == Ordering.Less;\n\
          }",
     );
 }

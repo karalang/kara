@@ -1921,12 +1921,25 @@ impl<'a> Interpreter<'a> {
             },
         );
 
-        // Register built-in Ordering enum variants
-        for variant in ["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"] {
+        // Register built-in comparison-Ordering enum variants
+        // (Less / Equal / Greater — returned by `Ord.cmp`).
+        for variant in ["Less", "Equal", "Greater"] {
             self.env.define(
                 format!("Ordering.{}", variant),
                 Value::EnumVariant {
                     enum_name: "Ordering".to_string(),
+                    variant: variant.to_string(),
+                    data: EnumData::Unit,
+                },
+            );
+        }
+        // Register built-in MemoryOrdering enum variants
+        // (Relaxed / Acquire / Release / AcqRel / SeqCst — used by Atomic[T]).
+        for variant in ["Relaxed", "Acquire", "Release", "AcqRel", "SeqCst"] {
+            self.env.define(
+                format!("MemoryOrdering.{}", variant),
+                Value::EnumVariant {
+                    enum_name: "MemoryOrdering".to_string(),
                     variant: variant.to_string(),
                     data: EnumData::Unit,
                 },
@@ -3696,10 +3709,12 @@ impl<'a> Interpreter<'a> {
                     };
                 }
                 _ => {
-                    // Check for Ordering::Variant pattern
-                    if segments.len() == 2 && segments[0] == "Ordering" {
+                    // Check for Ordering / MemoryOrdering qualified-variant pattern
+                    if segments.len() == 2
+                        && (segments[0] == "Ordering" || segments[0] == "MemoryOrdering")
+                    {
                         return Value::EnumVariant {
-                            enum_name: "Ordering".to_string(),
+                            enum_name: segments[0].clone(),
                             variant: segments[1].clone(),
                             data: EnumData::Unit,
                         };

@@ -864,7 +864,13 @@ fn test_f32_f64_total_order_types_resolve() {
 
 #[test]
 fn test_ordering_variants_resolve() {
-    resolve_ok("fn main() { let r = Ordering.Relaxed; let a = Ordering.Acquire; }");
+    // Comparison-Ordering variants (Less / Equal / Greater)
+    resolve_ok("fn main() { let lt = Ordering.Less; let eq = Ordering.Equal; }");
+}
+
+#[test]
+fn test_memory_ordering_variants_resolve() {
+    resolve_ok("fn main() { let r = MemoryOrdering.Relaxed; let a = MemoryOrdering.Acquire; }");
 }
 
 #[test]

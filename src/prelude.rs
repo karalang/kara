@@ -80,6 +80,7 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "F64",
     "Atomic",
     "Ordering",
+    "MemoryOrdering",
     "IoError",
     "VarError",
     "SortedSet",
@@ -141,10 +142,13 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "IntoIterator",
 ];
 
-/// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`)
-/// surfaced unqualified per design.md § Prelude.
+/// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`,
+/// `MemoryOrdering`) surfaced unqualified per design.md § Prelude.
 pub const PRELUDE_VARIANTS: &[&str] = &[
-    "Some", "None", "Ok", "Err", // Ordering
+    "Some", "None", "Ok", "Err",
+    // Ordering — comparison ordering, returned by Ord.cmp
+    "Less", "Equal", "Greater",
+    // MemoryOrdering — atomic memory ordering, used by Atomic[T] operations
     "Relaxed", "Acquire", "Release", "AcqRel", "SeqCst",
     // Entry[K, V] — Map.entry(k) returns one of these
     "Occupied", "Vacant",
@@ -207,6 +211,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("http.kara", include_str!("../runtime/stdlib/http.kara")),
     ("encoding.kara", include_str!("../runtime/stdlib/encoding.kara")),
     ("ordering.kara", include_str!("../runtime/stdlib/ordering.kara")),
+    ("memory_ordering.kara", include_str!("../runtime/stdlib/memory_ordering.kara")),
     ("entry.kara", include_str!("../runtime/stdlib/entry.kara")),
     ("io_error.kara", include_str!("../runtime/stdlib/io_error.kara")),
     ("var_error.kara", include_str!("../runtime/stdlib/var_error.kara")),

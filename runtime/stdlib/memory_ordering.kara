@@ -1,0 +1,18 @@
+// runtime/stdlib/memory_ordering.kara
+//
+// Atomic memory ordering. Carried by `Atomic[T]` operations (`load`,
+// `store`, etc.). Variants mirror the C++/Rust memory model.
+//
+// Split from the comparison `Ordering` (see `ordering.kara`) under the
+// CR-202-followup disambiguation: those two semantics shared a single
+// name and the design intent (per design.md § Comparison Traits) was
+// always for `Ord.cmp` to return `{Less, Equal, Greater}`.
+
+#[derive(Eq, Copy)]
+enum MemoryOrdering {
+    Relaxed,
+    Acquire,
+    Release,
+    AcqRel,
+    SeqCst,
+}
