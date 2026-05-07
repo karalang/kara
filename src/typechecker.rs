@@ -3085,8 +3085,10 @@ impl<'a> TypeChecker<'a> {
             name: "Option".to_string(),
             args: vec![Type::Float(FloatSize::F64)],
         };
+        // `Stats.sum` migrated to baked source as `impl Stats { fn sum }`
+        // (CR-202 slice 6.3 pilot). The remaining entries stay programmatic
+        // until the pilot proves out and the rest batch-migrate.
         for name in &[
-            "Stats.sum",
             "Stats.prod",
             "Stats.mean",
             "Stats.variance",

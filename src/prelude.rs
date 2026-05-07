@@ -901,4 +901,46 @@ mod tests {
             other => panic!("Slice should still be a stub StructDef, got {:?}", other),
         }
     }
+
+    // ── Slice 6.3 pilot: Stats.sum migrated to impl-block ───────────
+    //
+    // CR-202 slice 6.3 retires `env.functions["Stats.sum"]` in favour of
+    // `impl Stats { #[compiler_builtin] fn sum(...) }` in baked source.
+    // These tests pin the AST shape; the dispatch round-trip is covered
+    // by `tests/typechecker.rs::test_stats_sum_ok` and
+    // `tests/interpreter.rs::test_stats_sum`.
+
+    #[test]
+    fn baked_stats_carries_inherent_impl_with_sum_method() {
+        let stats_program = STDLIB_PROGRAMS
+            .iter()
+            .find(|(name, _)| *name == "stats.kara")
+            .map(|(_, p)| p)
+            .expect("stats.kara should be in STDLIB_PROGRAMS");
+        let imp = stats_program
+            .items
+            .iter()
+            .find_map(|i| match i {
+                Item::ImplBlock(b) => Some(b),
+                _ => None,
+            })
+            .expect("stats.kara should declare an impl block");
+        assert!(
+            imp.trait_name.is_none(),
+            "Stats impl should be inherent, not trait — got trait_name = {:?}",
+            imp.trait_name
+        );
+        let method = imp
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::ast::ImplItem::Method(m) if m.name == "sum" => Some(m),
+                _ => None,
+            })
+            .expect("Stats impl should declare a `sum` method");
+        assert!(
+            method.attributes.iter().any(|a| a.name == "compiler_builtin"),
+            "Stats.sum should carry #[compiler_builtin]"
+        );
+    }
 }
