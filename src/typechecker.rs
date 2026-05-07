@@ -2858,18 +2858,11 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        // Map[K, V] — insertion-order key-value map. Method dispatch is handled
-        // by `infer_map_method`. Registered with two type params K, V.
-        self.env.structs.insert(
-            "Map".to_string(),
-            StructInfo {
-                generic_params: vec!["K".to_string(), "V".to_string()],
-                fields: vec![],
-                derived_traits: HashSet::new(),
-                no_rc: false,
-                is_shared: false,
-            },
-        );
+        // Map[K, V] is now provided by `runtime/stdlib/map.kara` (CR-202
+        // slice 6.1a) — the bake walk registers it via `env_add_struct`.
+        // The `impl_assoc_types[("Map", "Item")]` entry below stays
+        // hardcoded since `(K, V)` tuples don't have a syntactic
+        // representation in baked struct source today.
 
         // SortedSet[T: Ord] — B-tree–backed ordered set. Registered as a
         // generic struct with one type param so the typechecker accepts

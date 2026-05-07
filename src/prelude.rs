@@ -192,6 +192,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("option.kara", include_str!("../runtime/stdlib/option.kara")),
     ("result.kara", include_str!("../runtime/stdlib/result.kara")),
     ("vec.kara", include_str!("../runtime/stdlib/vec.kara")),
+    ("map.kara", include_str!("../runtime/stdlib/map.kara")),
     ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
     ("eq.kara", include_str!("../runtime/stdlib/eq.kara")),
     ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),
@@ -507,6 +508,17 @@ mod tests {
         assert!(
             names.contains(&"vec.kara"),
             "STDLIB_SOURCES should contain vec.kara, got: {:?}",
+            names
+        );
+    }
+
+    #[test]
+    fn stdlib_sources_contains_map_kara() {
+        // CR-202 slice 6.1a: Map joins the baked surface.
+        let names: Vec<&str> = STDLIB_SOURCES.iter().map(|(n, _)| *n).collect();
+        assert!(
+            names.contains(&"map.kara"),
+            "STDLIB_SOURCES should contain map.kara, got: {:?}",
             names
         );
     }
@@ -837,13 +849,14 @@ mod tests {
         // real-source treatment; everything else continues to use
         // `stub_struct` with a synthetic span. This pins the
         // partial-migration property until the remaining types migrate.
-        // `Map` is explicitly deferred (its trait bounds depend on slice
-        // 5's trait materialization), so it's a stable picker for this
-        // test even as slice 4 widens the baked surface.
+        // `Slice` is a stable picker — it's a built-in primitive
+        // (`Type::Slice` in `lower_path_type`) that the per-type slice
+        // schedule explicitly defers, so its stub status holds across
+        // slice-6.1's mechanical migrations.
         let items = synthetic_prelude_items();
-        let map_item = find_prelude_item(&items, "Map")
-            .expect("Map is still a prelude name");
-        match map_item {
+        let slice_item = find_prelude_item(&items, "Slice")
+            .expect("Slice is still a prelude name");
+        match slice_item {
             Item::StructDef(s) => {
                 assert_eq!(
                     s.span.line, 0,
@@ -855,7 +868,7 @@ mod tests {
                      (the synthetic prelude module IS stdlib origin)"
                 );
             }
-            other => panic!("Map should still be a stub StructDef, got {:?}", other),
+            other => panic!("Slice should still be a stub StructDef, got {:?}", other),
         }
     }
 }

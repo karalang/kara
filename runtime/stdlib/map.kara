@@ -1,0 +1,10 @@
+// runtime/stdlib/map.kara
+//
+// CR-202 slice 6.1a. Insertion-order key-value map. Methods continue
+// to dispatch through the hardcoded `infer_map_method` /
+// `eval_map_method` paths; the bake migrates only the type shape.
+// `impl_assoc_types[("Map", "Item")] -> (K, V)` stays in
+// `register_builtin_types` since it doesn't have a syntactic
+// representation in the baked source today.
+
+struct Map[K, V] { }
