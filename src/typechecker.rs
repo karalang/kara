@@ -2900,20 +2900,17 @@ impl<'a> TypeChecker<'a> {
         let k = || Type::TypeParam("K".to_string());
         let v = || Type::TypeParam("V".to_string());
 
-        // `Vec` was previously registered in this loop; CR-202 slice 4b
-        // moved its shape to `runtime/stdlib/vec.kara` (baked-source pass
-        // at the top of this function). The `("Vec", "Item")` entry in
-        // `impl_assoc_types` is restored explicitly below so the iterator
-        // element-type resolution keeps working.
-        for name in &["Array", "SortedSet", "Set", "Iterator", "Peekable"] {
-            // Register in env.structs so element_type_of can find generic_params.
-            // `Iterator` is a trait per design.md but is treated as a parametric
-            // pseudo-type at this layer so `for x in v.iter()` resolves the
-            // bound element via the same impl_assoc_types path as collections.
-            // `Peekable[T]` is the result type of `Iterator.peekable()` — same
-            // shape as Iterator (single Item type) plus an extra `peek()`
-            // method dispatched only when the receiver carries this name.
-            // See `wip-list2.md` § Iterator trait — full adaptor surface.
+        // `Vec` (slice 4b), `SortedSet` (6.1b), `Set` and `Peekable`
+        // (6.1c) are now provided by their respective baked source
+        // files. `Array` stays in this loop because it is a built-in
+        // primitive (lowered specially in `lower_path_type`) and
+        // migrating it would be a separate primitive-vs-struct design
+        // call. `Iterator` is treated as a parametric pseudo-type at
+        // this layer so `for x in v.iter()` resolves the bound element
+        // via the same `impl_assoc_types` path as collections; slice
+        // 6.2d migrates the trait-shape registration but the
+        // pseudo-type entry stays.
+        for name in &["Array", "Iterator"] {
             self.env
                 .structs
                 .entry(name.to_string())
@@ -2928,9 +2925,14 @@ impl<'a> TypeChecker<'a> {
                 .impl_assoc_types
                 .insert((name.to_string(), "Item".to_string()), t());
         }
-        self.env
-            .impl_assoc_types
-            .insert(("Vec".to_string(), "Item".to_string()), t());
+        // `impl_assoc_types[(name, "Item")] = T` for the now-baked
+        // collection types — preserved explicitly outside the loop so
+        // `for x in coll.iter()` element-type resolution keeps working.
+        for name in &["Vec", "SortedSet", "Set", "Peekable"] {
+            self.env
+                .impl_assoc_types
+                .insert((name.to_string(), "Item".to_string()), t());
+        }
         // Map[K, V] yields (K, V) tuples
         self.env.impl_assoc_types.insert(
             ("Map".to_string(), "Item".to_string()),

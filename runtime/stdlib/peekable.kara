@@ -1,0 +1,9 @@
+// runtime/stdlib/peekable.kara
+//
+// CR-202 slice 6.1c. Iterator adapter — result of
+// `Iterator.peekable()`. Same shape as `Iterator` (single `Item` type)
+// plus an extra `peek()` method dispatched only when the receiver
+// carries this name. See `wip-list2.md` § Iterator trait — full
+// adaptor surface.
+
+struct Peekable[T] { }

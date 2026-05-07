@@ -197,6 +197,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("channel.kara", include_str!("../runtime/stdlib/channel.kara")),
     ("sender.kara", include_str!("../runtime/stdlib/sender.kara")),
     ("receiver.kara", include_str!("../runtime/stdlib/receiver.kara")),
+    ("set.kara", include_str!("../runtime/stdlib/set.kara")),
+    ("peekable.kara", include_str!("../runtime/stdlib/peekable.kara")),
     ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
     ("eq.kara", include_str!("../runtime/stdlib/eq.kara")),
     ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),

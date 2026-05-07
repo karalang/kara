@@ -1,0 +1,7 @@
+// runtime/stdlib/set.kara
+//
+// CR-202 slice 6.1c. Hash set — pulled from the collective
+// `["Array", "SortedSet", "Set", "Iterator", "Peekable"]` loop in
+// `register_builtin_types`. Methods stay programmatic.
+
+struct Set[T] { }
