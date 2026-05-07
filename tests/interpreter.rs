@@ -2998,6 +2998,31 @@ fn test_eprintln_routes_through_stderr_provider() {
     assert_eq!(output, "to stdout\n");
 }
 
+#[test]
+fn test_ambient_stdin_with_provider_overrides_default() {
+    // Symmetric to the Stdout interception test: a `with_provider[Stdin]`
+    // install routes `Stdin.read_line()` through the user's fake instead
+    // of pulling from the real stdin. CannedStdin returns a fixed line;
+    // the test asserts that line came back through the provider stack.
+    // Uses `Result[String, String]` to dodge `IoError` name resolution
+    // (the dispatch is duck-typed at runtime — same trick as the Env test).
+    let output = run("struct CannedStdin {}\n\
+                      impl CannedStdin {\n\
+                          fn read_line(self) -> Result[String, String] {\n\
+                              Ok(\"piped line\")\n\
+                          }\n\
+                      }\n\
+                      fn main() {\n\
+                          with_provider[Stdin](CannedStdin {}, || {\n\
+                              match Stdin.read_line() {\n\
+                                  Ok(s)  => println(s),\n\
+                                  Err(_) => println(\"err\"),\n\
+                              }\n\
+                          });\n\
+                      }");
+    assert_eq!(output, "piped line\n");
+}
+
 // ── `providers { R => p, ... } in { body }` block ───────────────
 
 #[test]
