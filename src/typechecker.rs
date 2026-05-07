@@ -3325,42 +3325,11 @@ impl<'a> TypeChecker<'a> {
                 return_type: Type::Str,
             },
         );
-        // Register Regex, RegexError, Match as structs so the typechecker
-        // accepts them in type positions.
-        self.env
-            .structs
-            .entry("Regex".to_string())
-            .or_insert_with(|| StructInfo {
-                generic_params: vec![],
-                fields: vec![("pattern".to_string(), Type::Str, false)],
-                derived_traits: HashSet::new(),
-                no_rc: false,
-                is_shared: false,
-            });
-        self.env
-            .structs
-            .entry("RegexError".to_string())
-            .or_insert_with(|| StructInfo {
-                generic_params: vec![],
-                fields: vec![("message".to_string(), Type::Str, false)],
-                derived_traits: HashSet::new(),
-                no_rc: false,
-                is_shared: false,
-            });
-        self.env
-            .structs
-            .entry("Match".to_string())
-            .or_insert_with(|| StructInfo {
-                generic_params: vec![],
-                fields: vec![
-                    ("text".to_string(), Type::Str, false),
-                    ("start".to_string(), Type::Int(IntSize::I64), false),
-                    ("end".to_string(), Type::Int(IntSize::I64), false),
-                ],
-                derived_traits: HashSet::new(),
-                no_rc: false,
-                is_shared: false,
-            });
+        // Regex / RegexError / Match are now provided by
+        // `runtime/stdlib/regex.kara` (CR-202 slice 6.1f). Method
+        // signatures (compile, is_match, find, find_all, replace_all)
+        // stay in `register_builtin_types` until slice 6.3 migrates
+        // them.
 
         // ── std.http namespace ────────────────────────────────────────────────
         // Interpreter-only. Backed by the `ureq` crate at runtime.

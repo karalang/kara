@@ -202,6 +202,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("atomic.kara", include_str!("../runtime/stdlib/atomic.kara")),
     ("f32.kara", include_str!("../runtime/stdlib/f32.kara")),
     ("f64.kara", include_str!("../runtime/stdlib/f64.kara")),
+    ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),
+    ("regex.kara", include_str!("../runtime/stdlib/regex.kara")),
     ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
     ("eq.kara", include_str!("../runtime/stdlib/eq.kara")),
     ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),

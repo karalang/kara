@@ -1,0 +1,9 @@
+// runtime/stdlib/stats.kara
+//
+// CR-202 slice 6.1f. `Stats` is a namespace for free statistical
+// functions (`Stats.sum`, `Stats.mean`, …). The struct itself is
+// opaque — users only call associated functions on it. Method
+// signatures stay in `register_builtin_types` until slice 6.3
+// migrates them as `impl` blocks.
+
+struct Stats { }

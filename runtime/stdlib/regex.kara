@@ -1,0 +1,19 @@
+// runtime/stdlib/regex.kara
+//
+// CR-202 slice 6.1f. Compiled regex pattern. Method signatures
+// (compile, is_match, find, find_all, replace_all) stay in
+// `register_builtin_types` until slice 6.3 migrates them.
+
+struct Regex {
+    pattern: String,
+}
+
+struct RegexError {
+    message: String,
+}
+
+struct Match {
+    text: String,
+    start: i64,
+    end: i64,
+}
