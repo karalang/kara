@@ -1113,6 +1113,18 @@ impl<'a> Resolver<'a> {
     }
 
     fn collect_impl(&mut self, imp: &ImplBlock) {
+        // `#[compiler_builtin]` is reserved for stdlib source — user code
+        // is rejected (E0237). The other `collect_*` callers gate top-level
+        // items; impl blocks need the same gate at two levels: the block
+        // itself, and each method. ImplBlock has no `stdlib_origin` field
+        // because baked stdlib impls live in `STDLIB_PROGRAMS` and are
+        // walked by the typechecker/interpreter directly — they never
+        // reach this resolver path. So `false` here is correct: any impl
+        // block walked by `collect_impl` is user-authored, and a
+        // session-wide stdlib-source resolver bypasses via `is_stdlib_source`.
+        // Methods carry their own `stdlib_origin` (inherited from the
+        // `Function` field) and pass it through for the per-item exemption.
+        self.check_compiler_builtin_attr(&imp.attributes, false);
         // Methods are registered in type_methods, not global scope.
         // We need the type name from the target_type.
         let type_name = self.type_expr_name(&imp.target_type);
@@ -1122,6 +1134,7 @@ impl<'a> Resolver<'a> {
                     ImplItem::Method(m) => m,
                     ImplItem::AssocType(_) => continue,
                 };
+                self.check_compiler_builtin_attr(&method.attributes, method.stdlib_origin);
                 let param_names: Vec<String> = method
                     .params
                     .iter()

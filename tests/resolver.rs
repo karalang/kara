@@ -1687,3 +1687,108 @@ fn test_compiler_builtin_per_item_tag_is_per_item_not_global() {
         rejections.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── #[compiler_builtin] gate on impl blocks ──────────────────────
+// Slice 1 closed the gate on top-level items (`fn`/`struct`/`enum`/`trait`).
+// Impl blocks were the documented loophole (phase-4-interpreter.md slice 6.3
+// findings #2): `collect_impl` did not call `check_compiler_builtin_attr`,
+// so user code could sneak `#[compiler_builtin]` past the resolver via
+// `impl Foo { #[compiler_builtin] fn bar() { } }`. Closing it: the gate
+// fires on both the impl block's own attributes and each method's, with
+// the per-method `stdlib_origin` exemption preserved for baked source.
+
+#[test]
+fn test_compiler_builtin_rejected_on_impl_method_in_user_code() {
+    assert_compiler_builtin_rejected(
+        "struct Foo { }\n\
+         impl Foo {\n\
+             #[compiler_builtin]\n\
+             fn bar(self) -> i64 { 0 }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_compiler_builtin_rejected_on_impl_block_itself_in_user_code() {
+    assert_compiler_builtin_rejected(
+        "struct Foo { }\n\
+         #[compiler_builtin]\n\
+         impl Foo {\n\
+             fn bar(self) -> i64 { 0 }\n\
+         }",
+    );
+}
+
+#[test]
+fn test_compiler_builtin_permitted_on_impl_method_with_stdlib_source_flag() {
+    // The session-wide bypass (`with_stdlib_source(true)`) should suppress
+    // the gate on both impl-block-level and method-level `#[compiler_builtin]`.
+    let parsed = parse(
+        "struct Foo { }\n\
+         #[compiler_builtin]\n\
+         impl Foo {\n\
+             #[compiler_builtin]\n\
+             fn bar(self) -> i64 { 0 }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let result = Resolver::new(&parsed.program)
+        .with_stdlib_source(true)
+        .resolve();
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.kind != ResolveErrorKind::CompilerBuiltinReserved),
+        "stdlib-source flag should suppress CompilerBuiltinReserved on impl items, got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compiler_builtin_per_method_origin_bypasses_gate_on_impl_method() {
+    // The per-item `stdlib_origin` exemption — the bake step for slice 6.3
+    // sets this on every method inside baked impl blocks. Confirms the
+    // resolver picks it up: even without the session-wide flag, a method
+    // tagged `stdlib_origin = true` is allowed to carry `#[compiler_builtin]`,
+    // while an untagged sibling in the same block is still rejected.
+    use karac::ast::{Item, ImplItem};
+    let parsed = parse(
+        "struct Foo { }\n\
+         impl Foo {\n\
+             #[compiler_builtin]\n\
+             fn baked(self) -> i64 { 0 }\n\
+             #[compiler_builtin]\n\
+             fn user_attempt(self) -> i64 { 0 }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty(), "parse errors: {:?}", parsed.errors);
+    let mut program = parsed.program;
+    let imp = program
+        .items
+        .iter_mut()
+        .find_map(|i| if let Item::ImplBlock(b) = i { Some(b) } else { None })
+        .expect("program has an impl block");
+    let baked_method = imp
+        .items
+        .iter_mut()
+        .find_map(|i| match i {
+            ImplItem::Method(m) if m.name == "baked" => Some(m),
+            _ => None,
+        })
+        .expect("impl block has `baked` method");
+    baked_method.stdlib_origin = true;
+
+    let result = Resolver::new(&program).resolve();
+    let rejections: Vec<_> = result
+        .errors
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::CompilerBuiltinReserved)
+        .collect();
+    assert_eq!(
+        rejections.len(),
+        1,
+        "expected exactly one rejection (the untagged sibling method), got: {:?}",
+        rejections.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
