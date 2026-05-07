@@ -2971,37 +2971,10 @@ impl<'a> TypeChecker<'a> {
             .impl_assoc_types
             .insert(("Set".to_string(), "Item".to_string()), t());
 
-        // F32: total-order float wrapper with Eq, Ord, Hash
-        let f32_traits: HashSet<String> = ["Eq", "Ord", "Hash", "PartialEq", "PartialOrd", "Copy"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        self.env.structs.insert(
-            "F32".to_string(),
-            StructInfo {
-                generic_params: vec![],
-                fields: vec![("value".to_string(), Type::Float(FloatSize::F32), false)],
-                derived_traits: f32_traits,
-                no_rc: false,
-                is_shared: false,
-            },
-        );
-
-        // F64: total-order float wrapper with Eq, Ord, Hash
-        let f64_traits: HashSet<String> = ["Eq", "Ord", "Hash", "PartialEq", "PartialOrd", "Copy"]
-            .iter()
-            .map(|s| s.to_string())
-            .collect();
-        self.env.structs.insert(
-            "F64".to_string(),
-            StructInfo {
-                generic_params: vec![],
-                fields: vec![("value".to_string(), Type::Float(FloatSize::F64), false)],
-                derived_traits: f64_traits,
-                no_rc: false,
-                is_shared: false,
-            },
-        );
+        // F32 / F64 / Atomic are now provided by their respective baked
+        // source files (CR-202 slice 6.1d). Float wrappers carry
+        // `Eq`/`Ord`/`Hash`/`PartialEq`/`PartialOrd`/`Copy` derives;
+        // `Atomic[T]` is opaque.
 
         // Ordering enum for Atomic operations
         let ordering_traits: HashSet<String> =

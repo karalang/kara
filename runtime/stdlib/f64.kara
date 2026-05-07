@@ -1,0 +1,9 @@
+// runtime/stdlib/f64.kara
+//
+// CR-202 slice 6.1d. `F64` is the total-order f64 wrapper — see
+// `f32.kara` for the wrapper rationale.
+
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+struct F64 {
+    value: f64,
+}

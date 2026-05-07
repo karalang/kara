@@ -1,0 +1,12 @@
+// runtime/stdlib/f32.kara
+//
+// CR-202 slice 6.1d. `F32` is the total-order f32 wrapper — adds
+// `Eq` / `Ord` / `Hash` to a 32-bit float by treating NaN as a
+// concrete distinguishable bit pattern. The structural derives match
+// what the legacy hardcoded `register_builtin_types` arm inserted
+// directly. Method dispatch stays in the hardcoded path.
+
+#[derive(Eq, Ord, Hash, PartialEq, PartialOrd, Copy)]
+struct F32 {
+    value: f32,
+}

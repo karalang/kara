@@ -1,0 +1,13 @@
+// runtime/stdlib/atomic.kara
+//
+// CR-202 slice 6.1d. `Atomic[T]` — concurrency primitive for
+// lock-free atomic operations on a single value, ordered by
+// `Ordering` (defined in `runtime/stdlib/ordering.kara` once 6.1h
+// migrates it). Method dispatch stays in the hardcoded path; the
+// bake registers only the type shape.
+//
+// Pre-6.1d Atomic was not in `env.structs` at all (the typechecker
+// fell through to a default named-type path for `Atomic[T]`). Baking
+// it makes the type shape uniform with other stdlib collection types.
+
+struct Atomic[T] { }
