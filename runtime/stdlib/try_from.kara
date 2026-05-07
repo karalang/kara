@@ -1,0 +1,8 @@
+// runtime/stdlib/try_from.kara
+//
+// CR-202 slice 6.2c. Per design.md § Conversion Traits — fallible
+// conversion. `Error` is the error type returned on failure.
+
+trait TryFrom {
+    type Error;
+}

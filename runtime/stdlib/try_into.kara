@@ -1,0 +1,10 @@
+// runtime/stdlib/try_into.kara
+//
+// CR-202 slice 6.2c. Per design.md § Conversion Traits — dual of
+// TryFrom. Same blanket-impl story as Into: user impls are rejected
+// at the resolver, and `x.try_into()` rewrites to `Target.try_from(x)`
+// via `try_into_conversions`.
+
+trait TryInto {
+    type Error;
+}
