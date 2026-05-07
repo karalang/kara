@@ -1,0 +1,26 @@
+// runtime/stdlib/io.kara
+//
+// I/O resource method signatures lifted from `register_compiler_intrinsic_env`
+// into baked stdlib source. Each I/O primitive (`Stdin`, `Stdout`, `Stderr`,
+// `FileSystem`, …) is also registered as a `SymbolKind::EffectResource` via
+// `PRELUDE_EFFECT_RESOURCES`; the empty struct here exists purely so
+// `impl <Resource> { ... }` has a target type for `env_add_impl` to register
+// methods against. Authoring the signatures here lets the I/O surface grow
+// in source instead of in three hand-coded sites per method.
+//
+// Method bodies are placeholder `#[compiler_builtin]` stubs: real dispatch
+// fires in `eval_resource_method` → `dispatch_builtin_resource_method_with_values`
+// (interpreter), which routes through the provider stack so
+// `with_provider[Stdin](Fake {}, || ...)` interception keeps working.
+//
+// Slice 1: Stdin only. Slice 2 follows for Stdout / Stderr / FileSystem.
+
+struct Stdin { }
+
+impl Stdin {
+    #[compiler_builtin]
+    fn read_line() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read_to_string() -> Result[String, IoError] { Err(IoError.Other("placeholder")) }
+}

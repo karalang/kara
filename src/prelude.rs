@@ -241,6 +241,7 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("bitxor.kara", include_str!("../runtime/stdlib/bitxor.kara")),
     ("shl.kara", include_str!("../runtime/stdlib/shl.kara")),
     ("shr.kara", include_str!("../runtime/stdlib/shr.kara")),
+    ("io.kara", include_str!("../runtime/stdlib/io.kara")),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first

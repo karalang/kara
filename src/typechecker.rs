@@ -2878,20 +2878,18 @@ impl<'a> TypeChecker<'a> {
     /// - The `Range*` family of typechecker-internal iteration types.
     ///   Constructed from `a..b` syntax; never user-referenced as
     ///   `Range[T]`, so a baked struct adds no value.
-    /// - I/O resource method signatures (`Stdin.read_line`,
-    ///   `Stdout.flush`, `FileSystem.write`, `Env.args`, …). Slice 6.3
-    ///   migrated every method whose receiver type is registered as a
-    ///   struct (`Stats`, `Regex`, `Client`, `Response`, `HttpError`,
-    ///   `Base64`, `Hex`, `Url`); these resource namespaces stay
-    ///   programmatic because the names are registered as
-    ///   `SymbolKind::EffectResource` in `PRELUDE_EFFECT_RESOURCES`,
-    ///   not as types — there is no `struct Stdin { }` for
-    ///   `impl Stdin { ... }` to attach to. Migrating them would
-    ///   require either authoring companion struct declarations
-    ///   (and reconciling the resolver's effect-resource symbol kind
-    ///   with the type-name kind) or special-casing impl blocks
-    ///   targeting effect-resource names. Tracked as a follow-up to
-    ///   slice 6.3 in `phase-4-interpreter.md`.
+    /// - I/O resource method signatures still authored here:
+    ///   `Stdout.flush`, `Stderr.flush`, `FileSystem.read_to_string`,
+    ///   `FileSystem.write`, `Env.args`, `Env.var`. The companion-struct
+    ///   migration (`struct Stdin {} impl Stdin { ... }` in baked source)
+    ///   moved `Stdin.read_line` / `Stdin.read_to_string` into
+    ///   `runtime/stdlib/io.kara` as the slice-1 proof-of-concept; the
+    ///   `EffectResource` symbol kind and the baked struct coexist because
+    ///   baked source bypasses the resolver — `Stdin` stays as a
+    ///   `SymbolKind::EffectResource` for `with_provider[Stdin]` purposes
+    ///   while `env.structs` / `env.impls` carries the type+method shape
+    ///   for `infer_path_type` lookups. Slice 2 extends the same pattern to
+    ///   the remaining I/O surface.
     /// - The primitive operator impl table via [`Self::register_stdlib_impls`]
     ///   (`impl Add for i32`, `impl Eq for u8`, the numeric widening
     ///   `From` impls, …). Documented as permanently programmatic — a
@@ -2972,26 +2970,14 @@ impl<'a> TypeChecker<'a> {
             args: vec![Type::Unit, io_error_ty],
         };
 
-        // Stdin.read_line() -> Result[str, IoError]
-        self.env.functions.insert(
-            "Stdin.read_line".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![],
-                params: vec![],
-                return_type: result_str_io.clone(),
-            },
-        );
-        // Stdin.read_to_string() -> Result[str, IoError]
-        self.env.functions.insert(
-            "Stdin.read_to_string".to_string(),
-            FunctionSig {
-                generic_params: vec![],
-                param_names: vec![],
-                params: vec![],
-                return_type: result_str_io.clone(),
-            },
-        );
+        // Stdin.read_line / Stdin.read_to_string — migrated to baked source
+        // (`runtime/stdlib/io.kara`, slice 1 of the I/O resource namespace
+        // CR). The signatures now flow through `register_baked_stdlib` →
+        // `env_add_impl` → `env.impls`, found by `resolve_path_type`'s impl
+        // lookup (`infer_path_type` line ~7227) before the
+        // `env.functions.get("Stdin.read_line")` fallback that backed them
+        // before. `result_str_io` is still used by the FileSystem entries
+        // below; cleanup follows when those migrate too.
         // Stdout.flush() -> Unit
         self.env.functions.insert(
             "Stdout.flush".to_string(),
