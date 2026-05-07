@@ -1,0 +1,8 @@
+// runtime/stdlib/from.kara
+//
+// CR-202 slice 6.2b. Per design.md § Conversion Traits — `From[T]`
+// is the explicit conversion trait. `Into[T]` is its blanket-impl
+// dual; users implement `From` and get `Into` for free via the
+// typechecker's `into_conversions` rewrite at lowering time.
+
+trait From { }

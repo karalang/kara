@@ -3445,8 +3445,7 @@ impl<'a> TypeChecker<'a> {
         // (name, assoc_types)
         let traits: &[(&str, &[&str])] = &[
             // Conversion traits
-            ("From", &[]),
-            ("Into", &[]),
+            // `From` and `Into` migrated to baked source (CR-202 slice 6.2b).
             ("TryFrom", &["Error"]),
             ("TryInto", &["Error"]),
             // Arithmetic and bitwise operators (CR-202 slices 5h-5l):

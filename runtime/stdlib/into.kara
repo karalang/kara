@@ -1,0 +1,9 @@
+// runtime/stdlib/into.kara
+//
+// CR-202 slice 6.2b. Per design.md § Conversion Traits — `Into[T]`
+// is the dual of `From[T]`. User-written `impl Into[T] for S` is
+// rejected at the resolver layer (`E_INTO_TRAIT_IMPL_NOT_ALLOWED`);
+// users implement `From` instead and the typechecker rewrites
+// `x.into()` calls to `Target.from(x)` via `into_conversions`.
+
+trait Into { }
