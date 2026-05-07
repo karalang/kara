@@ -2878,11 +2878,20 @@ impl<'a> TypeChecker<'a> {
     /// - The `Range*` family of typechecker-internal iteration types.
     ///   Constructed from `a..b` syntax; never user-referenced as
     ///   `Range[T]`, so a baked struct adds no value.
-    /// - Resource-method signatures (`Stdin.read_line`,
-    ///   `FileSystem.read_to_string`, `Stats.sum`, `Regex.compile`,
-    ///   `Client.get`, …) — slice 6.3's deferred surface. These could
-    ///   migrate as `impl Type { #[compiler_builtin] fn method(...) }`
-    ///   blocks if a concrete motivator surfaces.
+    /// - I/O resource method signatures (`Stdin.read_line`,
+    ///   `Stdout.flush`, `FileSystem.write`, `Env.args`, …). Slice 6.3
+    ///   migrated every method whose receiver type is registered as a
+    ///   struct (`Stats`, `Regex`, `Client`, `Response`, `HttpError`,
+    ///   `Base64`, `Hex`, `Url`); these resource namespaces stay
+    ///   programmatic because the names are registered as
+    ///   `SymbolKind::EffectResource` in `PRELUDE_EFFECT_RESOURCES`,
+    ///   not as types — there is no `struct Stdin { }` for
+    ///   `impl Stdin { ... }` to attach to. Migrating them would
+    ///   require either authoring companion struct declarations
+    ///   (and reconciling the resolver's effect-resource symbol kind
+    ///   with the type-name kind) or special-casing impl blocks
+    ///   targeting effect-resource names. Tracked as a follow-up to
+    ///   slice 6.3 in `phase-4-interpreter.md`.
     /// - The primitive operator impl table via [`Self::register_stdlib_impls`]
     ///   (`impl Add for i32`, `impl Eq for u8`, the numeric widening
     ///   `From` impls, …). Documented as permanently programmatic — a
