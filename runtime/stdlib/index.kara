@@ -1,0 +1,15 @@
+// runtime/stdlib/index.kara
+//
+// CR-202 slice 6.2a. Per design.md § Operator Traits — `Index` /
+// `IndexMut` are the bracket-indexing operator traits. `Output` is
+// the element type returned by the index operation; user impls must
+// supply it as `type Output = ...;` per `check_impl_block`'s
+// associated-type coverage rule.
+
+trait Index {
+    type Output;
+}
+
+trait IndexMut {
+    type Output;
+}

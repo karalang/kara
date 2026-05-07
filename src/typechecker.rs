@@ -3462,9 +3462,8 @@ impl<'a> TypeChecker<'a> {
             ("Not", &[]),
             // Equality and ordering. `Eq` (slice 5b) and `Ord` (slice 5d)
             // are likewise provided by `runtime/stdlib/{eq,ord}.kara`.
-            // Indexing — Output is the element type
-            ("Index", &["Output"]),
-            ("IndexMut", &["Output"]),
+            // Indexing — `Index` and `IndexMut` migrated to baked
+            // source (`runtime/stdlib/index.kara`, CR-202 slice 6.2a).
             // String conversion (used by f-string interpolation) — now
             // provided by `runtime/stdlib/display.kara` (CR-202 slice 5f);
             // the bake walk registers it via `env_add_trait`.
