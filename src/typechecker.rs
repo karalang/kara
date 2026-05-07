@@ -2869,26 +2869,12 @@ impl<'a> TypeChecker<'a> {
         // (CR-202 slice 6.1b). Method dispatch stays in
         // `infer_sorted_set_method` / `infer_channel_method`.
 
-        // ── Iterator and IntoIterator traits ──────────────────────────────
-        //
-        // Register as real traits with associated types so that:
-        //   (a) `impl Iterator for MyType { type Item = T; }` validates,
-        //   (b) `T: Iterator` bounds check `T.Item` projections,
-        //   (c) the for-loop element-type lookup can go through `element_type_of`.
-        self.env.traits.insert(
-            "Iterator".to_string(),
-            TraitInfo {
-                assoc_types: vec!["Item".to_string()],
-                supertraits: vec![],
-            },
-        );
-        self.env.traits.insert(
-            "IntoIterator".to_string(),
-            TraitInfo {
-                assoc_types: vec!["Item".to_string(), "IntoIter".to_string()],
-                supertraits: vec![],
-            },
-        );
+        // `Iterator` and `IntoIterator` trait registrations now come
+        // from `runtime/stdlib/{iterator,into_iterator}.kara` (CR-202
+        // slice 6.2d). The parametric pseudo-struct registration for
+        // `Iterator` (used by `element_type_of` for the
+        // `for x in v.iter()` lookup) stays in code below — it has no
+        // syntactic representation in baked source.
 
         // ── Builtin IntoIterator / Iterator impls for stdlib collections ──
         //

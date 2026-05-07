@@ -1,0 +1,13 @@
+// runtime/stdlib/into_iterator.kara
+//
+// CR-202 slice 6.2d. Per design.md § Iteration — `IntoIterator`
+// is the trait that drives `for x in collection` loops. `IntoIter`
+// is the iterator type returned by `into_iter()`; `Item` is the
+// element type that iterator yields. Two associated types because
+// the for-loop expansion needs both: `IntoIter` for the loop
+// variable's static type, `Item` for the element binding.
+
+trait IntoIterator {
+    type Item;
+    type IntoIter;
+}

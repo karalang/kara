@@ -1,0 +1,24 @@
+// runtime/stdlib/iterator.kara
+//
+// CR-202 slice 6.2d. Per design.md § Iteration — `Iterator` is the
+// trait every iteration adapter implements. `Item` is the element
+// type yielded by `next()`.
+//
+// The full method surface (`map`, `filter`, `take`, `skip`,
+// `peekable`, `collect`, …) stays programmatic in `infer_iterator_*`
+// dispatch paths until the impl-table cleanup. The bake migrates
+// only the trait shape so `T: Iterator` bound resolution and
+// `impl Iterator for MyType` validation see the same trait info
+// they did pre-bake.
+//
+// `Iterator` is also registered as a *parametric pseudo-struct* in
+// `register_builtin_types` for the `for x in v.iter()` element-type
+// lookup (`element_type_of` -> `impl_assoc_types[("Iterator",
+// "Item")]`). That pseudo-struct registration stays in code — it
+// has no syntactic representation in baked source. Trait
+// registration (this file) and pseudo-struct registration (code)
+// live in different env maps and never conflict.
+
+trait Iterator {
+    type Item;
+}

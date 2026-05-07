@@ -215,6 +215,8 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("into.kara", include_str!("../runtime/stdlib/into.kara")),
     ("try_from.kara", include_str!("../runtime/stdlib/try_from.kara")),
     ("try_into.kara", include_str!("../runtime/stdlib/try_into.kara")),
+    ("iterator.kara", include_str!("../runtime/stdlib/iterator.kara")),
+    ("into_iterator.kara", include_str!("../runtime/stdlib/into_iterator.kara")),
     ("partial_eq.kara", include_str!("../runtime/stdlib/partial_eq.kara")),
     ("eq.kara", include_str!("../runtime/stdlib/eq.kara")),
     ("partial_ord.kara", include_str!("../runtime/stdlib/partial_ord.kara")),
