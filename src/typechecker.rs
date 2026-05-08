@@ -3325,6 +3325,19 @@ impl<'a> TypeChecker<'a> {
         };
         self.env.functions.insert("env.var".to_string(), var_sig);
 
+        // `env.set(name, value)` — lowercase alias for `Env.set`. The
+        // capitalized form lives in baked stdlib (`runtime/stdlib/io.kara`)
+        // alongside `Env.var` / `Env.args`; this lowercase entry mirrors the
+        // `env.var` registration above. Carries `writes(Env)` (seeded in
+        // `effectchecker::check`) so callers must declare it.
+        let set_sig = FunctionSig {
+            generic_params: vec![],
+            param_names: vec![Some("name".to_string()), Some("value".to_string())],
+            params: vec![Type::Str, Type::Str],
+            return_type: Type::Unit,
+        };
+        self.env.functions.insert("env.set".to_string(), set_sig);
+
         // Register process.exit in the function table
         self.env.functions.insert(
             "process.exit".to_string(),

@@ -2616,6 +2616,24 @@ fn test_env_args_returns_array() {
     assert_eq!(output, "true\n");
 }
 
+#[test]
+fn test_env_set_round_trips_via_var() {
+    // env.set("X", "v") then env.var("X") observes "v". Confirms the new
+    // stdlib method writes to the same process-environment block that
+    // `env.var` reads from. Use a unique name to avoid collisions with
+    // other tests running in the same process.
+    std::env::remove_var("KARAC_ENV_SET_ROUND_TRIP_TEST");
+    let output = run("fn main() {
+         env.set(\"KARAC_ENV_SET_ROUND_TRIP_TEST\", \"hello-set\");
+         match env.var(\"KARAC_ENV_SET_ROUND_TRIP_TEST\") {
+             Ok(v) => println(v),
+             Err(_) => println(\"unset\"),
+         }
+     }");
+    std::env::remove_var("KARAC_ENV_SET_ROUND_TRIP_TEST");
+    assert_eq!(output, "hello-set\n");
+}
+
 // ── `with_provider` runtime + resource method dispatch ───────────
 
 #[test]

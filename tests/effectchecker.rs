@@ -3625,6 +3625,73 @@ fn test_pub_fn_calling_vec_new_must_declare_allocates_heap() {
 }
 
 #[test]
+fn test_env_set_infers_writes_env() {
+    // env.set(name, value) carries writes(Env) — callers accumulate the
+    // effect through the normal call-graph propagation. Both the lowercase
+    // and capitalized callee keys are seeded.
+    let result = effectcheck_ok(
+        "fn do_set() {
+             env.set(\"FOO\", \"bar\");
+         }",
+    );
+    let inferred = result.inferred_effects.get("do_set").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Writes && e.effect.resource == "Env"),
+        "Expected writes(Env) for env.set(...), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_env_set_capitalized_form_infers_writes_env() {
+    // The capitalized `Env.set(...)` dispatch path picks up the same effect
+    // — both keys are seeded by the effectchecker's startup seeding loop.
+    let result = effectcheck_ok(
+        "fn do_set() {
+             Env.set(\"FOO\", \"bar\");
+         }",
+    );
+    let inferred = result.inferred_effects.get("do_set").unwrap();
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Writes && e.effect.resource == "Env"),
+        "Expected writes(Env) for Env.set(...), got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_pub_fn_calling_env_set_must_declare_writes_env() {
+    // A public function that calls env.set must declare writes(Env). Mirror
+    // of the Vec.new + allocates(Heap) negative test for the new effect.
+    let errors = effectcheck_errors("pub fn save() { env.set(\"FOO\", \"bar\"); }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration),
+        "Expected MissingEffectDeclaration for pub fn calling env.set, got: {:?}",
+        errors
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("writes(Env)")),
+        "Expected error message to mention writes(Env), got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_pub_fn_with_writes_env_declared_accepts_env_set() {
+    // The dual of the negative — declaring writes(Env) on the public fn
+    // satisfies the seeded-effect requirement, no error.
+    effectcheck_ok("pub fn save() writes(Env) { env.set(\"FOO\", \"bar\"); }");
+}
+
+#[test]
 fn test_allocates_heap_propagates_through_call_chain() {
     // allocates(Heap) propagates transitively: inner → outer.
     let result = effectcheck_ok(

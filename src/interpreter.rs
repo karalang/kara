@@ -7296,6 +7296,36 @@ impl<'a> Interpreter<'a> {
                     },
                 }
             }
+            ("Env", "set") => {
+                // `env.set(name, value) -> Unit` with `writes(Env)`. POSIX
+                // `setenv` shape — overwrites if already present, creates if
+                // absent. Companion to `Env.var` and `Env.args`. The runtime
+                // crate is Rust 2021 edition, where `std::env::set_var` is
+                // safe; the safety contract (no concurrent reads of the
+                // environment block on other threads) is upheld here because
+                // the interpreter is single-threaded at this surface.
+                self.track_effect("writes(Env)");
+                let name = match arg_vals.first() {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => {
+                        return self.record_runtime_error(
+                            "Env.set expects a String name argument".to_string(),
+                            span,
+                        );
+                    }
+                };
+                let value = match arg_vals.get(1) {
+                    Some(Value::String(s)) => s.clone(),
+                    _ => {
+                        return self.record_runtime_error(
+                            "Env.set expects a String value argument".to_string(),
+                            span,
+                        );
+                    }
+                };
+                std::env::set_var(&name, &value);
+                Value::Unit
+            }
             // ── Stdin ──────────────────────────────────────────────
             ("Stdin", "read_line") => {
                 self.track_effect("reads(Stdin)");

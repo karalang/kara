@@ -5410,6 +5410,28 @@ fn test_var_error_not_unicode_variant_exists() {
     );
 }
 
+#[test]
+fn test_env_set_typechecks() {
+    // env.set(name, value) -> Unit; both lowercase and capitalized forms.
+    typecheck_ok(
+        "fn main() with writes(Env) {
+             env.set(\"FOO\", \"bar\");
+             Env.set(\"BAZ\", \"qux\");
+         }",
+    );
+}
+
+#[test]
+fn test_env_set_wrong_arg_type_is_error() {
+    // env.set expects two String arguments; passing an int fails typechecking.
+    let errors = typecheck_errors(
+        "fn main() with writes(Env) {
+             env.set(\"FOO\", 42);
+         }",
+    );
+    assert!(!errors.is_empty());
+}
+
 // ── Slice[T] method typechecking ──────────────────────────────────────────────
 
 #[test]

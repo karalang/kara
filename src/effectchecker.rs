@@ -489,6 +489,27 @@ impl<'a> EffectChecker<'a> {
             }
         }
 
+        // `Env.set(name, value)` / `env.set(name, value)`: writes(Env). The
+        // POSIX `setenv` shape mutates the process environment block, so a
+        // public caller must declare `writes(Env)` to forward the effect.
+        // Both the capitalized (baked-stdlib `impl Env { fn set }`) and
+        // lowercase (`env.functions.insert("env.set", …)`) keys are seeded
+        // so either dispatch path picks up the effect.
+        {
+            let writes_env = Effect {
+                verb: EffectVerbKind::Writes,
+                resource: "Env".to_string(),
+            };
+            for fn_name in ["Env.set", "env.set"] {
+                let mut set = EffectSet::new();
+                set.add(
+                    writes_env.clone(),
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                self.inferred_effects.insert(fn_name.to_string(), set);
+            }
+        }
+
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are
         // registered as trait names only by the typechecker — they have no
         // AST `TraitDef`, so `collect_declared_effects` skips them. Seed
@@ -1418,6 +1439,21 @@ impl<'a> EffectChecker<'a> {
                     calls.push(("__builtin_unwrap".to_string(), expr.span.clone()));
                 } else if method == "expect" {
                     calls.push(("__builtin_expect".to_string(), expr.span.clone()));
+                }
+                // Lowercase stdlib module aliases routed through `MethodCall`
+                // syntax (`env.set(...)`, etc.). The parser produces a
+                // `MethodCall` with `object = Identifier("env")` because the
+                // module name is value-class — `Env.set(...)` would parse as
+                // `Call(Path([Env, set]))` and route through `extract_callee_name`
+                // above, but the lowercase form does not. Mirror the
+                // typechecker's `infer_method_call` lowercase-module branch
+                // (line ~8725) and the interpreter's `eval_method_call` alias
+                // map by emitting the capitalized `Env.<method>` call key here
+                // so seeded `inferred_effects` flow to the caller.
+                if let ExprKind::Identifier(mod_name) = &object.kind {
+                    if mod_name == "env" {
+                        calls.push((format!("Env.{}", method), expr.span.clone()));
+                    }
                 }
                 // Stdlib methods whose effects are pre-seeded in inferred_effects.
                 // Matched by method name (conservatively — no receiver type info here).

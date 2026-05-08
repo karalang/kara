@@ -78,6 +78,9 @@ impl Env {
 
     #[compiler_builtin]
     fn var(name: String) -> Result[String, VarError] { Err(VarError.NotPresent) }
+
+    #[compiler_builtin]
+    fn set(name: String, value: String) { }
 }
 
 struct Clock { }
