@@ -158,7 +158,7 @@ wip-list1 is a single docs commit; do not bundle with implementation.
 
 ## Active queue
 
-- [x] **Slice 1 — Plumbing: thread `ConcurrencyAnalysis` into `Codegen`.** Pure refactor; foundation for slice 2 (auto-par codegen MVP, the Parallax punchline). Plan source: [`phase-7-codegen.md`](phase-7-codegen.md) § "Par codegen: auto-parallelization of non-`par` regions" → "Slice plan (drafted 2026-05-08) — slice 1: plumbing". No IR shape change, no test-output change; existing suite must remain green. Promoted from staging 2026-05-08. Landed 2026-05-08 (commit _pending_).
+- [x] **Slice 1 — Plumbing: thread `ConcurrencyAnalysis` into `Codegen`.** Pure refactor; foundation for slice 2 (auto-par codegen MVP, the Parallax punchline). Plan source: [`phase-7-codegen.md`](phase-7-codegen.md) § "Par codegen: auto-parallelization of non-`par` regions" → "Slice plan (drafted 2026-05-08) — slice 1: plumbing". No IR shape change, no test-output change; existing suite must remain green. Promoted from staging 2026-05-08. Landed 2026-05-08 (commit c0e72fc).
 
 Slices 2–6 of the Phase 8 auto-concurrency slate remain in
 [`wip-staging.md`](wip-staging.md) under "needs plan drafting" state;
@@ -174,4 +174,4 @@ the plan is committed.
 
 | # | Slice | Started | Landed | Duration | Commit |
 |---|---|---|---|---|---|
-| 1 | Plumbing: `ConcurrencyAnalysis` into `Codegen` | 2026-05-08 | 2026-05-08 | ~30 min | _pending_ |
+| 1 | Plumbing: `ConcurrencyAnalysis` into `Codegen` | 2026-05-08 | 2026-05-08 | ~30 min | c0e72fc |
