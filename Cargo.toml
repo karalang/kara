@@ -19,3 +19,26 @@ regex = "1"
 ureq = "2"
 rustyline = "18.0.0"
 pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
+
+# Binary-size phase 1: drop `__eh_frame` + `__unwind_info` from emitted
+# binaries by removing unwind tables from the runtime's release build.
+# `karac_par_run` uses `std::panic::catch_unwind`; with `panic = "abort"`
+# a panic in a worker aborts the process instead of unwinding, which is
+# the desired behavior for `par {}` fail-fast semantics anyway. The
+# `catch_unwind` call still compiles (it returns `Err` only on unwind)
+# but becomes effectively unreachable — the compiler/runtime pair stays
+# correct, and the binary loses unwind metadata on representative E2E
+# builds.
+#
+# Cargo currently does not allow `panic` to be specified per-package
+# (`panic may not be specified in a package profile`), so this lives at
+# the workspace root and applies to release builds of every workspace
+# member. Effect on the karac compiler itself: only its `--release`
+# build is affected; default `cargo build` and `cargo test` use the dev
+# profile and keep the default `panic = "unwind"`, so test-time panic
+# capture and dev-mode backtraces are unchanged.
+#
+# See `docs/implementation_checklist/phase-7-codegen.md § "Phase 1
+# binary-size optimization"` close-out for measured size deltas.
+[profile.release]
+panic = "abort"

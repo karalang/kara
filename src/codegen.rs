@@ -139,7 +139,51 @@ fn link_executable_impl(
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Linker failed: {}", stderr));
     }
+
+    // Binary-size phase 1: strip non-global symbols from the linked
+    // executable. `strip -x` keeps the global symbol table intact (so the
+    // `karac_*` runtime entry points the program actually calls remain
+    // resolvable, and ASAN-instrumented builds keep the `__asan_*`
+    // globals they need at runtime) and drops local debug symbols only.
+    // Skipped when sanitizer flags are passed: ASAN's stack-trace
+    // symbolication walks local symbol tables for function-name lookup,
+    // and stripping them turns "leak in karac_par_run+0x42" into
+    // "leak in <unknown>+0x42" — the sanitizer harness keeps the full
+    // symbol table for diagnostic legibility. Unix-only at v1; Windows
+    // toolchains lack a drop-in `strip` equivalent.
+    //
+    // `strip` failures are non-fatal — the executable already exists and
+    // works; we just lose the size-reduction benefit on this specific
+    // build. Print a stderr note rather than failing the codegen path so
+    // hosts without `strip` (rare on macOS/Linux) keep producing
+    // working binaries.
+    if cfg!(unix) && !is_sanitizer_link(extra_cc_args) {
+        let strip_status = std::process::Command::new("strip")
+            .args(["-x", exe_path])
+            .output();
+        match strip_status {
+            Ok(o) if !o.status.success() => {
+                eprintln!(
+                    "warning: `strip -x {exe_path}` failed: {}",
+                    String::from_utf8_lossy(&o.stderr)
+                );
+            }
+            Err(e) => {
+                eprintln!("warning: failed to invoke `strip`: {e}");
+            }
+            _ => {}
+        }
+    }
     Ok(())
+}
+
+/// True if any extra cc flag enables a sanitizer instrumentation runtime.
+/// Sanitizer runtimes rely on local symbol tables for stack-trace
+/// symbolication, so stripped sanitizer binaries print
+/// `<unknown>+0xN` frames in their reports — keep symbols on those
+/// builds.
+fn is_sanitizer_link(extra_cc_args: &[&str]) -> bool {
+    extra_cc_args.iter().any(|a| a.starts_with("-fsanitize"))
 }
 
 fn resolve_runtime_path() -> Result<String, String> {

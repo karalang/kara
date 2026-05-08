@@ -7,3 +7,10 @@ publish = false
 [lib]
 name = "karac_runtime"
 crate-type = ["staticlib"]
+
+# Note: the runtime's release-profile `panic = "abort"` setting lives in
+# the workspace root `Cargo.toml` (cargo ignores `[profile.*]` in
+# non-root manifests with a warning). See the workspace Cargo.toml's
+# `[profile.release.package.karac-runtime]` block + the close-out under
+# `docs/implementation_checklist/phase-7-codegen.md § "Phase 1
+# binary-size optimization"` for context.
