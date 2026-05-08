@@ -6999,6 +6999,89 @@ fn main() {
         );
     }
 
+    // ── Theme 6: par-block provider-stack inheritance (sub-step 5) ──────
+    //
+    // Structural + e2e tests pinning that `par { }` branches inherit the
+    // provider stack from the calling thread. The env-struct snapshot is
+    // taken via `karac_provider_get_stack_head` at par-block entry; each
+    // branch fn re-seeds its TLS with `karac_provider_set_stack_head` in
+    // its prologue.
+
+    #[test]
+    fn test_par_block_emits_provider_stack_head_snapshot_and_seed() {
+        let ir = ir_for(
+            "fn main() {\n\
+               par {\n\
+                 println(1);\n\
+                 println(2);\n\
+               }\n\
+             }",
+        );
+        // Snapshot at par-block entry (outer-fn side) — one call per par-block.
+        let snap_count = ir
+            .lines()
+            .filter(|l| l.contains("call") && l.contains("@karac_provider_get_stack_head"))
+            .count();
+        assert_eq!(
+            snap_count, 1,
+            "expected exactly one call to karac_provider_get_stack_head at par-block entry; \
+             IR: {}",
+            ir
+        );
+        // Seed inside each branch fn — one call per branch (2 branches here).
+        let seed_count = ir
+            .lines()
+            .filter(|l| l.contains("call") && l.contains("@karac_provider_set_stack_head"))
+            .count();
+        assert_eq!(
+            seed_count, 2,
+            "expected one karac_provider_set_stack_head call per branch fn (2 branches); \
+             IR: {}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_par_block_inside_with_provider_e2e_branches_see_provider() {
+        // Provider pushed by with_provider, par block spawned inside.
+        // Each par branch's worker thread starts with null TLS; the
+        // env-struct snapshot + set_stack_head seed is what makes
+        // R.get() resolve inside the branch body.
+        let src = "pub trait Reader { fn get(ref self) -> i64; }\n\
+            pub struct Data { x: i64 }\n\
+            impl Reader for Data { fn get(ref self) -> i64 { self.x } }\n\
+            pub effect resource D: Reader;\n\
+            fn main() {\n\
+              let p = Data { x: 100 };\n\
+              with_provider[D](p, || {\n\
+                par {\n\
+                  println(D.get());\n\
+                  println(D.get());\n\
+                }\n\
+              });\n\
+            }";
+        let Some(out) = run_program(src) else {
+            eprintln!("skipping par+with_provider e2e: runtime/linker unavailable");
+            return;
+        };
+        // Branch order is non-deterministic; both must print 100.
+        let lines: Vec<&str> = out.lines().filter(|l| !l.is_empty()).collect();
+        assert_eq!(
+            lines.len(),
+            2,
+            "expected 2 println outputs; got: {:?}",
+            lines
+        );
+        for l in &lines {
+            assert_eq!(
+                l.trim(),
+                "100",
+                "each branch should print 100 (provider inherited from outer scope); got: {:?}",
+                lines
+            );
+        }
+    }
+
     #[test]
     fn test_with_provider_e2e_mut_ref_self_mutation_visible_after_pop() {
         // Full Theme 6 round-trip: push → R.method() → pop, where the

@@ -716,6 +716,15 @@ struct Codegen<'ctx> {
     /// Consumed by `R.method(...)` dispatch (sub-step 4) to find the
     /// active provider's data pointer and vtable.
     karac_provider_lookup_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_provider_get_stack_head() -> *const ProviderFrame`.
+    /// Consumed by par-block lowering (sub-step 5) to snapshot the
+    /// calling thread's stack head into the par-block env-struct.
+    karac_provider_get_stack_head_fn: FunctionValue<'ctx>,
+    /// Runtime extern: `karac_provider_set_stack_head(head)`. Consumed
+    /// by par-branch fn prologues (sub-step 5) to seed each worker
+    /// thread's TLS from the env-struct snapshot, so providers in
+    /// scope at the par-block site stay visible inside spawned branches.
+    karac_provider_set_stack_head_fn: FunctionValue<'ctx>,
     /// LLVM struct type for `ProviderFrame { prev, resource_id, data, vtable }`
     /// — `#[repr(C)]` matches `runtime/src/lib.rs::ProviderFrame`. Consumed
     /// at `with_provider[R]` lowering sites for the alloca'd frame storage
@@ -940,6 +949,22 @@ impl<'ctx> Codegen<'ctx> {
         let karac_provider_lookup_fn = module.add_function(
             "karac_provider_lookup",
             karac_provider_lookup_type,
+            Some(Linkage::External),
+        );
+        // Sub-step 5 (par-block inheritance): get/set the per-thread head
+        // pointer so par-branch worker tasks can inherit the parent
+        // thread's provider stack via the env-struct snapshot mechanism.
+        let karac_provider_get_stack_head_type = ptr_type.fn_type(&[], false);
+        let karac_provider_get_stack_head_fn = module.add_function(
+            "karac_provider_get_stack_head",
+            karac_provider_get_stack_head_type,
+            Some(Linkage::External),
+        );
+        let karac_provider_set_stack_head_type =
+            context.void_type().fn_type(&[ptr_type.into()], false);
+        let karac_provider_set_stack_head_fn = module.add_function(
+            "karac_provider_set_stack_head",
+            karac_provider_set_stack_head_type,
             Some(Linkage::External),
         );
 
@@ -1173,6 +1198,8 @@ impl<'ctx> Codegen<'ctx> {
             karac_provider_push_fn,
             karac_provider_pop_fn,
             karac_provider_lookup_fn,
+            karac_provider_get_stack_head_fn,
+            karac_provider_set_stack_head_fn,
             provider_frame_ty,
             provider_lookup_result_ty,
             map_key_types: HashMap::new(),
@@ -13582,33 +13609,59 @@ impl<'ctx> Codegen<'ctx> {
             .collect();
         captures.sort(); // deterministic order
 
-        // 2. Build the shared env struct. Use a dummy i8 when there are no
-        //    captures so we always have a valid struct type to point at.
-        let env_field_types: Vec<BasicTypeEnum<'ctx>> = if captures.is_empty() {
-            vec![self.context.i8_type().into()]
-        } else {
-            captures.iter().map(|n| self.variables[n].ty).collect()
-        };
+        // 2. Build the shared env struct. Captured user locals fill the
+        //    leading slots; the trailing slot is always a `*const
+        //    ProviderFrame` snapshot of the calling thread's stack head
+        //    (Theme 6 sub-step 5 — provider inheritance). Each branch
+        //    fn re-seeds its TLS from this slot at prologue time so
+        //    `with_provider[R]` bindings established outside the par
+        //    block stay visible to spawned workers.
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let mut env_field_types: Vec<BasicTypeEnum<'ctx>> =
+            captures.iter().map(|n| self.variables[n].ty).collect();
+        let provider_head_idx = env_field_types.len();
+        env_field_types.push(ptr_ty.into());
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
-        // 3. Allocate and populate the env struct in the outer function. We
-        //    capture by value (copy semantics) — sufficient for the types the
-        //    rest of the codegen already supports (integers, floats, pointers).
+        // 3. Allocate and populate the env struct in the outer function.
+        //    Captures are copied by value (sufficient for ints, floats,
+        //    pointers — the types the rest of codegen already supports).
+        //    The provider-head field is filled by calling
+        //    `karac_provider_get_stack_head()`; that read is cheap (one
+        //    TLS get) and runs once per par-block, not per branch.
         let outer_fn = self.current_fn.unwrap();
         let env_alloca = self.create_entry_alloca(outer_fn, "__par_env", env_struct_ty.into());
-        if !captures.is_empty() {
-            let mut env_agg = env_struct_ty.get_undef();
-            for (i, name) in captures.iter().enumerate() {
-                let slot = self.variables[name];
-                let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
-                env_agg = self
-                    .builder
-                    .build_insert_value(env_agg, val, i as u32, "__par_env_field")
-                    .unwrap()
-                    .into_struct_value();
-            }
-            self.builder.build_store(env_alloca, env_agg).unwrap();
+        let mut env_agg = env_struct_ty.get_undef();
+        for (i, name) in captures.iter().enumerate() {
+            let slot = self.variables[name];
+            let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+            env_agg = self
+                .builder
+                .build_insert_value(env_agg, val, i as u32, "__par_env_field")
+                .unwrap()
+                .into_struct_value();
         }
+        let head_val = self
+            .builder
+            .build_call(
+                self.karac_provider_get_stack_head_fn,
+                &[],
+                "__par_env_head_snap",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        env_agg = self
+            .builder
+            .build_insert_value(
+                env_agg,
+                head_val,
+                provider_head_idx as u32,
+                "__par_env_head",
+            )
+            .unwrap()
+            .into_struct_value();
+        self.builder.build_store(env_alloca, env_agg).unwrap();
 
         // 4. Generate one branch function per statement.
         //    Mint the SpawnSiteId via `record_spawn_site` (Debugger
@@ -13750,9 +13803,38 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
         self.builder.position_at_end(body_bb);
 
+        // Theme 6 sub-step 5: seed this worker thread's provider stack
+        // from the env-struct snapshot taken at par-block entry. Always
+        // emitted because every par-block env-struct now carries the
+        // head-pointer slot in its trailing field (the captures vec may
+        // be empty but the env still has at least the one ptr field).
+        // Run before unpacking captures so any with_provider bindings
+        // are visible inside their initialization (defensive — none of
+        // the existing capture-init paths invoke R.method, but this
+        // ordering is the cheap, future-proof choice).
+        let env_ptr = branch_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let env_val_for_head = self
+            .builder
+            .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env_head_load")
+            .unwrap();
+        let head_val = self
+            .builder
+            .build_extract_value(
+                env_val_for_head.into_struct_value(),
+                captures.len() as u32,
+                "__par_branch_head",
+            )
+            .unwrap();
+        self.builder
+            .build_call(
+                self.karac_provider_set_stack_head_fn,
+                &[head_val.into()],
+                "",
+            )
+            .unwrap();
+
         // Unpack captures from the env struct into fresh allocas.
         if !captures.is_empty() {
-            let env_ptr = branch_fn.get_nth_param(0).unwrap().into_pointer_value();
             let env_val = self
                 .builder
                 .build_load::<BasicTypeEnum<'ctx>>(env_struct_ty.into(), env_ptr, "__env")
