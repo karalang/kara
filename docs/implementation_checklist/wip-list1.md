@@ -217,7 +217,7 @@ Per-slice durations recorded as each lands. Subagent wall-clock is the implement
 | 6 | REPL auto-clone | 2026-05-08 00:40 | 2026-05-08 00:59 | 19 min | `3f20d72` |
 | 7 | atomic-RC | 2026-05-08 01:01 | 2026-05-08 01:18 | 17 min | `791ea64` |
 | 8 | env.set | 2026-05-08 01:21 | 2026-05-08 01:34 | 13 min | `4f41905` |
-| 9 | From[VarError] → IoError | 2026-05-08 01:36 | 2026-05-08 01:48 | 12 min | _pending_ |
+| 9 | From[VarError] → IoError | 2026-05-08 01:36 | 2026-05-08 01:48 | 12 min | `3bc449e` |
 | 10 | `?` JSON trace mode | _—_ | _—_ | _—_ | _—_ |
 
 Total elapsed: _pending overall completion_.
