@@ -207,6 +207,50 @@ pub fn type_to_concrete_or_param_name(ty: &Type) -> Option<String> {
     }
 }
 
+/// Head name suitable for `env.impls` lookup. Primitives are keyed under
+/// their stringified name (`"i32"`, `"f64"`, `"bool"`, …) by
+/// `register_stdlib_impls`; named types under their nominal head.
+/// Returns `None` for type variables, function types, slices, tuples,
+/// etc. — none of which can satisfy a nominal trait bound today.
+/// Strips outer `ref` / `mut ref` so a borrowed receiver discharges
+/// against the same impls as its inner type.
+fn impl_table_key(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Int(s) => Some(
+            match s {
+                IntSize::I8 => "i8",
+                IntSize::I16 => "i16",
+                IntSize::I32 => "i32",
+                IntSize::I64 => "i64",
+            }
+            .to_string(),
+        ),
+        Type::UInt(s) => Some(
+            match s {
+                UIntSize::U8 => "u8",
+                UIntSize::U16 => "u16",
+                UIntSize::U32 => "u32",
+                UIntSize::U64 => "u64",
+                UIntSize::Usize => "usize",
+            }
+            .to_string(),
+        ),
+        Type::Float(s) => Some(
+            match s {
+                FloatSize::F32 => "f32",
+                FloatSize::F64 => "f64",
+            }
+            .to_string(),
+        ),
+        Type::Bool => Some("bool".to_string()),
+        Type::Char => Some("char".to_string()),
+        Type::Str => Some("String".to_string()),
+        Type::Named { name, .. } => Some(name.clone()),
+        Type::Ref(inner) | Type::MutRef(inner) => impl_table_key(inner),
+        _ => None,
+    }
+}
+
 pub fn type_display(ty: &Type) -> String {
     match ty {
         Type::Int(s) => match s {
@@ -1158,6 +1202,19 @@ pub struct ImplInfo {
     pub target_type: String,
     pub trait_name: Option<String>,
     pub methods: HashMap<String, FunctionSig>,
+    /// Impl-level type-parameter declarations including their inline
+    /// bounds (`impl[T: Ord] Foo for Bar[T]`). Populated by
+    /// `env_add_impl`; consumed by the conditional-impl-filtering pass
+    /// (slice 1 of the method-resolution CR — see
+    /// `phase-4-interpreter.md`) to decide whether an impl applies at a
+    /// given call site. `None` for unconditional impls (`impl Foo for
+    /// Bar { ... }`).
+    pub generic_params: Option<GenericParams>,
+    /// Impl-level `where` clause predicates. Same role as
+    /// `generic_params`'s inline bounds for the discharge engine; the
+    /// two compose additively (every predicate must discharge for the
+    /// impl to apply).
+    pub where_clause: Option<WhereClause>,
 }
 
 /// Associated type names declared by a trait.
@@ -1303,6 +1360,189 @@ impl TypeEnv {
             }
         }
         names
+    }
+
+    /// Conditional-impl-aware variant of [`Self::find_method`] — slice 1 of
+    /// the method-resolution CR (see `phase-4-interpreter.md`). Filters
+    /// candidates by [`Self::impl_bounds_discharge`] before applying the
+    /// inherent-beats-trait priority. Pass `target_args` from the receiver's
+    /// `Type::Named { args }` so impl-level bounds (`impl[T: Ord] Foo for
+    /// Bar[T]`) discharge against the concrete instantiation.
+    pub fn find_method_with_args(
+        &self,
+        target_type: &str,
+        target_args: &[Type],
+        method: &str,
+    ) -> Option<&FunctionSig> {
+        let mut inherent: Option<&FunctionSig> = None;
+        let mut trait_method: Option<&FunctionSig> = None;
+        for imp in &self.impls {
+            if imp.target_type != target_type {
+                continue;
+            }
+            let Some(sig) = imp.methods.get(method) else {
+                continue;
+            };
+            if !self.impl_bounds_discharge(imp, target_args) {
+                continue;
+            }
+            if imp.trait_name.is_none() {
+                if inherent.is_none() {
+                    inherent = Some(sig);
+                }
+            } else if trait_method.is_none() {
+                trait_method = Some(sig);
+            }
+        }
+        inherent.or(trait_method)
+    }
+
+    /// Slice 1 of the method-resolution CR — conditional impl filtering.
+    /// Returns `true` when an impl applies at the call site whose receiver
+    /// type instantiates with `target_args`. Unconditional impls (no
+    /// `generic_params`) discharge trivially. Conditional impls
+    /// (`impl[T: Ord] Foo for Bar[T]` and `where`-clause variants)
+    /// substitute each impl-level type parameter with its concrete arg
+    /// from `target_args` and check that every declared bound holds.
+    /// Walks the supertrait graph, so `T: Ord` discharges against any
+    /// type that impls `Ord` directly OR impls a trait whose supertrait
+    /// closure reaches `Ord`.
+    ///
+    /// Out of scope for slice 1 (see roadmap in `phase-4-interpreter.md`):
+    /// associated-type bounds (`T: Iterator<Item=i32>`), bounds with
+    /// generic args on the trait (`T: Foo[U]` — only the path-tail trait
+    /// name is consulted today), and the deeper "impl on a specific
+    /// type-argument instantiation" key extension that unblocks
+    /// `impl Option[Ordering]`.
+    pub fn impl_bounds_discharge(&self, imp: &ImplInfo, target_args: &[Type]) -> bool {
+        let Some(gp) = &imp.generic_params else {
+            // No impl-level generic params → no inline bounds; the where
+            // clause (if present) couldn't reference any names anyway.
+            return true;
+        };
+
+        // Substitution map: impl-level generic-param name → concrete arg.
+        let subs: std::collections::HashMap<&str, &Type> = gp
+            .params
+            .iter()
+            .zip(target_args.iter())
+            .map(|(p, a)| (p.name.as_str(), a))
+            .collect();
+
+        // Inline bounds on each generic param.
+        for param in &gp.params {
+            if param.bounds.is_empty() {
+                continue;
+            }
+            let Some(&subst_ty) = subs.get(param.name.as_str()) else {
+                // Receiver had fewer type args than the impl declares — can't
+                // substitute the param to discharge its bounds. Conservative:
+                // drop the candidate.
+                return false;
+            };
+            for bound in &param.bounds {
+                if !self.bound_satisfied(subst_ty, bound) {
+                    return false;
+                }
+            }
+        }
+
+        // Where-clause `TypeBound` predicates: `where T: Bound`. Each
+        // predicate's `type_name` is either an impl-level generic param
+        // (substituted via `subs`) or a concrete type name (treated as
+        // a bare `Type::Named` lookup against `env.impls`). The latter
+        // covers cases like `where AnotherType: Ord` that name a type
+        // unrelated to the impl's generics.
+        if let Some(wc) = &imp.where_clause {
+            for constraint in &wc.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = constraint
+                else {
+                    // `AssocTypeEq` predicates are out of scope for slice 1.
+                    continue;
+                };
+                if bounds.is_empty() {
+                    continue;
+                }
+                let owned;
+                let target_ty: &Type = if let Some(&t) = subs.get(type_name.as_str()) {
+                    t
+                } else {
+                    owned = Type::Named {
+                        name: type_name.clone(),
+                        args: Vec::new(),
+                    };
+                    &owned
+                };
+                for bound in bounds {
+                    if !self.bound_satisfied(target_ty, bound) {
+                        return false;
+                    }
+                }
+            }
+        }
+
+        true
+    }
+
+    /// Discharge `bound` against `ty`. The bound's last path segment names
+    /// the trait. Walks the supertrait graph via [`Self::type_satisfies_trait`].
+    fn bound_satisfied(&self, ty: &Type, bound: &TraitBound) -> bool {
+        let Some(trait_name) = bound.path.last() else {
+            return false;
+        };
+        let Some(ty_key) = impl_table_key(ty) else {
+            // Type variables, function types, etc. don't appear in
+            // `env.impls`. Conservative: drop. Generic call-site resolution
+            // against bounds (item 8 of the method-resolution CR) is a
+            // separate slice that handles `TypeParam` receivers properly.
+            return false;
+        };
+        self.type_satisfies_trait(&ty_key, trait_name)
+    }
+
+    /// `true` when `ty_name` impls `trait_name` directly OR impls some
+    /// trait whose supertrait closure reaches `trait_name`. The walk is
+    /// finite — supertrait graphs are acyclic by construction.
+    fn type_satisfies_trait(&self, ty_name: &str, trait_name: &str) -> bool {
+        if self.has_impl(trait_name, ty_name) {
+            return true;
+        }
+        let directly_impld_traits: Vec<&str> = self
+            .impls
+            .iter()
+            .filter(|imp| imp.target_type == ty_name)
+            .filter_map(|imp| imp.trait_name.as_deref())
+            .collect();
+        for start in directly_impld_traits {
+            if self.supertrait_closure_contains(start, trait_name) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// BFS over the supertrait graph. `true` iff `target_trait` is reachable
+    /// from `start_trait` through `TraitInfo::supertraits` edges.
+    fn supertrait_closure_contains(&self, start_trait: &str, target_trait: &str) -> bool {
+        use std::collections::{HashSet, VecDeque};
+        let mut frontier: VecDeque<&str> = VecDeque::from([start_trait]);
+        let mut seen: HashSet<&str> = HashSet::from([start_trait]);
+        while let Some(name) = frontier.pop_front() {
+            let Some(info) = self.traits.get(name) else {
+                continue;
+            };
+            for st in &info.supertraits {
+                if st == target_trait {
+                    return true;
+                }
+                if seen.insert(st.as_str()) {
+                    frontier.push_back(st);
+                }
+            }
+        }
+        false
     }
 
     /// Find a `From` impl mapping `source` → `target`. Disambiguates
@@ -3817,6 +4057,8 @@ impl<'a> TypeChecker<'a> {
             target_type: type_name,
             trait_name,
             methods,
+            generic_params: imp.generic_params.clone(),
+            where_clause: imp.where_clause.clone(),
         });
     }
 
@@ -3837,6 +4079,10 @@ impl<'a> TypeChecker<'a> {
             target_type: target_type.to_string(),
             trait_name: Some(trait_name.to_string()),
             methods,
+            // Compiler-internal stdlib impls are unconditional —
+            // primitive operator dispatch isn't generic over a bound.
+            generic_params: None,
+            where_clause: None,
         });
     }
 
@@ -6040,17 +6286,25 @@ impl<'a> TypeChecker<'a> {
                 }
             }
             Type::Named {
-                name: target_name, ..
+                name: target_name,
+                args: target_args,
             } => {
                 // Match against impl methods registered on this concrete type.
                 // Trait impls and inherent impls share the same `env.impls`
-                // table; we collect every impl whose target is `target_name`
-                // and whose method set contains `name`.
+                // table; we collect every impl whose target is `target_name`,
+                // whose method set contains `name`, and whose impl-level
+                // bounds discharge against the receiver's concrete generic
+                // args (slice 1 of the method-resolution CR — see
+                // `phase-4-interpreter.md`).
                 let matching: Vec<&ImplInfo> = self
                     .env
                     .impls
                     .iter()
-                    .filter(|imp| imp.target_type == *target_name && imp.methods.contains_key(name))
+                    .filter(|imp| {
+                        imp.target_type == *target_name
+                            && imp.methods.contains_key(name)
+                            && self.env.impl_bounds_discharge(imp, target_args)
+                    })
                     .collect();
                 match matching.len() {
                     0 => None,
@@ -8531,8 +8785,8 @@ impl<'a> TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
             other => other,
         };
-        let type_name = match receiver_for_lookup {
-            Type::Named { name, .. } => name.clone(),
+        let (type_name, type_args) = match receiver_for_lookup {
+            Type::Named { name, args } => (name.clone(), args.clone()),
             _ => {
                 // For non-named types, just type-check args and return Error
                 for arg in args {
@@ -8543,9 +8797,15 @@ impl<'a> TypeChecker<'a> {
         };
 
         // Look up method on the receiver type with inherent-beats-trait
-        // priority per design.md § Method Resolution Step 3. Multi-inherent
-        // / multi-trait ambiguity detection (Step 4) is deferred.
-        let method_sig = self.env.find_method(&type_name, method).cloned();
+        // priority per design.md § Method Resolution Step 3, plus
+        // conditional-impl filtering against the receiver's concrete
+        // generic args (slice 1 of the method-resolution CR — see
+        // `phase-4-interpreter.md`). Multi-inherent / multi-trait
+        // ambiguity detection (Step 4) is still deferred.
+        let method_sig = self
+            .env
+            .find_method_with_args(&type_name, &type_args, method)
+            .cloned();
 
         match method_sig {
             Some(sig) => {

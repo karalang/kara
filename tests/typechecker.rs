@@ -4753,6 +4753,83 @@ fn test_method_resolution_stdlib_silent_for_runtime_only() {
     );
 }
 
+// ── Method resolution: conditional impl filtering ───────────────
+//
+// Slice 1 of the method-resolution CR (see phase-4-interpreter.md).
+// `impl[T: Ord] Foo for Bar[T]` resolves at call sites where the
+// receiver's `T` discharges the bound, and silently falls through to
+// `no method named` (E0236) when it doesn't. The supertrait closure
+// is walked, so `T: PartialOrd` discharges against any type that
+// impls `Ord` directly (`Ord: PartialOrd + Eq` per stdlib).
+
+#[test]
+fn test_conditional_impl_satisfied_picks_method() {
+    // i32 impls Ord (registered by register_stdlib_impls), so the
+    // conditional impl applies; `b.method()` resolves through it. The
+    // function-parameter form pins `b: Bar[i32]` concretely without
+    // depending on struct-literal generic-argument inference.
+    typecheck_ok(
+        "struct Bar[T] { x: T }\n\
+         trait Foo { fn method(self) -> i64; }\n\
+         impl[T: Ord] Foo for Bar[T] { fn method(self) -> i64 { 0 } }\n\
+         fn use_bar(b: Bar[i32]) -> i64 { b.method() }",
+    );
+}
+
+#[test]
+fn test_conditional_impl_unsatisfied_drops_silently() {
+    // `NotOrd` has no `impl Ord for NotOrd` and no impl of any trait
+    // whose supertrait closure reaches `Ord`, so the conditional
+    // `impl[T: Ord] Foo for Bar[T]` discharges as false on
+    // `Bar[NotOrd]`. `b.method()` should error with NoMethodFound.
+    let errors = typecheck_errors(
+        "struct NotOrd { x: i64 }\n\
+         struct Bar[T] { x: T }\n\
+         trait Foo { fn method(self) -> i64; }\n\
+         impl[T: Ord] Foo for Bar[T] { fn method(self) -> i64 { 0 } }\n\
+         fn main() { let b: Bar[NotOrd] = Bar { x: NotOrd { x: 0 } }; b.method(); }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(e.kind, TypeErrorKind::NoMethodFound)),
+        "expected NoMethodFound for conditional impl that fails to discharge, got: {:?}",
+        errors.iter().map(|e| (&e.kind, &e.message)).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_conditional_impl_where_clause_filter() {
+    // Same shape as inline-bound case but using a `where` clause —
+    // the discharge engine treats `where T: Ord` and `impl[T: Ord]`
+    // equivalently.
+    typecheck_ok(
+        "struct Bar[T] { x: T }\n\
+         trait Foo { fn method(self) -> i64; }\n\
+         impl[T] Foo for Bar[T] where T: Ord { fn method(self) -> i64 { 0 } }\n\
+         fn use_bar(b: Bar[i32]) -> i64 { b.method() }",
+    );
+}
+
+#[test]
+fn test_conditional_impl_two_impls_only_one_bound_satisfied() {
+    // Two impls collide on `target_type=\"Bar\"` and `method=\"method\"`.
+    // Only the impl whose bounds discharge survives the filter,
+    // eliminating the would-be ambiguity. On `Bar[NotOrd]`, `FooOrd` is
+    // dropped (NotOrd doesn't impl Ord) so only `FooAny` applies — its
+    // `method` returns `bool`. Without the filter, the typechecker
+    // would either ambiguity-error or pick the wrong impl. The
+    // function-parameter form avoids the struct-literal generic-argument
+    // inference gap that the let-annotation form trips on.
+    typecheck_ok(
+        "struct NotOrd { x: i64 }\n\
+         struct Bar[T] { x: T }\n\
+         trait FooOrd { fn method(self) -> i64; }\n\
+         trait FooAny { fn method(self) -> bool; }\n\
+         impl[T: Ord] FooOrd for Bar[T] { fn method(self) -> i64 { 0 } }\n\
+         impl[T] FooAny for Bar[T] { fn method(self) -> bool { true } }\n\
+         fn use_bar(b: Bar[NotOrd]) -> bool { b.method() }",
+    );
+}
+
 // ── Public-signature visibility (CR-18) ─────────────────────────
 //
 // A `pub fn` / pub method / pub struct field / pub enum variant payload /
