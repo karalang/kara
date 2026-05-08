@@ -2634,6 +2634,66 @@ fn test_env_set_round_trips_via_var() {
     assert_eq!(output, "hello-set\n");
 }
 
+// ── impl From[VarError] for IoError — variant mapping ────────────────────
+
+#[test]
+fn test_var_error_not_present_maps_to_io_error_not_found() {
+    // VarError.NotPresent → IoError.NotFound via the baked stdlib impl.
+    let output = run("fn main() {
+         let io: IoError = IoError.from(VarError.NotPresent);
+         match io {
+             IoError.NotFound => println(\"not_found\"),
+             IoError.PermissionDenied => println(\"perm_denied\"),
+             IoError.AlreadyExists => println(\"already_exists\"),
+             IoError.UnexpectedEof => println(\"eof\"),
+             IoError.InvalidUtf8 => println(\"invalid_utf8\"),
+             IoError.Interrupted => println(\"interrupted\"),
+             IoError.Other(_) => println(\"other\"),
+         }
+     }");
+    assert_eq!(output, "not_found\n");
+}
+
+#[test]
+fn test_var_error_not_unicode_maps_to_io_error_invalid_utf8() {
+    // VarError.NotUnicode → IoError.InvalidUtf8 via the baked stdlib impl.
+    let output = run("fn main() {
+         let io: IoError = IoError.from(VarError.NotUnicode);
+         match io {
+             IoError.NotFound => println(\"not_found\"),
+             IoError.PermissionDenied => println(\"perm_denied\"),
+             IoError.AlreadyExists => println(\"already_exists\"),
+             IoError.UnexpectedEof => println(\"eof\"),
+             IoError.InvalidUtf8 => println(\"invalid_utf8\"),
+             IoError.Interrupted => println(\"interrupted\"),
+             IoError.Other(_) => println(\"other\"),
+         }
+     }");
+    assert_eq!(output, "invalid_utf8\n");
+}
+
+#[test]
+fn test_var_error_question_propagation_produces_io_error_not_found() {
+    // End-to-end: `env.var(missing)?` in a function returning
+    // `Result[String, IoError]` must propagate as `IoError.NotFound`
+    // (because `env.var` returns `VarError.NotPresent` for an unset key,
+    // and the `?` operator desugars through `IoError.from(...)`).
+    std::env::remove_var("__KARAC_FROM_VAR_TO_IO_NO_SUCH_VAR__");
+    let output = run("fn read_var() -> Result[String, IoError] with reads(Env) {
+             let s: String = env.var(\"__KARAC_FROM_VAR_TO_IO_NO_SUCH_VAR__\")?;
+             Ok(s)
+         }
+         fn main() {
+             match read_var() {
+                 Ok(v) => println(v),
+                 Err(IoError.NotFound) => println(\"not_found\"),
+                 Err(IoError.InvalidUtf8) => println(\"invalid_utf8\"),
+                 Err(_) => println(\"other_io_err\"),
+             }
+         }");
+    assert_eq!(output, "not_found\n");
+}
+
 // ── `with_provider` runtime + resource method dispatch ───────────
 
 #[test]

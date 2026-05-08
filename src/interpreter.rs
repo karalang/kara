@@ -1985,8 +1985,34 @@ impl<'a> Interpreter<'a> {
             .flat_map(|(_, p)| p.items.iter().cloned())
             .collect();
         for item in &baked_items {
-            if let Item::ImplBlock(imp) = item {
-                self.register_impl_methods(imp, /* skip_compiler_builtin = */ true);
+            match item {
+                Item::ImplBlock(imp) => {
+                    self.register_impl_methods(imp, /* skip_compiler_builtin = */ true);
+                }
+                // Register baked-stdlib enum unit variants under their
+                // qualified path (e.g. `IoError.NotFound`, `VarError.NotPresent`)
+                // so they can be used as expressions, peer to the
+                // hand-registered `Ordering.Less` / `MemoryOrdering.Relaxed`
+                // entries above. Without this, baked enums are pattern-only
+                // (match arms work because the resolver tags them, but
+                // construction `let e = IoError.NotFound` fails the
+                // env.get(path) lookup in `eval_path`). Tuple/struct variants
+                // are handled at call sites, same as user-program enums.
+                Item::EnumDef(e) => {
+                    for variant in &e.variants {
+                        if let VariantKind::Unit = variant.kind {
+                            self.env.define(
+                                format!("{}.{}", e.name, variant.name),
+                                Value::EnumVariant {
+                                    enum_name: e.name.clone(),
+                                    variant: variant.name.clone(),
+                                    data: EnumData::Unit,
+                                },
+                            );
+                        }
+                    }
+                }
+                _ => {}
             }
         }
 

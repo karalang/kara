@@ -96,3 +96,19 @@ impl RandomSource {
     #[compiler_builtin]
     fn next_u64() -> u64 { 0 }
 }
+
+// `?`-propagation from `env.var(...) -> Result[String, VarError]` into a
+// function returning `Result[T, IoError]` desugars to `IoError.from(e)`,
+// which dispatches through this impl. Variant mapping: `NotPresent` is the
+// "missing key" condition (mirrors `IoError.NotFound`); `NotUnicode` is the
+// "decoded payload was not valid UTF-8" condition (mirrors
+// `IoError.InvalidUtf8`). One-way only — the reverse direction is not
+// meaningful (a generic I/O error has no `VarError` projection).
+impl From for IoError {
+    fn from(e: VarError) -> IoError {
+        match e {
+            VarError.NotPresent => IoError.NotFound,
+            VarError.NotUnicode => IoError.InvalidUtf8,
+        }
+    }
+}

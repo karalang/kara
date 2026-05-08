@@ -5432,6 +5432,58 @@ fn test_env_set_wrong_arg_type_is_error() {
     assert!(!errors.is_empty());
 }
 
+// ── impl From[VarError] for IoError ──────────────────────────────────────────
+
+#[test]
+fn test_var_error_to_io_error_question_propagation() {
+    // `?`-propagation from `env.var(...) -> Result[String, VarError]` into a
+    // function returning `Result[T, IoError]` must typecheck via the baked
+    // `impl From for IoError { fn from(e: VarError) -> IoError }` impl.
+    let result = typecheck_ok(
+        "fn read_config() -> Result[String, IoError] with reads(Env) {
+             let s: String = env.var(\"CONFIG\")?;
+             Ok(s)
+         }",
+    );
+    // The `?` site must record `IoError` as the conversion target —
+    // i.e. the typechecker found an `impl From[VarError] for IoError`.
+    assert!(
+        result
+            .question_conversions
+            .values()
+            .any(|target| target == "IoError"),
+        "expected at least one ? site to convert VarError → IoError; got: {:?}",
+        result.question_conversions.values().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_var_error_to_io_error_explicit_from_call() {
+    // Direct `IoError.from(VarError.NotPresent)` must typecheck; this is the
+    // call shape the `?` operator desugars to. Exercises both that the impl
+    // is registered for typechecker `from` dispatch and that its return
+    // type unifies with the expected `IoError`.
+    typecheck_ok(
+        "fn main() {
+             let e: IoError = IoError.from(VarError.NotPresent);
+         }",
+    );
+}
+
+#[test]
+fn test_var_error_to_io_error_into_drives_from_impl() {
+    // `.into()` at a `let: IoError` annotation must rewrite to
+    // `IoError.from(e)` — the same dispatch path as `?` but exercised
+    // from the user-facing `Into` blanket. Verifies the impl participates
+    // in the `into_conversions` rewrite.
+    typecheck_ok(
+        "fn main() {
+             let e: VarError = VarError.NotUnicode;
+             let io: IoError = e.into();
+         }",
+    );
+}
+
 // ── Slice[T] method typechecking ──────────────────────────────────────────────
 
 #[test]
