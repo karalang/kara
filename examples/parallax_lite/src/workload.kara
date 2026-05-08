@@ -35,15 +35,12 @@
 
 import resources.{MetricsA, MetricsB, MetricsC};
 
-// Per-iteration loop count for the busy-compute kernel is hardcoded
-// inline as `50000000` in each driver. ~50M iterations is enough to
-// dominate thread-spawn / RC-fallback overhead on the auto-par
-// branch on a typical laptop, so the wall-clock benchmark sees
-// signal. Hardcoded rather than `pub const WORK: i64 = ...` because
-// v1 codegen does not yet emit module-level `const` decls (referencing
-// a top-level `const` from a function body raises `Undefined
-// variable` in the compiler today). Once that lands the literal can
-// hoist out.
+// Per-iteration loop count for the busy-compute kernel. ~50M iterations
+// is enough to dominate thread-spawn / RC-fallback overhead on the
+// auto-par branch on a typical laptop, so the wall-clock benchmark
+// sees signal. Hoisting to a `pub const` lets benchmark sweeps tune a
+// single source-of-truth without editing every driver.
+pub const WORK: i64 = 50000000;
 
 // Busy-compute kernel inlined into each driver. The running sum is
 // published via a printout so the optimizer cannot strip the loop
@@ -65,7 +62,7 @@ import resources.{MetricsA, MetricsB, MetricsC};
 fn record_a() with writes(MetricsA) {
     let mut sum: i64 = 0;
     let mut i: i64 = 0;
-    while i < 50000000 {
+    while i < WORK {
         sum = sum + i;
         i = i + 1;
     }
@@ -75,7 +72,7 @@ fn record_a() with writes(MetricsA) {
 fn record_b() with writes(MetricsB) {
     let mut sum: i64 = 0;
     let mut i: i64 = 0;
-    while i < 50000000 {
+    while i < WORK {
         sum = sum + i;
         i = i + 1;
     }
@@ -85,7 +82,7 @@ fn record_b() with writes(MetricsB) {
 fn record_c() with writes(MetricsC) {
     let mut sum: i64 = 0;
     let mut i: i64 = 0;
-    while i < 50000000 {
+    while i < WORK {
         sum = sum + i;
         i = i + 1;
     }

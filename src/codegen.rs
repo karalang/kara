@@ -568,6 +568,15 @@ struct Codegen<'ctx> {
     /// struct, so subsequent `.field` access dispatches through the right
     /// struct shape.
     pattern_binding_types: HashMap<(usize, usize), String>,
+    /// Top-level `const NAME: T = value` declarations, populated by
+    /// `compile_program` from `Item::ConstDecl` items before any function
+    /// body is compiled. Key: const name. Value: the const's value
+    /// expression. References to a const inside function bodies (parsed as
+    /// `ExprKind::Identifier(name)` for bare uses) re-compile this stored
+    /// expression at the use site, leaving constant folding to LLVM.
+    /// Cycles are precluded upstream by the typechecker's const-evaluation
+    /// pass (`check_const_decl`).
+    consts: HashMap<String, Expr>,
     /// Source filename threaded in from the CLI (`compile_to_object_with_options`
     /// / `compile_to_ir_with_options`). When `Some`, `emit_error_trace_push`
     /// emits a deduped global string and passes its `(ptr, len)` to the runtime
@@ -1044,6 +1053,7 @@ impl<'ctx> Codegen<'ctx> {
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
+            consts: HashMap::new(),
             source_filename: None,
             source_filename_global: None,
             source_text: None,
@@ -2733,6 +2743,17 @@ impl<'ctx> Codegen<'ctx> {
         // when the variant payload is a struct.
         self.pattern_binding_types = program.pattern_binding_types.clone();
 
+        // Top-level `const NAME: T = value` collection. References from
+        // function bodies (parsed as `ExprKind::Identifier(name)` for bare
+        // uses) look up this map and re-compile the stored expression at
+        // each use site; LLVM folds the resulting constant arithmetic.
+        // Must precede function compilation so forward references work.
+        for item in &program.items {
+            if let Item::ConstDecl(c) = item {
+                self.consts.insert(c.name.clone(), c.value.clone());
+            }
+        }
+
         // First pass: register generic functions for on-demand monomorphization;
         // declare concrete (non-generic) functions for forward-call support.
         for item in &program.items {
@@ -3986,11 +4007,18 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(result)
             }
             ExprKind::Identifier(name) => {
-                // Try local variable first, then unit enum variant
+                // Resolution order: local variable (may shadow a const),
+                // then unit enum variant, then top-level `const` (re-compile
+                // the stored value expression at this use site so LLVM
+                // folds it), and finally `load_variable` so the existing
+                // "Undefined variable" diagnostic still fires for genuinely
+                // unbound names.
                 if self.variables.contains_key(name.as_str()) {
                     self.load_variable(name)
                 } else if let Some(ev) = self.try_unit_enum_variant(name) {
                     Ok(ev)
+                } else if let Some(const_value) = self.consts.get(name).cloned() {
+                    self.compile_expr(&const_value)
                 } else {
                     self.load_variable(name)
                 }

@@ -6608,6 +6608,64 @@ fn main() {
         }
     }
 
+    /// `pub const X: T = lit;` declared at module scope is visible from
+    /// function bodies and lowers correctly through codegen. Pre-fix the
+    /// codegen had no `Item::ConstDecl` registration so any reference to
+    /// a top-level const fired `Undefined variable 'X'` from
+    /// `load_variable`. The interpreter path always handled it (matching
+    /// `Item::ConstDecl` arm in `eval_program`). Surfaced 2026-05-08
+    /// during slice 6 (Parallax-lite) when a `pub const WORK: i64 =
+    /// 50000000;` was hoisted out of the busy-compute kernels and
+    /// rejected by `karac build`.
+    #[test]
+    fn test_pub_const_visible_in_fn_body() {
+        let out = run_program(
+            r#"
+pub const WORK: i64 = 100;
+
+fn use_work() -> i64 {
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < WORK {
+        sum = sum + i;
+        i = i + 1;
+    }
+    sum
+}
+
+fn main() {
+    println(use_work());
+}
+"#,
+        );
+        if let Some(out) = out {
+            // sum(0..100) == 4950
+            assert_eq!(out.trim(), "4950");
+        }
+    }
+
+    /// Const-of-const: a const whose value expression references another
+    /// const must compile correctly. The codegen fix re-compiles the
+    /// stored value expression at every use site, so transitive const
+    /// references work for free as long as they hit the
+    /// `ExprKind::Identifier` lookup path on the inner reference.
+    #[test]
+    fn test_pub_const_references_other_const() {
+        let out = run_program(
+            r#"
+pub const BASE: i64 = 10;
+pub const SCALED: i64 = BASE + BASE;
+
+fn main() {
+    println(SCALED);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "20");
+        }
+    }
+
     /// `Runtime.list_tasks()` always returns an empty Vec in v1 — no
     /// real suspension exists yet. Pins the v1 contract surface; when
     /// Phase 6.3 ships real `WaitTarget` tracking this test gets
