@@ -114,8 +114,17 @@ pub enum Command {
     },
     /// Launch the interactive REPL over the tree-walk interpreter. P0
     /// delivery item per `roadmap.md § Interactive Development`. See
-    /// `src/repl.rs` for the cell-scope semantics.
-    Repl,
+    /// `src/repl.rs` for the cell-scope semantics. Flags mirror
+    /// `repl::ReplOptions` and are surfaced through the `--auto-clone`
+    /// CLI form (and, eventually, `%set auto-clone on` once the kernel
+    /// magic ships).
+    Repl {
+        /// `--auto-clone`: opt-in cross-cell ownership ergonomics — the
+        /// REPL auto-inserts `.clone()` at consume sites flagged by a
+        /// cross-cell `UseAfterMove`. Each insertion emits a
+        /// `perf[auto-clone-in-repl]` note (never silent).
+        auto_clone: bool,
+    },
     /// Walk the project, parse every module, render one HTML page per
     /// documented item under `dist/doc/`. v1 MVP — no cross-references,
     /// no effect display, flat per-module directory layout.
@@ -196,7 +205,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "fix" => parse_fix_command(args),
         "init" => parse_init_command(args),
         "test" => parse_test_command(args),
-        "repl" => Command::Repl,
+        "repl" => parse_repl_command(args),
         "doc" => Command::Doc,
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => {
@@ -428,6 +437,24 @@ fn parse_test_command(args: &[String]) -> Command {
     Command::Test { filter, all }
 }
 
+fn parse_repl_command(args: &[String]) -> Command {
+    let mut auto_clone = false;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--auto-clone" => auto_clone = true,
+            flag if flag.starts_with("--") || flag.starts_with('-') => {
+                eprintln!("error: unknown flag '{flag}' for `karac repl`");
+                process::exit(1);
+            }
+            other => {
+                eprintln!("error: `karac repl` takes no positional arguments (got '{other}')");
+                process::exit(1);
+            }
+        }
+    }
+    Command::Repl { auto_clone }
+}
+
 fn parse_init_command(args: &[String]) -> Command {
     let mut directory: Option<String> = None;
     let mut bin = false;
@@ -567,7 +594,9 @@ pub fn execute(cmd: Command) {
             force,
         } => cmd_init(directory, template, force),
         Command::Test { filter, all } => cmd_test(filter, all),
-        Command::Repl => crate::repl::run(),
+        Command::Repl { auto_clone } => {
+            crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone })
+        }
         Command::Doc => cmd_doc(),
     }
 }
@@ -623,7 +652,10 @@ COMMANDS:
     repl              Launch the interactive REPL. Items (fn/struct/...)
                       accumulate across cells; statement cells run as the
                       body of an implicit `fn main()`. Type :help inside
-                      the REPL for the meta-command list.
+                      the REPL for the meta-command list. Pass
+                      `--auto-clone` to opt into cross-cell ergonomics
+                      (auto-insert `.clone()` at consume sites; emits a
+                      `perf[auto-clone-in-repl]` note on every insertion).
     doc               Render HTML documentation under dist/doc/ from the
                       `///` doc comments attached to each public item.
                       MVP — flat per-module layout, no cross-references.
@@ -787,6 +819,26 @@ EXAMPLES:
     karac init                Scaffold a binary project in the current dir
     karac init my_app         Create ./my_app/ as a binary project
     karac init my_lib --lib   Create ./my_lib/ as a library project"
+        }
+        "repl" => {
+            "\
+karac repl - Launch the interactive REPL
+
+USAGE:
+    karac repl [--auto-clone]
+
+FLAGS:
+    --auto-clone   Opt into cross-cell ownership ergonomics. When a cell
+                   reuses a binding that an earlier cell consumed, the
+                   REPL rewrites the consume site to insert `.clone()` and
+                   emits a `perf[auto-clone-in-repl]` note (never silent).
+                   Inherited from `phase-5-diagnostics.md` § \"`--auto-clone`
+                   opt-in mode\". The rewrite goes into the cell's
+                   recorded source so subsequent compilations and `:save`
+                   exports see the cloned form. Off by default; without
+                   the flag the existing notebook-aware UAM diagnostic
+                   surfaces unchanged.
+    -h, --help     Print this message"
         }
         "test" => {
             "\

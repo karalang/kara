@@ -5,7 +5,7 @@
 //! `println` output into an in-memory buffer so we can assert against it
 //! without touching the process's real stdout fd.
 
-use karac::repl::Session;
+use karac::repl::{ReplOptions, Session};
 
 // ── Item accumulation ──────────────────────────────────────────────────────
 
@@ -643,5 +643,118 @@ fn kara_file_uam_message_unchanged_by_repl_slice() {
     assert!(
         uam.consume_span.is_some(),
         "UAM should now thread a consume_span (None means the populate-predicate-outputs site is not setting it)",
+    );
+}
+
+// ── --auto-clone REPL mode ─────────────────────────────────────────────────
+
+#[test]
+fn auto_clone_inserts_clone_at_consume_site() {
+    // With `--auto-clone` on: cell 1 declares the consume sink, cell 2
+    // binds `s`, cell 3 consumes via `let _t = consume(s);` (the v1
+    // source-replay model only carries `let`-positioned consumes across
+    // cells — same caveat slice 5 documented). Cell 4 reads `s` again,
+    // which would normally fire UAM. The auto-clone path rewrites cell
+    // 3's stored source to `let _t = consume(s.clone());` so cell 4
+    // succeeds, AND the rewrite lands in `cell_history[2]` so `:save`
+    // sees the cloned form.
+    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hello\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let r = s.evaluate_cell_captured("println(s);");
+    assert!(
+        r.errors.is_empty(),
+        "expected auto-clone to rewrite the consume site so cell 4 evaluates cleanly; errors={:?}",
+        r.errors,
+    );
+    let history = s.cell_history();
+    assert!(
+        history.iter().any(|c| c.contains("consume(s.clone())")),
+        "expected cell_history to record the rewritten consume; history={history:?}",
+    );
+}
+
+#[test]
+fn auto_clone_emits_perf_note() {
+    // Same setup as above; assert the perf-note channel surfaced the
+    // insertion. The note carries a stable `perf[auto-clone-in-repl]`
+    // code plus the binding name (`s`) so users can audit which sites
+    // got rewritten.
+    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hello\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let r = s.evaluate_cell_captured("println(s);");
+    assert!(
+        r.notes
+            .iter()
+            .any(|n| n.contains("perf[auto-clone-in-repl]")),
+        "expected a perf[auto-clone-in-repl] note to fire; notes={:?}",
+        r.notes,
+    );
+    assert!(
+        r.notes.iter().any(|n| n.contains("`s`")),
+        "expected the perf note to name the consumed binding; notes={:?}",
+        r.notes,
+    );
+}
+
+#[test]
+fn auto_clone_off_keeps_uam_diagnostic() {
+    // Without the flag the slice 5 cell-aware UAM diagnostic still
+    // surfaces unchanged — auto-clone is opt-in, never the default.
+    let mut s = Session::new();
+    assert!(!s.auto_clone(), "default Session must keep auto_clone off");
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hi\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let r = s.evaluate_cell_captured("println(s);");
+    assert!(
+        !r.errors.is_empty(),
+        "expected the cell-aware UAM diagnostic to fire when --auto-clone is off",
+    );
+    let joined = r.errors.join("\n");
+    assert!(
+        joined.contains("consumed by cell 3"),
+        "expected the slice-5 cross-cell tail; got:\n{joined}",
+    );
+    assert!(
+        r.notes.is_empty(),
+        "no perf notes should fire when --auto-clone is off; notes={:?}",
+        r.notes,
+    );
+    // No history rewrite either — the consuming cell's stored source
+    // stays exactly as the user typed it.
+    assert!(
+        s.cell_history().iter().all(|c| !c.contains("s.clone()")),
+        "no auto-clone insertion expected without the flag; history={:?}",
+        s.cell_history(),
+    );
+}
+
+#[test]
+fn auto_clone_export_preserves_inserted_clones() {
+    // `:save` writes `cell_history` verbatim; verify the rewritten
+    // consume site survives export. We don't drive the actual file write
+    // (that's covered elsewhere); instead we inspect cell_history
+    // directly — `:save` is a thin formatter over the same buffer.
+    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"persist\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let _ = s.evaluate_cell_captured("println(s);");
+    let history = s.cell_history();
+    let consuming = history
+        .iter()
+        .find(|c| c.contains("let _t = consume"))
+        .expect("expected the consume cell to remain in history");
+    assert!(
+        consuming.contains("consume(s.clone())"),
+        "expected the consuming cell's history entry to read `consume(s.clone())`; got:\n{consuming}",
+    );
+    assert!(
+        !consuming.contains("consume(s)"),
+        "the bare `consume(s)` form must not survive after auto-clone rewrites; got:\n{consuming}",
     );
 }

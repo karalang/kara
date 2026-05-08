@@ -39,13 +39,36 @@ use std::ops::Range;
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 
+/// Caller-supplied options for `run_with_options` — mirrors the flags
+/// surfaced on the `karac repl` subcommand. `Default` matches the
+/// historical bare-`karac repl` behavior so existing callers keep working.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct ReplOptions {
+    /// `--auto-clone`: when on, the REPL auto-inserts `.clone()` at
+    /// cross-cell consume sites flagged by `UseAfterMove`, rather than
+    /// surfacing the diagnostic. Each insertion emits a
+    /// `perf[auto-clone-in-repl]` note (never silent — design.md §
+    /// Interactive Evaluation Model > Ownership Across Cells).
+    pub auto_clone: bool,
+}
+
 /// Run the interactive REPL until EOF or `:quit`. Returns once the user
 /// exits; never reaches the rest of the CLI dispatch.
 pub fn run() {
-    let banner = "Kāra REPL  (type :help for commands, :quit to exit)";
+    run_with_options(ReplOptions::default());
+}
+
+/// Surface for the binary entry point: launch the REPL with caller-supplied
+/// options. Used by `karac repl` flag wiring (`--auto-clone`).
+pub fn run_with_options(opts: ReplOptions) {
+    let banner = if opts.auto_clone {
+        "Kāra REPL  (auto-clone on; type :help for commands, :quit to exit)"
+    } else {
+        "Kāra REPL  (type :help for commands, :quit to exit)"
+    };
     println!("{banner}");
 
-    let mut session = Session::new();
+    let mut session = Session::with_options(opts);
     let mut editor = match DefaultEditor::new() {
         Ok(e) => e,
         Err(e) => {
@@ -127,6 +150,34 @@ pub fn run() {
 pub struct EvaluatedCell {
     pub stdout: String,
     pub errors: Vec<String>,
+    /// Compiler-surface notes that aren't fatal — today this carries the
+    /// `perf[auto-clone-in-repl]` lines emitted when `--auto-clone` rewrites
+    /// a consume site. Always non-empty when an insertion fired (the spec
+    /// requires the channel be visible — never silent). Production
+    /// `evaluate_cell` mirrors each entry to stderr so users see them.
+    pub notes: Vec<String>,
+}
+
+/// Internal result type for `run_with_wrapper_inner` — bundles captured
+/// stdout, diagnostic strings, and auto-clone perf notes so the caller
+/// can route each to the right surface (stderr / stdout / `EvaluatedCell`
+/// fields). Unlike `EvaluatedCell`, both `Ok` and `Err` arms can carry
+/// notes — `--auto-clone` emits perf notes on every insertion regardless
+/// of whether the cell ultimately compiled cleanly.
+struct WrapperOutcome {
+    stdout: Vec<String>,
+    errors: Vec<String>,
+    notes: Vec<String>,
+}
+
+impl WrapperOutcome {
+    fn errors(errors: Vec<String>, notes: Vec<String>) -> Self {
+        Self {
+            stdout: Vec::new(),
+            errors,
+            notes,
+        }
+    }
 }
 
 /// Per-session state: accumulated source for top-level items + cell history
@@ -171,6 +222,17 @@ pub struct Session {
     /// the shape here is deliberately rich enough to support that without
     /// surfacing helper API the auto-clone slice doesn't need yet.
     cell_byte_ranges: Vec<(usize, Range<usize>)>,
+    /// `--auto-clone` opt-in mode. When `true`, the REPL pipeline detects
+    /// cross-cell `UseAfterMove` errors (using the same `cell_for_span`
+    /// machinery that drives the notebook-aware diagnostic), rewrites the
+    /// consume-site cell to insert `.clone()` after the consumed binding,
+    /// and re-runs the cell pipeline. The rewrite is recorded in
+    /// `cell_history[M-1]` AND the matching `persistent_lets[i]` slot so
+    /// the inserted `.clone()` survives both `:save` export and subsequent
+    /// cell compilations. Each insertion emits a `perf[auto-clone-in-repl]`
+    /// note onto the cell's `notes` channel — never silent (design.md §
+    /// Interactive Evaluation Model > Ownership Across Cells).
+    auto_clone: bool,
     /// In-memory `[dependencies]` table built up via the `:dep` meta-command.
     /// Each entry is `name → normalized TOML value` (e.g. `"\"1.2\""` for a
     /// bare semver, `"{ git = \"...\" }"` for an inline-table form). v1
@@ -197,8 +259,24 @@ impl Session {
             persistent_lets: Vec::new(),
             persistent_let_origin: Vec::new(),
             cell_byte_ranges: Vec::new(),
+            auto_clone: false,
             pending_deps: BTreeMap::new(),
         }
+    }
+
+    /// Construct a session pre-configured from caller-supplied
+    /// `ReplOptions` (the CLI flag bag). Used by `run_with_options` and
+    /// integration tests that exercise `--auto-clone` without driving
+    /// rustyline through a TTY.
+    pub fn with_options(opts: ReplOptions) -> Self {
+        let mut s = Self::new();
+        s.auto_clone = opts.auto_clone;
+        s
+    }
+
+    /// Inspector for the `--auto-clone` flag. Used by integration tests.
+    pub fn auto_clone(&self) -> bool {
+        self.auto_clone
     }
 
     /// Inspector for the accumulated `let`-statement replay buffer. Used by
@@ -429,9 +507,17 @@ impl Session {
 
     fn run_with_wrapper(&mut self, cell_src: &str) {
         match self.run_with_wrapper_inner(cell_src, /* capture */ false) {
-            Ok(_) => self.capture_new_lets(cell_src),
-            Err(msgs) => {
-                for m in msgs {
+            Ok(out) => {
+                for note in &out.notes {
+                    eprintln!("{note}");
+                }
+                self.capture_new_lets(cell_src);
+            }
+            Err(out) => {
+                for note in &out.notes {
+                    eprintln!("{note}");
+                }
+                for m in &out.errors {
                     eprintln!("{m}");
                 }
             }
@@ -439,14 +525,15 @@ impl Session {
     }
 
     /// Run a wrapper cell, optionally capturing the interpreter's stdout
-    /// output into a returned `Vec<String>`. `Err` carries diagnostic
-    /// messages for parse/resolve/type errors so callers (tests) can
-    /// surface or assert on them.
+    /// output. The returned `WrapperOutcome` carries either captured
+    /// stdout lines (`Ok` shape) or diagnostic strings (`Err` shape), plus
+    /// any auto-clone perf notes emitted along the way (always surfaced —
+    /// `--auto-clone` is never silent).
     fn run_with_wrapper_inner(
         &mut self,
         cell_src: &str,
         capture: bool,
-    ) -> Result<Vec<String>, Vec<String>> {
+    ) -> Result<WrapperOutcome, WrapperOutcome> {
         // Shadow-prune: drop any prior persistent let whose name(s) the new
         // cell re-binds. Kāra rejects same-scope re-declaration, so without
         // this prune `cell 1: let x = 1;` followed by `cell 2: let x = 99;`
@@ -454,52 +541,277 @@ impl Session {
         // design.md § Cell Scope, the later cell shadows the earlier
         // binding — source-replay approximates that by pruning.
         self.prune_shadowed_lets(cell_src);
-        let synthetic = self.build_synthetic_cell(cell_src);
-        let mut parsed = crate::parse(&synthetic);
-        if !parsed.errors.is_empty() {
-            return Err(parsed
-                .errors
-                .iter()
-                .map(|e| format!("parse error: {}", e.message))
-                .collect());
-        }
-        let resolved = crate::resolve(&parsed.program);
-        if !resolved.errors.is_empty() {
-            return Err(resolved
-                .errors
-                .iter()
-                .map(|e| format!("resolve error: {}", e.message))
-                .collect());
-        }
-        let typed = crate::typecheck(&parsed.program, &resolved);
-        if !typed.errors.is_empty() {
-            return Err(typed
-                .errors
-                .iter()
-                .map(|e| format!("type error: {}", e.message))
-                .collect());
-        }
 
-        // Round-trip the program through the ownership checker so cross-
-        // cell `UseAfterMove` errors fire in REPL context the same way
-        // they fire on `.kara` files. Strictness is identical to the
-        // .kara surface; only diagnostic *presentation* is enriched.
-        // Rendering happens via `render_ownership_errors_repl`, which
-        // appends a notebook-aware tail to UAM errors whose consume site
-        // and use site land in different cells.
-        let owned = crate::ownershipcheck(&parsed.program, &typed);
-        if !owned.errors.is_empty() {
-            return Err(self.render_ownership_errors_repl(&owned.errors));
-        }
+        // Auto-clone iteration loop: when `auto_clone` is on, cross-cell
+        // UAM errors found by the ownership pass drive a source rewrite of
+        // the consuming cell's stored slice. The rewritten slice replaces
+        // the entry in `persistent_lets` AND in `cell_history` (so `:save`
+        // exports the clone'd form). After each successful rewrite the
+        // pipeline restarts from synthetic-source assembly. The cap is
+        // generous — `persistent_lets.len() + 8` covers every realistic
+        // multi-binding consume cell while still bounding pathological
+        // input. With the flag off this loop runs at most once and falls
+        // through the existing rendering paths unchanged.
+        let max_iters = self.persistent_lets.len() + 8;
+        let mut notes: Vec<String> = Vec::new();
+        for _ in 0..=max_iters {
+            let synthetic = self.build_synthetic_cell(cell_src);
+            let mut parsed = crate::parse(&synthetic);
+            if !parsed.errors.is_empty() {
+                return Err(WrapperOutcome::errors(
+                    parsed
+                        .errors
+                        .iter()
+                        .map(|e| format!("parse error: {}", e.message))
+                        .collect(),
+                    notes,
+                ));
+            }
+            let resolved = crate::resolve(&parsed.program);
+            if !resolved.errors.is_empty() {
+                return Err(WrapperOutcome::errors(
+                    resolved
+                        .errors
+                        .iter()
+                        .map(|e| format!("resolve error: {}", e.message))
+                        .collect(),
+                    notes,
+                ));
+            }
+            let typed = crate::typecheck(&parsed.program, &resolved);
+            if !typed.errors.is_empty() {
+                return Err(WrapperOutcome::errors(
+                    typed
+                        .errors
+                        .iter()
+                        .map(|e| format!("type error: {}", e.message))
+                        .collect(),
+                    notes,
+                ));
+            }
 
-        crate::lower(&mut parsed.program, &typed);
+            // Round-trip the program through the ownership checker so cross-
+            // cell `UseAfterMove` errors fire in REPL context the same way
+            // they fire on `.kara` files. Strictness is identical to the
+            // .kara surface; only diagnostic *presentation* is enriched.
+            // Rendering happens via `render_ownership_errors_repl`, which
+            // appends a notebook-aware tail to UAM errors whose consume site
+            // and use site land in different cells.
+            let owned = crate::ownershipcheck(&parsed.program, &typed);
+            if !owned.errors.is_empty() {
+                if self.auto_clone {
+                    // Try to rewrite consume sites for the cross-cell UAM
+                    // arms. `apply_auto_clone_rewrites` mutates
+                    // `persistent_lets` / `cell_history` in place and
+                    // returns the perf-note lines for the insertions it
+                    // performed. If at least one rewrite happened, restart
+                    // the compile pipeline; otherwise fall through to the
+                    // baseline rendering path. The rewrites can't restore
+                    // a binding the user has already moved within the
+                    // same cell — same-cell UAM still surfaces, matching
+                    // the slice's "cross-cell only" rule.
+                    let new_notes = self.apply_auto_clone_rewrites(&owned.errors);
+                    if !new_notes.is_empty() {
+                        notes.extend(new_notes);
+                        continue;
+                    }
+                }
+                return Err(WrapperOutcome::errors(
+                    self.render_ownership_errors_repl(&owned.errors),
+                    notes,
+                ));
+            }
 
-        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
-        if capture {
-            interp.captured_output = Some(Vec::new());
+            crate::lower(&mut parsed.program, &typed);
+
+            let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
+            if capture {
+                interp.captured_output = Some(Vec::new());
+            }
+            interp.run();
+            return Ok(WrapperOutcome {
+                stdout: interp.captured_output.take().unwrap_or_default(),
+                errors: Vec::new(),
+                notes,
+            });
         }
-        interp.run();
-        Ok(interp.captured_output.take().unwrap_or_default())
+        // The loop bound is a defensive cap — every realistic auto-clone
+        // sequence converges in `persistent_lets.len() + 1` iterations
+        // (one rewrite per consume site, plus a final clean compile).
+        // Reaching this branch indicates a pathological repeat-rewrite
+        // scenario; surface as a regular ownership error so the user
+        // isn't left with a silent failure.
+        Err(WrapperOutcome::errors(
+            vec!["ownership error: --auto-clone exceeded its rewrite budget; aborting".to_string()],
+            notes,
+        ))
+    }
+
+    /// Apply auto-clone rewrites for the cross-cell `UseAfterMove` arms
+    /// in `errors`. Returns one `perf[auto-clone-in-repl]` note per
+    /// successful insertion (always non-empty when at least one rewrite
+    /// was applied; the caller restarts the compile when the slice is
+    /// non-empty). The rewrite locates the consume-site span in the
+    /// synthetic source we just built, identifies which `persistent_lets`
+    /// slot owns the corresponding bytes, and splices `.clone()` after
+    /// the consumed identifier. The matching `cell_history[M-1]` entry
+    /// is rewritten in lockstep so `:save` exports the clone'd form.
+    fn apply_auto_clone_rewrites(
+        &mut self,
+        errors: &[crate::ownership::OwnershipError],
+    ) -> Vec<String> {
+        let mut notes: Vec<String> = Vec::new();
+        // Collect rewrite intents first so we don't mutate persistent_lets
+        // while iterating over its indices. Each intent records the
+        // persistent_lets slot, the local byte offset of the identifier
+        // end, the binding name, and the consuming cell index.
+        struct Intent {
+            slot: usize,
+            local_end: usize,
+            binding: String,
+            consume_cell: usize,
+            use_cell: usize,
+        }
+        let mut intents: Vec<Intent> = Vec::new();
+        for err in errors {
+            if err.kind != crate::ownership::OwnershipErrorKind::UseAfterMove {
+                continue;
+            }
+            let Some(cs) = err.consume_span.as_ref() else {
+                continue;
+            };
+            let consume_cell = match self.cell_for_span(cs) {
+                Some(c) => c,
+                None => continue,
+            };
+            let use_cell = match self.cell_for_span(&err.span) {
+                Some(c) => c,
+                None => continue,
+            };
+            // Same-cell UAM is out of scope for auto-clone — the existing
+            // diagnostic still fires for it.
+            if consume_cell == use_cell {
+                continue;
+            }
+            // Locate the persistent_lets slot whose byte range contains
+            // the consume span. Falls through silently if the consume
+            // site is in the current cell body (use_cell == current and
+            // consume_cell < use_cell means the consume sits in a
+            // replayed `let`; that's the case the inheritance caveat
+            // from slice 5 narrows us to).
+            let Some(slot) = self.persistent_let_slot_for_offset(cs.offset) else {
+                continue;
+            };
+            let slot_range = match self.cell_byte_ranges.iter().find_map(|(_, r)| {
+                if r.start <= cs.offset && cs.offset < r.end {
+                    Some(r.clone())
+                } else {
+                    None
+                }
+            }) {
+                Some(r) => r,
+                None => continue,
+            };
+            let local_end = cs
+                .offset
+                .saturating_sub(slot_range.start)
+                .saturating_add(cs.length);
+            // Guard: `local_end` must fall inside the persistent_lets
+            // slice (the trailing `\n` we appended in build_synthetic_cell
+            // sits past the stored slice's end, so subtract that off).
+            let stored_len = self.persistent_lets[slot].len();
+            if local_end > stored_len {
+                continue;
+            }
+            // Extract the binding name from the consume span bytes — it's
+            // a bare identifier, so we can read it straight off
+            // persistent_lets[slot].
+            let local_start = cs.offset.saturating_sub(slot_range.start);
+            if local_start >= stored_len {
+                continue;
+            }
+            let binding = self.persistent_lets[slot][local_start..local_end].to_string();
+            intents.push(Intent {
+                slot,
+                local_end,
+                binding,
+                consume_cell,
+                use_cell,
+            });
+        }
+        if intents.is_empty() {
+            return notes;
+        }
+        // Apply intents grouped by slot, descending by local_end so
+        // earlier rewrites inside the same slot don't shift later
+        // offsets. Multiple rewrites in one slot is rare (one consumed
+        // binding per `let` in v1 source-replay) but the descending
+        // sort is cheap insurance.
+        intents.sort_by(|a, b| {
+            a.slot
+                .cmp(&b.slot)
+                .then_with(|| b.local_end.cmp(&a.local_end))
+        });
+        // Track which (slot, local_end) we already rewrote so duplicate
+        // diagnostics on the same site don't double-insert.
+        let mut applied: std::collections::HashSet<(usize, usize)> =
+            std::collections::HashSet::new();
+        for intent in &intents {
+            if !applied.insert((intent.slot, intent.local_end)) {
+                continue;
+            }
+            // Splice `.clone()` into the persistent_lets entry.
+            let entry = &mut self.persistent_lets[intent.slot];
+            entry.insert_str(intent.local_end, ".clone()");
+            // Re-emit the rewritten slice into the matching
+            // cell_history entry. Because cell_history records the cell
+            // verbatim (a multi-line block possibly containing many
+            // statements), we rewrite by recomposing: rebuild the
+            // history string from the persistent_lets slots that share
+            // this consume_cell origin, joined onto whatever non-`let`
+            // remainder the original cell carried. v1 simplification:
+            // overwrite the cell_history entry by replacing the bare
+            // `<binding>` token's *first* occurrence inside the
+            // statement that targeted this consume — same effect as the
+            // local splice when the original cell was the `let _t =
+            // consume(s);` shape the slice's caveat narrows us to.
+            let cell_idx0 = intent.consume_cell.saturating_sub(1);
+            if let Some(cell_src) = self.cell_history.get_mut(cell_idx0) {
+                rewrite_cell_history_consume(cell_src, &intent.binding);
+            }
+            notes.push(format!(
+                "perf[auto-clone-in-repl]: inserted `.clone()` on `{}` at consume site (cell {}, used in cell {}); cross-cell binding kept alive — disable with `karac repl` (no `--auto-clone`) to surface the underlying use-after-move diagnostic instead",
+                intent.binding, intent.consume_cell, intent.use_cell,
+            ));
+        }
+        notes
+    }
+
+    /// Locate the index in `persistent_lets` whose backing byte range
+    /// (inside the most recently built synthetic source) contains
+    /// `offset`. Returns `None` when the offset falls outside every
+    /// stored slot — including when it lands inside the current cell's
+    /// body block (the trailing `cell_byte_ranges` entry tagged with the
+    /// current 1-based cell index, which is *not* a persistent_lets slot
+    /// yet). Callers use this to decide whether the consume-site rewrite
+    /// targets a replayed `let` or the freshly-submitted cell body. The
+    /// slot index found is returned in `persistent_lets` order — the
+    /// same order ranges are emitted in `build_synthetic_cell`.
+    fn persistent_let_slot_for_offset(&self, offset: usize) -> Option<usize> {
+        // The first `persistent_lets.len()` entries in `cell_byte_ranges`
+        // map onto the persistent_lets slots in order (skipping any
+        // entries whose origin was the sentinel 0 — which `capture_new_lets`
+        // never produces in practice but the legacy fallback in
+        // `build_synthetic_cell` still defends). The trailing entry is
+        // the current cell's body block; never a persistent_lets slot.
+        // We mirror that iteration order here.
+        let n = self.persistent_lets.len();
+        for (i, range) in self.cell_byte_ranges.iter().take(n).enumerate() {
+            if range.1.start <= offset && offset < range.1.end {
+                return Some(i);
+            }
+        }
+        None
     }
 
     /// Render ownership errors with REPL-aware enrichment for
@@ -586,6 +898,7 @@ impl Session {
             return EvaluatedCell {
                 stdout: String::new(),
                 errors: errs,
+                notes: Vec::new(),
             };
         }
 
@@ -594,16 +907,18 @@ impl Session {
             Ok(out) => {
                 self.capture_new_lets(trimmed);
                 EvaluatedCell {
-                    stdout: out.join(""),
+                    stdout: out.stdout.join(""),
                     errors: Vec::new(),
+                    notes: out.notes,
                 }
             }
-            Err(msgs) => {
+            Err(out) => {
                 // Roll back history on diagnostic-side failure.
                 self.cell_history.pop();
                 EvaluatedCell {
                     stdout: String::new(),
-                    errors: msgs,
+                    errors: out.errors,
+                    notes: out.notes,
                 }
             }
         }
@@ -906,6 +1221,72 @@ impl Session {
             "  note: package resolution / download lands in v1.1 — the entry is recorded but `{name}`'s symbols are not yet in scope."
         );
     }
+}
+
+/// Rewrite the consume-site of `binding` inside a cell-history entry so
+/// `:save` exports the auto-clone'd form. The rewrite is positional: find
+/// the first occurrence of the bare identifier `binding` whose immediate
+/// suffix is *not* already `.clone()` (idempotent w.r.t. repeat
+/// rewrites — the second auto-clone for the same site is a no-op), and
+/// splice `.clone()` after it. Matches identifier boundaries so that
+/// substring overlap (e.g. `binding="s"` against `consumed`) doesn't trip
+/// the search. Idempotent under repeat invocations: a cell that already
+/// reads `consume(s.clone())` is returned unchanged.
+fn rewrite_cell_history_consume(cell_src: &mut String, binding: &str) {
+    if binding.is_empty() {
+        return;
+    }
+    let bytes = cell_src.as_bytes();
+    let blen = binding.len();
+    let mut i = 0usize;
+    while i + blen <= bytes.len() {
+        // Skip past string-literal contents — a binding name embedded in
+        // a string isn't a use-site. Cheap coarse-tracking matches the
+        // probe in `is_balanced` (good enough for the v1 source-replay
+        // model's input).
+        match bytes[i] {
+            b'"' => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != b'"' {
+                    if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                i = i.saturating_add(1);
+                continue;
+            }
+            b'/' if i + 1 < bytes.len() && bytes[i + 1] == b'/' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        // Identifier-boundary match: the byte before `binding` must not
+        // be an identifier continuation; ditto the byte after.
+        let prev_ok = i == 0 || !is_ident_continue(bytes[i - 1]);
+        let after = i + blen;
+        let next_ok = after >= bytes.len() || !is_ident_continue(bytes[after]);
+        if prev_ok && next_ok && &bytes[i..after] == binding.as_bytes() {
+            // Already-cloned guard — skip if `.clone(` immediately
+            // follows the identifier.
+            let already_cloned = bytes[after..].starts_with(b".clone(");
+            if !already_cloned {
+                cell_src.insert_str(after, ".clone()");
+                return;
+            }
+            i = after + ".clone()".len();
+            continue;
+        }
+        i += 1;
+    }
+}
+
+fn is_ident_continue(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'_'
 }
 
 /// One-line preview of a cell's source for the notebook-aware
