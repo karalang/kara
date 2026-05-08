@@ -509,3 +509,139 @@ fn dep_excluded_from_cell_history() {
     assert_eq!(s.cell_history().len(), 1);
     assert!(s.cell_history()[0].contains("fn one"));
 }
+
+// ── Notebook-aware use-after-move diagnostic ──────────────────────────────
+
+#[test]
+fn cross_cell_uam_names_consuming_cell() {
+    // Cell 1 declares the consume sink; cell 2 binds `s`; cell 3 consumes it
+    // via `let _ = consume(s);` (the `let` is what makes the consume survive
+    // across cells in the v1 source-replay model — `cell_history` doesn't
+    // re-execute the bare statement on the next compilation, but
+    // `persistent_lets` does). When cell 4 references `s` again, the
+    // ownership checker fires UseAfterMove against the synthetic source —
+    // and the REPL-aware diagnostic names cell 3 as the consumer.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hello\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let r = s.evaluate_cell_captured("let _u = consume(s);");
+    assert!(
+        !r.errors.is_empty(),
+        "expected UAM error on cross-cell reuse; stdout={:?}, errors={:?}",
+        r.stdout,
+        r.errors,
+    );
+    let joined = r.errors.join("\n");
+    assert!(
+        joined.contains("consumed by cell 3"),
+        "expected diagnostic to name cell 3 as consumer; got:\n{joined}",
+    );
+}
+
+#[test]
+fn cross_cell_uam_suggests_clone() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hello\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let r = s.evaluate_cell_captured("let _u = consume(s);");
+    let joined = r.errors.join("\n");
+    assert!(
+        joined.contains("add `.clone()` at the consume site"),
+        "expected diagnostic to suggest .clone() at the consume site; got:\n{joined}",
+    );
+}
+
+#[test]
+fn same_cell_uam_uses_baseline_diagnostic() {
+    // UAM contained within a single cell — no cross-cell phrasing should
+    // be appended. The baseline ownership-checker rendering still surfaces
+    // (we just don't decorate it with the notebook-aware tail).
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    let r = s.evaluate_cell_captured("let s = \"hi\"; consume(s); let _ = consume(s);");
+    assert!(
+        !r.errors.is_empty(),
+        "expected UAM error in single-cell scenario; errors={:?}",
+        r.errors,
+    );
+    let joined = r.errors.join("\n");
+    assert!(
+        joined.contains("moved here, used again here"),
+        "expected baseline UAM rendering; got:\n{joined}",
+    );
+    assert!(
+        !joined.contains("consumed by cell"),
+        "did not expect the cross-cell tail on same-cell UAM; got:\n{joined}",
+    );
+}
+
+#[test]
+fn cross_cell_uam_strictness_unchanged() {
+    // The diagnostic enrichment must not change rejection behavior — the
+    // program still errors and the failing cell does not enter history.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"hi\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let history_before = s.cell_history().len();
+    let r = s.evaluate_cell_captured("let _u = consume(s);");
+    assert!(
+        !r.errors.is_empty(),
+        "expected the diagnostic to still reject the program (strictness == .kara)",
+    );
+    assert!(
+        r.stdout.is_empty(),
+        "rejected program must produce no stdout; got: {:?}",
+        r.stdout,
+    );
+    // The failing cell rolled back out of history (existing behavior, just
+    // pinned here so the slice doesn't accidentally regress it).
+    assert_eq!(s.cell_history().len(), history_before);
+}
+
+#[test]
+fn kara_file_uam_message_unchanged_by_repl_slice() {
+    // The .kara compile path goes through the public `ownershipcheck`
+    // surface and surfaces the existing `OwnershipError.message` /
+    // `.suggestion` fields verbatim. This slice added a `consume_span:
+    // Some(span)` field to the UAM error but did not touch message or
+    // suggestion text — pin that here so the .kara presentation stays
+    // identical.
+    let src = "fn consume(s: String) {}\n\
+               fn main() {\n\
+               let s = \"hi\";\n\
+               consume(s);\n\
+               consume(s);\n\
+               }\n";
+    let parsed = karac::parse(src);
+    assert!(parsed.errors.is_empty(), "{:?}", parsed.errors);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let owned = karac::ownershipcheck(&parsed.program, &typed);
+    let uam = owned
+        .errors
+        .iter()
+        .find(|e| e.kind == karac::ownership::OwnershipErrorKind::UseAfterMove)
+        .expect("expected UseAfterMove on the second consume");
+    // Baseline format that pre-dates this slice.
+    assert!(
+        uam.message.contains("moved here, used again here"),
+        "baseline UAM message changed; got: {}",
+        uam.message,
+    );
+    assert!(
+        uam.suggestion
+            .as_deref()
+            .is_some_and(|s| s.contains("consider cloning")),
+        "baseline UAM suggestion changed; got: {:?}",
+        uam.suggestion,
+    );
+    // The new structural field is populated for downstream REPL-aware
+    // rendering — `.kara` callers can still ignore it.
+    assert!(
+        uam.consume_span.is_some(),
+        "UAM should now thread a consume_span (None means the populate-predicate-outputs site is not setting it)",
+    );
+}

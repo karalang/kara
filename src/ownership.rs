@@ -112,6 +112,13 @@ pub struct OwnershipError {
     /// Boxed so the sparse `Some` case doesn't bloat the error vector
     /// past clippy's `result_large_err` / large-enum heuristics.
     pub replacement: Option<Box<crate::resolver::TextEdit>>,
+    /// Secondary span carrying the consume site for `UseAfterMove`
+    /// diagnostics. `span` is the offending later-use site; this field
+    /// records *where* the binding was consumed. Threaded so REPL-aware
+    /// diagnostic enrichment can map the consume site to its origin
+    /// cell (see `Session::cell_for_span`). `None` for every other
+    /// diagnostic kind.
+    pub consume_span: Option<Span>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -531,6 +538,7 @@ impl<'a> OwnershipChecker<'a> {
                         kind: OwnershipErrorKind::OwnershipCycle,
                         suggestion,
                         replacement: None,
+                        consume_span: None,
                     });
                 }
             }
@@ -807,6 +815,7 @@ impl<'a> OwnershipChecker<'a> {
                     binding
                 )),
                 replacement: None,
+                consume_span: Some(w.consume_span),
             });
         }
     }
@@ -896,6 +905,7 @@ impl<'a> OwnershipChecker<'a> {
                     kind: OwnershipErrorKind::RefCaptureEscapesScope,
                     suggestion: Some(fix),
                     replacement: None,
+                    consume_span: None,
                 });
             }
         }
@@ -1649,6 +1659,7 @@ impl<'a> OwnershipChecker<'a> {
                                     name
                                 )),
                                 replacement: None,
+                                consume_span: None,
                             });
                             // Leave state as InitOnce — further reads still
                             // succeed, further reassigns still fire.
@@ -2264,6 +2275,7 @@ impl<'a> OwnershipChecker<'a> {
             kind: OwnershipErrorKind::UseOfUninitialized,
             suggestion: Some(suggestion),
             replacement: None,
+            consume_span: None,
         });
         true
     }
@@ -2790,6 +2802,7 @@ impl<'a> OwnershipChecker<'a> {
                                         .to_string(),
                                 ),
                                 replacement,
+                                consume_span: None,
                             });
                         }
                     }
@@ -2843,6 +2856,7 @@ impl<'a> OwnershipChecker<'a> {
                                 kind: OwnershipErrorKind::CaptureModeViolation,
                                 suggestion: Some(fix.to_string()),
                                 replacement: None,
+                                consume_span: None,
                             });
                         }
                     }
@@ -3004,6 +3018,7 @@ impl<'a> OwnershipChecker<'a> {
                             .to_string(),
                     ),
                     replacement: None,
+                    consume_span: Some(entry.consume_span.clone()),
                 });
             }
         }
@@ -3128,6 +3143,7 @@ impl<'a> OwnershipChecker<'a> {
                             binding
                         )),
                         replacement: None,
+                        consume_span: None,
                     });
                 }
                 let _ = fn_span; // span available if we want to attach a secondary later
@@ -3153,6 +3169,7 @@ impl<'a> OwnershipChecker<'a> {
                             binding, ty
                         )),
                         replacement: None,
+                        consume_span: None,
                     });
                 }
             }

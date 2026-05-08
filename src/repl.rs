@@ -34,6 +34,7 @@
 //!   chapter of `roadmap.md`.
 
 use std::collections::BTreeMap;
+use std::ops::Range;
 
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
@@ -148,6 +149,28 @@ pub struct Session {
     /// are recomputed each cell rather than snapshotted; see the module
     /// docs for the caveat.
     persistent_lets: Vec<String>,
+    /// 1-based origin cell index for each entry in `persistent_lets`. Length
+    /// is invariant-equal to `persistent_lets.len()`. Recorded so the
+    /// REPL-aware diagnostic-rendering path can map a span landing inside
+    /// a replayed `let` slice back to the cell that originally introduced
+    /// the binding (drives the "consumed by cell N" tail on cross-cell
+    /// `UseAfterMove` errors). The 1-based convention matches what users
+    /// see in cell labels (cell 1, cell 2, …); cell 0 is reserved for
+    /// synthetic / wrapper-introduced source that does not correspond to
+    /// any user cell.
+    persistent_let_origin: Vec<usize>,
+    /// Byte ranges, in the most recently built synthetic-program source,
+    /// that map back to a user cell. Each entry is `(cell_idx_1_based,
+    /// byte_range)`. Re-populated at the top of every `run_with_wrapper_inner`
+    /// / `evaluate_cell_captured` call, before the parser runs, so the
+    /// downstream diagnostic-rendering layer can call `cell_for_span`
+    /// against fresh data. Ranges are non-overlapping and source-ordered
+    /// so a binary search over them recovers the cell for any span. The
+    /// next slice (`--auto-clone` opt-in mode) consumes the same data to
+    /// decide which cell's source to rewrite when inserting `.clone()`;
+    /// the shape here is deliberately rich enough to support that without
+    /// surfacing helper API the auto-clone slice doesn't need yet.
+    cell_byte_ranges: Vec<(usize, Range<usize>)>,
     /// In-memory `[dependencies]` table built up via the `:dep` meta-command.
     /// Each entry is `name → normalized TOML value` (e.g. `"\"1.2\""` for a
     /// bare semver, `"{ git = \"...\" }"` for an inline-table form). v1
@@ -172,6 +195,8 @@ impl Session {
             items_source: String::new(),
             cell_history: Vec::new(),
             persistent_lets: Vec::new(),
+            persistent_let_origin: Vec::new(),
+            cell_byte_ranges: Vec::new(),
             pending_deps: BTreeMap::new(),
         }
     }
@@ -200,6 +225,33 @@ impl Session {
     /// tests; could back a future `:history` meta-command.
     pub fn cell_history(&self) -> &[String] {
         &self.cell_history
+    }
+
+    /// Inspector for the current cell-byte-range map (the synthetic-source
+    /// → cell mapping built by the most recent compilation). Used by
+    /// integration tests and consumed in the next slice (`--auto-clone`
+    /// opt-in mode) to drive consume-site rewrites.
+    pub fn cell_byte_ranges(&self) -> &[(usize, Range<usize>)] {
+        &self.cell_byte_ranges
+    }
+
+    /// Map a span (recorded against the most recently built synthetic-
+    /// program source) to the 1-based cell index that produced the
+    /// corresponding source bytes. Returns `None` for spans that fall
+    /// outside any tracked range — synthetic wrapper bytes (`fn main() {`,
+    /// closing `}`), `items_source` content, or stale spans whose offsets
+    /// no longer line up after a re-compile. The `cell_byte_ranges` table
+    /// is non-overlapping and source-ordered, so the linear scan here is
+    /// O(n) in the number of cells contributing to the current synthetic
+    /// source — fine for v1 cell counts.
+    pub fn cell_for_span(&self, span: &crate::token::Span) -> Option<usize> {
+        let start = span.offset;
+        for (cell_idx, range) in &self.cell_byte_ranges {
+            if range.contains(&start) {
+                return Some(*cell_idx);
+            }
+        }
+        None
     }
 
     /// Handle a `:meta` command. Returns `false` when the user requested
@@ -427,6 +479,19 @@ impl Session {
                 .map(|e| format!("type error: {}", e.message))
                 .collect());
         }
+
+        // Round-trip the program through the ownership checker so cross-
+        // cell `UseAfterMove` errors fire in REPL context the same way
+        // they fire on `.kara` files. Strictness is identical to the
+        // .kara surface; only diagnostic *presentation* is enriched.
+        // Rendering happens via `render_ownership_errors_repl`, which
+        // appends a notebook-aware tail to UAM errors whose consume site
+        // and use site land in different cells.
+        let owned = crate::ownershipcheck(&parsed.program, &typed);
+        if !owned.errors.is_empty() {
+            return Err(self.render_ownership_errors_repl(&owned.errors));
+        }
+
         crate::lower(&mut parsed.program, &typed);
 
         let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
@@ -435,6 +500,48 @@ impl Session {
         }
         interp.run();
         Ok(interp.captured_output.take().unwrap_or_default())
+    }
+
+    /// Render ownership errors with REPL-aware enrichment for
+    /// `UseAfterMove` diagnostics. When the consume site and the use site
+    /// resolve to different cells (via `cell_for_span` over the just-built
+    /// `cell_byte_ranges`), append a notebook-aware tail naming the
+    /// consuming cell and pointing the user at `.clone()` at the consume
+    /// site. Same-cell UAM and every non-UAM kind use the existing
+    /// rendering verbatim — strictness is identical to `.kara` files; only
+    /// presentation differs in REPL context.
+    fn render_ownership_errors_repl(
+        &self,
+        errors: &[crate::ownership::OwnershipError],
+    ) -> Vec<String> {
+        let mut rendered: Vec<String> = Vec::with_capacity(errors.len());
+        for err in errors {
+            let mut line = format!("ownership error: {}", err.message);
+            if let Some(s) = err.suggestion.as_deref() {
+                line.push_str("\n  help: ");
+                line.push_str(s);
+            }
+            // Notebook-aware tail: only fires for UseAfterMove with a
+            // consume-site span that resolves to a different cell than
+            // the use-site span. Same-cell UAM and any kind without a
+            // recorded `consume_span` fall through unchanged.
+            if err.kind == crate::ownership::OwnershipErrorKind::UseAfterMove {
+                if let Some(consume_span) = err.consume_span.as_ref() {
+                    let consume_cell = self.cell_for_span(consume_span);
+                    let use_cell = self.cell_for_span(&err.span);
+                    if let (Some(c), Some(u)) = (consume_cell, use_cell) {
+                        if c != u {
+                            line.push_str(&format!(
+                                "\n  note: consumed by cell {c} (`{}`); add `.clone()` at the consume site to keep the original binding usable in later cells",
+                                cell_preview(self.cell_history.get(c.saturating_sub(1)).map(String::as_str).unwrap_or("")),
+                            ));
+                        }
+                    }
+                }
+            }
+            rendered.push(line);
+        }
+        rendered
     }
 
     /// Test helper: evaluate a cell and return any captured output and
@@ -510,24 +617,52 @@ impl Session {
     /// rule from design.md). The persistent-let replay block sits at the
     /// top of the wrapper body so each cell sees the same flat scope as
     /// design.md § Cell Scope describes.
-    fn build_synthetic_cell(&self, cell_src: &str) -> String {
+    ///
+    /// Side effect: rebuilds `Session.cell_byte_ranges` so it reflects the
+    /// just-assembled source. Each replayed `let` slice is tagged with
+    /// the cell index that originally introduced it (from
+    /// `persistent_let_origin`); the trailing `cell_src` block is tagged
+    /// with the *current* cell's 1-based index (the one being submitted).
+    fn build_synthetic_cell(&mut self, cell_src: &str) -> String {
         let mut s = String::new();
         s.push_str(&strip_main(&self.items_source));
         if !s.is_empty() && !s.ends_with('\n') {
             s.push('\n');
         }
         s.push_str("fn main() {\n");
-        for prior_let in &self.persistent_lets {
+        let mut ranges: Vec<(usize, Range<usize>)> = Vec::new();
+        for (i, prior_let) in self.persistent_lets.iter().enumerate() {
+            let start = s.len();
             s.push_str(prior_let);
             if !prior_let.ends_with('\n') {
                 s.push('\n');
             }
+            let end = s.len();
+            // Origin index 0 (a sentinel) means "unknown cell" — should
+            // not occur with correct upkeep but if it does, skip the
+            // mapping rather than synthesize a misleading number.
+            if let Some(&cell_idx) = self.persistent_let_origin.get(i) {
+                if cell_idx > 0 {
+                    ranges.push((cell_idx, start..end));
+                }
+            }
         }
+        // The cell currently being evaluated occupies the next contiguous
+        // slice of the wrapper body. Its 1-based index is one past the
+        // current `cell_history` length (the entry has already been pushed
+        // by the caller before `build_synthetic_cell` runs).
+        let cell_idx = self.cell_history.len();
+        let body_start = s.len();
         s.push_str(cell_src);
         if !cell_src.ends_with('\n') {
             s.push('\n');
         }
+        let body_end = s.len();
+        if cell_idx > 0 {
+            ranges.push((cell_idx, body_start..body_end));
+        }
         s.push_str("}\n");
+        self.cell_byte_ranges = ranges;
         s
     }
 
@@ -537,9 +672,18 @@ impl Session {
     /// leak partial bindings forward. Shadow-pruning happened earlier in
     /// `prune_shadowed_lets` so the synthetic main could parse cleanly;
     /// at this point the new entries can simply append.
+    ///
+    /// Each new entry is tagged with the 1-based index of the current cell
+    /// in `persistent_let_origin` so the diagnostic-rendering layer can map
+    /// a span landing inside the replayed slice back to the originating
+    /// cell.
     fn capture_new_lets(&mut self, cell_src: &str) {
+        // Cell index = `cell_history.len()` because the caller pushed the
+        // current cell's source before invoking the wrapper pipeline.
+        let cell_idx = self.cell_history.len();
         for entry in scan_top_level_lets(cell_src) {
             self.persistent_lets.push(entry.slice);
+            self.persistent_let_origin.push(cell_idx);
         }
     }
 
@@ -561,16 +705,26 @@ impl Session {
         if new_names.is_empty() {
             return;
         }
-        self.persistent_lets.retain(|prior| {
+        // Walk persistent_lets and persistent_let_origin in lockstep so
+        // the parallel cell-origin tags stay aligned with the slices.
+        let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
+        let mut kept_origin: Vec<usize> = Vec::with_capacity(self.persistent_let_origin.len());
+        for (i, prior) in self.persistent_lets.iter().enumerate() {
             let prior_names = parse_let_binding_names(prior);
-            !prior_names.iter().any(|n| new_names.contains(n))
-        });
+            if !prior_names.iter().any(|n| new_names.contains(n)) {
+                kept_lets.push(prior.clone());
+                kept_origin.push(*self.persistent_let_origin.get(i).unwrap_or(&0));
+            }
+        }
+        self.persistent_lets = kept_lets;
+        self.persistent_let_origin = kept_origin;
     }
 
     /// Drop every persistent `let` binding accumulated so far. Items
     /// (`fn` / `struct` / etc.) and cell history are left intact.
     pub fn reset_persistent_lets(&mut self) {
         self.persistent_lets.clear();
+        self.persistent_let_origin.clear();
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
@@ -752,6 +906,40 @@ impl Session {
             "  note: package resolution / download lands in v1.1 — the entry is recorded but `{name}`'s symbols are not yet in scope."
         );
     }
+}
+
+/// One-line preview of a cell's source for the notebook-aware
+/// `UseAfterMove` tail. Trims whitespace, collapses interior newlines to
+/// spaces, and truncates with an ellipsis past `MAX` chars so a long
+/// multi-line cell doesn't blow out the diagnostic. Returned form is safe
+/// to embed in backticks: any embedded backticks are replaced with single
+/// quotes so the surrounding code-fence stays well-formed.
+fn cell_preview(src: &str) -> String {
+    const MAX: usize = 60;
+    let mut out = String::with_capacity(src.len().min(MAX + 1));
+    let mut last_was_space = true;
+    for ch in src.chars() {
+        let mapped = match ch {
+            '\n' | '\r' | '\t' => ' ',
+            '`' => '\'',
+            c => c,
+        };
+        if mapped == ' ' {
+            if last_was_space {
+                continue;
+            }
+            last_was_space = true;
+        } else {
+            last_was_space = false;
+        }
+        if out.chars().count() >= MAX {
+            out.push('…');
+            break;
+        }
+        out.push(mapped);
+    }
+    let trimmed = out.trim().to_string();
+    trimmed
 }
 
 /// Minimal TOML basic-string escaper. Only the characters that need

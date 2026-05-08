@@ -187,7 +187,7 @@ All other slices are independent.
 
 - [x] **Slice perf note — `shared struct` with mut fields (Tier 2 `--perf-report`).** ✓ Landed 2026-05-08. Definition-site walker over `StructDef` items emits `perf[shared-struct-mut-field]` into the perf-report aggregator (`src/cost_summary.rs`) when `kind == Shared` and at least one field carries `mut`; one note per offending struct (not per field) with field names enumerated in the message body. New `PerfNote` type + `perf_notes: Vec<PerfNote>` on `CostSummary`; surfaced today through `karac query cost-summary`'s JSON envelope (`"perf_notes":[...]`), ready for the future `karac build --perf-report` UX without further data-shape work. Off by default (Tier 2, predictive). Three tests in `tests/cli.rs` cover positive (shared+mut → note) and both negatives (shared/no-mut → no note; plain/+mut → no note). Close-out: `phase-7-codegen.md` § "Definition-site perf note: `shared struct` with mut fields".
 
-- [ ] **Slice REPL UAM diagnostic — Notebook-aware use-after-move.** Enrich the existing `UseAfterMove` diagnostic in REPL context to name the cell that consumed the binding and suggest `.clone()` at the consume site. Adds `Session.cell_byte_ranges` cell-tracking infrastructure (foundation for the next slice). Strictness identical to `.kara` files; only diagnostic presentation differs. Plan: `phase-5-diagnostics.md` § "Notebook-aware use-after-move diagnostic" (slice plan section). Source: phase 4–8 survey bucket A9.
+- [x] **Slice REPL UAM diagnostic — Notebook-aware use-after-move.** ✓ Landed 2026-05-08. Wired `ownershipcheck` into the REPL pipeline (it was previously absent — strictness on `.kara` files but not on cells), added `Session.cell_byte_ranges` + `persistent_let_origin` parallel tracking, enriched `OwnershipError` with an optional `consume_span` so the REPL diagnostic-rendering layer can map both the use-site span and the consume-site span back to cells via `Session::cell_for_span`. When the two cells differ, a notebook-aware tail names the consuming cell (with a one-line preview) and suggests `.clone()` at the consume site; same-cell UAM and `.kara` files keep the existing rendering verbatim. Four new tests in `tests/repl.rs` (cross-cell names cell + suggests `.clone()`, same-cell baseline, strictness unchanged). Close-out: `phase-5-diagnostics.md` § "Notebook-aware use-after-move diagnostic".
 
 - [ ] **Slice REPL auto-clone — `karac repl --auto-clone` opt-in mode.** CLI flag that auto-inserts `.clone()` at consume sites when bindings are referenced cross-cell. Builds on the previous slice's cell-tracking. Never silent — emits `perf[auto-clone-in-repl]` note on every insertion. Inserted clones survive `:save` export. Plan: `phase-5-diagnostics.md` § "`--auto-clone` opt-in mode" (slice plan section). Source: phase 4–8 survey bucket A11. **Depends on the previous slice (REPL UAM diagnostic).**
 
@@ -212,8 +212,8 @@ Per-slice durations recorded as each lands. Subagent wall-clock is the implement
 | 1 | 3.5 — Self-receiver dispatch | 2026-05-07 21:41 | 2026-05-07 21:53 | 12 min | `f7cad93` |
 | 2 | get_unchecked | 2026-05-07 22:00 | _—_ | ~10 min (investigation) | `BLOCKED` |
 | 3 | binary-size phase 1 | 2026-05-07 23:45 | 2026-05-07 23:55 | 10 min | `0731fd2` |
-| 4 | perf note (shared struct mut) | 2026-05-08 00:01 | 2026-05-08 00:12 | 11 min | _pending fill_ |
-| 5 | REPL UAM diagnostic | _—_ | _—_ | _—_ | _—_ |
+| 4 | perf note (shared struct mut) | 2026-05-08 00:01 | 2026-05-08 00:12 | 11 min | `4f1efe1` |
+| 5 | REPL UAM diagnostic | 2026-05-08 00:19 | 2026-05-08 00:53 | 34 min | _pending fill_ |
 | 6 | REPL auto-clone | _—_ | _—_ | _—_ | _—_ |
 | 7 | atomic-RC | _—_ | _—_ | _—_ | _—_ |
 | 8 | env.set | _—_ | _—_ | _—_ | _—_ |
