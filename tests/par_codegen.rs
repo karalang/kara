@@ -171,6 +171,71 @@ fn main() {
         );
     }
 
+    /// Debugger Contract slice 4: `karac_par_run` takes a `spawn_site_id`
+    /// argument (the same `par_id` minted via slice 3's
+    /// `record_spawn_site`). With two par blocks in the program, the call
+    /// sites must pass `i32 0` and `i32 1` respectively — pinning the
+    /// codegen-side argument-passing change against future regression.
+    /// The runtime uses this ID to populate `KaracFrame::spawn_site_id`
+    /// for slice 5's enumeration surface.
+    #[test]
+    fn test_emit_par_run_passes_spawn_site_id() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    par {
+        println(1);
+        println(2);
+    }
+    par {
+        println(3);
+        println(4);
+    }
+}
+"#,
+        );
+        // The extern declaration's signature now includes the `i32`
+        // spawn-site id as the third arg.
+        assert!(
+            ir.contains("declare void @karac_par_run(ptr, i64, i32)"),
+            "extern decl should be (ptr, i64, i32); got:\n{ir}"
+        );
+        // Two call sites — one with spawn_site_id 0, one with 1.
+        // Inkwell emits the actual call as
+        // `call void @karac_par_run(ptr ..., i64 ..., i32 0)`.
+        let calls: Vec<&str> = ir
+            .lines()
+            .filter(|l| l.contains("call void @karac_par_run"))
+            .collect();
+        assert_eq!(
+            calls.len(),
+            2,
+            "expected exactly two karac_par_run calls; got {}: {:?}",
+            calls.len(),
+            calls
+        );
+        let mut seen_zero = false;
+        let mut seen_one = false;
+        for c in &calls {
+            if c.contains("i32 0)") {
+                seen_zero = true;
+            }
+            if c.contains("i32 1)") {
+                seen_one = true;
+            }
+        }
+        assert!(
+            seen_zero,
+            "expected one call with spawn_site_id `i32 0`; calls:\n{:?}",
+            calls
+        );
+        assert!(
+            seen_one,
+            "expected one call with spawn_site_id `i32 1`; calls:\n{:?}",
+            calls
+        );
+    }
+
     #[test]
     fn test_ir_par_single_stmt_no_runtime_call() {
         // Par with one statement is optimized to sequential — no runtime call.

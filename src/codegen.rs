@@ -787,13 +787,17 @@ impl<'ctx> Codegen<'ctx> {
 
         // Declare runtime types and entry points for par blocks.
         // `KaracBranch { func: ptr, ctx: ptr }` matches the #[repr(C)] struct in
-        // runtime/src/lib.rs. karac_par_run(branches, count) spawns one thread
-        // per branch and joins all before returning.
+        // runtime/src/lib.rs. karac_par_run(branches, count, spawn_site_id)
+        // spawns one thread per branch and joins all before returning. The
+        // `spawn_site_id` argument (Debugger Contract slice 4) identifies the
+        // par site for `KaracFrame` metadata; the runtime ignores it when
+        // `KARAC_RUNTIME_DEBUG_METADATA=0`.
         let karac_branch_ty = context.struct_type(&[ptr_type.into(), ptr_type.into()], false);
         let karac_par_run_type = context.void_type().fn_type(
             &[
                 BasicMetadataTypeEnum::from(ptr_type),
                 BasicMetadataTypeEnum::from(i64_type),
+                BasicMetadataTypeEnum::from(i32_type),
             ],
             false,
         );
@@ -12734,12 +12738,16 @@ impl<'ctx> Codegen<'ctx> {
             self.builder.build_store(elem_ptr, entry).unwrap();
         }
 
-        // 6. Call karac_par_run(branches, count).
+        // 6. Call karac_par_run(branches, count, par_id).
+        //    `par_id` (Debugger Contract slice 4) was minted via
+        //    `record_spawn_site` above; the runtime uses it to populate
+        //    `KaracFrame::spawn_site_id` for slice 5's enumeration surface.
         let count = i64_type.const_int(stmts.len() as u64, false);
+        let par_id_val = self.context.i32_type().const_int(par_id as u64, false);
         self.builder
             .build_call(
                 self.karac_par_run_fn,
-                &[branches_alloca.into(), count.into()],
+                &[branches_alloca.into(), count.into(), par_id_val.into()],
                 "__par_run",
             )
             .unwrap();
