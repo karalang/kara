@@ -288,7 +288,7 @@ impl<'a> Lowerer<'a> {
             | ExprKind::InterpolatedStringLit(_)
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
-            | ExprKind::Path(_)
+            | ExprKind::Path { .. }
             | ExprKind::SelfValue
             | ExprKind::SelfType
             | ExprKind::PipePlaceholder
@@ -347,7 +347,10 @@ impl<'a> Lowerer<'a> {
             .clone();
         let new_callee = Box::new(Expr {
             span: callee.span.clone(),
-            kind: ExprKind::Path(vec![target, name]),
+            kind: ExprKind::Path {
+                segments: vec![target, name],
+                generic_args: None,
+            },
         });
         Some(ExprKind::Call {
             callee: new_callee,
@@ -511,7 +514,10 @@ fn call_path(segments: Vec<String>, args: Vec<Expr>) -> ExprKind {
         });
     let callee = Box::new(Expr {
         span: span.clone(),
-        kind: ExprKind::Path(segments),
+        kind: ExprKind::Path {
+            segments,
+            generic_args: None,
+        },
     });
     let call_args = args
         .into_iter()

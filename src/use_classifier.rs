@@ -246,7 +246,7 @@ impl<'a> UseClassifier<'a> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
-            | ExprKind::Path(..)
+            | ExprKind::Path { .. }
             | ExprKind::SelfType => {}
 
             ExprKind::Binary { left, right, .. }
@@ -579,7 +579,7 @@ impl<'a> UseClassifier<'a> {
     fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
         let key = match &callee.kind {
             ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path(segs) => segs.join("."),
+            ExprKind::Path { segments, .. } => segments.join("."),
             _ => return None,
         };
         self.callee_param_modes.get(&key)

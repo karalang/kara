@@ -5294,7 +5294,7 @@ impl<'a> TypeChecker<'a> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
-            | ExprKind::Path(..)
+            | ExprKind::Path { .. }
             | ExprKind::SelfType
             | ExprKind::PipePlaceholder
             | ExprKind::Error => {}
@@ -5635,7 +5635,7 @@ impl<'a> TypeChecker<'a> {
     fn callee_borrow_positions(&self, callee: &Expr) -> Option<Vec<bool>> {
         let key = match &callee.kind {
             ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path(segs) => segs.join("."),
+            ExprKind::Path { segments, .. } => segments.join("."),
             _ => return None,
         };
         if let Some(sig) = self.env.functions.get(&key) {
@@ -6754,7 +6754,7 @@ impl<'a> TypeChecker<'a> {
 
             // Identifiers
             ExprKind::Identifier(name) => self.resolve_identifier_type(name, &expr.span),
-            ExprKind::Path(segments) => self.resolve_path_type(segments, &expr.span),
+            ExprKind::Path { segments, .. } => self.resolve_path_type(segments, &expr.span),
 
             ExprKind::SelfValue => self.current_self_type.clone().unwrap_or(Type::Error),
             ExprKind::SelfType => self.current_self_type.clone().unwrap_or(Type::Error),
@@ -7825,7 +7825,7 @@ impl<'a> TypeChecker<'a> {
         // shape before the generic call infrastructure tries to read `T`
         // as a value. Concrete types (`Wrapper.method()`) fall through —
         // `resolve_path_type` already finds their impl methods.
-        if let ExprKind::Path(segments) = &callee.kind {
+        if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 {
                 if let Some(ty) = self.try_dispatch_typeparam_assoc_fn(
                     &segments[0],
@@ -7941,7 +7941,7 @@ impl<'a> TypeChecker<'a> {
                 .functions
                 .get(name)
                 .map(|sig| sig.param_names.clone()),
-            ExprKind::Path(segments) => segments.last().and_then(|name| {
+            ExprKind::Path { segments, .. } => segments.last().and_then(|name| {
                 self.env
                     .functions
                     .get(name)
@@ -8117,7 +8117,7 @@ impl<'a> TypeChecker<'a> {
     fn infer_pipe(&mut self, left: &Expr, right: &Expr, span: &Span) -> Type {
         match &right.kind {
             // a |> f => f(a)
-            ExprKind::Identifier(_) | ExprKind::Path(_) => {
+            ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 let synthetic_arg = CallArg {
                     label: None,
                     mut_marker: false,

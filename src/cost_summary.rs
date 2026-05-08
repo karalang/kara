@@ -458,7 +458,7 @@ fn walk_expr_for_with_provider(expr: &Expr, out: &mut Vec<WithProviderSite>) {
         | ExprKind::InterpolatedStringLit(_)
         | ExprKind::Bool(_)
         | ExprKind::Identifier(_)
-        | ExprKind::Path(_)
+        | ExprKind::Path { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType
         | ExprKind::PipePlaceholder
@@ -478,7 +478,7 @@ fn match_with_provider_callee(callee: &Expr) -> Option<String> {
     };
     let is_with_provider = match &object.kind {
         ExprKind::Identifier(n) => n == "with_provider",
-        ExprKind::Path(segs) => segs.as_slice() == ["with_provider"],
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
         _ => false,
     };
     if !is_with_provider {
@@ -486,7 +486,7 @@ fn match_with_provider_callee(callee: &Expr) -> Option<String> {
     }
     match &index.kind {
         ExprKind::Identifier(n) => Some(n.clone()),
-        ExprKind::Path(segs) => segs.last().cloned(),
+        ExprKind::Path { segments, .. } => segments.last().cloned(),
         _ => None,
     }
 }

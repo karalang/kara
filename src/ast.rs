@@ -799,7 +799,10 @@ pub enum ExprKind {
 
     // Identifiers
     Identifier(String),
-    Path(Vec<String>),
+    Path {
+        segments: Vec<String>,
+        generic_args: Option<Vec<TypeExpr>>,
+    },
     SelfValue,
     SelfType,
 

@@ -77,7 +77,7 @@
   **Slice plan (drafted 2026-05-08).** Two slices; Slice A is pure
   refactor with zero behavioral change, Slice B lands the feature.
 
-  - [ ] **Slice A — AST extension + mechanical fixup.** Pure
+  - [x] **Slice A — AST extension + mechanical fixup.** Pure
     refactoring; zero behavioral change.
     - *Goal.* `ExprKind::Path` carries
       `generic_args: Option<Vec<TypeExpr>>` (always `None` after this

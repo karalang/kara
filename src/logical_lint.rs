@@ -267,7 +267,7 @@ fn walk_expr_children(expr: &Expr, diags: &mut Vec<LintDiagnostic>) {
             }
         }
         ExprKind::Identifier(_)
-        | ExprKind::Path(_)
+        | ExprKind::Path { .. }
         | ExprKind::Integer(_, _)
         | ExprKind::Float(_, _)
         | ExprKind::CharLit(_)

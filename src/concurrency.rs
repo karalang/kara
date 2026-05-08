@@ -668,7 +668,7 @@ impl<'a> ConcurrencyChecker<'a> {
                     self.collect_expr_reads(e, reads);
                 }
             }
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 // A path like Mod::val — the first segment could be a variable
                 if let Some(first) = segments.first() {
                     reads.insert(first.clone());
@@ -905,7 +905,7 @@ impl<'a> ConcurrencyChecker<'a> {
             }
             // Leaf expressions — no effects
             ExprKind::Identifier(_)
-            | ExprKind::Path(_)
+            | ExprKind::Path { .. }
             | ExprKind::SelfValue
             | ExprKind::SelfType
             | ExprKind::Integer(_, _)
@@ -978,7 +978,7 @@ impl<'a> ConcurrencyChecker<'a> {
     fn extract_callee_name(&self, callee: &Expr) -> Option<String> {
         match &callee.kind {
             ExprKind::Identifier(name) => Some(name.clone()),
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 if segments.len() == 2 {
                     Some(format!("{}.{}", segments[0], segments[1]))
                 } else {

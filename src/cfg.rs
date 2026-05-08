@@ -534,7 +534,7 @@ impl<'a> CfgBuilder<'a> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
-            | ExprKind::Path(..)
+            | ExprKind::Path { .. }
             | ExprKind::SelfType => cur,
 
             ExprKind::Binary { left, right, .. }

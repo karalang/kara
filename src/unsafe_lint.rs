@@ -303,7 +303,7 @@ fn walk_expr(expr: &Expr, lines: &[&str], deny: bool, diags: &mut Vec<LintDiagno
         | ExprKind::InterpolatedStringLit(..)
         | ExprKind::Bool(..)
         | ExprKind::Identifier(..)
-        | ExprKind::Path(..)
+        | ExprKind::Path { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType
         | ExprKind::PipePlaceholder

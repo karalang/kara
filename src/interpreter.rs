@@ -1254,7 +1254,7 @@ fn collect_free_idents_expr(expr: &Expr, bound: &mut HashSet<String>, out: &mut 
                 out.push(name.clone());
             }
         }
-        ExprKind::Path(_)
+        ExprKind::Path { .. }
         | ExprKind::Integer(_, _)
         | ExprKind::Float(_, _)
         | ExprKind::Bool(_)
@@ -2224,7 +2224,7 @@ impl<'a> Interpreter<'a> {
                 )
             }),
 
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 let full = segments.join(".");
                 if let Some(v) = self.env.get(&full) {
                     return v;
@@ -3573,14 +3573,14 @@ impl<'a> Interpreter<'a> {
         // roots a Path in `parse_primary`. Dispatch through the provider
         // stack instead of normal path-call resolution when the head segment
         // names an `effect resource` (design.md § Provider-Rooted Resources).
-        if let ExprKind::Path(segments) = &callee.kind {
+        if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 && self.effect_resources.contains(&segments[0]) {
                 return self.eval_resource_method(&segments[0], &segments[1], args, span);
             }
         }
 
         // Built-in path-qualified functions (e.g. process.exit, Ordering.Relaxed, F64.from)
-        if let ExprKind::Path(segments) = &callee.kind {
+        if let ExprKind::Path { segments, .. } = &callee.kind {
             let path_str = segments.join(".");
             match path_str.as_str() {
                 "process.exit" => {
@@ -4004,7 +4004,7 @@ impl<'a> Interpreter<'a> {
                 // Try enum variant constructor by name
                 let variant_name = match &callee.kind {
                     ExprKind::Identifier(n) => n.clone(),
-                    ExprKind::Path(segs) => segs.last().cloned().unwrap_or_default(),
+                    ExprKind::Path { segments, .. } => segments.last().cloned().unwrap_or_default(),
                     _ => String::new(),
                 };
                 if let Some(enum_name) = self.find_enum_for_variant(&variant_name) {
@@ -4037,7 +4037,7 @@ impl<'a> Interpreter<'a> {
         };
         let is_with_provider = match &object.kind {
             ExprKind::Identifier(n) => n == "with_provider",
-            ExprKind::Path(segs) => segs.as_slice() == ["with_provider"],
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
             _ => false,
         };
         if !is_with_provider {
@@ -4045,7 +4045,7 @@ impl<'a> Interpreter<'a> {
         }
         let resource = match &index.kind {
             ExprKind::Identifier(n) => n.clone(),
-            ExprKind::Path(segs) => segs.last().cloned()?,
+            ExprKind::Path { segments, .. } => segments.last().cloned()?,
             _ => return None,
         };
         if args.len() != 2 {
@@ -8450,7 +8450,7 @@ impl<'a> Interpreter<'a> {
     fn eval_pipe(&mut self, left: &Expr, right: &Expr) -> Value {
         match &right.kind {
             // a |> f => f(a)
-            ExprKind::Identifier(_) | ExprKind::Path(_) => {
+            ExprKind::Identifier(_) | ExprKind::Path { .. } => {
                 let desugared = Expr {
                     span: right.span.clone(),
                     kind: ExprKind::Call {

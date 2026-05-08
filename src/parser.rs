@@ -4369,7 +4369,10 @@ impl Parser {
                     kind: ExprKind::Call {
                         callee: Box::new(Expr {
                             span: self.span_from(&start),
-                            kind: ExprKind::Path(path),
+                            kind: ExprKind::Path {
+                                segments: path,
+                                generic_args: None,
+                            },
                         }),
                         args,
                     },
@@ -4378,7 +4381,10 @@ impl Parser {
 
             return Some(Expr {
                 span: self.span_from(&start),
-                kind: ExprKind::Path(path),
+                kind: ExprKind::Path {
+                    segments: path,
+                    generic_args: None,
+                },
             });
         }
 

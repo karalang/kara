@@ -74,8 +74,13 @@ fn is_ffi_float_call(expr: &Expr, ffi_fns: &std::collections::HashSet<String>) -
     match &expr.kind {
         ExprKind::Call { callee, .. } => match &callee.kind {
             ExprKind::Identifier(name) if ffi_fns.contains(name) => Some(name.clone()),
-            ExprKind::Path(segs) if segs.last().map(|s| ffi_fns.contains(s)).unwrap_or(false) => {
-                segs.last().cloned()
+            ExprKind::Path { segments, .. }
+                if segments
+                    .last()
+                    .map(|s| ffi_fns.contains(s))
+                    .unwrap_or(false) =>
+            {
+                segments.last().cloned()
             }
             _ => None,
         },
@@ -288,7 +293,7 @@ fn walk_expr(
         | ExprKind::InterpolatedStringLit(..)
         | ExprKind::Bool(..)
         | ExprKind::Identifier(..)
-        | ExprKind::Path(..)
+        | ExprKind::Path { .. }
         | ExprKind::SelfValue
         | ExprKind::SelfType
         | ExprKind::PipePlaceholder

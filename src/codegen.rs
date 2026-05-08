@@ -1352,8 +1352,8 @@ impl<'ctx> Codegen<'ctx> {
 
     fn is_map_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path(segs) = &callee.kind {
-                return segs.len() == 2 && segs[0] == "Map" && segs[1] == "new";
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2 && segments[0] == "Map" && segments[1] == "new";
             }
         }
         false
@@ -1361,8 +1361,8 @@ impl<'ctx> Codegen<'ctx> {
 
     fn is_set_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path(segs) = &callee.kind {
-                return segs.len() == 2 && segs[0] == "Set" && segs[1] == "new";
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2 && segments[0] == "Set" && segments[1] == "new";
             }
         }
         false
@@ -1370,8 +1370,8 @@ impl<'ctx> Codegen<'ctx> {
 
     fn is_vec_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path(segs) = &callee.kind {
-                return segs.len() == 2 && segs[0] == "Vec" && segs[1] == "new";
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2 && segments[0] == "Vec" && segments[1] == "new";
             }
         }
         false
@@ -1390,8 +1390,8 @@ impl<'ctx> Codegen<'ctx> {
         // Lowered form `Call(Path(["String", "add"]), [a, b])` — produced by
         // the operator lowering pass. Also recognize String + String here.
         if let ExprKind::Call { callee, args } = &expr.kind {
-            if let ExprKind::Path(segs) = &callee.kind {
-                if segs.len() == 2 && segs[0] == "String" && segs[1] == "add" {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 && segments[0] == "String" && segments[1] == "add" {
                     if let Some(first) = args.first() {
                         return self.first_operand_is_string(&first.value);
                     }
@@ -1418,8 +1418,8 @@ impl<'ctx> Codegen<'ctx> {
 
     fn is_string_new_call(&self, expr: &Expr) -> bool {
         if let ExprKind::Call { callee, .. } = &expr.kind {
-            if let ExprKind::Path(segs) = &callee.kind {
-                return segs.len() == 2 && segs[0] == "String" && segs[1] == "new";
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2 && segments[0] == "String" && segments[1] == "new";
             }
         }
         false
@@ -3422,7 +3422,7 @@ impl<'ctx> Codegen<'ctx> {
             } => self.compile_method_call(object, method, args, &expr.span),
             ExprKind::Index { object, index } => self.compile_index(object, index),
             ExprKind::Question(inner) => self.compile_question(inner, &expr.span),
-            ExprKind::Path(segments) => self.compile_path_expr(segments),
+            ExprKind::Path { segments, .. } => self.compile_path_expr(segments),
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
     }
@@ -10232,13 +10232,15 @@ impl<'ctx> Codegen<'ctx> {
         // conservative "always fire" path via `None`.
         let callee_key: Option<String> = match &callee.kind {
             ExprKind::Identifier(n) => Some(n.clone()),
-            ExprKind::Path(segs) if segs.len() == 2 => Some(format!("{}.{}", segs[0], segs[1])),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                Some(format!("{}.{}", segments[0], segments[1]))
+            }
             _ => None,
         };
         self.emit_branch_cancel_check("call", callee_key.as_deref());
 
         // Associated function calls: Vec::new(), etc.
-        if let ExprKind::Path(segments) = &callee.kind {
+        if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 {
                 return self.compile_assoc_call(&segments[0], &segments[1], args);
             }
@@ -12691,7 +12693,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 // Lowered operator dispatch: `<Primitive>.<op>(args)` —
                 // the lowering pass produces these from BinOp/UnaryOp.
-                if let ExprKind::Path(segments) = &callee.kind {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
                     if segments.len() == 2 {
                         let target = segments[0].as_str();
                         let method = segments[1].as_str();

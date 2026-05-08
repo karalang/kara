@@ -2087,7 +2087,7 @@ impl<'a> Resolver<'a> {
                 }
             }
 
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 // Resolve the first segment, then qualified access
                 if let Some(first) = segments.first() {
                     if let Some(sym) = self.table.lookup(first) {

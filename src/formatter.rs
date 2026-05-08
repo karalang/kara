@@ -1136,7 +1136,7 @@ impl Formatter {
             }
             ExprKind::Bool(b) => self.write_str(if *b { "true" } else { "false" }),
             ExprKind::Identifier(name) => self.write_ident(name),
-            ExprKind::Path(segments) => self.write_path(segments),
+            ExprKind::Path { segments, .. } => self.write_path(segments),
             ExprKind::SelfValue => self.write_str("self"),
             ExprKind::SelfType => self.write_str("Self"),
 

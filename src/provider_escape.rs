@@ -923,7 +923,9 @@ impl<'a> EscapeChecker<'a> {
     fn call_escapable_caps(&self, callee: &Expr) -> Option<Vec<String>> {
         let key = match &callee.kind {
             ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path(segs) if segs.len() == 2 => format!("{}.{}", segs[0], segs[1]),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                format!("{}.{}", segments[0], segments[1])
+            }
             _ => return None,
         };
         self.escapable_caps.get(&key).cloned()
@@ -949,8 +951,8 @@ impl<'a> EscapeChecker<'a> {
                 method == "new" && matches!(&object.kind, ExprKind::Identifier(n) if n == "Channel")
             }
             ExprKind::Call { callee, .. } => {
-                matches!(&callee.kind, ExprKind::Path(segs)
-                    if segs.len() == 2 && segs[0] == "Channel" && segs[1] == "new")
+                matches!(&callee.kind, ExprKind::Path { segments, .. }
+                    if segments.len() == 2 && segments[0] == "Channel" && segments[1] == "new")
             }
             _ => false,
         };
@@ -999,7 +1001,7 @@ impl<'a> EscapeChecker<'a> {
         }
         let is_spawn = match &callee.kind {
             ExprKind::Identifier(n) => n == "spawn",
-            ExprKind::Path(segs) => segs.as_slice() == ["spawn"],
+            ExprKind::Path { segments, .. } => segments.as_slice() == ["spawn"],
             _ => false,
         };
         if !is_spawn {
@@ -1188,7 +1190,7 @@ fn match_with_provider<'e>(
     };
     let is_with_provider = match &object.kind {
         ExprKind::Identifier(n) => n == "with_provider",
-        ExprKind::Path(segs) => segs.as_slice() == ["with_provider"],
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["with_provider"],
         _ => false,
     };
     if !is_with_provider {
@@ -1196,7 +1198,7 @@ fn match_with_provider<'e>(
     }
     let resource = match &index.kind {
         ExprKind::Identifier(n) => n.clone(),
-        ExprKind::Path(segs) => segs.last().cloned()?,
+        ExprKind::Path { segments, .. } => segments.last().cloned()?,
         _ => return None,
     };
     if args.len() != 2 {
@@ -1213,9 +1215,9 @@ fn match_with_provider<'e>(
 fn collect_resource_refs(expr: &Expr, out: &mut Vec<String>) {
     match &expr.kind {
         ExprKind::Call { callee, args } => {
-            if let ExprKind::Path(segs) = &callee.kind {
-                if segs.len() == 2 {
-                    push_unique(out, segs[0].clone());
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 {
+                    push_unique(out, segments[0].clone());
                 }
             }
             collect_resource_refs(callee, out);
@@ -1418,7 +1420,7 @@ fn render_assign_target(expr: &Expr) -> String {
         ExprKind::Index { object, .. } => {
             format!("{}[…]", render_assign_target(object))
         }
-        ExprKind::Path(segs) => segs.join("."),
+        ExprKind::Path { segments, .. } => segments.join("."),
         _ => "<target>".to_string(),
     }
 }
@@ -1442,7 +1444,7 @@ fn extract_type_name_from_let_value(value: &Expr) -> Option<String> {
     match &value.kind {
         ExprKind::StructLiteral { path, .. } => path.last().cloned(),
         ExprKind::Call { callee, .. } => match &callee.kind {
-            ExprKind::Path(segs) if segs.len() == 2 => Some(segs[0].clone()),
+            ExprKind::Path { segments, .. } if segments.len() == 2 => Some(segments[0].clone()),
             ExprKind::MethodCall { object, .. } => {
                 if let ExprKind::Identifier(ty) = &object.kind {
                     Some(ty.clone())

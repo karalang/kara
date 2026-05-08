@@ -1725,7 +1725,7 @@ impl<'a> OwnershipChecker<'a> {
     fn callee_modes_for_call(&self, callee: &Expr) -> Option<&Vec<OwnershipMode>> {
         let key = match &callee.kind {
             ExprKind::Identifier(name) => name.clone(),
-            ExprKind::Path(segs) => segs.join("."),
+            ExprKind::Path { segments, .. } => segments.join("."),
             _ => return None,
         };
         self.callee_param_modes.get(&key)
@@ -2926,7 +2926,7 @@ impl<'a> OwnershipChecker<'a> {
                 }
                 self.check_block(body, states, param_types, param_usage);
             }
-            ExprKind::Path(_)
+            ExprKind::Path { .. }
             | ExprKind::SelfType
             | ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)

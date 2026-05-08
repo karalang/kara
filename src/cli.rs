@@ -3788,7 +3788,7 @@ fn expr_to_dotted_path(expr: &crate::ast::Expr) -> Option<String> {
     use crate::ast::ExprKind;
     match &expr.kind {
         ExprKind::Identifier(name) => Some(name.clone()),
-        ExprKind::Path(segments) => {
+        ExprKind::Path { segments, .. } => {
             if segments.is_empty() {
                 None
             } else {

@@ -1650,7 +1650,7 @@ impl<'a> EffectChecker<'a> {
                     self.collect_calls_in_expr(e, calls, bounds);
                 }
             }
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 // A path like Foo::bar used as a value — could be a function reference
                 if segments.len() == 2 {
                     let key = format!("{}.{}", segments[0], segments[1]);
@@ -1716,7 +1716,7 @@ impl<'a> EffectChecker<'a> {
     fn extract_callee_name(&self, callee: &Expr) -> Option<String> {
         match &callee.kind {
             ExprKind::Identifier(name) => Some(name.clone()),
-            ExprKind::Path(segments) => {
+            ExprKind::Path { segments, .. } => {
                 if segments.len() == 2 {
                     Some(format!("{}.{}", segments[0], segments[1]))
                 } else {
@@ -1743,7 +1743,7 @@ impl<'a> EffectChecker<'a> {
         bounds: &HashMap<String, Vec<TraitBound>>,
     ) -> Vec<String> {
         match &callee.kind {
-            ExprKind::Path(segments) if segments.len() == 2 => {
+            ExprKind::Path { segments, .. } if segments.len() == 2 => {
                 let head = &segments[0];
                 let method = &segments[1];
                 if let Some(bs) = bounds.get(head) {
@@ -3267,7 +3267,7 @@ impl<'a> EffectChecker<'a> {
             }
             // Leaf expressions — nothing to recurse into
             ExprKind::Identifier(_)
-            | ExprKind::Path(_)
+            | ExprKind::Path { .. }
             | ExprKind::SelfValue
             | ExprKind::SelfType
             | ExprKind::Integer(_, _)

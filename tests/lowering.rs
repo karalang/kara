@@ -45,7 +45,7 @@ fn test_lower_int_add_to_call_path() {
         ExprKind::Call { callee, args } => {
             assert_eq!(args.len(), 2);
             match &callee.kind {
-                ExprKind::Path(segments) => {
+                ExprKind::Path { segments, .. } => {
                     assert_eq!(segments, &["i64".to_string(), "add".to_string()]);
                 }
                 other => panic!("expected Path callee, got {:?}", other),
@@ -62,7 +62,7 @@ fn test_lower_float_mul_to_call_path() {
     let ExprKind::Call { callee, .. } = &body.kind else {
         panic!("expected Call");
     };
-    let ExprKind::Path(segments) = &callee.kind else {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
         panic!("expected Path callee");
     };
     assert_eq!(segments, &["f64".to_string(), "mul".to_string()]);
@@ -76,7 +76,7 @@ fn test_lower_neg_to_call_path() {
         panic!("expected Call, got {:?}", body.kind);
     };
     assert_eq!(args.len(), 1);
-    let ExprKind::Path(segments) = &callee.kind else {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
         panic!("expected Path callee");
     };
     assert_eq!(segments, &["i64".to_string(), "neg".to_string()]);
@@ -91,7 +91,7 @@ fn test_lower_recursive_descent() {
     let ExprKind::Call { callee, args } = &body.kind else {
         panic!("expected outer Call");
     };
-    let ExprKind::Path(segments) = &callee.kind else {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
         panic!("expected Path callee");
     };
     assert_eq!(segments, &["i64".to_string(), "mul".to_string()]);
@@ -99,7 +99,7 @@ fn test_lower_recursive_descent() {
     for (i, expected) in [(0, "add"), (1, "sub")] {
         match &args[i].value.kind {
             ExprKind::Call { callee, .. } => {
-                let ExprKind::Path(segs) = &callee.kind else {
+                let ExprKind::Path { segments: segs, .. } = &callee.kind else {
                     panic!("inner [{i}]: expected Path");
                 };
                 assert_eq!(segs, &["i64".to_string(), expected.to_string()]);
@@ -134,7 +134,7 @@ fn test_lower_eq_ne_to_call_path() {
         let ExprKind::Call { callee, .. } = &body.kind else {
             panic!("fn {name}: expected Call, got {:?}", body.kind);
         };
-        let ExprKind::Path(segments) = &callee.kind else {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
             panic!("fn {name}: expected Path callee");
         };
         assert_eq!(segments, &["i64".to_string(), expected_method.to_string()]);
@@ -154,7 +154,7 @@ fn test_lower_comparison_to_call_path() {
         let ExprKind::Call { callee, .. } = &body.kind else {
             panic!("fn {name}: expected Call");
         };
-        let ExprKind::Path(segs) = &callee.kind else {
+        let ExprKind::Path { segments: segs, .. } = &callee.kind else {
             panic!("fn {name}: expected Path");
         };
         assert_eq!(segs, &["i32".to_string(), expected.to_string()]);
@@ -181,7 +181,7 @@ fn test_lower_bitwise_to_call_path() {
         let ExprKind::Call { callee, .. } = &body.kind else {
             panic!("fn {name}: expected Call");
         };
-        let ExprKind::Path(segs) = &callee.kind else {
+        let ExprKind::Path { segments: segs, .. } = &callee.kind else {
             panic!("fn {name}: expected Path");
         };
         assert_eq!(segs, &["i32".to_string(), expected.to_string()]);
@@ -199,7 +199,7 @@ fn test_lower_bitnot_and_not_to_call_path() {
     let ExprKind::Call { callee, .. } = &a_body.kind else {
         panic!("expected Call for ~x, got {:?}", a_body.kind);
     };
-    let ExprKind::Path(segs) = &callee.kind else {
+    let ExprKind::Path { segments: segs, .. } = &callee.kind else {
         panic!("expected Path");
     };
     assert_eq!(segs, &["i32".to_string(), "not".to_string()]);
@@ -208,7 +208,7 @@ fn test_lower_bitnot_and_not_to_call_path() {
     let ExprKind::Call { callee, .. } = &b_body.kind else {
         panic!("expected Call for not x");
     };
-    let ExprKind::Path(segs) = &callee.kind else {
+    let ExprKind::Path { segments: segs, .. } = &callee.kind else {
         panic!("expected Path");
     };
     assert_eq!(segs, &["bool".to_string(), "not".to_string()]);
@@ -227,7 +227,7 @@ fn test_lower_string_concat_to_call_path() {
     let ExprKind::Call { callee, .. } = &body.kind else {
         panic!("expected Call, got {:?}", body.kind);
     };
-    let ExprKind::Path(segments) = &callee.kind else {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
         panic!("expected Path callee");
     };
     assert_eq!(segments, &["String".to_string(), "add".to_string()]);
@@ -256,7 +256,7 @@ fn test_lower_into_to_from_call_at_let_annotation() {
         panic!("expected Call, got {:?}", value.kind);
     };
     assert_eq!(args.len(), 1);
-    let ExprKind::Path(segs) = &callee.kind else {
+    let ExprKind::Path { segments: segs, .. } = &callee.kind else {
         panic!("expected Path callee");
     };
     assert_eq!(segs, &["i64".to_string(), "from".to_string()]);
@@ -271,7 +271,7 @@ fn test_lower_into_at_return_position() {
     let ExprKind::Call { callee, .. } = &body.kind else {
         panic!("expected Call, got {:?}", body.kind);
     };
-    let ExprKind::Path(segs) = &callee.kind else {
+    let ExprKind::Path { segments: segs, .. } = &callee.kind else {
         panic!("expected Path");
     };
     assert_eq!(segs, &["i64".to_string(), "from".to_string()]);
@@ -295,7 +295,7 @@ fn test_lower_into_at_call_argument() {
     else {
         panic!("expected inner Call for .into()");
     };
-    let ExprKind::Path(segs) = &inner_callee.kind else {
+    let ExprKind::Path { segments: segs, .. } = &inner_callee.kind else {
         panic!("expected Path");
     };
     assert_eq!(segs, &["i64".to_string(), "from".to_string()]);
