@@ -436,6 +436,343 @@ pub unsafe extern "C" fn karac_runtime_for_each_active_frame(
     }
 }
 
+// ── Debugger Contract — `std.runtime` introspection (slice 5) ──────────────
+//
+// Item (4) of the four-piece contract per `design.md § Debugger Contract`.
+// Materializes slice 3's `KARAC_SPAWN_SITES` LLVM globals + slice 4's
+// `ACTIVE_FRAMES` registry as Kāra-callable APIs through the
+// `Runtime.has_debug_metadata()` / `Runtime.list_par_blocks()` /
+// `Runtime.list_tasks()` surface declared in `runtime/stdlib/runtime.kara`.
+//
+// **Linkage choice (cross-checked against `cat rust-toolchain.toml`).**
+// The slice plan flagged a fork between `#[linkage = "extern_weak"]`
+// (nightly-only via `#![feature(linkage)]`) and strong linkage on stable
+// Rust. The project pins stable Rust (no `rust-toolchain.toml`; cargo
+// 1.95.0 stable), so this section takes the **strong-linkage** path:
+// slice 3's `emit_spawn_sites_metadata` always emits the globals (even
+// the gate-off form ships `LEN = 0`, `ENABLED = false`, empty array), so
+// extern declarations without `#[linkage]` resolve at link time on every
+// karac binary. Hard-stop trigger 1 is satisfied: weak linkage is only
+// needed when some build path skips the emission, which slice 3 never
+// does.
+//
+// **Vec materialization (sub-step f, hard-stop trigger 3).** Slice 5 takes
+// the runtime-side full Vec materialization path: `karac_runtime_list_par_blocks_into`
+// allocates the `Vec[ParBlockInfo]` element buffer, populates each entry
+// (including per-entry String allocation for the file-path field), and
+// writes the final `{data, len, cap}` Vec descriptor into a slot the
+// codegen alloca'd. Trade-off: the runtime carries Kāra Vec + String
+// layout knowledge (already present from `clone.rs::karac_string_clone`)
+// and the compiler-side ParBlockInfo struct layout (matched via `#[repr(C)]`
+// with explicit padding). Codegen-side complexity drops from ~80 lines of
+// inline-IR loop to a single call + load. The alternative (codegen emits
+// the iteration + per-entry String clone in inline IR) is the
+// plan-recommended path; slice 5 deviates because the Kāra-side `String`
+// allocation surface for inline-IR construction (hard-stop trigger 4) is
+// not directly exposed at the relevant abstraction level.
+
+// Strong-linkage extern declarations of slice 3's globals. Gated on
+// `#[cfg(not(test))]` so the runtime crate's own unit tests can provide
+// stand-in definitions (see the `#[cfg(test)]` block at the bottom of
+// this file) — codegen-emitted globals only enter the link in real karac
+// builds, never in the runtime crate's standalone test binary.
+#[cfg(not(test))]
+extern "C" {
+    /// Slice 3 emits `KARAC_SPAWN_SITES_ENABLED` as an LLVM `i1`
+    /// (booltype) global. On every supported target the `i1` lowers to
+    /// a 1-byte storage cell (the LLVM data layout's `i1` alignment is
+    /// 1, and the value-bit lives in the low bit), so reading it
+    /// through a `u8` extern static is the stable way to recover the
+    /// boolean: any non-zero low bit means `true`.
+    static KARAC_SPAWN_SITES_ENABLED: u8;
+    /// Slice 3 emits this as an `i32` global; row count of the
+    /// `KARAC_SPAWN_SITES` array (`0` when the gate is off).
+    static KARAC_SPAWN_SITES_LEN: u32;
+    /// Slice 3 emits this as a `[N x SpawnSiteEntry]` array global.
+    /// `KaracSpawnSiteEntry` below mirrors the LLVM struct layout
+    /// `{ i32 id, ptr file_cstr, i32 line, i32 col, i32 worker_count, i32 reserved }`.
+    static KARAC_SPAWN_SITES: KaracSpawnSiteEntry;
+}
+
+/// One row of slice 3's `KARAC_SPAWN_SITES` LLVM array. The layout must
+/// match `Codegen::emit_spawn_sites_metadata`'s
+/// `{ i32 id, ptr file_cstr, i32 line, i32 col, i32 worker_count, i32 reserved }`
+/// struct exactly: `#[repr(C)]` + 8-byte alignment for the `file_cstr`
+/// pointer puts a 4-byte gap after `id` and a 4-byte gap after
+/// `_reserved`, total 32 bytes per entry. `mem::size_of` /
+/// `mem::offset_of` are pinned in `tests::test_spawn_site_entry_layout_pinned`
+/// so any future codegen-side rearrangement triggers a runtime-test
+/// failure rather than a silent ABI break.
+#[repr(C)]
+struct KaracSpawnSiteEntry {
+    id: u32,
+    _pad0: u32, // alignment padding before pointer
+    file_cstr: *const std::os::raw::c_char,
+    line: u32,
+    col: u32,
+    worker_count: u32,
+    _reserved: u32,
+}
+
+/// Layout-compatible view of a Kāra `String` value `{ ptr data, i64 len, i64 cap }`.
+/// Mirrors `clone.rs::KaracString` — duplicated here rather than imported
+/// because `clone.rs` defines it with crate-private visibility for the
+/// `karac_string_clone` symbol; lifting it to a shared module is a
+/// post-slice-5 refactor.
+#[repr(C)]
+struct RuntimeKaracString {
+    data: *mut u8,
+    len: i64,
+    cap: i64,
+}
+
+/// Layout-compatible view of a Kāra `Vec[T]` value `{ ptr data, i64 len, i64 cap }`.
+/// Element type is opaque at this level — the slice 5 `_into` writers
+/// allocate `count * size_of::<KaracParBlockInfo>()` bytes and stride by
+/// the same element size when filling.
+///
+/// Public so the `karac_runtime_list_par_blocks_into` extern fn can name
+/// the type in its parameter list. Field semantics match Kāra's `Vec[T]`
+/// codegen — `data` is heap-allocated (`std::alloc::alloc` here, freed at
+/// scope exit by user-side codegen), `len` / `cap` are i64 element counts.
+#[repr(C)]
+pub struct KaracVec {
+    pub data: *mut u8,
+    pub len: i64,
+    pub cap: i64,
+}
+
+/// Layout-compatible view of the Kāra `ParBlockInfo` struct declared in
+/// `runtime/stdlib/runtime.kara`:
+///
+/// ```text
+/// pub struct ParBlockInfo {
+///     spawn_site_id: u32,
+///     file: String,        // {ptr, i64 len, i64 cap}
+///     line: u32,
+///     col: u32,
+///     worker_count: u32,
+/// }
+/// ```
+///
+/// LLVM's natural layout for `{ i32, {ptr, i64, i64}, i32, i32, i32 }`
+/// on 64-bit targets:
+///
+///   - offset 0..4:   spawn_site_id (i32)
+///   - offset 4..8:   padding (alignment to 8 for the inner String)
+///   - offset 8..32:  file (24 bytes)
+///   - offset 32..36: line (i32)
+///   - offset 36..40: col (i32)
+///   - offset 40..44: worker_count (i32)
+///   - offset 44..48: trailing padding (struct alignment 8)
+///   - total size:    48 bytes
+///
+/// Rust's `#[repr(C)]` produces the identical layout because the field
+/// order, alignments, and trailing-padding rules match LLVM's
+/// `target-data-layout`-driven defaults on every supported target. The
+/// `_pad0` / `_pad1` fields are explicit so the layout reads identically
+/// to the LLVM struct in source — `tests::test_par_block_info_layout_pinned`
+/// asserts size and field offsets at runtime.
+#[repr(C)]
+struct KaracParBlockInfo {
+    spawn_site_id: u32,
+    _pad0: u32,
+    file: RuntimeKaracString,
+    line: u32,
+    col: u32,
+    worker_count: u32,
+    _pad1: u32,
+}
+
+/// Slice 5 of the Debugger Contract — public extern reading
+/// `KARAC_SPAWN_SITES_ENABLED` from the binary's LLVM globals.
+/// `runtime/stdlib/runtime.kara`'s `Runtime.has_debug_metadata()`
+/// `#[compiler_builtin]` shim dispatches to this through codegen.
+///
+/// Slice 3 always emits the symbol (gate-off form is `0`), so the read
+/// is unconditionally safe under strong linkage.
+#[no_mangle]
+pub extern "C" fn karac_runtime_has_debug_metadata() -> bool {
+    // SAFETY: KARAC_SPAWN_SITES_ENABLED is always emitted by codegen
+    // (slice 3, `c6d8b44`) — even the gate-off form ships the symbol
+    // with value 0. Strong linkage resolves the address at link time;
+    // the load is a single byte read. The `i1` LLVM type lowers to
+    // 1-byte storage with the boolean value in the low bit, so any
+    // non-zero byte means `true`.
+    //
+    // The `unsafe` block is required only in non-test builds where the
+    // symbol resolves through an `extern "C"` decl; in test builds the
+    // stand-in is a regular Rust `static u8` and the `unsafe` would be
+    // unnecessary, so we cfg-gate accordingly.
+    #[cfg(not(test))]
+    {
+        unsafe { KARAC_SPAWN_SITES_ENABLED != 0 }
+    }
+    #[cfg(test)]
+    {
+        KARAC_SPAWN_SITES_ENABLED != 0
+    }
+}
+
+/// Build a Kāra `Vec[ParBlockInfo]` snapshot of currently-active
+/// `par {}` blocks across all OS threads. Writes the resulting
+/// `{data, len, cap}` Vec descriptor into `*out`.
+///
+/// Joins slice 4's `ACTIVE_FRAMES` registry against slice 3's
+/// `KARAC_SPAWN_SITES` table: each active `KaracFrame::spawn_site_id`
+/// indexes into `KARAC_SPAWN_SITES[id]` to look up `(file, line, col,
+/// worker_count)`. The lookup is bounds-checked — frames whose id is
+/// out-of-range (which would indicate a metadata mismatch between
+/// runtime and codegen) are skipped rather than panicking, on the
+/// "introspection should never crash the program" principle.
+///
+/// **Iteration holds the registry lock.** `karac_runtime_for_each_active_frame`'s
+/// callback API is reused so that frame-pointer dereferences happen
+/// while the lock is held — slice-4-style soundness for the `*const
+/// KaracFrame` reads. The two-call snapshot race the slice plan worried
+/// about (`_count` then `_fill`) is avoided entirely because we go from
+/// active-frames → final Vec in a single function call.
+///
+/// Allocates two heap regions: the element buffer
+/// (`count * size_of::<KaracParBlockInfo>()` bytes via `std::alloc::alloc`,
+/// the same allocator the rest of the runtime uses) and one
+/// `RuntimeKaracString` heap copy per entry's file path (also via
+/// `std::alloc::alloc`). Empty result (`count == 0` or
+/// `runtime_debug_metadata_enabled()` is false) writes `{null, 0, 0}` —
+/// no allocation, matching Kāra's `Vec.new()` convention so scope-exit
+/// cleanup is a no-op.
+///
+/// # Safety
+///
+/// `out` must point to a writable `{ptr, i64, i64}` slot. Codegen
+/// always allocas this on the caller's stack before invoking. The
+/// returned Vec's `cap` matches `len`, so when scope-exit cleanup
+/// `free`s the buffer it sees a complete Kāra-shape allocation.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_list_par_blocks_into(out: *mut KaracVec) {
+    if out.is_null() {
+        return;
+    }
+    // Empty fast path: gate off, or no active frames. Either way write
+    // the canonical empty `{null, 0, 0}` Vec.
+    if !runtime_debug_metadata_enabled() {
+        (*out) = KaracVec {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        return;
+    }
+
+    // Snapshot active frames under the lock; copy out the (id, parent,
+    // worker_index) triples so we can release the lock before doing
+    // String allocations.
+    struct FrameSnapshot {
+        spawn_site_id: u32,
+    }
+    let frames: Vec<FrameSnapshot> = {
+        let guard = ACTIVE_FRAMES.lock().unwrap_or_else(|p| p.into_inner());
+        guard
+            .iter()
+            .map(|fp| FrameSnapshot {
+                // SAFETY: pointers in ACTIVE_FRAMES are valid while the
+                // lock is held — `FrameGuard::drop` deregisters before
+                // the stack frame deallocates, and we read the field
+                // through the lock.
+                spawn_site_id: (*fp.0).spawn_site_id,
+            })
+            .collect()
+    };
+
+    let count = frames.len();
+    if count == 0 {
+        (*out) = KaracVec {
+            data: std::ptr::null_mut(),
+            len: 0,
+            cap: 0,
+        };
+        return;
+    }
+
+    // Slice 3's KARAC_SPAWN_SITES table — bounds-check each spawn_site_id
+    // against KARAC_SPAWN_SITES_LEN before indexing. Address cast goes
+    // through a `*const ()` intermediate so the test-mode stand-in type
+    // (`SpawnSiteEntryStandIn`, a `#[repr(transparent)]` wrapper around
+    // `KaracSpawnSiteEntry`) and the production extern type both lower
+    // to a raw byte address.
+    let sites_len = KARAC_SPAWN_SITES_LEN as usize;
+    let sites_base: *const KaracSpawnSiteEntry =
+        &KARAC_SPAWN_SITES as *const _ as *const KaracSpawnSiteEntry;
+
+    let elem_size = std::mem::size_of::<KaracParBlockInfo>();
+    let layout = std::alloc::Layout::from_size_align(elem_size * count, 8)
+        .expect("ParBlockInfo array layout");
+    let buf = std::alloc::alloc(layout) as *mut KaracParBlockInfo;
+    if buf.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+
+    let mut filled: usize = 0;
+    for snap in &frames {
+        let id = snap.spawn_site_id as usize;
+        let (file_str, line, col, worker_count) = if id < sites_len {
+            let entry = &*sites_base.add(id);
+            let file = if entry.file_cstr.is_null() {
+                RuntimeKaracString {
+                    data: std::ptr::null_mut(),
+                    len: 0,
+                    cap: 0,
+                }
+            } else {
+                let cstr = std::ffi::CStr::from_ptr(entry.file_cstr);
+                let bytes = cstr.to_bytes();
+                if bytes.is_empty() {
+                    RuntimeKaracString {
+                        data: std::ptr::null_mut(),
+                        len: 0,
+                        cap: 0,
+                    }
+                } else {
+                    let str_layout = std::alloc::Layout::array::<u8>(bytes.len()).unwrap();
+                    let str_buf = std::alloc::alloc(str_layout);
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr(), str_buf, bytes.len());
+                    RuntimeKaracString {
+                        data: str_buf,
+                        len: bytes.len() as i64,
+                        cap: bytes.len() as i64,
+                    }
+                }
+            };
+            (file, entry.line, entry.col, entry.worker_count)
+        } else {
+            // Spawn-site ID out of range — metadata mismatch (e.g. table
+            // emitted with gate off). Skip rather than crash.
+            continue;
+        };
+
+        let entry_ptr = buf.add(filled);
+        std::ptr::write(
+            entry_ptr,
+            KaracParBlockInfo {
+                spawn_site_id: snap.spawn_site_id,
+                _pad0: 0,
+                file: file_str,
+                line,
+                col,
+                worker_count,
+                _pad1: 0,
+            },
+        );
+        filled += 1;
+    }
+
+    (*out) = KaracVec {
+        data: buf as *mut u8,
+        len: filled as i64,
+        cap: count as i64,
+    };
+}
+
 // ── Error return trace ─────────────────────────────────────────────────────
 //
 // Mirrors the interpreter's `error_trace` (src/interpreter.rs:592). On each
@@ -753,6 +1090,57 @@ fn push_u32(out: &mut String, n: u32) {
     use std::fmt::Write;
     let _ = write!(out, "{}", n);
 }
+
+// ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
+//
+// The runtime crate's `cargo test -p karac-runtime` binary has its own
+// (test-only) symbol space — the LLVM globals `KARAC_SPAWN_SITES`,
+// `KARAC_SPAWN_SITES_LEN`, `KARAC_SPAWN_SITES_ENABLED` emitted by codegen
+// never enter the link. The `#[cfg(not(test))]` gate on the `extern "C"`
+// block above means the runtime test binary has no extern decl to resolve
+// — it instead reads the stand-in `static` definitions below directly.
+//
+// In real karac-build pipelines (compiler emits + runtime statically
+// links), codegen's `emit_spawn_sites_metadata` provides the symbols with
+// `External` linkage and the runtime's `extern "C"` block resolves to
+// them. The two paths never collide because they're cfg-gated apart.
+//
+// `KARAC_SPAWN_SITES_ENABLED = 1` flips
+// `karac_runtime_has_debug_metadata()` to `true` for the corresponding
+// runtime test (`test_has_debug_metadata_reads_through_global`). `_LEN = 0`
+// makes the `list_par_blocks_into` snapshot-from-table loop a no-op for
+// tests that don't bind a real frame.
+//
+// `SpawnSiteEntryStandIn` wraps `KaracSpawnSiteEntry` so we can express
+// `unsafe impl Sync` for the const-static stand-in (raw pointers are
+// `!Sync` by default; the wrapper is sound because the entry is read-only
+// and the pointer is the null sentinel).
+#[cfg(test)]
+#[repr(transparent)]
+struct SpawnSiteEntryStandIn(KaracSpawnSiteEntry);
+
+#[cfg(test)]
+unsafe impl Sync for SpawnSiteEntryStandIn {}
+
+#[cfg(test)]
+#[no_mangle]
+static KARAC_SPAWN_SITES_ENABLED: u8 = 1;
+
+#[cfg(test)]
+#[no_mangle]
+static KARAC_SPAWN_SITES_LEN: u32 = 0;
+
+#[cfg(test)]
+#[no_mangle]
+static KARAC_SPAWN_SITES: SpawnSiteEntryStandIn = SpawnSiteEntryStandIn(KaracSpawnSiteEntry {
+    id: 0,
+    _pad0: 0,
+    file_cstr: std::ptr::null(),
+    line: 0,
+    col: 0,
+    worker_count: 0,
+    _reserved: 0,
+});
 
 // ── Tests ──────────────────────────────────────────────────────────────────
 
@@ -1195,5 +1583,104 @@ mod tests {
             "FrameGuard::drop must run on unwind; found {} active after panic",
             after.count
         );
+    }
+
+    // ── Slice 5 layout pins ────────────────────────────────────────
+    //
+    // The `KaracParBlockInfo` `#[repr(C)]` layout must match what
+    // user-side codegen would emit for the baked-stdlib `ParBlockInfo`
+    // struct (`runtime/stdlib/runtime.kara`). LLVM lays out
+    // `{ i32, {ptr, i64, i64}, i32, i32, i32 }` with explicit alignment
+    // padding; if Rust's `#[repr(C)]` rules ever diverge from LLVM's
+    // `target-data-layout` defaults on a supported target, the runtime
+    // would silently mis-write entries and slice 5's `list_par_blocks()`
+    // would return garbage. These two tests are the canary.
+
+    #[test]
+    fn test_par_block_info_size_pinned() {
+        // Expected: { i32 (4) + 4 pad + KaracString (24) + 3*i32 (12) + 4 pad } = 48
+        assert_eq!(
+            std::mem::size_of::<KaracParBlockInfo>(),
+            48,
+            "KaracParBlockInfo size drift — codegen would mis-stride; \
+             check field order vs `runtime/stdlib/runtime.kara`'s ParBlockInfo"
+        );
+    }
+
+    #[test]
+    fn test_par_block_info_field_offsets_pinned() {
+        // Field offsets the LLVM layout produces:
+        //   spawn_site_id: 0
+        //   file:          8 (after 4 bytes of alignment padding)
+        //   line:         32
+        //   col:          36
+        //   worker_count: 40
+        assert_eq!(std::mem::offset_of!(KaracParBlockInfo, spawn_site_id), 0);
+        assert_eq!(std::mem::offset_of!(KaracParBlockInfo, file), 8);
+        assert_eq!(std::mem::offset_of!(KaracParBlockInfo, line), 32);
+        assert_eq!(std::mem::offset_of!(KaracParBlockInfo, col), 36);
+        assert_eq!(std::mem::offset_of!(KaracParBlockInfo, worker_count), 40);
+    }
+
+    #[test]
+    fn test_spawn_site_entry_layout_pinned() {
+        // Mirrors the LLVM struct layout in `Codegen::emit_spawn_sites_metadata`:
+        //   { i32 id, ptr file_cstr, i32 line, i32 col, i32 worker_count, i32 reserved }
+        // Expected total size 32 bytes (8-byte alignment from the pointer).
+        assert_eq!(std::mem::size_of::<KaracSpawnSiteEntry>(), 32);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, id), 0);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, file_cstr), 8);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, line), 16);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, col), 20);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, worker_count), 24);
+        assert_eq!(std::mem::offset_of!(KaracSpawnSiteEntry, _reserved), 28);
+    }
+
+    #[test]
+    fn test_has_debug_metadata_reads_through_global() {
+        // The runtime crate's `karac_runtime_has_debug_metadata` reads
+        // `KARAC_SPAWN_SITES_ENABLED` directly. In the runtime test
+        // binary we provide a strong-linkage definition of the slice-3
+        // globals (see the `#[no_mangle]` block at the top of this
+        // test module) so the reader resolves cleanly under
+        // `cargo test -p karac-runtime`. The test confirms the value
+        // we set flows through: 1 → true.
+        let value = karac_runtime_has_debug_metadata();
+        // The test-side stand-in below sets ENABLED to 1.
+        assert!(
+            value,
+            "expected has_debug_metadata to read true via stand-in"
+        );
+    }
+
+    #[test]
+    fn test_list_par_blocks_into_empty_outside_par() {
+        // Slice 5: `karac_runtime_list_par_blocks_into` writes
+        // `{null, 0, 0}` when `ACTIVE_FRAMES` is empty. Validates the
+        // empty-fast-path branch.
+        let mut out = KaracVec {
+            data: std::ptr::null_mut(),
+            len: -1,
+            cap: -1,
+        };
+        unsafe {
+            karac_runtime_list_par_blocks_into(&mut out as *mut _);
+        }
+        assert!(out.data.is_null(), "expected null data on empty");
+        assert_eq!(out.len, 0, "expected len=0 on empty");
+        assert_eq!(out.cap, 0, "expected cap=0 on empty");
+    }
+
+    #[test]
+    fn test_list_par_blocks_into_null_out_safe() {
+        // Defensive: passing `null` as the out-pointer is a no-op
+        // rather than UB. The compiler always allocates the slot, so
+        // this should never happen in practice — but the runtime
+        // explicitly returns early to avoid a deref crash if a
+        // future codegen bug regresses the alloca path.
+        unsafe {
+            karac_runtime_list_par_blocks_into(std::ptr::null_mut());
+        }
+        // No assertion — the test passes by not crashing.
     }
 }

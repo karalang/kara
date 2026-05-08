@@ -5357,6 +5357,46 @@ fn test_stdout_flush_returns_unit() {
     );
 }
 
+// ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
+//
+// Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The
+// signatures are the v1 contract surface — once shipped, return types and
+// parameter shapes become stable per `design.md § Stability`.
+
+#[test]
+fn test_runtime_has_debug_metadata_signature() {
+    // Runtime.has_debug_metadata() -> bool. No effect annotation
+    // required — introspection is observer-only and doesn't read or
+    // write any user-declared resource.
+    typecheck_ok(
+        "fn main() {
+             let dbg: bool = Runtime.has_debug_metadata();
+         }",
+    );
+}
+
+#[test]
+fn test_runtime_list_par_blocks_signature() {
+    // Runtime.list_par_blocks() -> Vec[ParBlockInfo]. The
+    // type-annotated let-binding pins the return type against
+    // signature drift.
+    typecheck_ok(
+        "fn main() {
+             let pbs: Vec[ParBlockInfo] = Runtime.list_par_blocks();
+         }",
+    );
+}
+
+#[test]
+fn test_runtime_list_tasks_signature() {
+    // Runtime.list_tasks() -> Vec[TaskInfo].
+    typecheck_ok(
+        "fn main() {
+             let tasks: Vec[TaskInfo] = Runtime.list_tasks();
+         }",
+    );
+}
+
 // ── env.args / env.var typechecker signatures ─────────────────────────────────
 
 #[test]

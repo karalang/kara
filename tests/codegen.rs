@@ -6433,4 +6433,212 @@ fn main() {
             "expected line=5 col=9 in spawn-site entry; ir:\n{ir}"
         );
     }
+
+    // ── Debugger Contract: std.runtime APIs (slice 5) ──
+    //
+    // Item (4) of the four-piece Debugger Contract. Three Kāra-callable
+    // functions exposed via the empty-marker `Runtime` struct in baked
+    // stdlib (`runtime/stdlib/runtime.kara`):
+    //
+    //   - `Runtime.has_debug_metadata() -> bool` — reads
+    //     `KARAC_SPAWN_SITES_ENABLED` (slice 3 global).
+    //   - `Runtime.list_par_blocks() -> Vec[ParBlockInfo]` — joins slice 4's
+    //     `ACTIVE_FRAMES` registry against slice 3's `KARAC_SPAWN_SITES`.
+    //   - `Runtime.list_tasks() -> Vec[TaskInfo]` — always empty in v1.
+    //
+    // Tests share the slice-3 `SPAWN_SITE_ENV_LOCK` for env-var-touching
+    // serialization (the gate-off test below mutates the same
+    // `KARAC_RUNTIME_DEBUG_METADATA` var slice 3's tests touch).
+
+    /// `has_debug_metadata()` returns `true` under the dev default
+    /// (env var unset). Validates that slice 3's `KARAC_SPAWN_SITES_ENABLED = 1`
+    /// flows through the runtime fn into the boolean returned to Kāra.
+    #[test]
+    fn test_has_debug_metadata_returns_true_when_gate_on() {
+        let _guard = SPAWN_SITE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        // Make sure the var is unset so the dev default applies.
+        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
+        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let dbg = Runtime.has_debug_metadata();
+    if dbg {
+        println(1);
+    } else {
+        println(0);
+    }
+}
+"#,
+        );
+        if let Some(v) = prior {
+            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
+        }
+        if let Some(c) = captured {
+            assert_eq!(c.stdout.trim(), "1", "expected gate-on (true → 1)");
+        }
+    }
+
+    /// `has_debug_metadata()` returns `false` when codegen runs with
+    /// `KARAC_RUNTIME_DEBUG_METADATA=0`. Pinpoints the slice 3 gate-off
+    /// emission of `KARAC_SPAWN_SITES_ENABLED = 0` flowing through the
+    /// runtime fn.
+    #[test]
+    fn test_has_debug_metadata_returns_false_when_gate_off() {
+        let _guard = SPAWN_SITE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
+        std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", "0");
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let dbg = Runtime.has_debug_metadata();
+    if dbg {
+        println(1);
+    } else {
+        println(0);
+    }
+}
+"#,
+        );
+        match prior {
+            Some(v) => std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v),
+            None => std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA"),
+        }
+        if let Some(c) = captured {
+            assert_eq!(c.stdout.trim(), "0", "expected gate-off (false → 0)");
+        }
+    }
+
+    /// `Runtime.list_par_blocks()` called from inside a `par {}` block
+    /// observes at least one active frame (its own). Validates that
+    /// slice 4's `ACTIVE_FRAMES` registry is populated under
+    /// `karac_par_run` and that `karac_runtime_list_par_blocks_into`
+    /// joins it against `KARAC_SPAWN_SITES` correctly.
+    ///
+    /// The branch that calls `list_par_blocks()` runs concurrently with
+    /// the second branch under `karac_par_run`; the lock-held iteration
+    /// guarantees we see a consistent snapshot. Worst case, the second
+    /// branch already finished — so we assert `>= 1` rather than `== 2`.
+    #[test]
+    fn test_list_par_blocks_inside_par_block_observes_self() {
+        let _guard = SPAWN_SITE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
+        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        let captured = run_program_capturing(
+            r#"
+fn check_par_blocks() {
+    let pbs = Runtime.list_par_blocks();
+    let n = pbs.len();
+    println(n);
+}
+fn other_branch() {
+    println(99);
+}
+fn main() {
+    par {
+        check_par_blocks();
+        other_branch();
+    }
+}
+"#,
+        );
+        if let Some(v) = prior {
+            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
+        }
+        if let Some(c) = captured {
+            // Stdout has two lines (one per branch), order non-deterministic.
+            // Find the line that's the par-block count and assert >= 1.
+            let mut found_count = false;
+            for line in c.stdout.lines() {
+                let trimmed = line.trim();
+                if trimmed == "99" {
+                    continue;
+                }
+                if let Ok(n) = trimmed.parse::<i64>() {
+                    assert!(
+                        n >= 1,
+                        "expected list_par_blocks() to observe ≥1 active frame inside a par block; got {} (full stdout: {:?})",
+                        n,
+                        c.stdout
+                    );
+                    found_count = true;
+                }
+            }
+            assert!(
+                found_count,
+                "didn't find a par-block count line in stdout: {:?}",
+                c.stdout
+            );
+        }
+    }
+
+    /// `Runtime.list_par_blocks()` called from outside any par-block
+    /// context returns an empty Vec. The root task has no `KaracFrame`
+    /// registered, so `ACTIVE_FRAMES` is empty.
+    #[test]
+    fn test_list_par_blocks_outside_par_block_returns_empty() {
+        let _guard = SPAWN_SITE_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prior = std::env::var("KARAC_RUNTIME_DEBUG_METADATA").ok();
+        std::env::remove_var("KARAC_RUNTIME_DEBUG_METADATA");
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let pbs = Runtime.list_par_blocks();
+    println(pbs.len());
+}
+"#,
+        );
+        if let Some(v) = prior {
+            std::env::set_var("KARAC_RUNTIME_DEBUG_METADATA", v);
+        }
+        if let Some(c) = captured {
+            assert_eq!(
+                c.stdout.trim(),
+                "0",
+                "expected empty Vec from main() (no active par blocks)"
+            );
+        }
+    }
+
+    /// `Runtime.list_tasks()` always returns an empty Vec in v1 — no
+    /// real suspension exists yet. Pins the v1 contract surface; when
+    /// Phase 6.3 ships real `WaitTarget` tracking this test gets
+    /// updated to flag the surface change.
+    #[test]
+    fn test_list_tasks_returns_empty_in_v1() {
+        let captured = run_program_capturing(
+            r#"
+fn main() {
+    let tasks = Runtime.list_tasks();
+    println(tasks.len());
+    par {
+        println(1);
+        println(2);
+    }
+    let after = Runtime.list_tasks();
+    println(after.len());
+}
+"#,
+        );
+        if let Some(c) = captured {
+            // Both reads must be 0 (one before par, one after par's join).
+            // Lines: par's own output (1, 2 in non-det order) plus two zero
+            // lines for the list_tasks reads. Filter for the zero count
+            // appearance — must occur at least twice.
+            let zero_count_lines = c.stdout.lines().filter(|l| l.trim() == "0").count();
+            assert!(
+                zero_count_lines >= 2,
+                "expected at least two `0` (list_tasks().len()) lines; got {:?}",
+                c.stdout
+            );
+        }
+    }
 }

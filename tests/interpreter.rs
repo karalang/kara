@@ -3285,6 +3285,53 @@ fn test_stderr_flush_is_callable() {
     assert_eq!(out, "ok\n");
 }
 
+// ── std.runtime introspection (Debugger Contract slice 5) ─────────────────────
+//
+// The tree-walk interpreter has its own par-block evaluation path and does
+// NOT construct `KaracFrame` / `ACTIVE_FRAMES` state, so all three APIs
+// return the empty / false form per design.md's "try-then-degrade" contract.
+// Real values flow through codegen in compiled binaries; the interpreter
+// returns degraded results that are still well-typed (empty Vec / false
+// bool). When/if interpreter parity for active-frame enumeration ships
+// (post-v1), these tests upgrade to assert real values.
+
+#[test]
+fn test_runtime_has_debug_metadata_returns_false_in_interpreter() {
+    let out = run_no_errors(
+        "fn main() {
+             let dbg = Runtime.has_debug_metadata();
+             if dbg {
+                 println(1);
+             } else {
+                 println(0);
+             }
+         }",
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn test_runtime_list_par_blocks_returns_empty_in_interpreter() {
+    let out = run_no_errors(
+        "fn main() {
+             let pbs = Runtime.list_par_blocks();
+             println(pbs.len());
+         }",
+    );
+    assert_eq!(out, "0\n");
+}
+
+#[test]
+fn test_runtime_list_tasks_returns_empty_in_interpreter() {
+    let out = run_no_errors(
+        "fn main() {
+             let tasks = Runtime.list_tasks();
+             println(tasks.len());
+         }",
+    );
+    assert_eq!(out, "0\n");
+}
+
 // ── Default parameter values ──────────────────────────────────────
 
 #[test]

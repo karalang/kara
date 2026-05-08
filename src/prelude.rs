@@ -98,6 +98,15 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Hex",
     "Url",
     "DecodeError",
+    // Debugger Contract slice 5: `std.runtime` introspection surface.
+    // `Runtime` is the empty-marker host for the three `#[compiler_builtin]`
+    // dispatch methods; `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the
+    // v1 contract data shapes returned by `Runtime.list_par_blocks()` /
+    // `Runtime.list_tasks()`. See `runtime/stdlib/runtime.kara`.
+    "Runtime",
+    "ParBlockInfo",
+    "TaskInfo",
+    "WaitTarget",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -290,6 +299,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("shl.kara", include_str!("../runtime/stdlib/shl.kara")),
     ("shr.kara", include_str!("../runtime/stdlib/shr.kara")),
     ("io.kara", include_str!("../runtime/stdlib/io.kara")),
+    (
+        "runtime.kara",
+        include_str!("../runtime/stdlib/runtime.kara"),
+    ),
 ];
 
 /// Parsed AST of every entry in [`STDLIB_SOURCES`]. Parsed lazily on first

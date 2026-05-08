@@ -1,0 +1,101 @@
+// runtime/stdlib/runtime.kara
+//
+// Item (4) of the four-piece Debugger Contract per `design.md § AI-First
+// Compiler Interface > Debugger Contract`. Slice 5 of the Phase 8
+// auto-concurrency slate; closes out the contract by exposing the runtime
+// introspection surface as Kāra-callable APIs.
+//
+// `Runtime` is an empty-marker type whose role is to host the three
+// `#[compiler_builtin]` introspection methods at the canonical
+// `Runtime.list_par_blocks()` / `Runtime.list_tasks()` /
+// `Runtime.has_debug_metadata()` paths (matching the design.md `std.runtime::*`
+// surface — Kāra's call syntax for module-path is `Module.fn()`, so the
+// capitalized struct name plays the role of the module).
+//
+// Bodies are placeholder stubs; real dispatch fires through:
+//   - codegen: `compile_assoc_call` adds three arms that emit calls into
+//     runtime extern fns (`karac_runtime_has_debug_metadata`,
+//     `karac_runtime_list_par_blocks_into`).
+//   - interpreter: path-string match in `eval_call` returns empty/false
+//     (the tree-walk interpreter has no `KaracFrame` / `ACTIVE_FRAMES`
+//     state — degrades cleanly per design.md "try-then-degrade" contract).
+//
+// `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the v1 contract surface.
+// Once shipped, field names and types become stable per `design.md § Stability`;
+// additive variant additions on `WaitTarget` (`PeerTask`, `IoHandle`) are
+// non-breaking when Phase 6.3's network event loop ships, but field renames
+// or type changes are major-version breaks.
+
+// One row per currently-active `par {}` block. `spawn_site_id` is the
+// stable per-binary identifier minted by codegen's `record_spawn_site`
+// (slice 3, commit c6d8b44); `(file, line, col, worker_count)` are joined
+// from the `KARAC_SPAWN_SITES` metadata table at enumeration time.
+pub struct ParBlockInfo {
+    spawn_site_id: u32,
+    file: String,
+    line: u32,
+    col: u32,
+    worker_count: u32,
+}
+
+// One row per currently-suspended task. v1 always returns an empty `Vec`
+// because v1's blocking runtime has no real suspension to track —
+// `Receiver.recv()` returns `Unit` on empty rather than blocking, no event
+// loop exists yet. Phase 6.3's network event loop is the predecessor that
+// lights this up.
+//
+// `EffectSummary` (mentioned in design.md § Debugger Contract) is deferred:
+// effect-sets aren't first-class Kāra values in v1. The struct shape doesn't
+// claim the field, so adding it later is non-breaking.
+pub struct TaskInfo {
+    spawn_site_id: u32,
+    wait_target: WaitTarget,
+    file: String,
+    line: u32,
+    col: u32,
+}
+
+// What a suspended task is currently waiting on. v1 ships single-variant
+// `Running` — every task in v1's blocking runtime reads as `Running`
+// because no real suspension exists yet (no event loop, no `Receiver.recv`
+// blocking). Phase 6.3 adds `PeerTask(...)` / `IoHandle(...)` variants
+// additively when the network event loop ships; the `Running` variant
+// keeps its discriminant so the upgrade is wire-compatible.
+//
+// Variant name `Running` (rather than the runtime-side `KaracWaitTarget::None`
+// at `runtime/src/lib.rs`) avoids prelude collision: `None` is reserved
+// for `Option.None`, exposed unqualified at scope-0 per
+// `prelude::PRELUDE_VARIANTS`. Bare `None` in user code must resolve to
+// `Option.None`; an enum named `None` would shadow it.
+pub enum WaitTarget {
+    Running,
+}
+
+// Empty-marker type — exists so the three introspection methods have a
+// receiver type for `impl Runtime { ... }`. Same pattern as
+// `runtime/stdlib/io.kara`'s `struct Stdin { }` etc.
+pub struct Runtime { }
+
+impl Runtime {
+    // Returns `true` when the binary carries `KARAC_SPAWN_SITES` metadata
+    // (i.e. when codegen ran with `KARAC_RUNTIME_DEBUG_METADATA` defaulted
+    // or set to anything other than "0"). Reads through the
+    // `KARAC_SPAWN_SITES_ENABLED` global emitted by slice 3.
+    #[compiler_builtin]
+    fn has_debug_metadata() -> bool { false }
+
+    // Enumerates currently-active `par {}` blocks across all OS threads.
+    // Each entry surfaces the slice-3 `(file, line, col, worker_count)`
+    // joined to the slice-4 `KaracFrame::spawn_site_id`. Returns an empty
+    // `Vec` when called from outside any `par {}` block, when
+    // `KARAC_RUNTIME_DEBUG_METADATA=0`, or in the tree-walk interpreter
+    // (which has no frame-tracking machinery — degrades cleanly).
+    #[compiler_builtin]
+    fn list_par_blocks() -> Vec[ParBlockInfo] { Vec.new() }
+
+    // Always returns an empty `Vec` in v1. The shape is the stable v1
+    // contract surface for tooling forward-compat; Phase 6.3's network
+    // event loop populates this with real suspended tasks.
+    #[compiler_builtin]
+    fn list_tasks() -> Vec[TaskInfo] { Vec.new() }
+}

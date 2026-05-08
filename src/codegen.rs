@@ -838,6 +838,40 @@ impl<'ctx> Codegen<'ctx> {
         let karac_par_run_fn =
             module.add_function("karac_par_run", karac_par_run_type, Some(Linkage::External));
 
+        // ── Debugger Contract slice 5: `std.runtime` introspection ──
+        //
+        // Two extern declarations consumed by `compile_assoc_call`'s
+        // arms for `Runtime.has_debug_metadata()` and
+        // `Runtime.list_par_blocks()`. The third API
+        // (`Runtime.list_tasks()`) always returns the empty Vec value
+        // in v1, so it has no runtime-side dispatch — the call lowers
+        // to a `Vec.new()`-shaped value directly.
+        //
+        // `karac_runtime_has_debug_metadata() -> bool` reads the
+        // `KARAC_SPAWN_SITES_ENABLED` global emitted by slice 3.
+        // `karac_runtime_list_par_blocks_into(out: *mut KaracVec)` writes
+        // a freshly-materialized `Vec[ParBlockInfo]` `{data, len, cap}`
+        // descriptor into the slot at `out`. Slice 5 takes the
+        // runtime-side full Vec materialization path (hard-stop trigger 3
+        // fallback) — runtime knows Kāra Vec + String layout (already
+        // documented in `clone.rs::karac_string_clone`) and the
+        // `KaracParBlockInfo` `#[repr(C)]` matches what user-side codegen
+        // would produce for the baked-stdlib `ParBlockInfo` struct.
+        let karac_runtime_has_debug_metadata_type = context.bool_type().fn_type(&[], false);
+        let _karac_runtime_has_debug_metadata_fn = module.add_function(
+            "karac_runtime_has_debug_metadata",
+            karac_runtime_has_debug_metadata_type,
+            Some(Linkage::External),
+        );
+        let karac_runtime_list_par_blocks_into_type = context
+            .void_type()
+            .fn_type(&[BasicMetadataTypeEnum::from(ptr_type)], false);
+        let _karac_runtime_list_par_blocks_into_fn = module.add_function(
+            "karac_runtime_list_par_blocks_into",
+            karac_runtime_list_par_blocks_into_type,
+            Some(Linkage::External),
+        );
+
         // ── Map runtime extern declarations ──────────────────────────────
         // All map methods use opaque ptr for the map handle and key/value
         // pointers. Sizes and fn-pointers are passed as i64 / ptr.
@@ -1615,6 +1649,22 @@ impl<'ctx> Codegen<'ctx> {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path { segments, .. } = &callee.kind {
                 return segments.len() == 2 && segments[0] == "Vec" && segments[1] == "new";
+            }
+        }
+        false
+    }
+
+    /// Debugger Contract slice 5: `Runtime.list_par_blocks()` /
+    /// `Runtime.list_tasks()` return `Vec[ParBlockInfo]` /
+    /// `Vec[TaskInfo]`. Used by the let-binding registration to set up
+    /// `vec_elem_types` so subsequent `.len()` / `.is_empty()` dispatches
+    /// through `compile_vec_method`.
+    fn is_runtime_introspection_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2
+                    && segments[0] == "Runtime"
+                    && (segments[1] == "list_par_blocks" || segments[1] == "list_tasks");
             }
         }
         false
@@ -3498,6 +3548,23 @@ impl<'ctx> Codegen<'ctx> {
                         self.vec_elem_types
                             .insert(var_name.clone(), self.context.i8_type().into());
                     }
+                    // Debugger Contract slice 5: register `let v =
+                    // Runtime.list_par_blocks()` / `Runtime.list_tasks()`
+                    // as a Vec-shaped binding so subsequent `v.len()` /
+                    // `v.is_empty()` etc. dispatch through `compile_vec_method`.
+                    // The element type is opaque from codegen's perspective
+                    // (the baked-stdlib `ParBlockInfo` / `TaskInfo` structs
+                    // aren't in `program.items` — see compile_program line
+                    // 2720+). Using `i64` as a placeholder element type
+                    // keeps Vec dispatch working for the v1 contract
+                    // surface (`.len()` / `.is_empty()` ignore element
+                    // type). Field access (`pb.spawn_site_id`) is a v1.x
+                    // follow-up that requires registering the baked struct
+                    // types.
+                    if !detected && self.is_runtime_introspection_call(value) {
+                        self.vec_elem_types
+                            .insert(var_name.clone(), self.context.i64_type().into());
+                    }
                     // Infer Slice element type from RHS shapes that produce
                     // a slice: `x.as_slice()` / `x.as_slice_mut()` on a known
                     // sequence variable, and `x[a..b]` range indexing.
@@ -4708,6 +4775,102 @@ impl<'ctx> Codegen<'ctx> {
                 return self.compile_expr(&synth);
             }
         }
+        // Debugger Contract slice 5 — `std.runtime` introspection APIs
+        // declared in `runtime/stdlib/runtime.kara`. Three Kāra-callable
+        // methods on the empty-marker `Runtime` struct that materialize the
+        // slice-3 `KARAC_SPAWN_SITES` metadata + slice-4 `ACTIVE_FRAMES`
+        // registry. Routes here because baked-stdlib impl methods are
+        // typechecked but not emitted as LLVM functions (see compile_program
+        // line 2720+ — only `program.items` impls compile), so the
+        // `module.get_function("Runtime.has_debug_metadata")` lookup below
+        // would miss and fall through to the i64-zero default. Explicit
+        // dispatch keeps the contract surface stable regardless of how
+        // baked stdlib codegen evolves.
+        if type_name == "Runtime" {
+            match method {
+                "has_debug_metadata" => {
+                    // Single call to `karac_runtime_has_debug_metadata` —
+                    // returns the `i1` value directly. The runtime fn reads
+                    // `KARAC_SPAWN_SITES_ENABLED`.
+                    let f = self
+                        .module
+                        .get_function("karac_runtime_has_debug_metadata")
+                        .expect("karac_runtime_has_debug_metadata declared in Codegen::new");
+                    let call = self
+                        .builder
+                        .build_call(f, &[], "runtime.has_debug_metadata")
+                        .unwrap();
+                    return Ok(call.try_as_basic_value().unwrap_basic());
+                }
+                "list_par_blocks" => {
+                    // Runtime-side Vec materialization (hard-stop trigger 3
+                    // fallback per slice 5 plan). Alloca a `{ptr, i64, i64}`
+                    // slot in the entry block, pass its address to the
+                    // runtime fn, and load the resulting Vec value.
+                    //
+                    // The Vec's heap buffer is owned by the caller — the
+                    // runtime allocates via `std::alloc::alloc`, the
+                    // codegen scope-cleanup machinery treats the returned
+                    // Vec like any other Kāra Vec for free-on-exit. Per
+                    // `runtime/stdlib/runtime.kara`'s comment on the
+                    // method, an empty result is the `{null, 0, 0}` form
+                    // (no heap allocation), matching `Vec.new()` so cleanup
+                    // is a no-op.
+                    let vec_ty = self.vec_struct_type();
+                    let fn_val = self
+                        .current_fn
+                        .ok_or_else(|| "list_par_blocks called outside fn".to_string())?;
+                    let slot = self.create_entry_alloca(
+                        fn_val,
+                        "runtime.list_par_blocks.slot",
+                        vec_ty.into(),
+                    );
+                    let f = self
+                        .module
+                        .get_function("karac_runtime_list_par_blocks_into")
+                        .expect("karac_runtime_list_par_blocks_into declared in Codegen::new");
+                    self.builder
+                        .build_call(f, &[slot.into()], "runtime.list_par_blocks.fill")
+                        .unwrap();
+                    let value = self
+                        .builder
+                        .build_load(vec_ty, slot, "runtime.list_par_blocks.val")
+                        .unwrap();
+                    return Ok(value);
+                }
+                "list_tasks" => {
+                    // v1 always returns the empty Vec — no real task
+                    // suspension exists yet. Identical to the `Vec.new()`
+                    // arm below: synthesize `{null, 0, 0}` directly.
+                    // Phase 6.3's network event loop replaces this with a
+                    // runtime-side materialization mirroring
+                    // `list_par_blocks`; the v1 contract pin lives in the
+                    // tests under `tests::test_list_tasks_returns_empty_in_v1`.
+                    let vec_ty = self.vec_struct_type();
+                    let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+                    let zero = self.context.i64_type().const_int(0, false);
+                    let mut agg = vec_ty.get_undef();
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, null_ptr, 0, "tasks.data")
+                        .unwrap()
+                        .into_struct_value();
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, zero, 1, "tasks.len")
+                        .unwrap()
+                        .into_struct_value();
+                    agg = self
+                        .builder
+                        .build_insert_value(agg, zero, 2, "tasks.cap")
+                        .unwrap()
+                        .into_struct_value();
+                    return Ok(agg.into());
+                }
+                _ => {}
+            }
+        }
+
         if type_name == "String" && method == "new" {
             let str_ty = self.vec_struct_type();
             let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();

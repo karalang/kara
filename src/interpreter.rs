@@ -3605,6 +3605,22 @@ impl<'a> Interpreter<'a> {
                     };
                     return Value::Atomic(Box::new(val));
                 }
+                // Debugger Contract slice 5: `std.runtime` introspection
+                // surface (`runtime/stdlib/runtime.kara`). The tree-walk
+                // interpreter has its own par-block evaluation path and does
+                // not construct `KaracFrame` / `ACTIVE_FRAMES` state, so all
+                // three return the empty / false form per design.md's
+                // try-then-degrade contract — generic tooling sees no frames
+                // and falls back to an alternate code path. Real values flow
+                // through the codegen-side dispatch in `compile_assoc_call`,
+                // which calls into `karac_runtime_*` extern fns to read the
+                // slice-3 globals + slice-4 active-frames registry.
+                "Runtime.has_debug_metadata" => {
+                    return Value::Bool(false);
+                }
+                "Runtime.list_par_blocks" | "Runtime.list_tasks" => {
+                    return Value::Array(Vec::new());
+                }
                 "Map.new" => {
                     return Value::Map(Vec::new());
                 }
