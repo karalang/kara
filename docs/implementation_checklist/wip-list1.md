@@ -34,6 +34,6 @@ Slice ordering is sequential (3 → 3.5) — both touch
 `infer_method_call`'s `Type::TypeParam` arm, so serial execution keeps
 merge surface tight and lets 3.5 reuse 3's `AmbiguousMethod` variant.
 
-- [ ] **Slice 3 — Ambiguity detection on receiver form (item 4).** When more than one user-impl method survives the inherent-beats-trait priority filter at a receiver-form call, emit `AmbiguousMethod` listing all candidates with UFCS hints instead of silent first-match. Inherent-beats-trait priority preserved (item 3 unchanged). Plan: `phase-4-interpreter.md` item 4 § "Slice 3 plan". Source: parent CR roadmap.
+- [x] **Slice 3 — Ambiguity detection on receiver form (item 4).** When more than one user-impl method survives the inherent-beats-trait priority filter at a receiver-form call, emit `AmbiguousMethod` listing all candidates with UFCS hints instead of silent first-match. Inherent-beats-trait priority preserved (item 3 unchanged). Plan: `phase-4-interpreter.md` item 4 § "Slice 3 plan". Source: parent CR roadmap.
 
 - [ ] **Slice 3.5 — Self-receiver dispatch (item 8 follow-up).** `self.method()` inside a trait default body resolves through the enclosing trait's own methods + supertrait closure (currently silent fallthrough). Closes the `name != "Self"` exclusion slice 2 left in place. Five pre-existing tests get a real resolution path; new negative test pins the closed silent-fallthrough hole. Plan: `phase-4-interpreter.md` item 8 § "Slice 3.5 plan". Source: slice 2 deferred item.

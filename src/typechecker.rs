@@ -1397,6 +1397,49 @@ impl TypeEnv {
         inherent.or(trait_method)
     }
 
+    /// Slice 3 of the method-resolution CR — all-candidates variant of
+    /// [`Self::find_method_with_args`]. Returns every impl that matches
+    /// `target_type` + `method` after the conditional-impl-filtering pass
+    /// (`impl_bounds_discharge`), partitioned by inherent-vs-trait priority:
+    /// if any inherent impls match, only those are returned; otherwise the
+    /// surviving trait impls are returned. Each entry is `(&ImplInfo,
+    /// &FunctionSig)` so callers can render the source impl in ambiguity
+    /// diagnostics. The returned vec preserves source order.
+    ///
+    /// A length-1 result is the dispatch-normally case; length ≥ 2 is the
+    /// ambiguity case (item 4 of the parent CR — see
+    /// `phase-4-interpreter.md`).
+    pub fn find_methods_with_args(
+        &self,
+        target_type: &str,
+        target_args: &[Type],
+        method: &str,
+    ) -> Vec<(&ImplInfo, &FunctionSig)> {
+        let mut inherent: Vec<(&ImplInfo, &FunctionSig)> = Vec::new();
+        let mut trait_methods: Vec<(&ImplInfo, &FunctionSig)> = Vec::new();
+        for imp in &self.impls {
+            if imp.target_type != target_type {
+                continue;
+            }
+            let Some(sig) = imp.methods.get(method) else {
+                continue;
+            };
+            if !self.impl_bounds_discharge(imp, target_args) {
+                continue;
+            }
+            if imp.trait_name.is_none() {
+                inherent.push((imp, sig));
+            } else {
+                trait_methods.push((imp, sig));
+            }
+        }
+        if !inherent.is_empty() {
+            inherent
+        } else {
+            trait_methods
+        }
+    }
+
     /// Slice 1 of the method-resolution CR — conditional impl filtering.
     /// Returns `true` when an impl applies at the call site whose receiver
     /// type instantiates with `target_args`. Unconditional impls (no
@@ -1723,6 +1766,17 @@ pub enum TypeErrorKind {
     /// its bound traits declare an associated function with that name. The
     /// programmer must use UFCS `Trait.method(...)` to disambiguate.
     AmbiguousAssocFn,
+    /// `e.method(args)` where two or more user-impl candidates of the same
+    /// priority tier survive method resolution on the receiver's type
+    /// (typically two trait impls when no inherent matches; the
+    /// inherent-beats-trait priority filter eliminates inherent-vs-trait
+    /// ambiguity). The programmer must use UFCS `Trait.method(receiver, ...)`
+    /// to disambiguate. Distinct from `AmbiguousAssocFn`, which targets the
+    /// type-prefixed `T.method(...)` form on a generic type parameter.
+    /// Slice 3 of the method-resolution CR — see
+    /// `phase-4-interpreter.md` § "TypeChecker: implement full method
+    /// resolution algorithm" item 4.
+    AmbiguousMethod,
     /// Bare `method(args)` call appears in a synthesis position (no expected
     /// type) where the only candidate resolutions are trait associated
     /// functions. The typechecker cannot infer the target type — programmer
@@ -8933,12 +8987,70 @@ impl<'a> TypeChecker<'a> {
         // priority per design.md § Method Resolution Step 3, plus
         // conditional-impl filtering against the receiver's concrete
         // generic args (slice 1 of the method-resolution CR — see
-        // `phase-4-interpreter.md`). Multi-inherent / multi-trait
-        // ambiguity detection (Step 4) is still deferred.
-        let method_sig = self
+        // `phase-4-interpreter.md`). All-candidates collection lets us
+        // detect Step-4 ambiguity (slice 3): >1 surviving candidate at
+        // the same priority tier (e.g. two trait impls when no inherent
+        // matches) emits AmbiguousMethod and returns Type::Error.
+        let candidates = self
             .env
-            .find_method_with_args(&type_name, &type_args, method)
-            .cloned();
+            .find_methods_with_args(&type_name, &type_args, method);
+        let method_sig: Option<FunctionSig> = if candidates.len() > 1 {
+            // Render each candidate as `Trait.method(receiver)` (or
+            // `Type.method(receiver)` for the rare inherent-vs-inherent
+            // case). The signature display includes the receiver-then-args
+            // tuple plus return type so the programmer can tell the
+            // candidates apart at a glance.
+            let candidate_lines: Vec<String> = candidates
+                .iter()
+                .map(|(imp, sig)| {
+                    let dispatcher = imp
+                        .trait_name
+                        .clone()
+                        .unwrap_or_else(|| imp.target_type.clone());
+                    let params_display = std::iter::once(type_name.clone())
+                        .chain(sig.params.iter().map(type_display))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!(
+                        "    `{}.{}({})` -> {}",
+                        dispatcher,
+                        method,
+                        params_display,
+                        type_display(&sig.return_type),
+                    )
+                })
+                .collect();
+            let receiver_display = if type_args.is_empty() {
+                type_name.clone()
+            } else {
+                format!(
+                    "{}[{}]",
+                    type_name,
+                    type_args
+                        .iter()
+                        .map(type_display)
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                )
+            };
+            self.type_error(
+                format!(
+                    "ambiguous method '{}' on receiver of type '{}': \
+                     multiple candidates apply. Use UFCS to disambiguate:\n{}",
+                    method,
+                    receiver_display,
+                    candidate_lines.join("\n"),
+                ),
+                span.clone(),
+                TypeErrorKind::AmbiguousMethod,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Error;
+        } else {
+            candidates.into_iter().next().map(|(_, sig)| sig.clone())
+        };
 
         match method_sig {
             Some(sig) => {

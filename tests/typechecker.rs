@@ -4894,6 +4894,99 @@ fn test_receiver_form_typeparam_multi_bound_disambiguates_by_method() {
     );
 }
 
+// ── Method resolution: ambiguity on receiver form ───────────────
+//
+// Slice 3 of the method-resolution CR (see phase-4-interpreter.md
+// item 4). When more than one user-impl candidate of the same
+// priority tier survives the conditional-impl filter at a
+// receiver-form call (typically two trait impls when no inherent
+// matches), emit `AmbiguousMethod` (E0239) listing each candidate
+// with a UFCS-disambiguation hint instead of silently picking
+// first-match. Inherent-beats-trait priority (item 3) is preserved
+// — ambiguity only fires *between* candidates of the same tier.
+
+#[test]
+fn test_receiver_form_ambiguity_two_trait_impls_same_method() {
+    // Two trait impls of `S` each declare `foo(self) -> i32` — no
+    // inherent impl exists, so both trait candidates survive the
+    // priority filter and `s.foo()` is ambiguous.
+    let errors = typecheck_errors(
+        "struct S { x: i32 }\n\
+         trait A { fn foo(self) -> i32; }\n\
+         trait B { fn foo(self) -> i32; }\n\
+         impl A for S { fn foo(self) -> i32 { 1 } }\n\
+         impl B for S { fn foo(self) -> i32 { 2 } }\n\
+         fn use_s(s: S) -> i32 { s.foo() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::AmbiguousMethod)),
+        "expected AmbiguousMethod for two-trait-impl ambiguity, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    let amb = errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::AmbiguousMethod))
+        .unwrap();
+    assert!(
+        amb.message.contains("`A.foo("),
+        "diagnostic missing trait `A` UFCS hint: {}",
+        amb.message
+    );
+    assert!(
+        amb.message.contains("`B.foo("),
+        "diagnostic missing trait `B` UFCS hint: {}",
+        amb.message
+    );
+}
+
+#[test]
+fn test_receiver_form_ambiguity_inherent_wins_no_diagnostic() {
+    // An inherent impl + a trait impl both declare `foo`. The
+    // inherent-beats-trait priority filter short-circuits to the
+    // inherent candidate, so ambiguity does not fire.
+    typecheck_ok(
+        "struct S { x: i32 }\n\
+         trait A { fn foo(self) -> i32; }\n\
+         impl S { fn foo(self) -> i32 { 1 } }\n\
+         impl A for S { fn foo(self) -> i32 { 2 } }\n\
+         fn use_s(s: S) -> i32 { s.foo() }",
+    );
+}
+
+#[test]
+fn test_receiver_form_ambiguity_filtered_by_conditional_impl() {
+    // Two trait impls collide on method `method`, but only one's
+    // bounds discharge against the call site's args (`Bar[NotOrd]`
+    // doesn't satisfy `T: Ord`). Slice 1's discharge filter drops the
+    // unsatisfied candidate so only `FooAny` survives — no ambiguity.
+    typecheck_ok(
+        "struct NotOrd { x: i64 }\n\
+         struct Bar[T] { x: T }\n\
+         trait FooOrd { fn method(self) -> i64; }\n\
+         trait FooAny { fn method(self) -> i64; }\n\
+         impl[T: Ord] FooOrd for Bar[T] { fn method(self) -> i64 { 0 } }\n\
+         impl[T] FooAny for Bar[T] { fn method(self) -> i64 { 1 } }\n\
+         fn use_bar(b: Bar[NotOrd]) -> i64 { b.method() }",
+    );
+}
+
+#[test]
+fn test_receiver_form_ambiguity_single_trait_no_diagnostic() {
+    // Single trait impl in scope — no ambiguity, dispatches normally
+    // through the one surviving candidate.
+    typecheck_ok(
+        "struct S { x: i32 }\n\
+         trait A { fn foo(self) -> i32; }\n\
+         impl A for S { fn foo(self) -> i32 { 1 } }\n\
+         fn use_s(s: S) -> i32 { s.foo() }",
+    );
+}
+
 // ── Public-signature visibility (CR-18) ─────────────────────────
 //
 // A `pub fn` / pub method / pub struct field / pub enum variant payload /
