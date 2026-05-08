@@ -4581,6 +4581,81 @@ fn test_method_resolution_no_method_diagnostic_fires_through_ref() {
     );
 }
 
+// ── Method resolution: Shared / Rc / Arc deref step ──
+//
+// Sub-item 3a of the `Type::Shared` / `Type::Rc` / `Type::Arc`
+// representation work — graduates 1B of the receiver candidate list.
+// `let s: Shared = ...; s.method()` now resolves through the shared
+// struct's methods directly (the user-visible payoff). Rc[T] / Arc[T]
+// receive the same deref logic in `receiver_for_lookup`, but the
+// surface-level `Rc[T]` / `Arc[T]` type-annotation form is blocked
+// on resolver-side builtin registration (pre-existing v1 limitation
+// orthogonal to this sub-item) — those paths are exercised at the
+// unit level in `src/typechecker.rs` instead.
+
+#[test]
+fn test_method_resolution_shared_struct_deref_finds_inherent_method() {
+    let errors = typecheck_errors(
+        "shared struct S { x: i64 }\n\
+         impl S { fn get(ref self) -> i64 { self.x } }\n\
+         fn want_string(s: String) {}\n\
+         fn main() { let s: S = S { x: 7 }; want_string(s.get()); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("expected 'String'")
+            && e.message.contains("found 'i64'")),
+        "expected TypeMismatch for String/i64 from s.get() through shared-struct deref, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_method_resolution_shared_struct_deref_finds_trait_method() {
+    let errors = typecheck_errors(
+        "trait Greeter { fn greet(ref self) -> i64; }\n\
+         shared struct S { x: i64 }\n\
+         impl Greeter for S { fn greet(ref self) -> i64 { self.x } }\n\
+         fn want_string(s: String) {}\n\
+         fn use_s(s: S) { want_string(s.greet()); }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch
+            && e.message.contains("expected 'String'")
+            && e.message.contains("found 'i64'")),
+        "expected trait dispatch through shared-struct deref, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_method_resolution_shared_struct_unknown_method_diagnoses() {
+    // Negative control: the shared-struct deref step does not invent
+    // methods that don't exist — `s.missing()` must still surface a
+    // NoMethodFound diagnostic.
+    let errors = typecheck_errors(
+        "shared struct S { x: i64 }\n\
+         impl S { fn get(ref self) -> i64 { self.x } }\n\
+         fn use_s(s: S) { s.missing(); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::NoMethodFound),
+        "expected NoMethodFound for s.missing() on shared S, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── Method resolution: `no method named` diagnostic ─────────────
 //
 // Per design.md § Method Resolution Step 7, a method-call that fails to

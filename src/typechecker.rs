@@ -284,6 +284,28 @@ fn impl_args_match(stored: &[Type], call_site: &[Type]) -> bool {
     stored.is_empty() || stored == call_site
 }
 
+/// Strip the outer wrapper from a method-call receiver type to surface
+/// the named receiver for impl-table lookup. Per design.md § Method
+/// Resolution Step 1, the autoref candidates `T`, `ref T`, `mut ref T`
+/// collapse to the same name lookup. Sub-item 3a of the
+/// `Type::Shared` / `Type::Rc` / `Type::Arc` representation work
+/// extends this with three more wrappers — shared structs lower their
+/// outer `Type::Shared(name)` to `Type::Named { name, args: [] }`
+/// (matches the user-defined-struct lookup path verbatim);
+/// `Rc(inner)` / `Arc(inner)` deref to the inner type so the
+/// wrapped-type's methods become reachable.
+fn receiver_for_method_lookup(obj_ty: &Type) -> Type {
+    match obj_ty {
+        Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+        Type::Shared(name) => Type::Named {
+            name: name.clone(),
+            args: vec![],
+        },
+        Type::Rc(inner) | Type::Arc(inner) => (**inner).clone(),
+        other => other.clone(),
+    }
+}
+
 /// `true` iff every `TypeParam` / `TypeVar` / `AssocProjection` is
 /// absent from the type recursively. Used by `env_add_impl` to decide
 /// whether an impl's target args should be stored as specialized
@@ -4365,6 +4387,11 @@ impl<'a> TypeChecker<'a> {
                     (name.clone(), Vec::new())
                 }
             }
+            // Shared structs: `impl S { ... }` for a `shared struct S`
+            // registers under the bare name (no target_args — shared
+            // structs are non-generic at v1 per design.md § Part 5).
+            // Sub-item 2 audit miss caught during sub-item 3a.
+            Type::Shared(name) => (name.clone(), Vec::new()),
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.
@@ -9545,14 +9572,14 @@ impl<'a> TypeChecker<'a> {
         // design.md § Method Resolution Step 1 (autoref candidates `T`,
         // `ref T`, `mut ref T` collapse to the same name lookup; the
         // receiver/self-mode compatibility check happens at the
-        // param-binding layer). The `shared struct` / `Rc[S]` / `Arc[S]`
-        // and refinement-base candidates are deferred — those types have
-        // no Type-level representation in v1.
-        let receiver_for_lookup = match &obj_ty {
-            Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
-            other => other,
-        };
-        let (type_name, type_args) = match receiver_for_lookup {
+        // param-binding layer). Shared-struct / Rc / Arc deref handled
+        // here (sub-item 3a of the `Type::Shared` / `Type::Rc` /
+        // `Type::Arc` representation work) — `Rc[Foo].method()` and
+        // `let s: SharedStruct; s.method()` resolve through the inner
+        // type's methods. Refinement-base candidate (1C) remains
+        // deferred on `Type::Refinement` from phase-9.
+        let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
+        let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             Type::TypeParam(name) if name == "Self" => {
                 // Self-receiver dispatch (slice 3.5 of the method-resolution
@@ -11694,9 +11721,18 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
-        Type::Named {
-            name: struct_name,
-            args: Vec::new(),
+        // Shared-struct literals lower to Type::Shared so the literal's
+        // type matches an annotated `let s: S = S { ... }` shape and the
+        // method-resolution deref step (sub-item 3a) sees a consistent
+        // receiver type. Sub-item 2's `lower_path_type` intercept handles
+        // the annotation side; this is its construction-site twin.
+        if struct_info.is_shared {
+            Type::Shared(struct_name)
+        } else {
+            Type::Named {
+                name: struct_name,
+                args: Vec::new(),
+            }
         }
     }
 
@@ -12499,6 +12535,81 @@ mod once_function_carrier_tests {
                 args: vec![],
             }
         );
+    }
+
+    // ── Method resolution: receiver_for_method_lookup deref step (sub-item 3a) ──
+
+    #[test]
+    fn test_receiver_for_lookup_strips_ref_wrappers() {
+        let foo = Type::Named {
+            name: "Foo".to_string(),
+            args: vec![],
+        };
+        // `ref Foo` and `mut ref Foo` deref to `Foo` per design.md
+        // § Method Resolution Step 1 — same as before sub-item 3a.
+        assert_eq!(
+            receiver_for_method_lookup(&Type::Ref(Box::new(foo.clone()))),
+            foo
+        );
+        assert_eq!(
+            receiver_for_method_lookup(&Type::MutRef(Box::new(foo.clone()))),
+            foo
+        );
+    }
+
+    #[test]
+    fn test_receiver_for_lookup_shared_lowers_to_named() {
+        // `Type::Shared(S)` lowers to `Type::Named { name: "S", args: [] }`
+        // so the candidate-list lookup feeds into the existing
+        // user-defined-struct method-resolution path verbatim.
+        let shared = Type::Shared("S".to_string());
+        assert_eq!(
+            receiver_for_method_lookup(&shared),
+            Type::Named {
+                name: "S".to_string(),
+                args: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn test_receiver_for_lookup_rc_arc_deref_to_inner() {
+        // `Rc[Foo]` and `Arc[Foo]` strip the wrapper so the inner type's
+        // methods become reachable. Args carry through (e.g.
+        // `Rc[Vec[i64]]` → `Vec[i64]`).
+        let foo = Type::Named {
+            name: "Foo".to_string(),
+            args: vec![],
+        };
+        assert_eq!(
+            receiver_for_method_lookup(&Type::Rc(Box::new(foo.clone()))),
+            foo
+        );
+        assert_eq!(
+            receiver_for_method_lookup(&Type::Arc(Box::new(foo.clone()))),
+            foo
+        );
+
+        let vec_i64 = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![Type::Int(IntSize::I64)],
+        };
+        assert_eq!(
+            receiver_for_method_lookup(&Type::Rc(Box::new(vec_i64.clone()))),
+            vec_i64
+        );
+    }
+
+    #[test]
+    fn test_receiver_for_lookup_passthrough_for_other_types() {
+        // No-op for types without an outer wrapper — TypeParam, primitive,
+        // etc. — so the existing arms in `infer_method_call` (TypeParam
+        // dispatch, fallthrough) still receive the original shape.
+        let tp = Type::TypeParam("T".to_string());
+        assert_eq!(receiver_for_method_lookup(&tp), tp);
+
+        let prim = Type::Int(IntSize::I64);
+        assert_eq!(receiver_for_method_lookup(&prim), prim);
     }
 }
 
