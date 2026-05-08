@@ -18,7 +18,35 @@
 
 - [ ] **`#[rc_budget(max: N)]` module-level enforcement.** Module-level attributes are not yet parsed. The current Phase 7 RC story ships per-function `#[no_rc]` and per-type `@no_rc`. To support `#[rc_budget(max: N)]`: (1) extend the parser to accept `#![rc_budget(max: N)]` at file/module head, (2) thread the budget through `OwnershipCheckResult`, (3) error when total RC bindings in the module exceed N (with a diagnostic that lists every contributing binding so the programmer knows which one to restructure first).
 
-- [x] **RC values: codegen integration.** `ownership.rs` now emits `rc_values` and `arc_values` per function but `codegen.rs` does not yet consume them — it only inserts RC operations for `shared struct` types. Wire codegen to (1) box-and-RC values flagged in `rc_values`, (2) use `Arc` (atomic refcount) for values in `arc_values`, (3) drop the inserted refcount at scope end. Without this, the dataflow decision is invisible to runtime behavior in compiled binaries (the interpreter remains dynamically typed and is unaffected).
+- [~] **RC values: codegen integration.** Substeps (1) box-and-RC and (3) drop-at-scope-end are landed; substep (2) atomic-RC for `arc_values` is the remaining slice. `ownership.rs` emits `rc_values` and `arc_values` per function (`src/ownership.rs:209-211`); `codegen.rs` consumes `rc_values` via `is_rc_fallback_binding` (`src/codegen.rs:846`), heap-boxes via `emit_rc_alloc` (line 1457), and emits non-atomic inc/dec (`emit_rc_inc` line 1479, `emit_rc_dec` line 1497) using plain `load`/`add`/`store`. The `arc_values` subset is currently ignored — bindings the dataflow flagged for atomic-RC promotion (because they cross `par {}` thread boundaries) get plain non-atomic RC, racing on the refcount. Status correction 2026-05-07: previously marked `[x]` but the prose still described work-as-needed; substeps (1) and (3) had landed under the RC fallback Phase 1 umbrella, substep (2) had not.
+
+  *Slice plan (drafted 2026-05-07) — substep (2) atomic-RC for `arc_values`.*
+
+  Wire codegen to use atomic LLVM operations (`atomicrmw add` / `atomicrmw sub`) on the refcount when a binding is in the `arc_values` subset. Memory ordering for v1: `SeqCst` (correct, conservative; relaxation to `Relaxed`/`Acquire`+`Release` per Rust's `Arc` is a future optimization). Allocation site unchanged — the heap shape `{ refcount: i64, payload: T }` is identical; only inc/dec ops differ.
+
+  *Sub-steps.*
+  - **(a)** New `arc_fallback_fns: HashMap<String, HashSet<String>>` field on the codegen context, populated in `load_rc_fallback` from `ow.arc_values` (parallel to existing `rc_fallback_fns`). New `is_arc_binding(name)` query mirrors `is_rc_fallback_binding`.
+  - **(b)** New `emit_arc_inc` / `emit_arc_dec` variants that swap the load+arith+store sequence for `atomicrmw add`/`atomicrmw sub` against the refcount field. `SeqCst` ordering. The conditional-free pattern uses the value returned by `atomicrmw sub` (old value): if old == 1, post-decrement is 0 → free.
+  - **(c)** Dispatch wiring at every existing `emit_rc_inc` / `emit_rc_dec` call site: if the binding is in `arc_fallback_fns`, route to the atomic variant; else use the existing non-atomic. Encapsulate as `emit_refcount_inc(name, ...)` / `emit_refcount_dec(name, ...)` dispatchers if the call sites duplicate the check.
+  - **(d)** Allocation site (`emit_rc_alloc`) unchanged — initial refcount of 1 stored via plain `build_store` is fine; the value isn't shared yet at allocation time.
+
+  *Tests* (3-4 new in `tests/codegen.rs`, `--features llvm`, under `// ── Atomic RC for par-block bindings ──`):
+  - `test_par_block_arc_promoted_binding_uses_atomic_rc` — `par {}` block where a binding crosses threads; LLVM IR shape check confirms `atomicrmw` is emitted for the flagged binding.
+  - `test_non_par_binding_uses_plain_rc` — binding in `rc_values` but not `arc_values` continues to use the plain non-atomic shape.
+  - `test_arc_binding_runtime_correctness_single_thread` — atomic-RC produces the same observable behavior as plain RC for single-thread programs.
+  - `test_arc_binding_drop_runs_on_zero_refcount` — at scope exit, `atomicrmw sub` reaching 0 triggers `free_fn`. ASAN confirms no leak.
+
+  *Files expected to change.* `src/codegen.rs` — `arc_fallback_fns` field + load + query (~15 lines); `emit_arc_inc` / `emit_arc_dec` (~50 lines); dispatch wiring at existing inc/dec sites (~40 lines). `tests/codegen.rs` — 3-4 new tests. This doc — flip `[~]` → `[x]` and add "What landed (substep 2)" close-out after slice ships.
+
+  *Out of scope.*
+  - Memory-ordering optimization (relax `SeqCst` → `Relaxed` / `Acquire`+`Release`). v1 ships `SeqCst`.
+  - Drop-glue for `Arc` of complex payloads (struct types with their own destructors). Heap shape today is `{ rc, payload }` and free is unconditional; payload destructors tracked elsewhere.
+  - `Weak[T]` interpreter→codegen lift. Atomic-RC for Arc bindings doesn't depend on Weak.
+
+  *Hard-stop triggers.*
+  - The `atomicrmw` LLVM intrinsic isn't surfaced by the current Inkwell binding (would need an Inkwell upgrade or alternative emission path).
+  - `arc_values` turns out to never be populated in any existing test program (Phase 2 promotion algorithm hasn't fired in practice) — would need a representative test program first to exercise the new path.
+  - Runtime-side RC helpers (e.g., `karac_rc_clone` if present) are called from codegen-emitted IR for some shared-struct paths and would diverge from atomic-RC for `arc_values` in a way that creates inconsistency.
 
 - [ ] **OwnershipChecker Phase 2: `spawn(closure)` and `Sender.send(closure)` par-region awareness for closure captures.** Today the Phase 2 `Rc → Arc` walker (`scan_block_for_par_uses` family in `src/ownership.rs`) only treats `par {}` blocks as parallel regions when intersecting RC live ranges. Round 12.34 (Step 6 of the closure-ownership track) extended the walker to follow closure-binding uses inside `par {}` to their captures via a per-function `closure_bindings` map. Two parallel-region escape routes still go uncovered:
 

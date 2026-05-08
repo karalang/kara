@@ -139,10 +139,16 @@ keep the slice in main where you can iterate on design as you go.
 
 ## Theme: phase 4–8 autonomous queue (overnight slate, 2026-05-07)
 
-Six-slice slate spanning phases 4, 5, and 7, queued for autonomous
-overnight execution (~8h budget, ~5–6h subagent time + verification
-headroom). Each slice has its plan drafted under the relevant item in
-the phase tracker; this list is execution order + checkbox mirror.
+Ten-slice slate spanning phases 4, 5, 7, and 8, queued for autonomous
+overnight execution (~8h budget). Initial six slices populated 2026-05-07;
+extended by four more slices later the same day after deeper triage
+(A3 status correction + N2/N3/N4 from the phase-5/7/8 sub-item scan).
+Each slice has its plan drafted under the relevant item in the phase
+tracker; this list is execution order + checkbox mirror.
+
+Verified alternates if any queued slice hard-stops:
+- Phase-5:99 — let-binding case-class enforcement (resolver-side completion of `[x]` parent)
+- Phase-7:47 — `karac query monomorphization` subcommand (data exists in codegen, plan needs minor refinement)
 
 **Discussion mode** (NOT in this queue):
 - Method-resolution slice 4 (`impl Option[Ordering]` storage-shape
@@ -184,3 +190,11 @@ All other slices are independent.
 - [ ] **Slice REPL UAM diagnostic — Notebook-aware use-after-move.** Enrich the existing `UseAfterMove` diagnostic in REPL context to name the cell that consumed the binding and suggest `.clone()` at the consume site. Adds `Session.cell_byte_ranges` cell-tracking infrastructure (foundation for the next slice). Strictness identical to `.kara` files; only diagnostic presentation differs. Plan: `phase-5-diagnostics.md` § "Notebook-aware use-after-move diagnostic" (slice plan section). Source: phase 4–8 survey bucket A9.
 
 - [ ] **Slice REPL auto-clone — `karac repl --auto-clone` opt-in mode.** CLI flag that auto-inserts `.clone()` at consume sites when bindings are referenced cross-cell. Builds on the previous slice's cell-tracking. Never silent — emits `perf[auto-clone-in-repl]` note on every insertion. Inserted clones survive `:save` export. Plan: `phase-5-diagnostics.md` § "`--auto-clone` opt-in mode" (slice plan section). Source: phase 4–8 survey bucket A11. **Depends on the previous slice (REPL UAM diagnostic).**
+
+- [ ] **Slice atomic-RC — wire `arc_values` to atomic-RC codegen (RC integration substep 2).** `ownership.rs` flags `arc_values` (subset of `rc_values`) for bindings that cross `par {}` thread boundaries; codegen currently ignores the subset and uses non-atomic `load`/`add`/`store` for inc/dec, racing on the refcount. Wire `atomicrmw add` / `atomicrmw sub` (`SeqCst`) for the `arc_values` subset. Substeps (1) box-and-RC and (3) drop-at-scope-end already landed under the RC fallback Phase 1 umbrella; this slice closes substep (2). Plan: `phase-7-codegen.md` § "RC values: codegen integration" (slice plan section). Source: 2026-05-07 deeper triage (corrects A3 false-positive `[x]` to `[~]`).
+
+- [ ] **Slice env.set — `env.set(name, value)` stdlib method + `writes(Env)` effect.** Standard I/O Phase 8 follow-up; `env.var()` and `env.args()` are shipped, `env.set()` is the missing companion. Pure pattern-extension of the existing `env.var` / `env.args` registration. Plan: `phase-8-stdlib-floor.md` § "`env.set(name: String, value: String)` + `writes(Env)` effect" (slice plan section). Source: 2026-05-07 deeper triage, factored from Standard I/O `[x]` parent.
+
+- [ ] **Slice From[VarError] → IoError — `impl From[VarError] for IoError`.** Standard I/O Phase 8 follow-up; needed for `?`-propagation from `env.var(...) -> Result[String, VarError]` into functions returning `Result[T, IoError]`. Single trait-impl addition in baked stdlib. Variant mapping: `VarError.NotPresent → IoError.NotFound`; `VarError.NotUnicode → IoError.InvalidUtf8`. Plan: `phase-8-stdlib-floor.md` § "`impl From[VarError] for IoError`" (slice plan section). Source: 2026-05-07 deeper triage, factored from Standard I/O `[x]` parent.
+
+- [ ] **Slice `?` JSON trace mode — runtime JSON / JSONL output for compiled binaries.** Add `KARAC_ERROR_TRACE_FORMAT=json|jsonl|text` env-var-driven format selector to the runtime's atexit error-trace printer; default `text` preserves existing behavior. JSON shape matches the interpreter's existing trace format. Runtime-only change in `runtime/src/lib.rs`. Plan: `phase-8-stdlib-floor.md` § "`?` codegen follow-up: `error_return_trace`..." → "Slice plan (drafted 2026-05-07) — JSON / JSONL trace output mode". Source: 2026-05-07 deeper triage, the open follow-up of the parent `[~]` item.

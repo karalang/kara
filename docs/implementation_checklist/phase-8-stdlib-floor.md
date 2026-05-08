@@ -2,7 +2,49 @@
 
 > **Note on phase split (2026-04-29):** roadmap.md splits stdlib work across Phase 8 (floor — universal modules every program needs) and [Phase 11](#phase-11-standard-library--long-tail) (long-tail — numerical/data-science stack, scripting helpers like `std.regex`/`std.http`/`std.process`/`std.stats`, security types, embedded primitives, codegen IR optimization). v1 release = end of Phase 11. The items below mix floor and long-tail because this working tracker predates the split — the **`### Numerical and data-science stdlib`** sub-section and the embedded-primitives / `std.secret` items belong to Phase 11; everything else is floor (Phase 8). The roadmap.md phase headings are the authoritative split.
 
-- [x] **Standard I/O surface — stdlib implementation (Phase 8 interpreter MVP).** `IoError` enum (`NotFound`, `PermissionDenied`, `AlreadyExists`, `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other(String)`) registered in the prelude and typechecker. `Stdin`, `Stdout`, `Stderr`, `FileSystem` added to `PRELUDE_EFFECT_RESOURCES`. Interpreter builtins: `Stdin.read_line()`, `Stdin.read_to_string()` → `Result[String, IoError]`; `Stdout.flush()`, `Stderr.flush()` → `Unit`; `FileSystem.read_to_string(path)` → `Result[String, IoError]`; `FileSystem.write(path, contents)` → `Result[Unit, IoError]`. Typechecker signatures registered via dot-joined `"TypeName.method"` key looked up in `resolve_path_type`. 5 typechecker tests + 4 interpreter tests added. `env.args()` → `Vec[String]` and `env.var(name)` → `Result[String, VarError]` added: `VarError` (`NotPresent`, `NotUnicode`) registered in prelude + typechecker; resolver registers lowercase `"env"` as a `SymbolKind::Module` alias; both `"Env.args"` / `"env.args"` and `"Env.var"` / `"env.var"` registered in the function table; interpreter maps `"env"` → `"Env"` in `eval_method_call` for resource dispatch. 14 typechecker tests + 14 interpreter tests added. Sub-items not yet done: `impl From[VarError] for IoError`; `env.set`; book tutorial coverage; `File` handle type; `BufReader`; network I/O; process spawning.
+- [x] **Standard I/O surface — stdlib implementation (Phase 8 interpreter MVP).** `IoError` enum (`NotFound`, `PermissionDenied`, `AlreadyExists`, `UnexpectedEof`, `InvalidUtf8`, `Interrupted`, `Other(String)`) registered in the prelude and typechecker. `Stdin`, `Stdout`, `Stderr`, `FileSystem` added to `PRELUDE_EFFECT_RESOURCES`. Interpreter builtins: `Stdin.read_line()`, `Stdin.read_to_string()` → `Result[String, IoError]`; `Stdout.flush()`, `Stderr.flush()` → `Unit`; `FileSystem.read_to_string(path)` → `Result[String, IoError]`; `FileSystem.write(path, contents)` → `Result[Unit, IoError]`. Typechecker signatures registered via dot-joined `"TypeName.method"` key looked up in `resolve_path_type`. 5 typechecker tests + 4 interpreter tests added. `env.args()` → `Vec[String]` and `env.var(name)` → `Result[String, VarError]` added: `VarError` (`NotPresent`, `NotUnicode`) registered in prelude + typechecker; resolver registers lowercase `"env"` as a `SymbolKind::Module` alias; both `"Env.args"` / `"env.args"` and `"Env.var"` / `"env.var"` registered in the function table; interpreter maps `"env"` → `"Env"` in `eval_method_call` for resource dispatch. 14 typechecker tests + 14 interpreter tests added. Sub-items not yet done (factored out below as separate trackable items): `impl From[VarError] for IoError`; `env.set`; book tutorial coverage; `File` handle type; `BufReader`; network I/O; process spawning.
+
+- [ ] **`env.set(name: String, value: String)` + `writes(Env)` effect.** Standard I/O Phase 8 follow-up — `env.var()` and `env.args()` are shipped; `env.set()` is the missing companion. Mirrors POSIX `setenv` shape.
+
+  *Slice plan (drafted 2026-05-07).* Pure pattern-extension of the existing `env.var` / `env.args` registration in the typechecker and interpreter, plus a `writes(Env)` effect seed. No design judgment.
+
+  *Sub-steps.*
+  - **(a)** Typechecker — register `"Env.set"` and `"env.set"` in the function table with signature `fn set(name: String, value: String) with writes(Env)`. The `Env` resource is already in `PRELUDE_EFFECT_RESOURCES`. Mirrors the existing `env.var` registration site.
+  - **(b)** Interpreter — `eval_method_call` already maps `"env"` receiver → `"Env"` type; add the `"set"` arm calling `std::env::set_var(name, value)`. Returns `Unit`.
+  - **(c)** Effect-checker — `Env.set` carries `writes(Env)`; rejection at non-`writes(Env)`-declaring callers should fire automatically through existing infra. Verify via a negative test.
+
+  *Tests* (3 new): `test_env_set_typechecks` (typechecker, signature shape); `test_env_set_round_trips_via_var` (interpreter, `env.set("X", "v"); env.var("X") == "v"`); `test_env_set_without_writes_effect_rejects` (effectchecker).
+
+  *Files expected to change.* `src/typechecker.rs` (~15 lines mirroring `env.var` registration); `src/interpreter.rs` (~10 lines, new `"set"` arm); `tests/typechecker.rs` + `tests/interpreter.rs` + `tests/effectchecker.rs` (3 tests); this doc (close-out).
+
+  *Out of scope.*
+  - `env.unset(name)` — not in the deferred-portion sentence; spec only names `set`.
+  - `File` / `BufReader` / network I/O / process spawning — separate Standard I/O follow-ups.
+
+  *Hard-stop triggers.*
+  - The effect-checker doesn't auto-seed `writes(Env)` for stdlib registrations the way it does for other resource verbs — would need design discussion.
+  - `std::env::set_var` flagged unsafe in current Rust toolchain due to multi-threaded modification semantics; if this surfaces as a compile-time issue, halt.
+
+- [ ] **`impl From[VarError] for IoError`.** Standard I/O Phase 8 follow-up — needed for `?`-propagation from `env.var(...) -> Result[String, VarError]` into functions returning `Result[T, IoError]`. Variant mapping: `VarError.NotPresent` → `IoError.NotFound`; `VarError.NotUnicode` → `IoError.InvalidUtf8`.
+
+  *Slice plan (drafted 2026-05-07).* Single trait-impl addition. The `From` infrastructure is shipped (per Conversion-traits Slice 1, commit `deff0e3`); this slice is purely the variant-mapping `match`.
+
+  *Sub-steps.*
+  - **(a)** Add `impl From[VarError] for IoError` block to baked stdlib (in `runtime/stdlib/io.kara` next to where `IoError` lives, or a new file if needed). Body: `match self { VarError.NotPresent => IoError.NotFound, VarError.NotUnicode => IoError.InvalidUtf8 }`.
+  - **(b)** Verify the typechecker picks up the impl through `register_baked_stdlib` (no code change needed — `env_add_impl` walks STDLIB_PROGRAMS).
+  - **(c)** Verify `?`-propagation: a function `fn read_config() -> Result[String, IoError] { let s = env.var("CONFIG")?; Ok(s) }` typechecks and behaves correctly.
+
+  *Tests* (2-3 new): `test_var_error_to_io_error_conversion` (explicit `From` call); `test_question_propagation_var_error_to_io_error_in_result_io_error_fn` (the `?` site); optional `test_explicit_from_call_produces_correct_variant`.
+
+  *Files expected to change.* `runtime/stdlib/io.kara` or equivalent (one impl block, ~10 lines); `tests/typechecker.rs` + `tests/interpreter.rs` (2-3 tests); this doc (close-out).
+
+  *Out of scope.*
+  - `impl From` for other I/O error pairs (network errors, fs errors) — only `VarError → IoError` is named in the deferred-portion sentence.
+  - Reverse direction (`From[IoError] for VarError`) — not meaningful; one-way conversion.
+
+  *Hard-stop triggers.*
+  - The `From` infrastructure doesn't pick up baked-source impls the way it does user impls — would mean the From dispatch pipeline needs an extra hook.
+  - `IoError` and `VarError` variant names diverge from those listed (e.g., `IoError.NotFound` doesn't actually exist by that name) — typechecker would error. Halt and surface the variant mismatch.
 
 - [x] **`SortedSet[T: Ord]` stdlib type.** `Value::SortedSet(BTreeMap<OrdValue, ()>)` added to the interpreter; `OrdValue` newtype wraps `Value` and implements `Ord` via `value_compare` so `Value` can key a `BTreeMap` without global `Ord`. `SortedSet` registered in `PRELUDE_TYPES` + `stub_generics(["T"])` in `prelude.rs` and as a generic struct in `register_builtin_types`. `SortedSet.new()` handled in the path-call dispatch. Method surface: `len`, `is_empty`, `contains`, `insert`, `remove`, `min`, `max`, `union`, `intersection`, `difference` — all with write-back via `self.env.set` for mutation methods. `for` loop updated to iterate SortedSet in ascending key order (`into_keys()`). `infer_sorted_set_method` added to typechecker; dispatch wired in `infer_method_call` on `Type::Named { name: "SortedSet" }`. 12 typechecker tests + 11 interpreter tests added. ~~Open: `T: Ord` bound enforcement at call sites (deferred to associated types / trait bound checking); effect annotation for `new` (`allocates(Heap)`).~~ Now closed: `T: Ord` enforced via `type_supports_ord` check at each `infer_sorted_set_method` dispatch (E0232); `allocates(Heap)` seeded in effect checker. SortedSet LLVM codegen: deferred to v1 — B-tree is too complex to shim cleanly; stays interpreter-only through v1.
 
@@ -238,6 +280,30 @@ Ship-list targets **medium stdlib scope**: numerical core + scripting-critical u
   7. [x] **End-to-end tests.** 8 codegen E2E tests in `tests/codegen.rs`: `option_some_propagates`, `option_none_propagates`, `result_ok_propagates`, `result_err_propagates`, `result_match_interop`, `question_in_loop`, `question_triggers_scope_cleanup`, `question_cross_error_from_conversion`. 2 ASAN tests in `tests/memory_sanitizer.rs` covering the cleanup-on-`?` contract for Result and Option. Files: `src/codegen.rs`, `src/lowering.rs`, `src/ast.rs`, `tests/codegen.rs`, `tests/memory_sanitizer.rs`.
 
 - [~] **`?` codegen follow-up: `error_return_trace` push from compiled binaries.** Shipped 2026-04-28. Runtime side (`runtime/src/lib.rs`): two new externs `karac_error_trace_push(file_ptr, file_len, line, col)` and `karac_error_trace_clear()`, backed by a global `Mutex<ErrorTraceState>` (depth-64 ring buffer). Storage is mutex-protected, *not* `thread_local!` — TLS gets torn down before C `atexit` handlers run, which manifests as a "cannot access a Thread Local Storage value during or after destruction" panic; the global mutex stays valid throughout `atexit`. The first `push` lazily registers a printer via libc's `atexit`; the printer emits to stderr in the interpreter's text format (`Error return trace:\n  <file>:<line>:<col>\n...`). Codegen side (`src/codegen.rs`): `compile_question` emits a `karac_error_trace_push` at the failure block before `emit_scope_cleanup`, and a `karac_error_trace_clear` at the OK block. CLI needs no change — the binary's stderr passes through. 3 codegen E2E tests in `tests/codegen.rs`. **Filename threading follow-up shipped 2026-04-28** (round 2 — see git history `ba2dc9a`): added `compile_to_object_with_options` / `compile_to_ir_with_options` taking `Option<&str>` source filename (existing two-arg APIs delegate, so all 20+ in-tree callers keep working unchanged). `Codegen` carries the filename and a memoized `(PointerValue, len)` for a deduped global string materialized lazily on the first `?` site (`ensure_source_filename_global`). `emit_error_trace_push` consults that helper instead of always passing `(null, 0)`. CLI: `cmd_build` passes the source filename it already has on hand. 1 new E2E test (`test_e2e_question_trace_includes_source_filename_when_threaded`). **Remaining open follow-up:** JSON / JSONL trace output mode for compiled binaries (the binary currently always emits text — JSON would need a runtime mode env var or a compile-time flag).
+
+  *Slice plan (drafted 2026-05-07) — JSON / JSONL trace output mode.* Runtime-only change in `runtime/src/lib.rs`. Read `KARAC_ERROR_TRACE_FORMAT=json|jsonl|text` at first push (or at process start); branch the printer between the existing text format and a new JSON/JSONL emitter. No codegen change; no typechecker change. Spec: match the interpreter's existing JSON trace shape verbatim.
+
+  *Sub-steps.*
+  - **(a)** Env-var read at lazy registration: `let format = std::env::var("KARAC_ERROR_TRACE_FORMAT").unwrap_or_default()`. Parse to `enum TraceFormat { Text, Json, Jsonl }`. Default is `Text` for backwards compatibility.
+  - **(b)** New `emit_json` / `emit_jsonl` printers serialize the ring-buffer entries per the interpreter's existing JSON trace format. JSONL emits one entry per line; JSON emits a single array.
+  - **(c)** Dispatch in the existing atexit printer: `match format { Text => emit_text(...), Json => emit_json(...), Jsonl => emit_jsonl(...) }`.
+
+  *Tests* (3 new in `tests/codegen.rs`, `--features llvm`):
+  - `test_error_trace_text_format_default` — no env var set, output matches existing text format (regression pin).
+  - `test_error_trace_json_format` — `KARAC_ERROR_TRACE_FORMAT=json`, output is parseable JSON array matching interpreter's shape.
+  - `test_error_trace_jsonl_format` — `KARAC_ERROR_TRACE_FORMAT=jsonl`, output is line-delimited JSON.
+
+  *Files expected to change.* `runtime/src/lib.rs` (~80-150 lines: format enum + parse + 2 new emitter functions + dispatch); `tests/codegen.rs` (3 tests); this doc (close-out, flip parent `[~]` → `[x]`).
+
+  *Out of scope.*
+  - Format-switching mid-process (first-push value sticks for the run).
+  - JSON trace shape changes (matches interpreter's existing shape verbatim).
+  - Other runtime env vars (only `KARAC_ERROR_TRACE_FORMAT`).
+  - Compile-time flag form mentioned in the entry's parenthetical — runtime env var only for v1.
+
+  *Hard-stop triggers.*
+  - The interpreter's JSON trace shape isn't easily parseable from runtime-side serialization (e.g., requires interpreter-only types). Would need format negotiation.
+  - The existing text printer is structured in a way that's not easily adapted to a format-dispatcher. Refactor risk if so.
 
 - [x] **Codegen for user impl-block methods.** Added passes over `Item::ImplBlock` in `CodegenCtx::compile` that declare and compile each method as an LLVM function named `Type.method`; `self`-taking methods get `self` prepended as an owned `Type` parameter (synthetic `Function` built by `make_impl_method_function`). `compile_assoc_call` and `compile_method_call` now fall through to `get_function("Type.method")` and call it, routing both the operator-lowered `Call(Path([T, m]))` shape and source-form receiver calls `obj.method(args)`. `compile_expr` gained an `ExprKind::SelfValue` arm that loads from the `self` local; `field_index_for` maps `self.field` via `var_type_names["self"]`. `ref self` / `mut ref self` deferred — all current call sites (Eq/Ord, constructors) take owned receivers, and wiring reference passing needs synthesizing `TypeKind::Ref` around the target type plus coupling with the existing `fn_param_ref` call-site logic. Generic methods on impl blocks also deferred (matches the existing generic-fn monomorphization gap).
 
