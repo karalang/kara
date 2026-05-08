@@ -160,7 +160,7 @@ wip-list1 is a single docs commit; do not bundle with implementation.
 
 - [x] **Slice 1 — Plumbing: thread `ConcurrencyAnalysis` into `Codegen`.** Pure refactor; foundation for slice 2 (auto-par codegen MVP, the Parallax punchline). Plan source: [`phase-7-codegen.md`](phase-7-codegen.md) § "Par codegen: auto-parallelization of non-`par` regions" → "Slice plan (drafted 2026-05-08) — slice 1: plumbing". No IR shape change, no test-output change; existing suite must remain green. Promoted from staging 2026-05-08. Landed 2026-05-08 (commit c0e72fc).
 
-- [x] **Slice 2 — Auto-par codegen MVP (the Parallax punchline).** Consume the slice-1 `parallel_groups_for_current_fn` getter at function-body scope: emit `karac_par_run` for compiler-inferred non-trivial parallel groups outside explicit `par {}` blocks. The "write sequential code, the compiler parallelizes it" promise becomes true in compiled output, not just the interpreter. Plan source: [`phase-7-codegen.md`](phase-7-codegen.md) § "Par codegen: auto-parallelization of non-`par` regions" → "Slice plan (drafted 2026-05-08) — slice 2: auto-par codegen MVP". Promoted from staging 2026-05-08. Landed 2026-05-08 (commit _pending_).
+- [x] **Slice 2 — Auto-par codegen MVP (the Parallax punchline).** Consume the slice-1 `parallel_groups_for_current_fn` getter at function-body scope: emit `karac_par_run` for compiler-inferred non-trivial parallel groups outside explicit `par {}` blocks. The "write sequential code, the compiler parallelizes it" promise becomes true in compiled output, not just the interpreter. Plan source: [`phase-7-codegen.md`](phase-7-codegen.md) § "Par codegen: auto-parallelization of non-`par` regions" → "Slice plan (drafted 2026-05-08) — slice 2: auto-par codegen MVP". Promoted from staging 2026-05-08. Landed 2026-05-08 (commit 8bc3bab).
 
 Slices 3–6 of the Phase 8 auto-concurrency slate remain in
 [`wip-staging.md`](wip-staging.md) under "needs plan drafting" state;
@@ -177,4 +177,4 @@ retrofits the `par_counter` ID-mint inside `emit_par_run` to a
 | # | Slice | Started | Landed | Duration | Commit |
 |---|---|---|---|---|---|
 | 1 | Plumbing: `ConcurrencyAnalysis` into `Codegen` | 2026-05-08 | 2026-05-08 | ~30 min | c0e72fc |
-| 2 | Auto-par codegen MVP (Parallax punchline) | 2026-05-08 | 2026-05-08 | ~45 min | _pending_ |
+| 2 | Auto-par codegen MVP (Parallax punchline) | 2026-05-08 | 2026-05-08 | ~45 min | 8bc3bab |
