@@ -23,9 +23,9 @@ use inkwell::{
 };
 
 use crate::ast::*;
-use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
+use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency, ParallelGroup};
 use crate::ownership::OwnershipCheckResult;
-use crate::token::{FloatSuffix, IntSuffix};
+use crate::token::{FloatSuffix, IntSuffix, Span};
 
 // ── Public API ─────────────────────────────────────────────────
 
@@ -960,11 +960,10 @@ impl<'ctx> Codegen<'ctx> {
     /// Look up the parallelization decision for the function currently being
     /// compiled. Returns `None` when no concurrency analysis was threaded in
     /// (the legacy entry-point path) or when the current function isn't
-    /// keyed in the analysis (e.g. compiler-synthesized helpers). Slice 2's
-    /// consumer entry point — the body lowering path will dispatch on
-    /// `parallel_groups_for_current_fn().is_some()` to decide whether to
-    /// emit `karac_par_run` for non-`par` parallel groups.
-    #[allow(dead_code)] // slice 1 plumbing; consumed by slice 2 auto-par lowering
+    /// keyed in the analysis (e.g. compiler-synthesized helpers). Slice 2
+    /// consumes this in `compile_function_body` to decide whether to emit
+    /// `karac_par_run` for compiler-inferred parallel groups outside
+    /// explicit `par {}` blocks.
     fn parallel_groups_for_current_fn(&self) -> Option<&FunctionConcurrency> {
         if self.concurrency_decisions.is_empty() {
             return None;
@@ -2834,7 +2833,12 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        let result = self.compile_block(&func.body)?;
+        // Slice 2 (auto-par codegen MVP): route the function body through
+        // `compile_function_body`, which dispatches inferred parallel
+        // groups to `karac_par_run` when a `ConcurrencyAnalysis` was
+        // threaded into codegen. With no analysis, `compile_function_body`
+        // falls through to `compile_block` and behavior is unchanged.
+        let result = self.compile_function_body(&func.body)?;
 
         if self
             .builder
@@ -2877,6 +2881,202 @@ impl<'ctx> Codegen<'ctx> {
         } else {
             Ok(None)
         }
+    }
+
+    /// Compile a function's top-level body, dispatching inferred parallel
+    /// groups to `karac_par_run` (slice 2 — auto-par codegen MVP).
+    ///
+    /// Mirrors `compile_block` for the no-analysis path; on top of that,
+    /// when the concurrency analysis identifies non-trivial parallel
+    /// groups for the current function, the matching contiguous-or-not
+    /// stmt sets are batched into a single `emit_par_run` call instead of
+    /// being emitted sequentially. Trivial groups (per `is_trivial`) are
+    /// skipped — their statements still emit sequentially. This is the
+    /// only call site that consumes `parallel_groups_for_current_fn`;
+    /// nested blocks (let-RHS, if-arms, loop bodies) keep flowing through
+    /// plain `compile_block` because the analyzer's stmt indices only
+    /// reference `func.body.stmts`.
+    ///
+    /// Hard-stop trigger 2 mitigation: a top-level `par {}` stmt has its
+    /// inner effects collected by the analyzer (`collect_block_effects`
+    /// in `concurrency.rs`), so an effectful par-block already serializes
+    /// against neighbors. To stay defensive against pure par-block stmts
+    /// being grouped, we drop any group that contains a par-block stmt —
+    /// re-parallelizing an already-parallel block would be wasteful at
+    /// best and semantically wrong at worst.
+    #[allow(clippy::result_large_err)]
+    fn compile_function_body(
+        &mut self,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Snapshot the analysis up front to release the borrow on `self`
+        // before the loop calls `&mut self` methods (`compile_stmt`,
+        // `emit_par_run`). The clone is cheap — `ParallelGroup` holds a
+        // small `Vec<usize>`, a short `String` reason, and a bool.
+        let decision = self.parallel_groups_for_current_fn().cloned();
+
+        let Some(decision) = decision else {
+            return self.compile_block(body);
+        };
+
+        // Defensive guard: the analyzer walks `func.body.stmts` directly,
+        // so its indices should always be in bounds. A `debug_assert!`
+        // catches future drift between the analysis and codegen views of
+        // the function body without paying the cost in release builds.
+        let n = body.stmts.len();
+        debug_assert!(
+            decision
+                .parallel_groups
+                .iter()
+                .all(|g| g.statement_indices.iter().all(|&i| i < n)),
+            "parallel_groups statement_indices out of bounds for function body (len={n})"
+        );
+
+        // Build group-start and covered-index lookups. Trivial groups
+        // (per the granularity heuristic) are skipped — their stmts emit
+        // sequentially as if no group existed. Groups containing an
+        // explicit `par {}` stmt are also skipped (hard-stop trigger 2
+        // mitigation: don't re-parallelize an already-parallel block).
+        // Groups that define a binding consumed *outside* the group are
+        // also skipped: the existing `karac_par_run` lowering captures
+        // bindings *into* branch fns but does not propagate let-bindings
+        // *out*, so a let inside a group is invisible to later stmts in
+        // the function body. Capturing-back is out of scope for slice 2
+        // (the explicit-par lowering has the same limitation today; see
+        // the "Out of scope" entries on `compile_par_block`).
+        let mut group_starts: HashMap<usize, &ParallelGroup> = HashMap::new();
+        let mut covered: HashSet<usize> = HashSet::new();
+        for group in &decision.parallel_groups {
+            if group.is_trivial {
+                continue;
+            }
+            if group
+                .statement_indices
+                .iter()
+                .any(|&i| i < n && Self::stmt_is_par_block(&body.stmts[i]))
+            {
+                continue;
+            }
+            if self.group_defines_binding_used_outside(group, body) {
+                continue;
+            }
+            let Some(&min_idx) = group.statement_indices.iter().min() else {
+                continue;
+            };
+            group_starts.insert(min_idx, group);
+            for &i in &group.statement_indices {
+                covered.insert(i);
+            }
+        }
+
+        let mut i = 0;
+        while i < n {
+            if let Some(group) = group_starts.get(&i) {
+                let group_stmts: Vec<Stmt> = group
+                    .statement_indices
+                    .iter()
+                    .map(|&s| body.stmts[s].clone())
+                    .collect();
+                self.emit_par_run(&group_stmts, &body.span)?;
+                let max_idx = group.statement_indices.iter().copied().max().unwrap_or(i);
+                i = max_idx + 1;
+            } else if covered.contains(&i) {
+                // Mid-group index already emitted as part of an earlier
+                // group-start dispatch.
+                i += 1;
+            } else {
+                self.compile_stmt(&body.stmts[i])?;
+                i += 1;
+            }
+            if self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_some()
+            {
+                return Ok(None);
+            }
+        }
+
+        if let Some(ref expr) = body.final_expr {
+            let val = self.compile_expr(expr)?;
+            Ok(Some(val))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// True iff `stmt` is a top-level `par { ... }` expression statement.
+    /// Used in `compile_function_body` to skip auto-par groups that would
+    /// otherwise re-parallelize an already-parallel block.
+    fn stmt_is_par_block(stmt: &Stmt) -> bool {
+        matches!(&stmt.kind, StmtKind::Expr(e) if matches!(&e.kind, ExprKind::Par(_)))
+    }
+
+    /// True iff any binding defined by a stmt in `group` is read by a
+    /// stmt outside the group (or by `body.final_expr`). The existing
+    /// `karac_par_run` lowering captures variables *into* branch fns
+    /// but does not propagate let-bindings *out*, so a let inside an
+    /// auto-par group would be invisible to later stmts in the function
+    /// body. This guard is conservative — slice 2 deliberately leaves
+    /// capture-back as out-of-scope; it matches the same limitation
+    /// the explicit `par {}` codegen has today.
+    fn group_defines_binding_used_outside(&self, group: &ParallelGroup, body: &Block) -> bool {
+        // 1. Collect names defined by stmts in this group.
+        let in_group: HashSet<usize> = group.statement_indices.iter().copied().collect();
+        let mut defined: HashSet<String> = HashSet::new();
+        for &idx in &in_group {
+            if idx >= body.stmts.len() {
+                continue;
+            }
+            match &body.stmts[idx].kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    for name in pattern.binding_names() {
+                        defined.insert(name);
+                    }
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    defined.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+        if defined.is_empty() {
+            return false;
+        }
+
+        // 2. Walk every other stmt + final_expr collecting reads.
+        let mut refs: HashSet<String> = HashSet::new();
+        let mut defs: HashSet<String> = HashSet::new();
+        for (idx, stmt) in body.stmts.iter().enumerate() {
+            if in_group.contains(&idx) {
+                continue;
+            }
+            match &stmt.kind {
+                StmtKind::Let { pattern, value, .. } | StmtKind::LetElse { pattern, value, .. } => {
+                    self.refs_in_expr(value, &mut refs, &mut defs);
+                    for name in pattern.binding_names() {
+                        defs.insert(name);
+                    }
+                }
+                StmtKind::Expr(e) => self.refs_in_expr(e, &mut refs, &mut defs),
+                StmtKind::Assign { target, value } => {
+                    self.refs_in_expr(target, &mut refs, &mut defs);
+                    self.refs_in_expr(value, &mut refs, &mut defs);
+                }
+                StmtKind::CompoundAssign { target, value, .. } => {
+                    self.refs_in_expr(target, &mut refs, &mut defs);
+                    self.refs_in_expr(value, &mut refs, &mut defs);
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = &body.final_expr {
+            self.refs_in_expr(e, &mut refs, &mut defs);
+        }
+
+        defined.iter().any(|n| refs.contains(n))
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
@@ -12095,8 +12295,26 @@ impl<'ctx> Codegen<'ctx> {
     /// alongside the work-stealing scheduler.
     #[allow(clippy::result_large_err)]
     fn compile_par_block(&mut self, block: &Block) -> Result<BasicValueEnum<'ctx>, String> {
+        self.emit_par_run(&block.stmts, &block.span)
+    }
+
+    /// Lower a list of statements to a `karac_par_run` runtime dispatch.
+    ///
+    /// Shared between the explicit-`par`-block lowering (`compile_par_block`)
+    /// and slice 2's auto-par lowering on inferred parallel groups
+    /// (`compile_function_body`). Both call sites pass a slice of stmts that
+    /// should run concurrently and a span used for capture-set scoping —
+    /// for the explicit path the span is the par-block's own span; for the
+    /// inferred path it is best-effort the function-body span (per-stmt
+    /// span resolution is slice 3's concern). Trivial fan-outs (zero or
+    /// one statement) compile sequentially without invoking the runtime.
+    #[allow(clippy::result_large_err)]
+    fn emit_par_run(
+        &mut self,
+        stmts: &[Stmt],
+        span: &Span,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let unit = self.context.i64_type().const_int(0, false).into();
-        let stmts = &block.stmts;
 
         // Zero statements: nothing to do. Single statement: no parallelism
         // needed — compile in place to avoid the runtime call overhead.
@@ -12117,7 +12335,7 @@ impl<'ctx> Codegen<'ctx> {
             let mini = Block {
                 stmts: vec![stmt.clone()],
                 final_expr: None,
-                span: block.span.clone(),
+                span: span.clone(),
             };
             self.refs_in_block(&mini, &mut refs, &mut inner_defs);
         }

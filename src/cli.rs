@@ -2222,6 +2222,12 @@ fn cmd_build(filename: &str, output: OutputMode) {
         pipeline.lower();
         pipeline.effectcheck();
         pipeline.ownershipcheck();
+        // Auto-par codegen (slice 2): populate `pipeline.concurrency` so the
+        // codegen call below picks up inferred parallel groups via
+        // `Codegen::parallel_groups_for_current_fn`. `concurrencycheck` is a
+        // no-op when `effectcheck` produced no result (`self.effects.is_none()`),
+        // so phase ordering follows effects → ownership → concurrency.
+        pipeline.concurrencycheck();
 
         if pipeline.has_fatal_errors() {
             match output {

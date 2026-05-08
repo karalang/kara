@@ -436,4 +436,116 @@ fn main() {
             }
         }
     }
+
+    // ── Auto-parallelization of non-par regions ──
+
+    /// Compile-time helper for slice 2's auto-par tests: runs the full
+    /// pipeline (resolve → typecheck → lower → effectcheck →
+    /// concurrency_analyze), threads the resulting `ConcurrencyAnalysis`
+    /// into codegen via `compile_to_ir_with_options`, and returns the
+    /// emitted IR. Mirrors `ir_for_with_pipeline` but additionally
+    /// constructs the analysis object the auto-par codegen path consumes.
+    fn ir_for_with_concurrency(src: &str) -> String {
+        use karac::codegen::compile_to_ir_with_options;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        compile_to_ir_with_options(&parsed.program, None, Some(&analysis), None)
+            .expect("codegen failed")
+    }
+
+    /// Three independent reads on disjoint resources — the analyzer
+    /// groups all three as parallelizable, no binding leaks out (all
+    /// `let _ = ...`), so the auto-par dispatch fires and the IR holds
+    /// exactly one `karac_par_run` call site that fans out three branch
+    /// fns.
+    #[test]
+    fn test_auto_par_three_independent_reads_emits_par_run() {
+        let ir = ir_for_with_concurrency(
+            r#"
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+
+fn fetch_net() -> i64 reads(Net) { 1 }
+fn fetch_disk() -> i64 reads(Disk) { 2 }
+fn fetch_db() -> i64 reads(Db) { 3 }
+
+fn main() {
+    let _ = fetch_net();
+    let _ = fetch_disk();
+    let _ = fetch_db();
+}
+"#,
+        );
+        let calls = ir.matches("call void @karac_par_run").count();
+        assert_eq!(
+            calls, 1,
+            "expected exactly one karac_par_run dispatch for three independent reads; \
+             found {calls}; IR:\n{ir}"
+        );
+        // Three branch fns minted from one auto-par site. We use
+        // par_id=0 because main's body is the first par site emitted.
+        for i in 0..3 {
+            let needle = format!("__par_branch_0_{i}");
+            assert!(
+                ir.contains(&needle),
+                "expected branch fn {needle} in IR:\n{ir}"
+            );
+        }
+    }
+
+    /// Three pure top-level lets — the analyzer marks the group as
+    /// `is_trivial = true` (no effects), and the codegen granularity
+    /// gate emits sequentially with no `karac_par_run` call. Pins the
+    /// `is_trivial` short-circuit in `compile_function_body`.
+    #[test]
+    fn test_auto_par_skips_trivial_pure_group() {
+        let ir = ir_for_with_concurrency(
+            r#"
+fn main() {
+    let _a = 1_i64;
+    let _b = 2_i64;
+    let _c = 3_i64;
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call void @karac_par_run"),
+            "trivial pure group should not call karac_par_run; IR:\n{ir}"
+        );
+    }
+
+    /// Two `writes(Disk)` calls on the same resource — the analyzer
+    /// must not group them (effect conflict on the same resource), so
+    /// the codegen emits sequentially. Pins that the lowering respects
+    /// analyzer decisions and never speculatively parallelizes.
+    #[test]
+    fn test_auto_par_serializes_when_resources_conflict() {
+        let ir = ir_for_with_concurrency(
+            r#"
+effect resource Disk;
+
+fn write_a() -> i64 writes(Disk) { 1 }
+fn write_b() -> i64 writes(Disk) { 2 }
+
+fn main() {
+    let _ = write_a();
+    let _ = write_b();
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call void @karac_par_run"),
+            "writes(Disk) ↔ writes(Disk) should serialize; IR:\n{ir}"
+        );
+    }
 }

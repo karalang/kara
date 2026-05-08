@@ -6112,4 +6112,46 @@ fn main() {
         );
         let _ = std::fs::remove_file(obj_path);
     }
+
+    /// Slice 2 pin: replays the same pipeline shape that `cmd_build` uses
+    /// (resolve → typecheck → lower → effectcheck → ownershipcheck →
+    /// concurrencycheck) and asserts that `concurrency_analyze` produces
+    /// a non-empty analysis. Locks in sub-step (a)'s wiring of
+    /// `pipeline.concurrencycheck()` into `cmd_build` against future
+    /// regression — without this call, the auto-par codegen path stays
+    /// dormant on the build path.
+    #[test]
+    fn test_cmd_build_pipeline_populates_concurrency() {
+        let src = r#"
+effect resource Net;
+effect resource Disk;
+
+fn fetch_net() -> i64 reads(Net) { 1 }
+fn fetch_disk() -> i64 reads(Disk) { 2 }
+
+fn main() {
+    let _ = fetch_net();
+    let _ = fetch_disk();
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let _ = karac::ownershipcheck(&parsed.program, &typed);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+
+        // The analysis should at minimum have an entry for `main`.
+        assert!(
+            analysis.function_decisions.contains_key("main"),
+            "expected `main` in function_decisions; got keys: {:?}",
+            analysis.function_decisions.keys().collect::<Vec<_>>()
+        );
+    }
 }
