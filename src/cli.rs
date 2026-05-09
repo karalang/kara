@@ -58,10 +58,22 @@ pub enum Command {
         /// pipeline once per profile and group diagnostics per profile".
         /// `--profiles=all` expands to every known profile.
         profiles: Option<Vec<crate::manifest::CompileProfile>>,
+        /// `--concurrency-report` (Slice D, 2026-05-08): also emit the
+        /// human-readable concurrency analysis to stdout after checks
+        /// complete. Already runs `concurrencycheck()` via
+        /// `Pipeline::run_all_checks`, so wiring is purely render-side.
+        concurrency_report: bool,
     },
     Build {
         file: String,
         output: OutputMode,
+        /// `--concurrency-report` (Slice D, 2026-05-08): emit the
+        /// human-readable concurrency analysis to stdout alongside the
+        /// binary build. Pairs with the auto-par execution path landed
+        /// in Slice A to make the compiler's reasoning visible alongside
+        /// the speedup. See `docs/demo_ideas.md:80-88` for the locked
+        /// output shape.
+        concurrency_report: bool,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -182,16 +194,7 @@ pub fn parse_args(args: &[String]) -> Command {
             }
         }
         "check" => parse_check_command(args),
-        "build" => {
-            let p = parse_file_args_optional(args, 2);
-            match p.file {
-                Some(f) => Command::Build {
-                    file: f,
-                    output: p.output,
-                },
-                None => Command::BuildProject { output: p.output },
-            }
-        }
+        "build" => parse_build_command(args),
         "query" => parse_query_command(args),
         "fmt" => {
             if args.len() < 3 {
@@ -292,6 +295,7 @@ fn parse_check_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut profiles: Option<Vec<crate::manifest::CompileProfile>> = None;
+    let mut concurrency_report = false;
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -301,6 +305,8 @@ fn parse_check_command(args: &[String]) -> Command {
             output = OutputMode::Jsonl;
         } else if let Some(rest) = arg.strip_prefix("--profiles=") {
             profiles = Some(parse_profiles_arg(rest));
+        } else if arg == "--concurrency-report" {
+            concurrency_report = true;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -326,6 +332,51 @@ fn parse_check_command(args: &[String]) -> Command {
         file,
         output,
         profiles,
+        concurrency_report,
+    }
+}
+
+/// Parser for `karac build [<file>] [--output=...] [--concurrency-report]`.
+/// Mirrors `parse_check_command`'s shape so future build-only flags slot in
+/// next to `--concurrency-report` without churning the bare-`build` /
+/// project-mode-`build` distinction below.
+fn parse_build_command(args: &[String]) -> Command {
+    let mut file: Option<String> = None;
+    let mut output = OutputMode::Text;
+    let mut concurrency_report = false;
+    let mut i = 2usize;
+    while i < args.len() {
+        let arg = &args[i];
+        if arg == "--output=json" {
+            output = OutputMode::Json;
+        } else if arg == "--output=jsonl" {
+            output = OutputMode::Jsonl;
+        } else if arg == "--concurrency-report" {
+            concurrency_report = true;
+        } else if arg.starts_with("--output=") {
+            eprintln!(
+                "error: unknown output mode '{}'. Use json or jsonl.",
+                arg.strip_prefix("--output=").unwrap_or(arg)
+            );
+            process::exit(1);
+        } else if arg.starts_with('-') {
+            eprintln!("error: unknown flag '{arg}'");
+            process::exit(1);
+        } else if file.is_none() {
+            file = Some(arg.clone());
+        } else {
+            eprintln!("error: unexpected argument '{arg}'");
+            process::exit(1);
+        }
+        i += 1;
+    }
+    match file {
+        Some(f) => Command::Build {
+            file: f,
+            output,
+            concurrency_report,
+        },
+        None => Command::BuildProject { output },
     }
 }
 
@@ -578,8 +629,13 @@ pub fn execute(cmd: Command) {
             file,
             output,
             profiles,
-        } => cmd_check(&file, output, profiles),
-        Command::Build { file, output } => cmd_build(&file, output),
+            concurrency_report,
+        } => cmd_check(&file, output, profiles, concurrency_report),
+        Command::Build {
+            file,
+            output,
+            concurrency_report,
+        } => cmd_build(&file, output, concurrency_report),
         Command::BuildProject { output } => cmd_build_project(output),
         Command::Query {
             kind,
@@ -710,6 +766,10 @@ OPTIONS:
                             Useful for CI matrices that advertise
                             multi-profile compatibility. Exits non-zero
                             if any profile fails.
+    --concurrency-report    Print a human-readable summary of the auto-par
+                            analyzer's per-function parallel groups to
+                            stdout alongside the check output. Same shape
+                            as `karac build --concurrency-report`.
     -h, --help              Print this message"
         }
         "build" => {
@@ -725,9 +785,14 @@ under `src/`. (The multi-file pipeline lands in CR-24 slice 3; slice 2 only
 verifies the manifest.)
 
 OPTIONS:
-    --output=json      Structured JSON output on stdout
-    --output=jsonl     Streaming JSONL output on stdout
-    -h, --help         Print this message"
+    --output=json           Structured JSON output on stdout
+    --output=jsonl          Streaming JSONL output on stdout
+    --concurrency-report    Print a human-readable summary of the auto-par
+                            analyzer's per-function parallel groups (with the
+                            calls in source order, their reads/writes effects,
+                            and the analyzer's reason for parallelizing) to
+                            stdout alongside the binary build.
+    -h, --help              Print this message"
         }
         "query" => {
             "\
@@ -2088,6 +2153,7 @@ fn cmd_check(
     filename: &str,
     output: OutputMode,
     profiles: Option<Vec<crate::manifest::CompileProfile>>,
+    concurrency_report: bool,
 ) {
     let source = read_source(filename);
 
@@ -2107,6 +2173,13 @@ fn cmd_check(
         _ => {
             let mut pipeline = Pipeline::new(filename, &source);
             pipeline.run_all_checks();
+
+            // Slice D: concurrency report fires after `run_all_checks` (which
+            // already runs `concurrencycheck()`) and before the final OK /
+            // error summary so the report sits with the rest of stdout.
+            if concurrency_report {
+                emit_concurrency_report(&pipeline);
+            }
 
             match output {
                 OutputMode::Text => {
@@ -2129,6 +2202,23 @@ fn cmd_check(
             }
         }
     }
+}
+
+/// Slice D helper: render the human-readable concurrency report from the
+/// pipeline's already-populated `concurrency` and `effects` fields and
+/// emit it to stdout. No-op when either field is None (the analysis didn't
+/// run because earlier phases failed); the build/check paths still surface
+/// the upstream errors through the normal diagnostic channel.
+fn emit_concurrency_report(pipeline: &Pipeline) {
+    let (Some(concurrency), Some(effects)) = (&pipeline.concurrency, &pipeline.effects) else {
+        return;
+    };
+    let report = crate::concurrency_report::render_concurrency_report(
+        concurrency,
+        effects,
+        &pipeline.parsed.program,
+    );
+    print!("{report}");
 }
 
 /// Multi-profile typecheck driver. Runs the full pipeline once per named
@@ -2222,7 +2312,7 @@ fn cmd_check_profiles(
     }
 }
 
-fn cmd_build(filename: &str, output: OutputMode) {
+fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool) {
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
@@ -2238,6 +2328,13 @@ fn cmd_build(filename: &str, output: OutputMode) {
         // no-op when `effectcheck` produced no result (`self.effects.is_none()`),
         // so phase ordering follows effects → ownership → concurrency.
         pipeline.concurrencycheck();
+
+        // Slice D: emit the human-readable concurrency report before the
+        // codegen / link stage so it lands on stdout next to the
+        // `Built: <exe>` line, regardless of whether codegen later fails.
+        if concurrency_report {
+            emit_concurrency_report(&pipeline);
+        }
 
         if pipeline.has_fatal_errors() {
             match output {
@@ -2295,7 +2392,7 @@ fn cmd_build(filename: &str, output: OutputMode) {
     #[cfg(not(feature = "llvm"))]
     {
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
-        cmd_check(filename, output, None);
+        cmd_check(filename, output, None, concurrency_report);
     }
 }
 

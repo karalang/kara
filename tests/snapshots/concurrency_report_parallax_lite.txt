@@ -1,0 +1,7 @@
+function process_request (line 137):
+  parallel_group {
+    [138] record_a()  // writes(MetricsA)
+    [139] record_b()  // writes(MetricsB)
+    [140] record_c()  // writes(MetricsC)
+    reason: independent effects on different resources
+  }
