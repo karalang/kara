@@ -311,6 +311,26 @@ struct SharedTypeInfo<'ctx> {
 
 // ── Enum variant layout ─────────────────────────────────────────
 
+/// Per-payload-field drop classification recorded at `declare_enums`
+/// time (Phase 7.2 Slice DP — Compound-payload enum follow-up: drop-path
+/// implementation, 2026-05-09). Drives `emit_enum_drop_switch`'s per-
+/// variant cleanup-BB body: for each `EnumDropKind::VecOrString` field
+/// the drop function emits the same `cap > 0 ? free(data)` shape that
+/// `CleanupAction::FreeVecBuffer` uses for top-level Vec/String bindings.
+/// `None` is the no-op variant (primitives, slices, RC-pointer payloads,
+/// nested user-struct payloads — the last one is the v1 carve-out, see
+/// the slice's *Out of scope* paragraph and the optional test 7).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum EnumDropKind {
+    /// No cleanup — primitive, slice (no ownership), RC-pointer (handled
+    /// by the shared-type RC machinery), or v1-carved-out nested struct.
+    None,
+    /// Three-word `String` / `Vec[T]` payload — payload words at
+    /// `(start, start+1, start+2)` are `(data, len, cap)`. Free with
+    /// `karac_runtime_free(data)` when `cap > 0`.
+    VecOrString,
+}
+
 /// Tracks how an enum is laid out in LLVM IR as a tagged union.
 /// Representation: `{ i64 tag, i64 word_0, ..., i64 word_N }`.
 /// All payload words are stored as i64 (signed-extended / reinterpreted).
@@ -336,6 +356,20 @@ struct EnumLayout<'ctx> {
     /// destructure (`bind_pattern_values` `TupleVariant` arm) to read
     /// each field's word range and reconstruct the original aggregate.
     field_word_offsets: HashMap<String, Vec<(usize, usize)>>,
+    /// Phase 7.2 Slice DP — drop-path classification per source field.
+    /// Same shape as `field_word_offsets`: variant name → vec of
+    /// per-field `EnumDropKind` (declaration order). Read by
+    /// `emit_enum_drop_switch` to decide which payload-word ranges
+    /// require destructor invocations at scope exit. `None` for every
+    /// field of a variant means the variant's cleanup BB short-circuits
+    /// to `ret void` without emitting any work.
+    field_drop_kinds: HashMap<String, Vec<EnumDropKind>>,
+    /// Whether this enum is a `shared enum` (RC heap-allocated). When
+    /// true, the layout's value-type drop machinery is dormant — RC
+    /// inc/dec via `track_rc_var` handles cleanup through refcount
+    /// semantics. The DP slice's `track_enum_var` registration site
+    /// guards on `!is_shared` per design lock DP3.
+    is_shared: bool,
 }
 
 // ── SoA layout metadata ─────────────────────────────────────────
@@ -398,6 +432,26 @@ enum CleanupAction<'ctx> {
     FreeMapHandle {
         /// Alloca that holds the opaque map ptr.
         map_alloca: PointerValue<'ctx>,
+    },
+    /// Run a per-enum drop function on a value-type (non-shared) enum
+    /// alloca at scope exit. The drop function is synthesized once per
+    /// enum type by `emit_enum_drop_switch` (one `__karac_drop_<EnumName>`
+    /// symbol per non-shared enum with at least one heap-bearing payload
+    /// field; lazily emitted on first registration). The function loads
+    /// the tag, switches to the matching variant's cleanup BB, and frees
+    /// each heap-bearing payload field's data buffer (Vec/String:
+    /// `karac_runtime_free` on the payload's data pointer when `cap > 0`).
+    /// Variants with no heap-bearing payload short-circuit to the default
+    /// `ret void` arm. See Compound-payload enum follow-up: drop-path
+    /// slice (Phase 7.2 Slice DP, 2026-05-09) for the design lock.
+    EnumDrop {
+        /// Alloca holding the enum's tagged-union struct value
+        /// (`{ i64 tag, i64 w0, ..., i64 wN }`).
+        enum_alloca: PointerValue<'ctx>,
+        /// Cached `__karac_drop_<EnumName>` function — emitted once per
+        /// enum type, reused across all `track_enum_var` registrations of
+        /// that type.
+        drop_fn: FunctionValue<'ctx>,
     },
 }
 
@@ -612,6 +666,13 @@ struct Codegen<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
+    /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
+    /// `emit_enum_drop_switch` on first registration of a value-type
+    /// enum binding via `track_enum_var`. One drop fn per enum type;
+    /// reused across all registration sites for that type. Mirrors the
+    /// existing `display_fn_cache` / `clone_fn_cache` lazy-synth pattern.
+    enum_drop_fns: HashMap<String, FunctionValue<'ctx>>,
     /// Cross-error-type conversion targets at `?` sites — populated from
     /// `Program.question_conversions` (set by the lowering pass from the
     /// typechecker's `question_conversions` map). Key: `(span.offset,
@@ -1259,6 +1320,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_ref: HashMap::new(),
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
+            enum_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
@@ -2253,6 +2315,119 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
+    /// Phase 7.2 Slice DP — resolve a let-binding's surface enum name
+    /// from the let-statement's annotation and RHS shape, for the
+    /// `track_enum_var` registration site. Tries in order:
+    ///
+    /// 1. Existing `var_type_names` entry — populated by the upstream
+    ///    type-hint pass when an explicit `let e: E = ...;` annotation
+    ///    is present, or when an Identifier-RHS aliases a previously-
+    ///    typed binding.
+    /// 2. RHS = bare `Variant(args)` (`ExprKind::Call` with an Identifier
+    ///    callee whose name matches a known variant) — walk `enum_layouts`
+    ///    for the enum that owns that variant. Single-variant collisions
+    ///    across enums are rare in practice and are tolerated by taking
+    ///    the first match.
+    /// 3. RHS = qualified `Enum.Variant(args)` (`ExprKind::Call` with a
+    ///    Path-based callee whose first segment matches a known enum) —
+    ///    use the first-segment name directly.
+    /// 4. RHS = qualified `Enum.assoc_fn(args)` returning a value of the
+    ///    enum's LLVM struct type — match by LLVM-struct-identity reverse-
+    ///    lookup against `enum_layouts` (the same shape the existing
+    ///    user-struct fallback at the let-site uses for structs).
+    ///
+    /// Returns `None` when the binding's surface type isn't a known
+    /// value-type enum; the cleanup hook then becomes a no-op for that
+    /// binding (matches v1 conservative behavior — no spurious cleanup).
+    fn enum_name_for_binding(
+        &self,
+        var_name: &str,
+        value: &Expr,
+        ty: Option<&TypeExpr>,
+    ) -> Option<String> {
+        // (1) Existing var_type_names entry pointing at a known enum.
+        if let Some(n) = self.var_type_names.get(var_name) {
+            if self.enum_layouts.contains_key(n) {
+                return Some(n.clone());
+            }
+        }
+        // Explicit annotation.
+        if let Some(t) = ty {
+            if let TypeKind::Path(p) = &t.kind {
+                if let Some(seg) = p.segments.last() {
+                    if self.enum_layouts.contains_key(seg) {
+                        return Some(seg.clone());
+                    }
+                }
+            }
+        }
+        // (2) / (3) Inspect the RHS Call shape.
+        if let ExprKind::Call { callee, .. } = &value.kind {
+            match &callee.kind {
+                ExprKind::Identifier(n) => {
+                    // Bare-name variant constructor.
+                    for (en, layout) in &self.enum_layouts {
+                        if layout.tags.contains_key(n) {
+                            return Some(en.clone());
+                        }
+                    }
+                }
+                ExprKind::Path { segments, .. } => {
+                    if let Some(first) = segments.first() {
+                        if self.enum_layouts.contains_key(first) {
+                            return Some(first.clone());
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Phase 7.2 Slice DP — register a value-type enum alloca for
+    /// scope-exit drop-function invocation. Per design lock DP1, the
+    /// registration site is at let-binding time (not inside
+    /// `try_compile_enum_variant` — the variant constructor returns a
+    /// `BasicValueEnum` aggregate before the alloca exists; the alloca
+    /// is created by `bind_pattern_values`). Per DP3, `is_shared` enums
+    /// are filtered upstream — RC inc/dec via `track_rc_var` handles
+    /// their cleanup through refcount semantics. Per DP4, the
+    /// scope-exit drain emits a single `call drop_fn(alloca)` for the
+    /// `EnumDrop` action; move-suppression for caller→callee passing
+    /// is implicit in the existing convention that function parameters
+    /// don't register `track_enum_var` (mirrors how Vec/String params
+    /// don't register `track_vec_var` — only the let-binding site
+    /// owns cleanup, so the param is a stranded view of the same
+    /// payload words and no double-free can occur).
+    fn track_enum_var(&mut self, enum_name: &str, enum_alloca: PointerValue<'ctx>) {
+        // DP3 carve-out: shared enums use the RC-pointer cleanup path
+        // (refcount-driven free in `emit_rc_dec`). The drop-switch
+        // machinery is for value-type enums only.
+        let is_shared = self
+            .enum_layouts
+            .get(enum_name)
+            .map(|l| l.is_shared)
+            .unwrap_or(false);
+        if is_shared {
+            return;
+        }
+        // Skip enums with no heap-bearing payload anywhere — emitting
+        // a no-op drop call would just bloat IR. The drop-fn helper
+        // returns `None` when every variant's `field_drop_kinds` is
+        // entirely `EnumDropKind::None`.
+        let drop_fn = match self.emit_enum_drop_switch(enum_name) {
+            Some(f) => f,
+            None => return,
+        };
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::EnumDrop {
+                enum_alloca,
+                drop_fn,
+            });
+        }
+    }
+
     /// Emit all cleanup actions registered across all scope frames (for function exit).
     /// Iterates frames in reverse (innermost first) and within each frame in push order
     /// (consistent with how RAII destruction works in block-structured languages).
@@ -2324,6 +2499,18 @@ impl<'ctx> Codegen<'ctx> {
                             .into_pointer_value();
                         self.builder
                             .build_call(self.karac_map_free_fn, &[handle.into()], "")
+                            .unwrap();
+                    }
+                    // Phase 7.2 Slice DP — invoke the per-enum drop
+                    // function on the alloca. The drop fn takes a
+                    // pointer to the enum struct and walks the tag-
+                    // switch / per-variant cleanup BBs internally.
+                    CleanupAction::EnumDrop {
+                        enum_alloca,
+                        drop_fn,
+                    } => {
+                        self.builder
+                            .build_call(*drop_fn, &[(*enum_alloca).into()], "")
                             .unwrap();
                     }
                 }
@@ -2813,9 +3000,11 @@ impl<'ctx> Codegen<'ctx> {
                 // (or 0 for unit variants); the enum-wide payload-area
                 // width is `max(variant_totals)`.
                 let mut field_word_offsets: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+                let mut field_drop_kinds: HashMap<String, Vec<EnumDropKind>> = HashMap::new();
                 let mut variant_totals: Vec<usize> = Vec::with_capacity(e.variants.len());
                 for v in &e.variants {
                     let mut offsets: Vec<(usize, usize)> = Vec::new();
+                    let mut drop_kinds: Vec<EnumDropKind> = Vec::new();
                     let mut running: usize = 0;
                     let field_tys: Vec<&TypeExpr> = match &v.kind {
                         VariantKind::Unit => Vec::new(),
@@ -2825,10 +3014,12 @@ impl<'ctx> Codegen<'ctx> {
                     for ty in field_tys {
                         let n = self.payload_word_count_for_type_expr(ty, &e.name, &v.name);
                         offsets.push((running, n));
+                        drop_kinds.push(self.enum_drop_kind_for_type_expr(ty));
                         running += n;
                     }
                     variant_totals.push(running);
                     field_word_offsets.insert(v.name.clone(), offsets);
+                    field_drop_kinds.insert(v.name.clone(), drop_kinds);
                 }
                 let max_words = variant_totals.iter().copied().max().unwrap_or(0);
 
@@ -2876,6 +3067,8 @@ impl<'ctx> Codegen<'ctx> {
                         tags,
                         field_counts,
                         field_word_offsets,
+                        field_drop_kinds,
+                        is_shared: e.is_shared,
                     },
                 );
             }
@@ -3004,6 +3197,17 @@ impl<'ctx> Codegen<'ctx> {
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("None".to_string(), Vec::new());
             field_word_offsets.insert("Some".to_string(), vec![(0, 1)]);
+            // DP slice: Option[T] is generic; the seeded single-word
+            // payload shape can't carry String/Vec, so drop kinds are
+            // uniformly None — the drop function (if synthesized) is
+            // a pure tag-switch with default `ret`. Higher-arity
+            // monomorphizations of Option that route String/Vec
+            // through the variant payload aren't seeded here; user-
+            // declared enums with explicit String/Vec payloads go
+            // through the regular `declare_enums` path.
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("None".to_string(), Vec::new());
+            field_drop_kinds.insert("Some".to_string(), vec![EnumDropKind::None]);
             self.enum_layouts.insert(
                 "Option".to_string(),
                 EnumLayout {
@@ -3011,6 +3215,8 @@ impl<'ctx> Codegen<'ctx> {
                     tags,
                     field_counts,
                     field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
                 },
             );
         }
@@ -3026,6 +3232,9 @@ impl<'ctx> Codegen<'ctx> {
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("Err".to_string(), vec![(0, 1)]);
             field_word_offsets.insert("Ok".to_string(), vec![(0, 1)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Err".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("Ok".to_string(), vec![EnumDropKind::None]);
             self.enum_layouts.insert(
                 "Result".to_string(),
                 EnumLayout {
@@ -3033,8 +3242,32 @@ impl<'ctx> Codegen<'ctx> {
                     tags,
                     field_counts,
                     field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
                 },
             );
+        }
+    }
+
+    /// DP slice helper — classify a payload field's TypeExpr into an
+    /// `EnumDropKind`. Mirrors `payload_word_count_for_type_expr`'s shape
+    /// detection: only top-level `String` / `Vec[T]` get the
+    /// `VecOrString` 3-word destructor; `Slice[T]` (2 words, borrowed),
+    /// primitives, RC pointers, and v1-carved-out nested user-struct
+    /// payloads (their per-field drop is the optional test-7 territory)
+    /// all return `None`. Tuples and nested user enums are also `None`
+    /// at v1 — the DP1–DP5 design locks scope cleanup to top-level
+    /// String/Vec payloads, which is what the regression gates exercise.
+    fn enum_drop_kind_for_type_expr(&self, ty: &TypeExpr) -> EnumDropKind {
+        match &ty.kind {
+            TypeKind::Path(path) => {
+                let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                match name {
+                    "String" | "Vec" => EnumDropKind::VecOrString,
+                    _ => EnumDropKind::None,
+                }
+            }
+            _ => EnumDropKind::None,
         }
     }
 
@@ -4825,6 +5058,28 @@ impl<'ctx> Codegen<'ctx> {
                     if self.vec_elem_types.contains_key(var_name.as_str()) {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             self.track_vec_var(slot.ptr);
+                        }
+                    }
+                }
+                // Phase 7.2 Slice DP — track value-type enum bindings
+                // for scope-exit drop-function invocation. Per design
+                // lock DP1, the registration site is the let-binding
+                // (the alloca-creation site) rather than inside
+                // `try_compile_enum_variant` (which returns a
+                // `BasicValueEnum` aggregate before any alloca exists).
+                // The enum name is recovered from (a) the explicit
+                // type annotation, when present; (b) bare-name
+                // `Variant(args)` Call → walk `enum_layouts` for the
+                // enum that owns `Variant`; (c) qualified
+                // `Enum.Variant(args)` Call. The `track_enum_var` helper
+                // self-filters shared enums (DP3) and enums with no
+                // heap-bearing payload (returns early, no IR bloat).
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    let enum_name = self.enum_name_for_binding(var_name, value, ty.as_ref());
+                    if let Some(name) = enum_name {
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            let alloca = slot.ptr;
+                            self.track_enum_var(&name, alloca);
                         }
                     }
                 }
@@ -7266,6 +7521,208 @@ impl<'ctx> Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         eq_fn
+    }
+
+    /// Phase 7.2 Slice DP — synthesize (or reuse) the per-enum drop
+    /// function `__karac_drop_<EnumName>` for value-type enums.
+    ///
+    /// Body shape:
+    /// ```text
+    /// fn __karac_drop_E(p: *const E) {
+    ///   let tag = (*p).tag;
+    ///   switch tag {
+    ///     0 => cleanup_variant_0(p);
+    ///     1 => cleanup_variant_1(p);
+    ///     ...
+    ///     default => {}
+    ///   }
+    ///   ret void
+    /// }
+    /// ```
+    ///
+    /// Each per-variant cleanup BB walks the variant's
+    /// `field_drop_kinds`; for every `EnumDropKind::VecOrString` field
+    /// the BB emits the same `cap > 0 ? free(data)` pattern that
+    /// `CleanupAction::FreeVecBuffer` uses inline at the top-level
+    /// scope-cleanup drain. Field word offsets come from
+    /// `EnumLayout::field_word_offsets` (laid out by `declare_enums`).
+    ///
+    /// Returns `None` when the enum has no heap-bearing payload anywhere
+    /// — saves the synth cost and lets `track_enum_var` skip
+    /// registration entirely (no payload to free, no IR bloat from a
+    /// tag-switch with all-`ret` arms).
+    ///
+    /// Lazily memoized in `enum_drop_fns`. Mirrors the existing
+    /// `emit_hash_fn_for_type` lazy-synth pattern: the saved insert
+    /// block is restored on exit so callers don't have to.
+    fn emit_enum_drop_switch(&mut self, enum_name: &str) -> Option<FunctionValue<'ctx>> {
+        if let Some(f) = self.enum_drop_fns.get(enum_name) {
+            return Some(*f);
+        }
+        // Snapshot what we need before mutably borrowing `self.module`
+        // / `self.builder`. The layout is reconstituted from
+        // `enum_layouts`; we clone the relevant pieces so the loop body
+        // doesn't fight the builder over `&mut self`.
+        let layout = self.enum_layouts.get(enum_name)?.clone();
+        if layout.is_shared {
+            return None; // DP3 — shared enums use RC machinery
+        }
+        // Skip enums whose every variant has zero heap-bearing fields.
+        let any_heap = layout
+            .field_drop_kinds
+            .values()
+            .any(|kinds| kinds.iter().any(|k| *k != EnumDropKind::None));
+        if !any_heap {
+            return None;
+        }
+
+        let fn_name = format!("__karac_drop_{enum_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.enum_drop_fns.insert(enum_name.to_string(), f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let vec_ty = self.vec_struct_type();
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        let exit_bb = self.context.append_basic_block(drop_fn, "exit");
+        self.builder.position_at_end(entry_bb);
+        let p_arg = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // Load tag (field 0 of the enum struct).
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(layout.llvm_type, p_arg, 0, "drop.tag.p")
+            .unwrap();
+        let tag_val = self
+            .builder
+            .build_load(i64_t, tag_ptr, "drop.tag")
+            .unwrap()
+            .into_int_value();
+
+        // Sort variants by tag for deterministic IR. `tags` HashMap
+        // doesn't preserve insertion order; sorting on the discriminant
+        // makes the BB layout reproducible across runs.
+        let mut tag_entries: Vec<(String, u64)> =
+            layout.tags.iter().map(|(n, t)| (n.clone(), *t)).collect();
+        tag_entries.sort_by_key(|(_, t)| *t);
+
+        // One BB per variant, all branching to `exit_bb` after their
+        // cleanup work.
+        let mut switch_cases: Vec<(inkwell::values::IntValue<'ctx>, BasicBlock<'ctx>)> = Vec::new();
+        let case_bbs: Vec<(String, u64, BasicBlock<'ctx>)> = tag_entries
+            .iter()
+            .map(|(name, tag)| {
+                let bb = self
+                    .context
+                    .append_basic_block(drop_fn, &format!("drop.{}", name));
+                switch_cases.push((i64_t.const_int(*tag, false), bb));
+                (name.clone(), *tag, bb)
+            })
+            .collect();
+
+        self.builder
+            .build_switch(tag_val, exit_bb, &switch_cases)
+            .unwrap();
+
+        // Per-variant cleanup BBs — for each heap-bearing payload field
+        // (`EnumDropKind::VecOrString`), reload the (data, len, cap)
+        // payload words and free the data pointer when cap > 0.
+        for (variant_name, _tag, bb) in &case_bbs {
+            self.builder.position_at_end(*bb);
+            if let Some(kinds) = layout.field_drop_kinds.get(variant_name) {
+                if let Some(offsets) = layout.field_word_offsets.get(variant_name) {
+                    for (kind, (start_word, _num_words)) in kinds.iter().zip(offsets.iter()) {
+                        if *kind != EnumDropKind::VecOrString {
+                            continue;
+                        }
+                        // Field index in `llvm_type` is `start_word + 1`
+                        // for the data ptr (tag is field 0); +2 for len;
+                        // +3 for cap. Match the insert-side at
+                        // `try_compile_enum_variant`.
+                        let data_idx = (*start_word + 1) as u32;
+                        let cap_idx = (*start_word + 3) as u32;
+
+                        let cap_ptr = self
+                            .builder
+                            .build_struct_gep(layout.llvm_type, p_arg, cap_idx, "drop.cap.p")
+                            .unwrap();
+                        let cap_val = self
+                            .builder
+                            .build_load(i64_t, cap_ptr, "drop.cap")
+                            .unwrap()
+                            .into_int_value();
+                        let zero = i64_t.const_int(0, false);
+                        let is_heap = self
+                            .builder
+                            .build_int_compare(IntPredicate::UGT, cap_val, zero, "drop.is_heap")
+                            .unwrap();
+                        let free_bb = self.context.append_basic_block(drop_fn, "drop.free");
+                        let skip_bb = self.context.append_basic_block(drop_fn, "drop.skip");
+                        self.builder
+                            .build_conditional_branch(is_heap, free_bb, skip_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(free_bb);
+                        // Payload words are stored as i64 at the start_word
+                        // slot — for VecOrString that's the data pointer
+                        // bit-cast to i64. Load it and convert back to
+                        // a pointer for the free call.
+                        let data_word_ptr = self
+                            .builder
+                            .build_struct_gep(layout.llvm_type, p_arg, data_idx, "drop.data.wp")
+                            .unwrap();
+                        let data_word = self
+                            .builder
+                            .build_load(i64_t, data_word_ptr, "drop.data.w")
+                            .unwrap()
+                            .into_int_value();
+                        let data_ptr = self
+                            .builder
+                            .build_int_to_ptr(data_word, ptr_ty, "drop.data.p")
+                            .unwrap();
+                        self.builder
+                            .build_call(self.free_fn, &[data_ptr.into()], "")
+                            .unwrap();
+                        // After freeing, zero the cap word so a
+                        // re-entrant invocation (via aliased binding,
+                        // unusual in v1 but defensive) becomes a no-op
+                        // through the cap > 0 guard. Mirrors the
+                        // FreeVecBuffer semantics implicitly carried by
+                        // the runtime's own grow/clear paths.
+                        self.builder.build_store(cap_ptr, zero).unwrap();
+                        self.builder.build_unconditional_branch(skip_bb).unwrap();
+
+                        self.builder.position_at_end(skip_bb);
+                    }
+                }
+            }
+            // Reference the vec_ty so the unused-binding lint stays
+            // quiet on builds that don't enter the inner loop with
+            // VecOrString fields. (Most do, but the suppress here keeps
+            // the helper robust to future drop-kind additions.)
+            let _ = vec_ty;
+            self.builder.build_unconditional_branch(exit_bb).unwrap();
+        }
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        self.enum_drop_fns.insert(enum_name.to_string(), drop_fn);
+        Some(drop_fn)
     }
 
     /// TypeExpr-aware hash-fn wrapper. Dispatches tuples to a recursive
@@ -12390,6 +12847,16 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap();
                     self.builder.build_store(word_ptr, w).unwrap();
                 }
+                // Phase 7.2 Slice DP — move-suppression for the source
+                // binding when the arg is an Identifier referencing a
+                // tracked Vec/String variable. Zeroing the source's
+                // `cap` field neutralizes the existing
+                // `FreeVecBuffer` cleanup at scope exit (it's gated
+                // on `cap > 0`), preventing a double-free against the
+                // payload buffer the new enum binding now owns. See
+                // `suppress_source_vec_cleanup_for_arg` for the
+                // shape-detection path.
+                self.suppress_source_vec_cleanup_for_arg(&arg.value);
             }
             return Ok(Some(ptr.into()));
         }
@@ -12433,9 +12900,58 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap()
                     .into_struct_value();
             }
+            // Phase 7.2 Slice DP — move-suppression. Same shape as the
+            // shared-enum branch above; zero the source binding's
+            // `cap` so its scope-exit `FreeVecBuffer` becomes a no-op.
+            // The new enum binding owns the buffer.
+            self.suppress_source_vec_cleanup_for_arg(&arg.value);
         }
 
         Ok(Some(agg.into()))
+    }
+
+    /// Phase 7.2 Slice DP — move-suppression helper. When an enum-
+    /// variant constructor's argument is an Identifier referencing a
+    /// tracked Vec/String binding, zero the source binding's `cap`
+    /// field. The existing `CleanupAction::FreeVecBuffer` drain checks
+    /// `cap > 0` before invoking `free`, so a zeroed cap turns the
+    /// scope-exit cleanup into a no-op for that source. The new enum
+    /// binding's `EnumDrop` cleanup then owns the buffer's free.
+    ///
+    /// No-op for non-Identifier args (rvalue / literal / call result —
+    /// no source alloca to mutate; the buffer is already an rvalue
+    /// owned solely by the new enum) and for Identifier args that
+    /// don't resolve to a tracked Vec/String variable (slice / int /
+    /// struct / etc.).
+    ///
+    /// This mirrors the slice-A return-slot mechanism's cleanup
+    /// strategy at `compile_function_body` (around line 4343), which
+    /// also opts not to register a parent-side cleanup when the slot
+    /// value is moved into a downstream consumer — the consumer
+    /// becomes the unique cleanup owner.
+    fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
+        let var_name = match &arg_expr.kind {
+            ExprKind::Identifier(n) => n.as_str(),
+            _ => return,
+        };
+        // Only zero the cap when the source binding is a tracked
+        // Vec/String — its slot has the {ptr, len, cap} shape.
+        if !self.vec_elem_types.contains_key(var_name) {
+            return;
+        }
+        let slot = match self.variables.get(var_name) {
+            Some(s) => *s,
+            None => return,
+        };
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        if let Ok(cap_ptr) = self
+            .builder
+            .build_struct_gep(vec_ty, slot.ptr, 2, "move.cap.p")
+        {
+            let zero = i64_t.const_int(0, false);
+            let _ = self.builder.build_store(cap_ptr, zero);
+        }
     }
 
     /// Compound-payload enum codegen (CP4 helper) — decompose an

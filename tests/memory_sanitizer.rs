@@ -861,6 +861,107 @@ fn main() {
         );
     }
 
+    // ── Compound-payload enum drop-path (Phase 7.2 Slice DP, 2026-05-09) ──
+    // Exercises `track_enum_var` + `emit_enum_drop_switch`: a value-type
+    // enum binding that goes out of scope without being moved into a
+    // downstream consumer must invoke its per-enum drop function, which
+    // walks the variant's heap-bearing payload fields and frees their
+    // data buffers. Without the slice's machinery these tests would leak
+    // (Linux ASAN/LSan) or, on hosts with DP move-suppression bugs,
+    // double-free at scope exit.
+
+    #[test]
+    fn asan_compound_enum_drop_invokes_string_destructor() {
+        // Headline regression gate (DP5). A `String` payload's heap
+        // buffer must be freed at scope exit — `__karac_drop_E` runs
+        // the cap > 0 ? free(data) shape on the V variant's payload
+        // words. Without DP4's drain hook the buffer leaks.
+        assert_clean_asan_run(
+            r#"
+enum E { V(String) }
+fn main() {
+    let mut s: String = String.new();
+    s.push_str("disk full");
+    let _e = V(s);
+    println(1);
+}
+"#,
+            &["1"],
+            "compound_enum_drop_invokes_string_destructor",
+        );
+    }
+
+    #[test]
+    fn asan_compound_enum_drop_invokes_vec_destructor() {
+        // Vec[i64] payload — same `cap > 0 ? free(data)` cleanup
+        // shape as String, exercised through the second drop-kind
+        // entry in `field_drop_kinds`.
+        assert_clean_asan_run(
+            r#"
+enum E { V(Vec[i64]) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    let _e = V(v);
+    println(1);
+}
+"#,
+            &["1"],
+            "compound_enum_drop_invokes_vec_destructor",
+        );
+    }
+
+    #[test]
+    fn asan_compound_enum_drop_skips_no_payload_variant() {
+        // No-payload variant lands on the default `ret` arm of the
+        // tag-switch — no spurious free, no UAF on the unset payload
+        // words. `V2` has zero heap-bearing fields, but the enum
+        // itself has at least one heap-bearing variant so the drop
+        // fn is still synthesized; verifies the per-variant arm
+        // structure handles the trivial case correctly.
+        assert_clean_asan_run(
+            r#"
+enum E { V1(String), V2 }
+fn main() {
+    let _e = V2;
+    println(1);
+}
+"#,
+            &["1"],
+            "compound_enum_drop_skips_no_payload_variant",
+        );
+    }
+
+    #[test]
+    fn asan_compound_enum_drop_handles_mixed_width_variants() {
+        // Mixed-width: V1(i64) at one tag, V2(String) at another.
+        // Constructing each in turn must route through the right
+        // cleanup arm — V1's primitive payload triggers no work,
+        // V2's String payload frees the buffer. Each construction
+        // is in a nested scope to test the per-scope drain timing
+        // (the heap String buffer is freed at the inner block's
+        // close, not deferred to `main`'s exit).
+        assert_clean_asan_run(
+            r#"
+enum E { V1(i64), V2(String) }
+fn main() {
+    {
+        let _a = V1(42);
+    }
+    {
+        let mut s = String.new();
+        s.push_str("hello");
+        let _b = V2(s);
+    }
+    println(1);
+}
+"#,
+            &["1"],
+            "compound_enum_drop_handles_mixed_width_variants",
+        );
+    }
     #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
