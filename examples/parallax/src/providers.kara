@@ -33,31 +33,14 @@ pub const FETCH_NOTIFS_WORK: i64 = 15000000;
 pub const FETCH_RECOMMEND_WORK: i64 = 20000000;
 
 // ── UserDB provider ─────────────────────────────────────────────────
-//
-// Each provider carries a unique field-shape signature so the codegen's
-// LLVM-struct-identity reverse lookup in `let mut p = InMemoryFooDB.new()`
-// resolves each binding to the right type name. The `let p = call(...)`
-// path falls back to LLVM-type-identity reverse lookup against
-// `struct_types` (codegen.rs ll.4493-4503) when `type_name_of` can't
-// classify the RHS expression; if two struct types in the program have
-// the same field layout (e.g. provider with `{ i64, i64 }` collides
-// with the user-facing `Order { order_id: i64, total_cents: i64 }`),
-// HashMap iteration order picks an arbitrary match. Each provider
-// therefore carries a String "tag" field as a unique discriminant —
-// `{ String, i64, ... }` doesn't collide with any data type in
-// `types.kara` and stays distinct across the four providers (different
-// arities of trailing i64 fields). Also gives the busy-compute kernel
-// a String value to consult, which makes dead-code elimination on the
-// kernel impossible.
 
 pub struct InMemoryUserDB {
-    user_tag: String,
     user_seed: i64,
 }
 
 impl InMemoryUserDB {
     pub fn new() -> InMemoryUserDB {
-        InMemoryUserDB { user_tag: "user-db", user_seed: 42 }
+        InMemoryUserDB { user_seed: 42 }
     }
 }
 
@@ -85,14 +68,13 @@ impl UserDatabase for InMemoryUserDB {
 // ── OrderDB provider ────────────────────────────────────────────────
 
 pub struct InMemoryOrderDB {
-    order_tag: String,
     order_seed: i64,
     order_count: i64,
 }
 
 impl InMemoryOrderDB {
     pub fn new() -> InMemoryOrderDB {
-        InMemoryOrderDB { order_tag: "order-db", order_seed: 42, order_count: 2 }
+        InMemoryOrderDB { order_seed: 42, order_count: 2 }
     }
 }
 
@@ -117,7 +99,6 @@ impl OrderDatabase for InMemoryOrderDB {
 // ── NotifDB provider ────────────────────────────────────────────────
 
 pub struct InMemoryNotifDB {
-    notif_tag: String,
     notif_seed: i64,
     notif_count: i64,
     notif_high_water: i64,
@@ -126,7 +107,6 @@ pub struct InMemoryNotifDB {
 impl InMemoryNotifDB {
     pub fn new() -> InMemoryNotifDB {
         InMemoryNotifDB {
-            notif_tag: "notif-db",
             notif_seed: 42,
             notif_count: 3,
             notif_high_water: 0,
@@ -152,7 +132,6 @@ impl NotificationDatabase for InMemoryNotifDB {
 // ── RecommendDB provider ────────────────────────────────────────────
 
 pub struct InMemoryRecommendDB {
-    rec_tag: String,
     rec_seed: i64,
     rec_count: i64,
     rec_threshold: i64,
@@ -162,7 +141,6 @@ pub struct InMemoryRecommendDB {
 impl InMemoryRecommendDB {
     pub fn new() -> InMemoryRecommendDB {
         InMemoryRecommendDB {
-            rec_tag: "rec-db",
             rec_seed: 42,
             rec_count: 2,
             rec_threshold: 0,
