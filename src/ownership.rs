@@ -32,6 +32,88 @@ impl std::fmt::Display for OwnershipMode {
     }
 }
 
+/// A projection step from a root binding to a sub-place.
+/// `Field("inner")` for `c.inner`, `Index` for `arr[i]` or `tup.0`,
+/// `Range` for the half-open `v[a..b]` slice form (kept distinct from
+/// scalar `Index` so future tighter analyses can treat range
+/// projections separately).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Projection {
+    Field(String),
+    Index,
+    Range,
+}
+
+/// A normalized place expression rooted at a named binding. Used by
+/// the slice borrow tracker to attribute every slice view to the
+/// original source binding (slice-of-slice resolves transitively to
+/// the original `Vec` / `Array` / `Slice` storage). `projections`
+/// lists the projection chain root-to-leaf — `c.inner[0]` → root
+/// `"c"`, projections `[Field("inner"), Index]`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PlaceExpr {
+    pub root: String,
+    pub projections: Vec<Projection>,
+}
+
+/// Kind of an active borrow tracked by Slice 2's conflict matrix.
+/// `Imm*` / `Mut*` distinguish read vs. write borrows; `*Ref` /
+/// `*Slice` distinguish the borrow form. The four-way split lets the
+/// matrix emit shape-correct diagnostics — slice-vs-slice conflicts
+/// route through `SliceBorrowConflict`, slice-vs-ref through
+/// `CrossBorrowConflict`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BorrowKind {
+    ImmRef,
+    MutRef,
+    ImmSlice,
+    MutSlice,
+}
+
+impl BorrowKind {
+    fn is_slice(&self) -> bool {
+        matches!(self, BorrowKind::ImmSlice | BorrowKind::MutSlice)
+    }
+    fn is_mut(&self) -> bool {
+        matches!(self, BorrowKind::MutRef | BorrowKind::MutSlice)
+    }
+}
+
+/// A live borrow recorded against a source binding. Pushed at slice
+/// creation sites (and at fn-call boundaries for the scoped ref-side
+/// push) and drained at block exit when `scope_depth > current_scope_depth`.
+#[derive(Debug, Clone)]
+pub struct ActiveBorrow {
+    pub kind: BorrowKind,
+    pub source: PlaceExpr,
+    pub span: Span,
+    pub scope_depth: usize,
+}
+
+/// Shape of a slice-vs-slice / slice-vs-source-state-change conflict.
+/// Used to route the rendered diagnostic message variant for
+/// `error[E_SLICE_BORROW_CONFLICT]`. Cross-borrow conflicts (slice +
+/// `ref T` / `mut ref T` of the same root) use a separate
+/// `CrossBorrowConflict` variant so their diagnostic family stays
+/// distinct.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SliceConflictShape {
+    /// Shape A: an immutable slice and a mutable slice both borrow
+    /// the same source. Either order — the existing borrow may be
+    /// imm and the new one mut, or vice versa.
+    ImmSliceVsMutSlice,
+    /// Shape B: two mutable slices of the same source.
+    MutSliceVsMutSlice,
+    /// Shape C: source binding consumed (moved) while a slice borrow
+    /// is live.
+    MoveOfBorrowed,
+    /// Shape D: slice's lifetime extends past its source binding's
+    /// scope (source dropped while slice still live). v1 detects this
+    /// at block-exit drain when the source's scope is exiting and a
+    /// slice into it was bound at a shallower scope.
+    DropOfBorrowed,
+}
+
 #[derive(Debug, Clone)]
 enum ValueState {
     Live,
@@ -151,6 +233,29 @@ pub enum OwnershipErrorKind {
     /// the current function; the ref capture would outlive its source.
     /// Per design.md § Closures Rule 2 sub-case (iv).
     RefCaptureEscapesScope,
+    /// A slice was created from a temporary value (a function call result,
+    /// composite literal, etc. — anything without a rooted source binding)
+    /// and bound to a name that escapes the enclosing statement. The
+    /// slice's storage would be dropped at end-of-statement leaving the
+    /// binding pointing at freed memory. Phase-5 § Slice borrow source
+    /// attribution sub-step (d).
+    SliceFromTemporaryEscapes,
+    /// Slice-vs-slice or slice-vs-source-state-change conflict against a
+    /// shared source binding. The `shape` field selects the diagnostic
+    /// message variant (imm + mut, mut + mut, move-of-borrowed,
+    /// drop-of-borrowed). Phase-5 § Slice borrow conflict detection
+    /// sub-step (d) / (e) / (f).
+    SliceBorrowConflict {
+        shape: SliceConflictShape,
+    },
+    /// A slice borrow and a `ref T` / `mut ref T` borrow are simultaneously
+    /// live against the same source. Distinct from the slice-vs-slice
+    /// `SliceBorrowConflict` family because the diagnostic wording names
+    /// the cross-form pairing. v1 surfaces this for in-call mutation of
+    /// a source while a slice into it is live (`v.push(...)` with
+    /// `let s = v.as_slice_mut();` outstanding). Phase-5 § Slice borrow
+    /// conflict detection sub-step (g).
+    CrossBorrowConflict,
 }
 
 impl std::fmt::Display for OwnershipError {
@@ -216,6 +321,16 @@ pub struct OwnershipCheckResult {
     pub rc_values: HashMap<String, HashMap<String, RcEntry>>,
     /// Per-function Arc-promoted bindings (Phase 2). Subset of `rc_values`.
     pub arc_values: HashMap<String, HashSet<String>>,
+    /// Per-slice-creation-site borrow source attribution. Keyed by the
+    /// slice expression's `SpanKey` — the `.as_slice()` / `.as_slice_mut()`
+    /// MethodCall, the range-indexing `Index`, the let-RHS, or the
+    /// implicitly-coerced call-arg expression. The value is the resolved
+    /// root place plus the slice's mutability. Slice-of-slice creations
+    /// are walked through to the original root, so an entry's `root`
+    /// always names the storage binding (never an intermediate slice).
+    /// Populated by Phase-5 Theme 1 Slice 1 (borrow source attribution);
+    /// consumed by Slice 2's conflict detector.
+    pub slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -329,6 +444,50 @@ pub struct OwnershipChecker<'a> {
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
     callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    /// Callee name → per-position "is the formal a slice?" flag. `Some(true)`
+    /// for `mut Slice[T]`, `Some(false)` for `Slice[T]`, `None` for
+    /// non-slice formals. Drives the Slice 1 call-arg coercion site
+    /// detection: when a Vec / Array / Slice expression flows into a
+    /// formal slot whose type is `Slice[T]` / `mut Slice[T]`, the
+    /// implicit coercion creates a slice view that needs source
+    /// attribution. Same key convention as `callee_param_modes`.
+    callee_param_slice_kind: HashMap<String, Vec<Option<bool>>>,
+    /// Slice creation sites recorded by Slice 1. Surfaced via
+    /// `OwnershipCheckResult::slice_borrow_sources`. Populated at
+    /// `.as_slice()` / `.as_slice_mut()`, range-indexing, and call-arg
+    /// coercion sites; the let-binding-rhs site reuses whichever
+    /// recording its RHS expression already produced.
+    slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
+    /// Per-binding slice source attribution. Populated at `let pat = rhs`
+    /// time when the RHS is a slice creation expression — the binding
+    /// name maps to the same `(PlaceExpr, mutable)` pair recorded for the
+    /// RHS's span. Consumed by `place_expr_root` so a use of the binding
+    /// in a later slice creation chains through to the original storage
+    /// root rather than the intermediate slice.
+    slice_binding_sources: HashMap<String, (PlaceExpr, bool)>,
+    /// Slice 2 — active borrow stack per source root binding name. Pushed
+    /// at slice creation sites and at the call-statement-scoped ref-side
+    /// boundary; drained at block exit when an entry's `scope_depth` is
+    /// strictly greater than the current scope depth. Conflict detection
+    /// scans this list at every push to find slice-vs-slice and
+    /// slice-vs-ref overlaps against the same root.
+    active_borrows: HashMap<String, Vec<ActiveBorrow>>,
+    /// Slice 2 — current block scope depth, incremented on `check_block`
+    /// entry and decremented on exit. Used to stamp `ActiveBorrow` and
+    /// to drive the drain-on-exit cleanup. Top-level fn body sits at
+    /// depth 1 after entry; nested blocks bump deeper.
+    current_scope_depth: usize,
+    /// Slice 2 — scope depth at which each binding was declared. Used by
+    /// drop-of-borrowed detection: at block-exit drain, a source binding
+    /// whose scope ends now (`scope_depth == current_scope_depth`) with
+    /// any live slice into it whose own binding scope is shallower
+    /// triggers shape D.
+    binding_scope_depth: HashMap<String, usize>,
+    /// Slice 2 — scope depth at which each slice binding was declared.
+    /// Populated at the `StmtKind::Let` arm when the RHS produced a
+    /// `slice_borrow_sources` entry. Drives the drop-of-borrowed
+    /// trigger comparison.
+    slice_binding_scope_depth: HashMap<String, usize>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -352,6 +511,13 @@ impl<'a> OwnershipChecker<'a> {
             binding_types: HashMap::new(),
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
+            callee_param_slice_kind: collect_callee_param_slice_kind(program),
+            slice_borrow_sources: HashMap::new(),
+            slice_binding_sources: HashMap::new(),
+            active_borrows: HashMap::new(),
+            current_scope_depth: 0,
+            binding_scope_depth: HashMap::new(),
+            slice_binding_scope_depth: HashMap::new(),
         }
     }
 
@@ -416,6 +582,7 @@ impl<'a> OwnershipChecker<'a> {
             representations,
             rc_values: self.rc_values,
             arc_values: self.arc_values,
+            slice_borrow_sources: self.slice_borrow_sources,
         }
     }
 
@@ -671,10 +838,25 @@ impl<'a> OwnershipChecker<'a> {
         }
         self.binding_type_names.clear();
         self.binding_types.clear();
+        // Slice 2 — reset per-function active borrow tracking. The
+        // result-surfaced `slice_borrow_sources` is NOT cleared (it
+        // accumulates across the program); the other maps are function-
+        // local because binding names are.
+        self.slice_binding_sources.clear();
+        self.active_borrows.clear();
+        self.binding_scope_depth.clear();
+        self.slice_binding_scope_depth.clear();
+        self.current_scope_depth = 0;
 
         // Initialize value states for parameters
         let mut states: HashMap<String, ValueState> = HashMap::new();
         let mut param_types: HashMap<String, Type> = HashMap::new();
+
+        // Slice 2 — params are scoped to the body block (depth 1, after
+        // `check_block` bumps). Register at depth 1 so the
+        // drop-of-borrowed trigger lines up correctly when slices into
+        // params are bound inside the body.
+        let body_depth = self.current_scope_depth + 1;
 
         for param in &f.params {
             let ty = self.lower_type_for_ownership(&param.ty);
@@ -684,7 +866,8 @@ impl<'a> OwnershipChecker<'a> {
                     self.binding_type_names.insert(name.clone(), tn);
                 }
                 self.binding_types.insert(name.clone(), ty.clone());
-                param_types.insert(name, ty.clone());
+                param_types.insert(name.clone(), ty.clone());
+                self.binding_scope_depth.insert(name, body_depth);
             }
         }
 
@@ -1539,12 +1722,19 @@ impl<'a> OwnershipChecker<'a> {
         param_types: &HashMap<String, Type>,
         param_usage: &mut HashMap<String, ParamUsage>,
     ) {
+        // Slice 2 — bracket the block walk with scope-depth tracking. On
+        // exit, drain any active borrows whose `scope_depth` is at or
+        // beyond this block's depth.
+        self.current_scope_depth += 1;
+        let entered_depth = self.current_scope_depth;
         for stmt in &block.stmts {
             self.check_stmt(stmt, states, param_types, param_usage);
         }
         if let Some(ref expr) = block.final_expr {
             self.check_expr_consuming(expr, states, param_types, param_usage);
         }
+        self.drain_borrows_at_depth(entered_depth);
+        self.current_scope_depth = entered_depth - 1;
     }
 
     fn check_stmt(
@@ -1576,6 +1766,67 @@ impl<'a> OwnershipChecker<'a> {
                     for name in pattern.binding_names() {
                         self.binding_types.insert(name.clone(), rhs_ty.clone());
                     }
+                }
+
+                // Slice 1: escape-from-temp detection. When the RHS is a
+                // direct slice creation (`.as_slice()` / `.as_slice_mut()` /
+                // range-indexing) whose source has no rooted attribution
+                // (the receiver is a function call result, composite
+                // literal, etc.), the slice's storage is dropped at end of
+                // statement — binding it to a name that outlives the
+                // statement points at freed memory. In-statement uses
+                // (`make_vec().as_slice().len()`) are not let-RHS so they
+                // accept. Future expansions (return-of-temp-slice, escape
+                // through call-arg-into-borrow) ride on Slice 2's conflict
+                // detector.
+                if let Some((source, _)) = Self::slice_creation_source(value) {
+                    if self.place_expr_root(source).is_none() {
+                        self.errors.push(OwnershipError {
+                            message: "slice from temporary value escapes the enclosing statement"
+                                .to_string(),
+                            span: value.span.clone(),
+                            kind: OwnershipErrorKind::SliceFromTemporaryEscapes,
+                            suggestion: Some(
+                                "bind the receiver to a local first, then take a slice into it"
+                                    .to_string(),
+                            ),
+                            replacement: None,
+                            consume_span: None,
+                        });
+                    }
+                }
+
+                // Slice 1: chain-through population for slice-of-slice. If
+                // the RHS produced a `slice_borrow_sources` entry (any of
+                // the four creation sites fired), propagate it to each
+                // binding name introduced by the pattern. A later slice
+                // creation whose source is the binding name walks through
+                // this map in `place_expr_root` so the recorded root is
+                // the original storage (`v`), not the intermediate slice.
+                if let Some(entry) = self
+                    .slice_borrow_sources
+                    .get(&SpanKey::from_span(&value.span))
+                    .cloned()
+                {
+                    for name in pattern.binding_names() {
+                        self.slice_binding_sources
+                            .insert(name.clone(), entry.clone());
+                        // Slice 2 — record the scope at which this slice
+                        // binding lives, keyed by the source's root. Used
+                        // by drop-of-borrowed detection at the source's
+                        // scope-exit drain.
+                        self.slice_binding_scope_depth
+                            .insert(entry.0.root.clone(), self.current_scope_depth);
+                        let _ = name;
+                    }
+                }
+
+                // Slice 2 — record this binding's scope depth so the
+                // drop-of-borrowed trigger can detect "source going out
+                // of scope while a slice into it is still bound" cases.
+                for name in pattern.binding_names() {
+                    self.binding_scope_depth
+                        .insert(name, self.current_scope_depth);
                 }
             }
             StmtKind::LetUninit {
@@ -1741,6 +1992,337 @@ impl<'a> OwnershipChecker<'a> {
             .is_some_and(|m| matches!(m, OwnershipMode::Ref | OwnershipMode::MutRef))
     }
 
+    /// Returns `Some(mutable)` if the formal at `arg_index` of `callee` is a
+    /// slice type (`Slice[T]` or `mut Slice[T]`); `None` for non-slice
+    /// formals or unresolvable callees. Drives Slice 1's call-arg coercion
+    /// site detection.
+    fn arg_formal_slice_kind(&self, callee: &Expr, arg_index: usize) -> Option<bool> {
+        let key = match &callee.kind {
+            ExprKind::Identifier(name) => name.clone(),
+            ExprKind::Path { segments, .. } => segments.join("."),
+            _ => return None,
+        };
+        self.callee_param_slice_kind
+            .get(&key)
+            .and_then(|kinds| kinds.get(arg_index).copied().flatten())
+    }
+
+    /// Resolve the root binding of a place expression at a slice creation
+    /// site. Walks identifier / field / index / tuple-index / `.as_slice` /
+    /// `.as_slice_mut` chains down to a root binding; returns `None` for
+    /// expressions that don't start at a named binding (function-call
+    /// results, struct / tuple / collection literals, etc.). For chains that
+    /// pass through a slice binding (`s2 = s1[0..3]` where `s1` is itself a
+    /// slice into `v`), the lookup walks transitively through
+    /// `slice_binding_sources` so the returned root is the original storage
+    /// (`v`), not the intermediate slice.
+    fn place_expr_root(&self, expr: &Expr) -> Option<PlaceExpr> {
+        match &expr.kind {
+            ExprKind::Identifier(name) => {
+                if let Some((parent, _)) = self.slice_binding_sources.get(name) {
+                    Some(parent.clone())
+                } else {
+                    Some(PlaceExpr {
+                        root: name.clone(),
+                        projections: Vec::new(),
+                    })
+                }
+            }
+            ExprKind::FieldAccess { object, field, .. } => {
+                let mut p = self.place_expr_root(object)?;
+                p.projections.push(Projection::Field(field.clone()));
+                Some(p)
+            }
+            ExprKind::Index { object, index } => {
+                let mut p = self.place_expr_root(object)?;
+                let proj = if matches!(&index.kind, ExprKind::Range { .. }) {
+                    Projection::Range
+                } else {
+                    Projection::Index
+                };
+                p.projections.push(proj);
+                Some(p)
+            }
+            ExprKind::TupleIndex { object, .. } => {
+                let mut p = self.place_expr_root(object)?;
+                p.projections.push(Projection::Index);
+                Some(p)
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if (method == "as_slice" || method == "as_slice_mut") && args.is_empty() => {
+                self.place_expr_root(object)
+            }
+            _ => None,
+        }
+    }
+
+    /// Record a slice creation site if the source resolves to a rooted
+    /// place. Called from each of the four slice creation hook points:
+    /// `.as_slice()` / `.as_slice_mut()`, range-indexing, call-arg
+    /// coercion, and let-binding-rhs coercion. Idempotent — recording the
+    /// same span twice is a no-op (later writes overwrite with the same
+    /// value). Slice 2: also pushes an `ActiveBorrow` so the conflict
+    /// matrix sees this slice when later borrows are added.
+    fn record_slice_creation(&mut self, slice_span: &Span, source: &Expr, mutable: bool) {
+        if let Some(place) = self.place_expr_root(source) {
+            let key = SpanKey::from_span(slice_span);
+            if let std::collections::hash_map::Entry::Vacant(e) =
+                self.slice_borrow_sources.entry(key)
+            {
+                e.insert((place.clone(), mutable));
+                let kind = if mutable {
+                    BorrowKind::MutSlice
+                } else {
+                    BorrowKind::ImmSlice
+                };
+                self.push_active_borrow(kind, place, slice_span.clone());
+            }
+        }
+    }
+
+    /// If `expr` is a direct slice creation form (`.as_slice()` /
+    /// `.as_slice_mut()` MethodCall, or `Index` with a `Range` index),
+    /// return the source expression and the resulting slice's mutability.
+    /// Used by the let-binding-rhs escape detector.
+    fn slice_creation_source(expr: &Expr) -> Option<(&Expr, bool)> {
+        match &expr.kind {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } if (method == "as_slice" || method == "as_slice_mut") && args.is_empty() => {
+                Some((object.as_ref(), method == "as_slice_mut"))
+            }
+            ExprKind::Index { object, index } if matches!(&index.kind, ExprKind::Range { .. }) => {
+                Some((object.as_ref(), false))
+            }
+            _ => None,
+        }
+    }
+
+    /// Slice 2 — push an active borrow into `active_borrows[source.root]`,
+    /// scanning the existing entries first to detect slice-vs-slice and
+    /// slice-vs-ref conflicts. Conflicts emit `SliceBorrowConflict` (same
+    /// shape: A imm+mut, B mut+mut) or `CrossBorrowConflict` (slice + ref
+    /// of same root) with the existing borrow's span as the secondary
+    /// label. The new borrow is recorded regardless — we keep both so a
+    /// later third operation can still detect against either.
+    fn push_active_borrow(&mut self, kind: BorrowKind, source: PlaceExpr, span: Span) {
+        // Scan existing borrows on the same root for conflicts.
+        if let Some(existing) = self.active_borrows.get(&source.root) {
+            for prior in existing {
+                let conflict = self.classify_borrow_conflict(&prior.kind, &kind);
+                match conflict {
+                    BorrowConflict::SliceShape(shape) => {
+                        self.errors.push(OwnershipError {
+                            message: format!(
+                                "{}: existing borrow at line {}:{}",
+                                slice_conflict_message(&shape, &source.root),
+                                prior.span.line,
+                                prior.span.column
+                            ),
+                            span: span.clone(),
+                            kind: OwnershipErrorKind::SliceBorrowConflict { shape },
+                            suggestion: Some(
+                                "drop the prior borrow before creating a new one (or restructure so they don't overlap)"
+                                    .to_string(),
+                            ),
+                            replacement: None,
+                            consume_span: Some(prior.span.clone()),
+                        });
+                    }
+                    BorrowConflict::CrossForm => {
+                        self.errors.push(OwnershipError {
+                            message: format!(
+                                "`{}` cannot be borrowed as `{}` because it is also borrowed as `{}` at line {}:{}",
+                                source.root,
+                                borrow_kind_display(&kind),
+                                borrow_kind_display(&prior.kind),
+                                prior.span.line,
+                                prior.span.column
+                            ),
+                            span: span.clone(),
+                            kind: OwnershipErrorKind::CrossBorrowConflict,
+                            suggestion: Some(
+                                "drop the slice borrow before mutating the source (or restructure so they don't overlap)"
+                                    .to_string(),
+                            ),
+                            replacement: None,
+                            consume_span: Some(prior.span.clone()),
+                        });
+                    }
+                    BorrowConflict::None => {}
+                }
+            }
+        }
+        self.active_borrows
+            .entry(source.root.clone())
+            .or_default()
+            .push(ActiveBorrow {
+                kind,
+                source,
+                span,
+                scope_depth: self.current_scope_depth,
+            });
+    }
+
+    /// Slice 2 — classify the conflict shape between an existing borrow
+    /// and a newly-pushed one. Symmetric in the slice-vs-slice cases (A
+    /// fires whether existing is imm or new is imm). Cross-form pairs
+    /// (slice + ref) route through `CrossBorrowConflict` rather than
+    /// `SliceBorrowConflict`.
+    #[allow(clippy::unused_self)]
+    fn classify_borrow_conflict(&self, existing: &BorrowKind, new: &BorrowKind) -> BorrowConflict {
+        match (existing.is_slice(), new.is_slice()) {
+            (true, true) => match (existing.is_mut(), new.is_mut()) {
+                (false, false) => BorrowConflict::None, // two imm slices — OK
+                (true, true) => BorrowConflict::SliceShape(SliceConflictShape::MutSliceVsMutSlice),
+                _ => BorrowConflict::SliceShape(SliceConflictShape::ImmSliceVsMutSlice),
+            },
+            (true, false) | (false, true) => {
+                if existing.is_mut() || new.is_mut() {
+                    BorrowConflict::CrossForm
+                } else {
+                    // Two immutable borrows of any form coexist — read-only.
+                    BorrowConflict::None
+                }
+            }
+            (false, false) => BorrowConflict::None,
+        }
+    }
+
+    /// Slice 2 — drain any active borrows whose `scope_depth` exceeds the
+    /// current scope depth. Called at block exit (after the in-block walk
+    /// completes, before the depth decrements). Drop-of-borrowed detection
+    /// rides this drain: a draining slice borrow whose source root is
+    /// itself going out of scope here AND was bound at a shallower scope
+    /// indicates the slice outlives its source storage.
+    fn drain_borrows_at_depth(&mut self, exit_depth: usize) {
+        let mut to_emit: Vec<(PlaceExpr, Span, Span)> = Vec::new();
+        for (root, borrows) in self.active_borrows.iter_mut() {
+            // For each draining slice, check whether its source root is
+            // also dropping at this scope. The source's binding scope is
+            // tracked separately so we know if the source's storage goes
+            // away here.
+            let source_dropping_now = self
+                .binding_scope_depth
+                .get(root)
+                .is_some_and(|&depth| depth >= exit_depth);
+            borrows.retain(|b| {
+                if b.scope_depth >= exit_depth {
+                    if source_dropping_now && b.kind.is_slice() {
+                        // Slice's binding scope (where the slice value
+                        // lives, populated at let time) is shallower
+                        // than the source's? Then the slice will live
+                        // past the source — shape D. We use
+                        // `slice_binding_scope_depth` indexed by the
+                        // root to flag this; if not present, conservative
+                        // fall-through to drain without emitting.
+                        if let Some(&slice_depth) =
+                            self.slice_binding_scope_depth.get(&b.source.root)
+                        {
+                            if slice_depth < exit_depth {
+                                to_emit.push((b.source.clone(), b.span.clone(), b.span.clone()));
+                            }
+                        }
+                    }
+                    false // drain
+                } else {
+                    true // keep
+                }
+            });
+        }
+        // Drop empty entries so the map stays clean.
+        self.active_borrows.retain(|_, v| !v.is_empty());
+        for (place, span, secondary) in to_emit {
+            self.errors.push(OwnershipError {
+                message: format!(
+                    "slice into `{}` outlives its source: source dropped at end of scope while slice borrow is still live",
+                    place.root,
+                ),
+                span,
+                kind: OwnershipErrorKind::SliceBorrowConflict {
+                    shape: SliceConflictShape::DropOfBorrowed,
+                },
+                suggestion: Some(
+                    "extend the source binding's scope to outlive the slice, or restructure so the slice does not escape"
+                        .to_string(),
+                ),
+                replacement: None,
+                consume_span: Some(secondary),
+            });
+        }
+    }
+
+    /// Slice 2 — snapshot active-borrow per-root counts before walking a
+    /// `Call` or `MethodCall`. Use with `restore_active_borrows_to_snapshot`
+    /// after the args walk to drop the call-arg-coerced slice borrows
+    /// (they are call-statement-scoped per the slice plan's sub-step (g)
+    /// — the slice value lives only for the call's duration). This still
+    /// lets the conflict matrix fire mid-call (the push side-effect emits
+    /// the diagnostic before the drain), so persistent slice + transient
+    /// coerced slice still conflicts. Sequential calls do not stack up.
+    fn snapshot_active_borrow_lens(&self) -> HashMap<String, usize> {
+        self.active_borrows
+            .iter()
+            .map(|(k, v)| (k.clone(), v.len()))
+            .collect()
+    }
+
+    fn restore_active_borrows_to_snapshot(&mut self, snapshot: &HashMap<String, usize>) {
+        let roots: Vec<String> = self.active_borrows.keys().cloned().collect();
+        for root in roots {
+            let target = snapshot.get(&root).copied().unwrap_or(0);
+            if let Some(borrows) = self.active_borrows.get_mut(&root) {
+                if borrows.len() > target {
+                    borrows.truncate(target);
+                }
+            }
+        }
+        self.active_borrows.retain(|_, v| !v.is_empty());
+    }
+
+    /// Slice 2 — at every consume that would transition `name` to
+    /// `Moved`, check whether `name` has any live slice borrows. If so,
+    /// emit shape C (move-of-borrowed) before the move proceeds. Returns
+    /// `true` iff a conflict was emitted (caller may use this to suppress
+    /// the consume — but v1 keeps the consume regardless so downstream
+    /// state stays consistent).
+    fn check_move_of_borrowed(&mut self, name: &str, move_span: &Span) -> bool {
+        let Some(borrows) = self.active_borrows.get(name) else {
+            return false;
+        };
+        if borrows.is_empty() {
+            return false;
+        }
+        // Use the first live borrow as the secondary span — multiple
+        // borrows would each fire, but for v1 we keep the diagnostic
+        // count to one per move.
+        let prior = borrows[0].clone();
+        self.errors.push(OwnershipError {
+            message: format!(
+                "cannot move `{}` while a slice borrow into it is still live (borrowed at line {}:{})",
+                name, prior.span.line, prior.span.column
+            ),
+            span: move_span.clone(),
+            kind: OwnershipErrorKind::SliceBorrowConflict {
+                shape: SliceConflictShape::MoveOfBorrowed,
+            },
+            suggestion: Some(
+                "drop the slice borrow before moving the source, or restructure so they don't overlap"
+                    .to_string(),
+            ),
+            replacement: None,
+            consume_span: Some(prior.span),
+        });
+        true
+    }
+
     fn method_call_consumes_receiver(&self, method_call: &Expr) -> bool {
         let key = match self
             .typecheck_result
@@ -1751,6 +2333,23 @@ impl<'a> OwnershipChecker<'a> {
             None => return false,
         };
         matches!(self.method_self_modes.get(key), Some(SelfParam::Owned))
+    }
+
+    /// Slice 2 — the receiver-side `BorrowKind` for a `MethodCall`. Drives
+    /// the call-statement-scoped ref-side push that Slice 2's sub-step (g)
+    /// gates on. Returns `None` for static methods, bare-self consumes
+    /// (no borrow), and unresolved methods (typecheck error upstream or
+    /// stdlib methods whose impls aren't in user code).
+    fn method_self_borrow_kind(&self, method_call: &Expr) -> Option<BorrowKind> {
+        let key = self
+            .typecheck_result
+            .method_callee_types
+            .get(&SpanKey::from_span(&method_call.span))?;
+        match self.method_self_modes.get(key)? {
+            SelfParam::Owned => None,
+            SelfParam::Ref => Some(BorrowKind::ImmRef),
+            SelfParam::MutRef => Some(BorrowKind::MutRef),
+        }
     }
 
     /// Whether the resolved method's receiver is `mut ref self`. Used by the
@@ -2158,6 +2757,11 @@ impl<'a> OwnershipChecker<'a> {
                 }
 
                 if !is_copy {
+                    // Slice 2 — before the move proceeds, check whether
+                    // any slice borrow into this binding is live. If so,
+                    // emit shape C (move-of-borrowed). The move itself
+                    // still proceeds so downstream state stays consistent.
+                    self.check_move_of_borrowed(name, &expr.span);
                     // Non-copy value is consumed → mark as moved.
                     states.insert(
                         name.clone(),
@@ -2175,6 +2779,9 @@ impl<'a> OwnershipChecker<'a> {
                 }
             }
             ExprKind::Call { callee, args } => {
+                // Slice 2 — call-statement-scoped slice borrows; see
+                // `check_expr_reading`'s Call arm for rationale.
+                let snapshot = self.snapshot_active_borrow_lens();
                 self.check_call_callee(callee, states, param_types, param_usage);
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): the arg's classification
@@ -2193,7 +2800,13 @@ impl<'a> OwnershipChecker<'a> {
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
+                    // Slice 1: site (iii) call-arg coercion — see
+                    // `check_expr_reading`'s Call arm for rationale.
+                    if let Some(formal_mutable) = self.arg_formal_slice_kind(callee, i) {
+                        self.record_slice_creation(&arg.value.span, &arg.value, formal_mutable);
+                    }
                 }
+                self.restore_active_borrows_to_snapshot(&snapshot);
             }
             ExprKind::Return(Some(inner)) => {
                 self.check_expr_consuming(inner, states, param_types, param_usage);
@@ -2364,6 +2977,11 @@ impl<'a> OwnershipChecker<'a> {
                 self.check_expr_reading(operand, states, param_types, param_usage);
             }
             ExprKind::Call { callee, args } => {
+                // Slice 2 — snapshot before arg walking so call-arg-
+                // coerced slice borrows are call-statement-scoped (drop
+                // at call return). Conflicts mid-call still fire because
+                // the push side-effects the diagnostic.
+                let snapshot = self.snapshot_active_borrow_lens();
                 self.check_call_callee(callee, states, param_types, param_usage);
                 for (i, arg) in args.iter().enumerate() {
                     // Step 2 (consume-predicate): see the analogous arm in
@@ -2374,9 +2992,23 @@ impl<'a> OwnershipChecker<'a> {
                     } else {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
+                    // Slice 1: site (iii) call-arg coercion. When the
+                    // formal slot is `Slice[T]` / `mut Slice[T]` and the
+                    // arg flows in as a `Vec` / `Array` / `Slice`, the
+                    // typechecker inserts an implicit slice view. Record
+                    // the source attribution against the arg's span.
+                    if let Some(formal_mutable) = self.arg_formal_slice_kind(callee, i) {
+                        self.record_slice_creation(&arg.value.span, &arg.value, formal_mutable);
+                    }
                 }
+                self.restore_active_borrows_to_snapshot(&snapshot);
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 // Step 1 (consume-predicate): receiver mode comes from the
                 // resolved method's `self_param`, not from a name heuristic.
                 // `bare self` → consume the receiver; `ref self` /
@@ -2405,6 +3037,37 @@ impl<'a> OwnershipChecker<'a> {
                 } else {
                     self.check_expr_reading(object, states, param_types, param_usage);
                 }
+                // Slice 1: `.as_slice()` / `.as_slice_mut()` are slice
+                // creation site (i). Record the source attribution so
+                // Slice 2's conflict detector can match later uses against
+                // the original storage binding. No-op when the receiver
+                // is a temporary (function call result, etc.). Recorded
+                // BEFORE the receiver-side push snapshot so the slice
+                // borrow persists past the method call.
+                if (method == "as_slice" || method == "as_slice_mut") && args.is_empty() {
+                    self.record_slice_creation(&expr.span, object, method == "as_slice_mut");
+                }
+                // Slice 2 — receiver-side borrow push for instance methods.
+                // The push fires the conflict matrix against any existing
+                // borrows on the receiver's root, surfacing CrossBorrowConflict
+                // when a slice into the receiver is already live (e.g.,
+                // `let _s = h.v.as_slice_mut(); h.modify();`). Skipped for
+                // `.as_slice` / `.as_slice_mut` (the slice creation push
+                // above is the correct representation; a redundant
+                // receiver-side ref push would false-positive on the
+                // method's own slice result). Snapshot taken AFTER the
+                // slice creation push so persistent slice borrows survive
+                // the restore at end-of-call. Static methods, bare-self
+                // consumes, and unresolved methods (stdlib impls etc.) all
+                // return None from `method_self_borrow_kind` and skip.
+                let receiver_snapshot = self.snapshot_active_borrow_lens();
+                if !matches!(method.as_str(), "as_slice" | "as_slice_mut") {
+                    if let Some(borrow_kind) = self.method_self_borrow_kind(expr) {
+                        if let Some(place) = self.place_expr_root(object) {
+                            self.push_active_borrow(borrow_kind, place, expr.span.clone());
+                        }
+                    }
+                }
                 // Trigger 3 (container store + subsequent use) was
                 // formerly routed by snapshotting Live arg-rooted
                 // bindings, walking the args, and retagging any that
@@ -2424,6 +3087,11 @@ impl<'a> OwnershipChecker<'a> {
                         self.check_expr_consuming(&arg.value, states, param_types, param_usage);
                     }
                 }
+                // Slice 2 — drop the receiver-side ref borrow + any call-
+                // arg-coerced slice borrows added during the args walk.
+                // The `.as_slice` / `.as_slice_mut` slice creation push
+                // happens BEFORE the snapshot so it's preserved.
+                self.restore_active_borrows_to_snapshot(&receiver_snapshot);
             }
             ExprKind::FieldAccess { object, .. } => {
                 self.check_expr_reading(object, states, param_types, param_usage);
@@ -2434,6 +3102,13 @@ impl<'a> OwnershipChecker<'a> {
             ExprKind::Index { object, index } => {
                 self.check_expr_reading(object, states, param_types, param_usage);
                 self.check_expr_reading(index, states, param_types, param_usage);
+                // Slice 1: range-indexing produces a slice view (site (ii)).
+                // The typechecker types `v[a..b]` as `Slice[T]` (immutable
+                // — see typechecker.rs:7244-7282); record the source
+                // attribution against the index expression's span.
+                if matches!(&index.kind, ExprKind::Range { .. }) {
+                    self.record_slice_creation(&expr.span, object, false);
+                }
             }
             ExprKind::Block(block) => {
                 self.check_block(block, states, param_types, param_usage);
@@ -4145,6 +4820,110 @@ fn param_modes_from_signature(params: &[Param]) -> Vec<OwnershipMode> {
             _ => OwnershipMode::Own,
         })
         .collect()
+}
+
+/// Return `Some(mutable)` if the formal-param type is a slice — `Slice[T]`
+/// (mutable=false) or `mut Slice[T]` (mutable=true). `None` for any
+/// non-slice formal. Drives Slice 1's call-arg coercion site detection:
+/// when an arg expression of type `Vec[T]` / `Array[T, N]` / `Slice[T]`
+/// flows into one of these slots, the implicit coercion creates a slice
+/// view whose source attribution must be recorded.
+fn slice_kind_from_type(ty: &TypeExpr) -> Option<bool> {
+    match &ty.kind {
+        TypeKind::MutSlice(_) => Some(true),
+        TypeKind::Path(path) => {
+            if path.segments.last().map(|s| s.as_str()) == Some("Slice") {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Result of comparing a new borrow against an existing one against the
+/// same source. `None` for compatible pairs (two immutable views, etc.).
+enum BorrowConflict {
+    None,
+    SliceShape(SliceConflictShape),
+    CrossForm,
+}
+
+/// Render a `BorrowKind` for diagnostic messages.
+fn borrow_kind_display(kind: &BorrowKind) -> &'static str {
+    match kind {
+        BorrowKind::ImmRef => "ref T",
+        BorrowKind::MutRef => "mut ref T",
+        BorrowKind::ImmSlice => "Slice[T]",
+        BorrowKind::MutSlice => "mut Slice[T]",
+    }
+}
+
+/// Render the leading message for a slice-vs-slice / source-state-change
+/// conflict. The caller appends the secondary borrow's span.
+fn slice_conflict_message(shape: &SliceConflictShape, root: &str) -> String {
+    match shape {
+        SliceConflictShape::ImmSliceVsMutSlice => format!(
+            "cannot create a `mut Slice[T]` of `{}` while another slice borrow is live",
+            root
+        ),
+        SliceConflictShape::MutSliceVsMutSlice => format!(
+            "cannot create a second `mut Slice[T]` of `{}` while one is already live",
+            root
+        ),
+        SliceConflictShape::MoveOfBorrowed => format!(
+            "cannot move `{}` while a slice borrow into it is live",
+            root
+        ),
+        SliceConflictShape::DropOfBorrowed => format!(
+            "slice into `{}` outlives its source: source dropped while borrow is still live",
+            root
+        ),
+    }
+}
+
+/// Per-callee, per-position "is the formal a slice?" map. Same key
+/// convention as `collect_callee_param_modes`. Free fns keyed by name;
+/// static methods keyed by `"Type.method"`.
+pub(crate) fn collect_callee_param_slice_kind(
+    program: &Program,
+) -> HashMap<String, Vec<Option<bool>>> {
+    let mut map = HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                map.insert(
+                    f.name.clone(),
+                    f.params
+                        .iter()
+                        .map(|p| slice_kind_from_type(&p.ty))
+                        .collect(),
+                );
+            }
+            Item::ImplBlock(impl_block) => {
+                let Some(target_name) = impl_target_name(&impl_block.target_type) else {
+                    continue;
+                };
+                for impl_item in &impl_block.items {
+                    if let ImplItem::Method(method) = impl_item {
+                        if method.self_param.is_none() {
+                            map.insert(
+                                format!("{target_name}.{}", method.name),
+                                method
+                                    .params
+                                    .iter()
+                                    .map(|p| slice_kind_from_type(&p.ty))
+                                    .collect(),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    map
 }
 
 /// Merge two branch states into the parent (`target`). For move

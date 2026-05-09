@@ -1492,6 +1492,15 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ReassignToImmutable => "E0506",
                 crate::ownership::OwnershipErrorKind::UnusedMutCaptureNote => "N0507",
                 crate::ownership::OwnershipErrorKind::RefCaptureEscapesScope => "E0508",
+                crate::ownership::OwnershipErrorKind::SliceFromTemporaryEscapes => {
+                    "E_SLICE_FROM_TEMPORARY_ESCAPES"
+                }
+                crate::ownership::OwnershipErrorKind::SliceBorrowConflict { .. } => {
+                    "E_SLICE_BORROW_CONFLICT"
+                }
+                crate::ownership::OwnershipErrorKind::CrossBorrowConflict => {
+                    "E_CROSS_BORROW_CONFLICT"
+                }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

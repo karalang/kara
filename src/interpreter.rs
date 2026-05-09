@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, RwLock};
+use std::sync::{Arc, Mutex, RwLock, RwLockReadGuard};
 
 use regex::Regex as RustRegex;
 use ureq;
@@ -60,7 +60,33 @@ pub enum Value {
     String(String),
     Unit,
     Tuple(Vec<Value>),
-    Array(Vec<Value>),
+    /// Sequence storage shared between the source binding and any live
+    /// slice views. `Arc<RwLock<...>>` is universal — every Array
+    /// allocation carries the shared cell whether or not it ever gets
+    /// sliced, because retroactive upgrade when slice creation finds the
+    /// source in another binding / struct field is significantly more
+    /// complex. Tree-walk perf is irrelevant for v1; the extra
+    /// `Arc::clone` + `RwLock::read/write` per op is the design's
+    /// accepted cost. (`Arc<RwLock<>>` rather than the slice-plan-
+    /// suggested `Rc<RefCell<>>` so `Value: Send + Sync` — the
+    /// par-block branch evaluator uses `thread::scope` and shares
+    /// captured Values across worker threads.) See Phase-5 § Slice
+    /// borrow-tracking parity § sub-item 3 "Aliased interpreter
+    /// representation".
+    Array(Arc<RwLock<Vec<Value>>>),
+    /// `Slice[T]` / `mut Slice[T]` runtime value — a window into shared
+    /// storage. Created at `.as_slice()` / `.as_slice_mut()` /
+    /// range-indexing / call-arg coercion sites; cloned by sharing the
+    /// `Arc<RwLock<...>>` storage. Index reads / writes go through the
+    /// same `try_write_or_panic` helper as direct array writes, so the
+    /// runtime guard fires on aliased writes the borrow checker would
+    /// otherwise reject.
+    Slice {
+        storage: Arc<RwLock<Vec<Value>>>,
+        start: usize,
+        len: usize,
+        mutable: bool,
+    },
     Map(Vec<(Value, Value)>),
     Struct {
         name: String,
@@ -240,7 +266,30 @@ impl PartialEq for Value {
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Unit, Value::Unit) => true,
             (Value::Tuple(a), Value::Tuple(b)) => a == b,
-            (Value::Array(a), Value::Array(b)) => a == b,
+            (Value::Array(a), Value::Array(b)) => {
+                Arc::ptr_eq(a, b) || *a.read().unwrap() == *b.read().unwrap()
+            }
+            (
+                Value::Slice {
+                    storage: sa,
+                    start: ssa,
+                    len: la,
+                    ..
+                },
+                Value::Slice {
+                    storage: sb,
+                    start: ssb,
+                    len: lb,
+                    ..
+                },
+            ) => {
+                if la != lb {
+                    return false;
+                }
+                let va = sa.read().unwrap();
+                let vb = sb.read().unwrap();
+                va[*ssa..*ssa + *la] == vb[*ssb..*ssb + *lb]
+            }
             (
                 Value::EnumVariant {
                     enum_name: a1,
@@ -552,9 +601,26 @@ impl std::fmt::Display for Value {
                 }
                 write!(f, ")")
             }
-            Value::Array(vals) => {
+            Value::Array(rc) => {
+                let vals = rc.read().unwrap();
                 write!(f, "[")?;
                 for (i, v) in vals.iter().enumerate() {
+                    if i > 0 {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{}", v)?;
+                }
+                write!(f, "]")
+            }
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => {
+                let vals = storage.read().unwrap();
+                write!(f, "[")?;
+                for (i, v) in vals[*start..*start + *len].iter().enumerate() {
                     if i > 0 {
                         write!(f, ", ")?;
                     }
@@ -703,7 +769,45 @@ impl std::fmt::Display for Value {
     }
 }
 
+/// Slice 3 runtime guard — write-lock the shared array storage,
+/// panicking with an aliased-write message if another reader or writer
+/// is currently holding it. Centralized at every mutating array / slice
+/// site (push / pop / insert / remove / set_element / index-assignment)
+/// so the `panic_on_aliased_write` rule has one structural enforcement
+/// point. The `source_label` is best-effort context — derived from the
+/// active expression's place-expression root when available, else
+/// `"<value>"`.
+fn try_write_or_panic<'a>(
+    storage: &'a Arc<RwLock<Vec<Value>>>,
+    source_label: &str,
+) -> std::sync::RwLockWriteGuard<'a, Vec<Value>> {
+    storage.try_write().unwrap_or_else(|_| {
+        panic!(
+            "aliased write detected: {} mutated while a borrow is live",
+            source_label
+        )
+    })
+}
+
 impl Value {
+    /// Slice 3 helper — wrap a fresh `Vec<Value>` in the shared
+    /// `Arc<RwLock<>>` storage used for `Value::Array`. Every Array
+    /// allocation goes through this so the rep upgrade stays uniform.
+    pub fn array_of(items: Vec<Value>) -> Value {
+        Value::Array(Arc::new(RwLock::new(items)))
+    }
+
+    /// Slice 3 helper — borrow the inner `Vec<Value>` for read-only access.
+    /// Returns `None` for non-array values so callers can fall through to
+    /// other arms cleanly. The guard is held for the lifetime of the
+    /// returned `RwLockReadGuard`, so callers should keep it scoped.
+    pub fn as_array_borrow(&self) -> Option<RwLockReadGuard<'_, Vec<Value>>> {
+        match self {
+            Value::Array(rc) => Some(rc.read().unwrap()),
+            _ => None,
+        }
+    }
+
     /// Format for programmer-facing debug output.
     /// Strings are quoted, chars are single-quoted; compound values recurse.
     pub fn debug_fmt(&self) -> String {
@@ -714,8 +818,22 @@ impl Value {
                 let inner: Vec<String> = vals.iter().map(|v| v.debug_fmt()).collect();
                 format!("({})", inner.join(", "))
             }
-            Value::Array(vals) => {
+            Value::Array(rc) => {
+                let vals = rc.read().unwrap();
                 let inner: Vec<String> = vals.iter().map(|v| v.debug_fmt()).collect();
+                format!("[{}]", inner.join(", "))
+            }
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => {
+                let vals = storage.read().unwrap();
+                let inner: Vec<String> = vals[*start..*start + *len]
+                    .iter()
+                    .map(|v| v.debug_fmt())
+                    .collect();
                 format!("[{}]", inner.join(", "))
             }
             Value::Map(entries) => {
@@ -2272,13 +2390,13 @@ impl<'a> Interpreter<'a> {
             // both Array and Vec are represented as Value::Array at runtime.
             ExprKind::ArrayLiteral(elements) => {
                 let vals: Vec<Value> = elements.iter().map(|e| self.eval_expr_inner(e)).collect();
-                Value::Array(vals)
+                Value::array_of(vals)
             }
 
             // Prefix collection literal: `Vec[e1, e2, ...]` / `Array[e1, ...]`
             ExprKind::PrefixCollectionLiteral { items, .. } => {
                 let vals: Vec<Value> = items.iter().map(|e| self.eval_expr_inner(e)).collect();
-                Value::Array(vals)
+                Value::array_of(vals)
             }
 
             // Repeat literal: `[v; n]` / `Vec[v; n]` / `Array[v; n]`. Value
@@ -2290,7 +2408,7 @@ impl<'a> Interpreter<'a> {
                     Value::Int(n) if n >= 0 => n as usize,
                     _ => 0,
                 };
-                Value::Array(vec![v; n])
+                Value::array_of(vec![v; n])
             }
 
             // Map literal
@@ -2366,8 +2484,50 @@ impl<'a> Interpreter<'a> {
                     } else {
                         0
                     };
-                    let source = match &obj {
-                        Value::Array(vals) => vals.clone(),
+                    let (storage, source_len) = match &obj {
+                        Value::Array(rc) => (rc.clone(), rc.read().unwrap().len()),
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        } => {
+                            // Re-slicing — produce a window into the same
+                            // storage with offset adjustment.
+                            let raw_end = if let Some(e) = end {
+                                match self.eval_expr_inner(e) {
+                                    Value::Int(n) if n >= 0 => n as usize,
+                                    Value::Int(n) => {
+                                        return self.record_runtime_error(
+                                            format!("range end must be non-negative, got {}", n),
+                                            &expr.span,
+                                        );
+                                    }
+                                    _ => unreachable!(
+                                        "non-int range end at {}:{}; should be caught by typechecker",
+                                        expr.span.line, expr.span.column
+                                    ),
+                                }
+                            } else {
+                                *len
+                            };
+                            let end_i = if *inclusive { raw_end + 1 } else { raw_end };
+                            if start_i > end_i || end_i > *len {
+                                return self.record_runtime_error(
+                                    format!(
+                                        "slice bounds {}..{} out of range (len {})",
+                                        start_i, end_i, len,
+                                    ),
+                                    &expr.span,
+                                );
+                            }
+                            return Value::Slice {
+                                storage: storage.clone(),
+                                start: start + start_i,
+                                len: end_i - start_i,
+                                mutable: false,
+                            };
+                        }
                         _ => unreachable!(
                             "range-indexing on non-array at {}:{}; should be caught by typechecker",
                             expr.span.line, expr.span.column
@@ -2388,27 +2548,31 @@ impl<'a> Interpreter<'a> {
                             ),
                         }
                     } else {
-                        source.len()
+                        source_len
                     };
                     let end_i = if *inclusive { raw_end + 1 } else { raw_end };
-                    if start_i > end_i || end_i > source.len() {
+                    if start_i > end_i || end_i > source_len {
                         return self.record_runtime_error(
                             format!(
                                 "slice bounds {}..{} out of range (len {})",
-                                start_i,
-                                end_i,
-                                source.len(),
+                                start_i, end_i, source_len,
                             ),
                             &expr.span,
                         );
                     }
-                    return Value::Array(source[start_i..end_i].to_vec());
+                    return Value::Slice {
+                        storage,
+                        start: start_i,
+                        len: end_i - start_i,
+                        mutable: false,
+                    };
                 }
                 let obj = self.eval_expr_inner(object);
                 let idx = self.eval_expr_inner(index);
                 match (&obj, &idx) {
-                    (Value::Array(vals), Value::Int(i)) => {
+                    (Value::Array(rc), Value::Int(i)) => {
                         let i = *i as usize;
+                        let vals = rc.read().unwrap();
                         let len = vals.len();
                         vals.get(i).cloned().unwrap_or_else(|| {
                             self.record_runtime_error(
@@ -2416,6 +2580,25 @@ impl<'a> Interpreter<'a> {
                                 &expr.span,
                             )
                         })
+                    }
+                    (
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        },
+                        Value::Int(i),
+                    ) => {
+                        let i = *i as usize;
+                        if i >= *len {
+                            return self.record_runtime_error(
+                                format!("index {} out of bounds (len {})", i, len),
+                                &expr.span,
+                            );
+                        }
+                        let vals = storage.read().unwrap();
+                        vals[start + i].clone()
                     }
                     _ => unreachable!(
                         "non-array/non-int index at {}:{}; should be caught by typechecker",
@@ -2532,7 +2715,16 @@ impl<'a> Interpreter<'a> {
             } => {
                 let iter_val = self.eval_expr_inner(iterable);
                 let items = match iter_val {
-                    Value::Array(v) => v,
+                    Value::Array(rc) => match Arc::try_unwrap(rc) {
+                        Ok(cell) => cell.into_inner().unwrap(),
+                        Err(rc) => rc.read().unwrap().clone(),
+                    },
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => storage.read().unwrap()[start..start + len].to_vec(),
                     Value::Tuple(v) => v,
                     // SortedSet iterates in ascending key order
                     Value::SortedSet(s) => s.into_keys().map(|k| k.0).collect(),
@@ -2715,7 +2907,7 @@ impl<'a> Interpreter<'a> {
                         } else {
                             (a..b).map(Value::Int).collect()
                         };
-                        Value::Array(items)
+                        Value::array_of(items)
                     }
                     (None, None) => {
                         // RangeFull used as a value — only valid as a slice index
@@ -3619,7 +3811,7 @@ impl<'a> Interpreter<'a> {
                     return Value::Bool(false);
                 }
                 "Runtime.list_par_blocks" | "Runtime.list_tasks" => {
-                    return Value::Array(Vec::new());
+                    return Value::array_of(Vec::new());
                 }
                 "Map.new" => {
                     return Value::Map(Vec::new());
@@ -3736,11 +3928,13 @@ impl<'a> Interpreter<'a> {
                 | "Stats.median" | "Stats.min" | "Stats.max" => {
                     let xs: Vec<f64> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
-                            Value::Array(vs) => vs
-                                .into_iter()
+                            Value::Array(rc) => rc
+                                .read()
+                                .unwrap()
+                                .iter()
                                 .map(|v| match v {
-                                    Value::Float(f) => f,
-                                    Value::Int(i) => i as f64,
+                                    Value::Float(f) => *f,
+                                    Value::Int(i) => *i as f64,
                                     _ => 0.0,
                                 })
                                 .collect(),
@@ -3754,10 +3948,12 @@ impl<'a> Interpreter<'a> {
                 "Base64.encode" | "Base64.encode_url_safe" | "Hex.encode" | "Hex.encode_upper" => {
                     let bytes: Vec<u8> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {
-                            Value::Array(vs) => vs
-                                .into_iter()
+                            Value::Array(rc) => rc
+                                .read()
+                                .unwrap()
+                                .iter()
                                 .map(|v| match v {
-                                    Value::Int(i) => i as u8,
+                                    Value::Int(i) => *i as u8,
                                     _ => 0,
                                 })
                                 .collect(),
@@ -4702,7 +4898,7 @@ impl<'a> Interpreter<'a> {
                             *exhausted = true;
                         }
                     }
-                    Some(Value::Array(chunk))
+                    Some(Value::array_of(chunk))
                 }
             }
             IteratorSource::Windows { .. } => {
@@ -4782,7 +4978,7 @@ impl<'a> Interpreter<'a> {
                     } = iter
                     {
                         *primed = true;
-                        return Some(Value::Array(buffer.clone()));
+                        return Some(Value::array_of(buffer.clone()));
                     }
                     return None;
                 }
@@ -4813,7 +5009,7 @@ impl<'a> Interpreter<'a> {
                         {
                             buffer.remove(0);
                             buffer.push(v);
-                            return Some(Value::Array(buffer.clone()));
+                            return Some(Value::array_of(buffer.clone()));
                         }
                         None
                     }
@@ -4900,7 +5096,7 @@ impl<'a> Interpreter<'a> {
                         if group.is_empty() {
                             return None;
                         } else {
-                            return Some(Value::Array(group));
+                            return Some(Value::array_of(group));
                         }
                     };
                     let key_fn = if let Value::Iterator {
@@ -4939,7 +5135,7 @@ impl<'a> Interpreter<'a> {
                                 *pending_item = Some(Box::new(item));
                                 *pending_key = Some(Box::new(key));
                             }
-                            return Some(Value::Array(group));
+                            return Some(Value::array_of(group));
                         }
                     }
                 }
@@ -5300,6 +5496,66 @@ impl<'a> Interpreter<'a> {
 
         let obj = self.eval_expr_inner(object);
 
+        // Slice 3 — mut-Slice mutation methods that route their writes
+        // back to the original storage. These dispatch BEFORE the
+        // Slice→Array normalization below; the normalization is for
+        // read-only methods that can safely operate on a fresh snapshot.
+        if let Value::Slice {
+            storage,
+            start,
+            len,
+            ..
+        } = &obj
+        {
+            if method == "swap" {
+                let i_val = args
+                    .first()
+                    .map(|a| self.eval_expr_inner(&a.value))
+                    .unwrap_or(Value::Int(0));
+                let j_val = args
+                    .get(1)
+                    .map(|a| self.eval_expr_inner(&a.value))
+                    .unwrap_or(Value::Int(0));
+                if let (Value::Int(i_v), Value::Int(j_v)) = (i_val, j_val) {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut guard = try_write_or_panic(storage, &label);
+                    let i = i_v as usize;
+                    let j = j_v as usize;
+                    if i < *len && j < *len {
+                        guard.swap(start + i, start + j);
+                    }
+                }
+                return Value::Unit;
+            }
+        }
+
+        // Slice 3 — methods on `Slice[T]` / `mut Slice[T]` dispatch via
+        // the existing Array-method surface. The interpreter snapshots
+        // the slice's window into a fresh `Value::Array` so each
+        // read-only method (`first` / `last` / `get` / `contains` /
+        // `chunks` / `windows` / `len` / `is_empty` / `iter` / etc.)
+        // sees a uniform shape. The slice itself is preserved by the
+        // `.as_slice` / `.as_slice_mut` MethodCall arm above (which
+        // detects the Slice receiver and rebuilds the view) and by the
+        // Index expression path for read/write through `[i]`. Mutation
+        // methods that need source-aliasing semantics (`swap`) dispatch
+        // above this fence.
+        let obj = match obj {
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } if !matches!(method, "as_slice" | "as_slice_mut") => {
+                let snap = storage.read().unwrap()[start..start + len].to_vec();
+                Value::array_of(snap)
+            }
+            other => other,
+        };
+
         // `#[derive(Display)]` — `to_string()` on a unit enum variant.
         if method == "to_string" {
             if let Value::EnumVariant {
@@ -5381,7 +5637,8 @@ impl<'a> Interpreter<'a> {
             }
             "len" => {
                 return match &obj {
-                    Value::Array(v) => Value::Int(v.len() as i64),
+                    Value::Array(rc) => Value::Int(rc.read().unwrap().len() as i64),
+                    Value::Slice { len, .. } => Value::Int(*len as i64),
                     Value::String(s) => Value::Int(s.len() as i64),
                     Value::Map(m) => Value::Int(m.len() as i64),
                     Value::SortedSet(s) => Value::Int(s.len() as i64),
@@ -5401,7 +5658,13 @@ impl<'a> Interpreter<'a> {
                 // into_iter() are identical at this layer — the design.md
                 // borrow-vs-consume distinction is a typechecker concern.
                 let items = match &obj {
-                    Value::Array(v) => v.clone(),
+                    Value::Array(rc) => rc.read().unwrap().clone(),
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => storage.read().unwrap()[*start..*start + *len].to_vec(),
                     Value::Set(s) => s.clone(),
                     Value::SortedSet(s) => s.keys().map(|k| k.0.clone()).collect(),
                     Value::Map(m) => m
@@ -5867,7 +6130,7 @@ impl<'a> Interpreter<'a> {
                     while let Some(v) = self.iterator_step(&mut iter_val) {
                         out.push(v);
                     }
-                    return Value::Array(out);
+                    return Value::array_of(out);
                 }
             }
             "fold" => {
@@ -5936,15 +6199,34 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "as_slice" | "as_slice_mut" => {
-                // The tree-walk interpreter is type-erased; Slice[T] uses
-                // the same Value::Array representation as Vec/Array. Clone
-                // the backing data so the slice binding doesn't share
-                // storage with the source (matches the interpreter's
-                // broader value-semantics stance). Mutation through a
-                // mutable slice consequently does not propagate back —
-                // the compiled codegen has full aliasing semantics.
+                // Slice 3 — produce a Value::Slice that shares the
+                // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation
+                // through a `mut Slice[T]` propagates back to the source
+                // because the storage is the same handle, and the
+                // runtime guard fires on aliased writes via
+                // try_write_or_panic.
+                let mutable = method == "as_slice_mut";
                 return match &obj {
-                    Value::Array(v) => Value::Array(v.clone()),
+                    Value::Array(rc) => {
+                        let len = rc.read().unwrap().len();
+                        Value::Slice {
+                            storage: rc.clone(),
+                            start: 0,
+                            len,
+                            mutable,
+                        }
+                    }
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => Value::Slice {
+                        storage: storage.clone(),
+                        start: *start,
+                        len: *len,
+                        mutable,
+                    },
                     _ => unreachable!(
                         "{}() on unsupported type at {}:{}; should be caught by typechecker",
                         method, span.line, span.column
@@ -5952,16 +6234,17 @@ impl<'a> Interpreter<'a> {
                 };
             }
             "push" => {
-                if let Value::Array(mut arr) = obj {
+                if let Value::Array(rc) = &obj {
                     let val = if let Some(arg) = args.first() {
                         self.eval_expr_inner(&arg.value)
                     } else {
                         Value::Unit
                     };
-                    arr.push(val);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Array(arr));
-                    }
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    try_write_or_panic(rc, &label).push(val);
                     return Value::Unit;
                 }
             }
@@ -6018,8 +6301,11 @@ impl<'a> Interpreter<'a> {
             // lookup so user-defined structs with the same method name
             // (`struct Counter { fn get(self) ... }`) still resolve correctly.
             "is_empty" => {
-                if let Value::Array(ref v) = obj {
-                    return Value::Bool(v.is_empty());
+                if let Value::Array(ref rc) = obj {
+                    return Value::Bool(rc.read().unwrap().is_empty());
+                }
+                if let Value::Slice { len, .. } = &obj {
+                    return Value::Bool(*len == 0);
                 }
                 if let Value::String(ref s) = obj {
                     return Value::Bool(s.is_empty());
@@ -6035,41 +6321,77 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "first" => {
-                if let Value::Array(ref v) = obj {
-                    return if let Some(first) = v.first() {
-                        Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![first.clone()]),
+                let elem = match &obj {
+                    Value::Array(rc) => rc.read().unwrap().first().cloned(),
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => {
+                        if *len > 0 {
+                            Some(storage.read().unwrap()[*start].clone())
+                        } else {
+                            None
                         }
-                    } else {
-                        Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        }
-                    };
-                }
+                    }
+                    _ => return Value::Unit,
+                };
+                return match elem {
+                    Some(v) => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "Some".to_string(),
+                        data: EnumData::Tuple(vec![v]),
+                    },
+                    None => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    },
+                };
             }
             "last" => {
-                if let Value::Array(ref v) = obj {
-                    return if let Some(last) = v.last() {
-                        Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "Some".to_string(),
-                            data: EnumData::Tuple(vec![last.clone()]),
+                let elem = match &obj {
+                    Value::Array(rc) => rc.read().unwrap().last().cloned(),
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => {
+                        if *len > 0 {
+                            Some(storage.read().unwrap()[*start + *len - 1].clone())
+                        } else {
+                            None
                         }
-                    } else {
-                        Value::EnumVariant {
-                            enum_name: "Option".to_string(),
-                            variant: "None".to_string(),
-                            data: EnumData::Unit,
-                        }
-                    };
-                }
+                    }
+                    _ => return Value::Unit,
+                };
+                return match elem {
+                    Some(v) => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "Some".to_string(),
+                        data: EnumData::Tuple(vec![v]),
+                    },
+                    None => Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    },
+                };
             }
             "get" => {
-                if let Value::Array(ref v) = obj {
+                let array_view: Option<Vec<Value>> = match &obj {
+                    Value::Array(rc) => Some(rc.read().unwrap().clone()),
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => Some(storage.read().unwrap()[*start..*start + *len].to_vec()),
+                    _ => None,
+                };
+                if let Some(v) = array_view {
                     let idx = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
@@ -6125,7 +6447,8 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "contains" => {
-                if let Value::Array(ref v) = obj {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
                     let needle = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
@@ -6167,7 +6490,8 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "binary_search" => {
-                if let Value::Array(ref v) = obj {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
                     let needle = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
@@ -6187,15 +6511,16 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "split_at" => {
-                if let Value::Array(ref v) = obj {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
                     let idx = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
                         .unwrap_or(Value::Int(0));
                     return if let Value::Int(i) = idx {
                         let i = (i as usize).min(v.len());
-                        let left = Value::Array(v[..i].to_vec());
-                        let right = Value::Array(v[i..].to_vec());
+                        let left = Value::array_of(v[..i].to_vec());
+                        let right = Value::array_of(v[i..].to_vec());
                         Value::Tuple(vec![left, right])
                     } else {
                         Value::Unit
@@ -6203,7 +6528,8 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "chunks" => {
-                if let Value::Array(ref v) = obj {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
                     let n = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
@@ -6211,8 +6537,8 @@ impl<'a> Interpreter<'a> {
                     if let Value::Int(n) = n {
                         let n = if n > 0 { n as usize } else { 1 };
                         let chunks: Vec<Value> =
-                            v.chunks(n).map(|c| Value::Array(c.to_vec())).collect();
-                        return Value::Array(chunks);
+                            v.chunks(n).map(|c| Value::array_of(c.to_vec())).collect();
+                        return Value::array_of(chunks);
                     }
                 }
                 // Iterator-trait variant — lazy chunks; wraps the
@@ -6246,7 +6572,8 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "windows" => {
-                if let Value::Array(ref v) = obj {
+                if let Value::Array(ref rc) = obj {
+                    let v = rc.read().unwrap();
                     let n = args
                         .first()
                         .map(|a| self.eval_expr_inner(&a.value))
@@ -6255,11 +6582,11 @@ impl<'a> Interpreter<'a> {
                         let n = if n > 0 && (n as usize) <= v.len() {
                             n as usize
                         } else {
-                            return Value::Array(vec![]);
+                            return Value::array_of(vec![]);
                         };
                         let wins: Vec<Value> =
-                            v.windows(n).map(|w| Value::Array(w.to_vec())).collect();
-                        return Value::Array(wins);
+                            v.windows(n).map(|w| Value::array_of(w.to_vec())).collect();
+                        return Value::array_of(wins);
                     }
                 }
                 // Iterator-trait variant — lazy sliding window; each
@@ -6297,11 +6624,12 @@ impl<'a> Interpreter<'a> {
                 }
             }
             "sort" => {
-                if let Value::Array(mut arr) = obj {
-                    arr.sort_by(value_compare);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Array(arr));
-                    }
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    try_write_or_panic(rc, &label).sort_by(value_compare);
                     return Value::Unit;
                 }
             }
@@ -6309,11 +6637,12 @@ impl<'a> Interpreter<'a> {
                 // sort_by(|a, b| ...) — interpreter uses natural value ordering
                 // as a fallback since closure invocation inside a comparator
                 // requires re-entrancy unsupported at this call site.
-                if let Value::Array(mut arr) = obj {
-                    arr.sort_by(value_compare);
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Array(arr));
-                    }
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    try_write_or_panic(rc, &label).sort_by(value_compare);
                     return Value::Unit;
                 }
             }
@@ -6323,9 +6652,10 @@ impl<'a> Interpreter<'a> {
                     chars.sort_unstable();
                     return Value::String(chars.into_iter().collect());
                 }
-                if let Value::Array(mut arr) = obj {
-                    arr.sort_by(value_compare);
-                    return Value::Array(arr);
+                if let Value::Array(ref rc) = obj {
+                    let mut v = rc.read().unwrap().clone();
+                    v.sort_by(value_compare);
+                    return Value::array_of(v);
                 }
             }
             "sorted_by" => {
@@ -6336,17 +6666,19 @@ impl<'a> Interpreter<'a> {
                     chars.sort_unstable();
                     return Value::String(chars.into_iter().collect());
                 }
-                if let Value::Array(mut arr) = obj {
-                    arr.sort_by(value_compare);
-                    return Value::Array(arr);
+                if let Value::Array(ref rc) = obj {
+                    let mut v = rc.read().unwrap().clone();
+                    v.sort_by(value_compare);
+                    return Value::array_of(v);
                 }
             }
             "reverse" => {
-                if let Value::Array(mut arr) = obj {
-                    arr.reverse();
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Array(arr));
-                    }
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    try_write_or_panic(rc, &label).reverse();
                     return Value::Unit;
                 }
             }
@@ -6355,12 +6687,14 @@ impl<'a> Interpreter<'a> {
                     .first()
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Unit);
-                if let Value::Array(mut arr) = obj {
-                    for elem in arr.iter_mut() {
+                if let Value::Array(ref rc) = obj {
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut guard = try_write_or_panic(rc, &label);
+                    for elem in guard.iter_mut() {
                         *elem = fill_val.clone();
-                    }
-                    if let ExprKind::Identifier(name) = &object.kind {
-                        self.env.set(name, Value::Array(arr));
                     }
                     return Value::Unit;
                 }
@@ -6375,14 +6709,16 @@ impl<'a> Interpreter<'a> {
                     .map(|a| self.eval_expr_inner(&a.value))
                     .unwrap_or(Value::Int(0));
                 if let (Value::Int(i_val), Value::Int(j_val)) = (i, j) {
-                    if let Value::Array(mut arr) = obj {
+                    if let Value::Array(ref rc) = obj {
+                        let label = match &object.kind {
+                            ExprKind::Identifier(n) => n.clone(),
+                            _ => "<value>".to_string(),
+                        };
+                        let mut guard = try_write_or_panic(rc, &label);
                         let i = i_val as usize;
                         let j = j_val as usize;
-                        if i < arr.len() && j < arr.len() {
-                            arr.swap(i, j);
-                        }
-                        if let ExprKind::Identifier(name) = &object.kind {
-                            self.env.set(name, Value::Array(arr));
+                        if i < guard.len() && j < guard.len() {
+                            guard.swap(i, j);
                         }
                         return Value::Unit;
                     }
@@ -6442,7 +6778,24 @@ impl<'a> Interpreter<'a> {
                     return Value::Sender(Arc::clone(queue));
                 }
                 match &obj {
-                    Value::Array(a) => return Value::Array(a.clone()),
+                    Value::Array(rc) => {
+                        // Deep copy — clone the inner Vec into a fresh
+                        // shared cell so the clone has independent
+                        // storage. Slice 3: this matches the v1
+                        // value-semantics rule that `arr.clone()`
+                        // produces a structurally independent array.
+                        return Value::array_of(rc.read().unwrap().clone());
+                    }
+                    Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    } => {
+                        return Value::array_of(
+                            storage.read().unwrap()[*start..*start + *len].to_vec(),
+                        );
+                    }
                     Value::String(s) => return Value::String(s.clone()),
                     Value::Map(m) => return Value::Map(m.clone()),
                     Value::Set(s) => return Value::Set(s.clone()),
@@ -6470,17 +6823,17 @@ impl<'a> Interpreter<'a> {
             }
             "keys" => {
                 if let Value::Map(ref m) = obj {
-                    return Value::Array(m.iter().map(|(k, _)| k.clone()).collect());
+                    return Value::array_of(m.iter().map(|(k, _)| k.clone()).collect());
                 }
             }
             "values" => {
                 if let Value::Map(ref m) = obj {
-                    return Value::Array(m.iter().map(|(_, v)| v.clone()).collect());
+                    return Value::array_of(m.iter().map(|(_, v)| v.clone()).collect());
                 }
             }
             "entries" => {
                 if let Value::Map(ref m) = obj {
-                    return Value::Array(
+                    return Value::array_of(
                         m.iter()
                             .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                             .collect(),
@@ -6939,7 +7292,7 @@ impl<'a> Interpreter<'a> {
                                         }
                                     })
                                     .collect();
-                                return Value::Array(matches);
+                                return Value::array_of(matches);
                             }
                         }
                     }
@@ -7302,7 +7655,7 @@ impl<'a> Interpreter<'a> {
                 // conversion for non-UTF-8 argv: `std::env::args` itself
                 // panics in that case, same as Rust's convention.
                 let vals: Vec<Value> = std::env::args().map(Value::String).collect();
-                Value::Array(vals)
+                Value::array_of(vals)
             }
             ("Env", "var") => {
                 // `env.var(name) -> Result[String, VarError]` per design.md
@@ -8324,10 +8677,30 @@ impl<'a> Interpreter<'a> {
     fn set_index(&mut self, object: &Expr, index: &Expr, val: Value) {
         if let ExprKind::Identifier(name) = &object.kind {
             let idx = self.eval_expr_inner(index);
-            if let (Some(Value::Array(arr)), Value::Int(i)) = (self.env.get(name), idx) {
-                let mut arr = arr;
-                arr[i as usize] = val;
-                self.env.set(name, Value::Array(arr));
+            match (self.env.get(name), idx) {
+                (Some(Value::Array(rc)), Value::Int(i)) => {
+                    let mut guard = try_write_or_panic(&rc, name);
+                    let i = i as usize;
+                    if i < guard.len() {
+                        guard[i] = val;
+                    }
+                }
+                (
+                    Some(Value::Slice {
+                        storage,
+                        start,
+                        len,
+                        ..
+                    }),
+                    Value::Int(i),
+                ) => {
+                    let mut guard = try_write_or_panic(&storage, name);
+                    let i = i as usize;
+                    if i < len {
+                        guard[start + i] = val;
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -8877,11 +9250,11 @@ fn url_decode(s: &str) -> Result<String, String> {
 }
 
 fn decode_ok_bytes(bytes: Vec<u8>) -> Value {
-    let arr = bytes.into_iter().map(|b| Value::Int(b as i64)).collect();
+    let arr: Vec<Value> = bytes.into_iter().map(|b| Value::Int(b as i64)).collect();
     Value::EnumVariant {
         enum_name: "Result".to_string(),
         variant: "Ok".to_string(),
-        data: EnumData::Tuple(vec![Value::Array(arr)]),
+        data: EnumData::Tuple(vec![Value::array_of(arr)]),
     }
 }
 
