@@ -10008,3 +10008,151 @@ fn test_labeled_block_multi_break_lub_inference() {
         "fn main() { let x: i64 = lbl: { if true { break lbl 1; } if false { break lbl 2; } 3 }; }",
     );
 }
+
+// ── Method resolution: UFCS-form inherent-vs-trait priority ──
+//
+// Slice 5C of the method-resolution CR (see phase-4-interpreter.md
+// item 5). Mirrors slice 3's receiver-form ambiguity onto the
+// concrete-type UFCS form (`TypeName[…].method(…)`): when ≥2
+// candidates of the same priority tier survive the partition +
+// bounds-discharge filter, emit `AmbiguousAssocFn` (E0233) listing
+// each candidate as `TraitName.method(<concrete params>) -> <ret>`
+// so the user can pick a specific UFCS form to disambiguate.
+// Inherent-beats-trait priority short-circuits the ambiguity check
+// via `find_methods_with_args`'s existing partition.
+
+#[test]
+fn test_ufcs_concrete_type_inherent_beats_trait() {
+    // Both an inherent impl and a trait impl declare `method` on `Foo`.
+    // The inherent-beats-trait priority partition short-circuits
+    // ambiguity — UFCS `Foo.method(...)` resolves cleanly to the
+    // inherent impl's signature.
+    typecheck_ok(
+        "struct Foo[T] { x: i64 }\n\
+         trait A { fn method() -> i64; }\n\
+         impl[T] Foo[T] { fn method() -> i64 { 1 } }\n\
+         impl[T] A for Foo[T] { fn method() -> i64 { 2 } }\n\
+         fn use_foo() -> i64 { Foo[i64].method() }",
+    );
+}
+
+#[test]
+fn test_ufcs_concrete_type_two_traits_no_inherent_ambiguity() {
+    // Two trait impls of `Foo[T]` each declare `method` and no
+    // inherent impl exists, so both trait candidates survive the
+    // priority filter. UFCS `Foo[i64].method()` is ambiguous and
+    // must fire AmbiguousAssocFn (E0233) listing both candidates
+    // with UFCS hints.
+    let errors = typecheck_errors(
+        "struct Foo[T] { x: i64 }\n\
+         trait A { fn method() -> i64; }\n\
+         trait B { fn method() -> i64; }\n\
+         impl[T] A for Foo[T] { fn method() -> i64 { 1 } }\n\
+         impl[T] B for Foo[T] { fn method() -> i64 { 2 } }\n\
+         fn use_foo() -> i64 { Foo[i64].method() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::AmbiguousAssocFn)),
+        "expected AmbiguousAssocFn for two-trait-impl UFCS ambiguity, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    let amb = errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::AmbiguousAssocFn))
+        .unwrap();
+    assert!(
+        amb.message.contains("`A.method("),
+        "diagnostic missing trait `A` UFCS hint: {}",
+        amb.message
+    );
+    assert!(
+        amb.message.contains("`B.method("),
+        "diagnostic missing trait `B` UFCS hint: {}",
+        amb.message
+    );
+}
+
+#[test]
+fn test_ufcs_concrete_type_disambiguates_via_explicit_trait() {
+    // Same setup as the ambiguity case, but now disambiguate at the
+    // call site by writing the UFCS form on the trait directly:
+    // `A.method(...)` resolves cleanly through the trait-prefixed
+    // dispatch path, sidestepping the receiver-name ambiguity.
+    typecheck_ok(
+        "struct Foo[T] { x: i64 }\n\
+         trait A { fn method() -> i64; }\n\
+         trait B { fn method() -> i64; }\n\
+         impl[T] A for Foo[T] { fn method() -> i64 { 1 } }\n\
+         impl[T] B for Foo[T] { fn method() -> i64 { 2 } }\n\
+         fn use_foo() -> i64 { A.method() }",
+    );
+}
+
+#[test]
+fn test_ufcs_concrete_type_partition_with_conditional_impls() {
+    // Two trait impls declare `method` on `Foo[T]`, but one is gated
+    // on `T: Ord`. At the UFCS call site `Foo[NotOrd].method()`,
+    // bounds discharge filters out the `T: Ord` impl, leaving exactly
+    // one candidate — no ambiguity, dispatches normally. Verifies
+    // bounds-discharge runs before the partition.
+    typecheck_ok(
+        "struct NotOrd { x: i64 }\n\
+         struct Foo[T] { x: i64 }\n\
+         trait A { fn method() -> i64; }\n\
+         trait B { fn method() -> i64; }\n\
+         impl[T: Ord] A for Foo[T] { fn method() -> i64 { 1 } }\n\
+         impl[T] B for Foo[T] { fn method() -> i64 { 2 } }\n\
+         fn use_foo() -> i64 { Foo[NotOrd].method() }",
+    );
+}
+
+#[test]
+fn test_ufcs_concrete_type_no_method_diagnostic() {
+    // Calling an unknown method via UFCS on a known type emits
+    // NoMethodFound — regression gate that the new ambiguity
+    // branch did not displace the no-candidates path.
+    let errors = typecheck_errors(
+        "struct Foo[T] { x: i64 }\n\
+         impl[T] Foo[T] { fn method() -> i64 { 1 } }\n\
+         fn use_foo() -> i64 { Foo[i64].unknown_method() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NoMethodFound)),
+        "expected NoMethodFound for unknown UFCS method, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_ufcs_typeparam_form_unchanged() {
+    // Regression gate: 5A's TypeParam UFCS path
+    // (`try_dispatch_typeparam_assoc_fn`) continues to emit
+    // AmbiguousAssocFn for multi-bound collisions, unchanged by
+    // the 5C work on the concrete-type form. Mirrors the existing
+    // `test_typeparam_assoc_fn_ambiguous_traits` shape.
+    let errors = typecheck_errors(
+        "trait A { fn m() -> Self; }\n\
+         trait B { fn m() -> Self; }\n\
+         fn make[T: A + B]() -> T { T.m() }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::AmbiguousAssocFn)),
+        "expected AmbiguousAssocFn for TypeParam UFCS multi-bound, got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}

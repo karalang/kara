@@ -9465,6 +9465,80 @@ impl<'a> TypeChecker<'a> {
                     .into_iter()
                     .map(|(imp, sig)| (imp.clone(), sig.clone()))
                     .collect();
+                // Slice 5C of the method-resolution CR — see
+                // `phase-4-interpreter.md` § method-resolution sub-item 5C.
+                // `find_methods_with_args` already applies the inherent-
+                // beats-trait priority partition + bounds-discharge filter
+                // (slices 1 + 3); a length-≥2 result here means multiple
+                // candidates of the same priority tier survived. The
+                // user must pick a specific UFCS form (`TraitName.method(...)`)
+                // to disambiguate. Mirrors slice 3's receiver-form
+                // `AmbiguousMethod` (E0239) but uses `AmbiguousAssocFn`
+                // (E0233) to match slice 3.5 and slice 5A's framing —
+                // type-prefixed dispatch is the natural disambiguation
+                // form for UFCS.
+                if candidates.len() > 1 {
+                    let receiver_display = if target_args.is_empty() {
+                        type_name.clone()
+                    } else {
+                        format!(
+                            "{}[{}]",
+                            type_name,
+                            target_args
+                                .iter()
+                                .map(type_display)
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        )
+                    };
+                    let candidate_lines: Vec<String> = candidates
+                        .iter()
+                        .map(|(imp, sig)| {
+                            let dispatcher = imp
+                                .trait_name
+                                .clone()
+                                .unwrap_or_else(|| imp.target_type.clone());
+                            let subs: HashMap<String, Type> = imp
+                                .generic_params
+                                .as_ref()
+                                .map(|gp| {
+                                    gp.params
+                                        .iter()
+                                        .zip(target_args.iter())
+                                        .map(|(p, t)| (p.name.clone(), t.clone()))
+                                        .collect()
+                                })
+                                .unwrap_or_default();
+                            let params_display = sig
+                                .params
+                                .iter()
+                                .map(|p| type_display(&substitute_type_params(p, &subs)))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            let return_display =
+                                type_display(&substitute_type_params(&sig.return_type, &subs));
+                            format!(
+                                "    `{}.{}({})` -> {}",
+                                dispatcher, method, params_display, return_display,
+                            )
+                        })
+                        .collect();
+                    self.type_error(
+                        format!(
+                            "ambiguous method '{}' on `{}`: \
+                             multiple candidates apply. Use UFCS to disambiguate:\n{}",
+                            method,
+                            receiver_display,
+                            candidate_lines.join("\n"),
+                        ),
+                        span.clone(),
+                        TypeErrorKind::AmbiguousAssocFn,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                    return Type::Error;
+                }
                 if let Some((imp, sig)) = candidates.first() {
                     let subs: HashMap<String, Type> = imp
                         .generic_params
