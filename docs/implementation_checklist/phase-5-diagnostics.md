@@ -217,7 +217,7 @@
 
   **Out of scope, still open.** (a) Non-i64 result-slot type (deferred to the symmetric `compile_loop` / `compile_labeled_block` lift described above). (b) `loop` LUB inference (design.md line 2564–2568) — labeled blocks ship the LUB collector at the typechecker; the codegen-side `compile_loop` slot remains i64-only until loop-LUB inference flips the typechecker's `Loop` arm. (c) `break expr` rejection inside `while` / `for` loops (design.md line 2562) — diagnostic-only, piggybacks on loop-LUB enforcement, not this slice. (d) Cross-construct break from a `for` loop inside a labeled block — the optional sixth test was scoped out; the shared frame stack already handles mixed loop+block frames per LBC1's design (the existing four codegen tests exercise the rev-walk against both labeled-loop and labeled-block frames).
 
-  Closing: the slice landed in commit `26485ec` on 2026-05-09.
+  Closing: the slice landed in commit `f1eed0f` on 2026-05-09.
 
 - [x] **Named/labeled function arguments.** Extend parser to accept `name: expr` at call sites. Labels must follow declaration order. Partial labeling allowed (any suffix). Receiver (`self`) cannot be labeled. Labels are documentation — never required.
 
