@@ -6119,6 +6119,222 @@ fn main() {
         let _ = std::fs::remove_file(obj_path);
     }
 
+    /// Slice A (Phase-7 — Par codegen: return values, 2026-05-09) E2E
+    /// correctness + wall-clock sanity. Four CPU-bound reads on disjoint
+    /// resources, each returning a typed `i64`. Slice 2 would have
+    /// dropped the parallel group via the
+    /// `group_defines_binding_used_outside` gate (each read names its
+    /// result for the join site); slice A lifts the gate and the four
+    /// branches now fan out through `karac_par_run`. Asserts:
+    ///   - **Correctness:** the joined output equals the deterministic
+    ///     sum the four kernels computed (4 × triangular `0..N` sums
+    ///     plus a tag).
+    ///   - **Wall-clock concurrency:** total runtime is meaningfully
+    ///     below 4× the per-branch kernel cost, demonstrating that the
+    ///     branches actually executed in parallel rather than serialized
+    ///     through the slot mechanism. The threshold is conservative
+    ///     (3.0× of a per-branch budget) to absorb the runtime's spawn
+    ///     overhead and CI noise; the auto-par dispatch should be
+    ///     comfortably under 2× on any modern multi-core host.
+    ///
+    /// Skips when the runtime archive is missing — same legitimate
+    /// soft-skip as the rest of the codegen E2E suite.
+    #[test]
+    fn test_auto_par_with_returns_runs_concurrently_and_joins_correctly() {
+        use karac::codegen::{compile_to_object_with_options, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        use std::time::Instant;
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        // Each `read_*` runs an `N`-iteration triangular-sum kernel; N
+        // is tuned to be heavy enough that 4× sequential work is
+        // measurable (~hundreds of ms) but light enough that CI noise
+        // doesn't dominate. The expected total is
+        // `4 * (N * (N - 1) / 2) + (1 + 2 + 3 + 4)`.
+        const N: i64 = 8_000_000;
+        let expected_sum: i64 = 4 * (N * (N - 1) / 2) + 10;
+
+        let src = format!(
+            r#"
+effect resource Net;
+effect resource Disk;
+effect resource Db;
+effect resource Cache;
+
+fn busy_sum(n: i64) -> i64 {{
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {{
+        sum = sum + i;
+        i = i + 1;
+    }}
+    sum
+}}
+
+fn read_net() -> i64 reads(Net) {{ busy_sum({n}) + 1 }}
+fn read_disk() -> i64 reads(Disk) {{ busy_sum({n}) + 2 }}
+fn read_db() -> i64 reads(Db) {{ busy_sum({n}) + 3 }}
+fn read_cache() -> i64 reads(Cache) {{ busy_sum({n}) + 4 }}
+
+fn combine(a: i64, b: i64, c: i64, d: i64) -> i64 {{
+    a + b + c + d
+}}
+
+fn main() {{
+    let result_1 = read_net();
+    let result_2 = read_disk();
+    let result_3 = read_db();
+    let result_4 = read_cache();
+    println(combine(result_1, result_2, result_3, result_4));
+}}
+"#,
+            n = N
+        );
+
+        let mut parsed = karac::parse(&src);
+        if !parsed.errors.is_empty() {
+            panic!("parse errors: {:?}", parsed.errors);
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_par_returns_e2e_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_par_returns_e2e_{}_{}", std::process::id(), id);
+
+        if let Err(e) = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        ) {
+            panic!("codegen failed for slice-A E2E: {e}");
+        }
+        // Link / exec failures stay soft-skip — runtime archive may be
+        // missing on some CI hosts (matches `tests/par_codegen.rs`'s
+        // E2E pattern).
+        let Ok(()) = link_executable(&obj_path, &exe_path) else {
+            eprintln!("[slice-A E2E] link failed; skipping (runtime archive missing?)");
+            let _ = std::fs::remove_file(&obj_path);
+            return;
+        };
+
+        // Calibrate per-branch cost by running `busy_sum(N)` once
+        // sequentially in a separate single-branch program. Cheaper
+        // than threading sequential mode into the same binary; gives
+        // us a host-specific budget for the wall-clock assertion.
+        let cal_src = format!(
+            r#"
+fn busy_sum(n: i64) -> i64 {{
+    let mut sum: i64 = 0;
+    let mut i: i64 = 0;
+    while i < n {{
+        sum = sum + i;
+        i = i + 1;
+    }}
+    sum
+}}
+
+fn main() {{
+    println(busy_sum({n}));
+}}
+"#,
+            n = N
+        );
+        let mut cal_parsed = karac::parse(&cal_src);
+        if !cal_parsed.errors.is_empty() {
+            panic!("calibration parse errors: {:?}", cal_parsed.errors);
+        }
+        let cal_resolved = karac::resolve(&cal_parsed.program);
+        let cal_typed = karac::typecheck(&cal_parsed.program, &cal_resolved);
+        karac::lower(&mut cal_parsed.program, &cal_typed);
+        let cal_obj = format!("/tmp/karac_par_returns_cal_{}_{}.o", std::process::id(), id);
+        let cal_exe = format!("/tmp/karac_par_returns_cal_{}_{}", std::process::id(), id);
+        if compile_to_object_with_options(&cal_parsed.program, &cal_obj, None, None, None, None)
+            .is_err()
+        {
+            eprintln!("[slice-A E2E] calibration codegen failed; skipping wall-clock assertion");
+            let _ = std::fs::remove_file(&obj_path);
+            let _ = std::fs::remove_file(&exe_path);
+            return;
+        }
+        let Ok(()) = link_executable(&cal_obj, &cal_exe) else {
+            eprintln!("[slice-A E2E] calibration link failed; skipping wall-clock assertion");
+            let _ = std::fs::remove_file(&obj_path);
+            let _ = std::fs::remove_file(&exe_path);
+            let _ = std::fs::remove_file(&cal_obj);
+            return;
+        };
+        let cal_t0 = Instant::now();
+        let _ = std::process::Command::new(&cal_exe).output();
+        let per_branch = cal_t0.elapsed();
+
+        // Run the parallel binary, measure wall-clock, capture stdout.
+        let par_t0 = Instant::now();
+        let par_out = match std::process::Command::new(&exe_path).output() {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("[slice-A E2E] failed to exec parallel binary: {e}");
+                let _ = std::fs::remove_file(&obj_path);
+                let _ = std::fs::remove_file(&exe_path);
+                let _ = std::fs::remove_file(&cal_obj);
+                let _ = std::fs::remove_file(&cal_exe);
+                return;
+            }
+        };
+        let par_elapsed = par_t0.elapsed();
+        let stdout = String::from_utf8_lossy(&par_out.stdout).to_string();
+
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+        let _ = std::fs::remove_file(&cal_obj);
+        let _ = std::fs::remove_file(&cal_exe);
+
+        // Correctness: the printed sum matches the precomputed total.
+        let printed: i64 = stdout
+            .trim()
+            .parse()
+            .unwrap_or_else(|e| panic!("[slice-A E2E] non-integer stdout {stdout:?}: {e}"));
+        assert_eq!(
+            printed, expected_sum,
+            "[slice-A E2E] joined value mismatch: got {printed}, expected {expected_sum}; \
+             the slot loads or `combine` argument flow is wrong"
+        );
+
+        // Wall-clock concurrency: parallel total < 3.0 × per-branch
+        // budget. The sequential lower bound is 4.0× per-branch; the
+        // 3.0× threshold gives a generous margin while still rejecting
+        // a serialized lowering. Print observed values to stderr so
+        // a developer reading test output can see the actual ratio
+        // (matches the parallax-lite microbenchmark's stderr-note
+        // pattern).
+        let par_secs = par_elapsed.as_secs_f64();
+        let cal_secs = per_branch.as_secs_f64();
+        eprintln!(
+            "[slice-A E2E] per-branch cal {:.3}s; parallel {:.3}s; ratio {:.2}× (4× sequential bound)",
+            cal_secs,
+            par_secs,
+            par_secs / cal_secs.max(1e-6)
+        );
+        // Ratio test only when the calibration is large enough that
+        // the comparison is meaningful; on extremely fast hosts where
+        // the kernel completes in < 50ms, signal-to-noise is too low
+        // to assert against (same pragmatism as the parallax-lite
+        // ratio guards).
+        if cal_secs > 0.05 {
+            assert!(
+                par_secs < 3.0 * cal_secs,
+                "[slice-A E2E] parallel runtime {par_secs:.3}s ≥ 3× per-branch {cal_secs:.3}s — \
+                 lowering looks serial (slot mechanism may be forcing sequential dispatch)"
+            );
+        }
+    }
+
     /// Slice 2 pin: replays the same pipeline shape that `cmd_build` uses
     /// (resolve → typecheck → lower → effectcheck → ownershipcheck →
     /// concurrencycheck) and asserts that `concurrency_analyze` produces

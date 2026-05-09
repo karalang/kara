@@ -387,6 +387,40 @@ enum CleanupAction<'ctx> {
     },
 }
 
+/// One let-binding hoisted out of an auto-par group via the slice-A return-
+/// slot mechanism (Phase-7 Slice A — Par codegen: return values).
+///
+/// A class-(ii) binding is one defined inside a parallel group's branch but
+/// read by stmts *outside* the group (or by the function-body's final
+/// expression). Each such binding gets a dedicated field in a per-group
+/// return struct (`__karac_ParGroup_<spawn_site_id>_Returns`). The branch
+/// fn computes the value into a local alloca (the existing `compile_stmt`
+/// path), then the slot-write emitter copies the loaded value into the
+/// return-struct field. After `karac_par_run` joins, the parent loads each
+/// slot back and binds it as a new variable in the surrounding function-
+/// body scope so subsequent stmts see the value as if it were a normal
+/// let.
+///
+/// Slot semantics are move-only: branch writes once, parent reads once,
+/// no destructor on the slot itself (the existing branch-fn cleanup
+/// discard — `scope_cleanup_actions` is reset on entry and dropped on
+/// exit — already strands the branch's local destructors, so the slot
+/// store is effectively a bitcopy and the parent's subsequent
+/// `track_*` on the loaded value is the unique cleanup owner).
+#[derive(Clone)]
+struct ReturnSlot<'ctx> {
+    /// Source-level binding name produced inside the branch.
+    binding_name: String,
+    /// Position of the statement in the group's branch order — also the
+    /// branch index passed to `emit_par_branch_fn`. Slot-writes inside
+    /// the branch are gated on this index.
+    branch_index: usize,
+    /// LLVM scalar/aggregate type for this slot's field. Matches what
+    /// the branch's `compile_stmt` produces for the let-binding's value
+    /// (derived from explicit annotation or call-target return type).
+    llvm_ty: BasicTypeEnum<'ctx>,
+}
+
 /// Per-element predicate driving `emit_set_op_iter` (`Set.union` /
 /// `intersection` / `difference` codegen). `Always` means insert every
 /// element; the other two consult `karac_map_contains` against the named
@@ -3988,14 +4022,20 @@ impl<'ctx> Codegen<'ctx> {
         // sequentially as if no group existed. Groups containing an
         // explicit `par {}` stmt are also skipped (hard-stop trigger 2
         // mitigation: don't re-parallelize an already-parallel block).
-        // Groups that define a binding consumed *outside* the group are
-        // also skipped: the existing `karac_par_run` lowering captures
-        // bindings *into* branch fns but does not propagate let-bindings
-        // *out*, so a let inside a group is invisible to later stmts in
-        // the function body. Capturing-back is out of scope for slice 2
-        // (the explicit-par lowering has the same limitation today; see
-        // the "Out of scope" entries on `compile_par_block`).
-        let mut group_starts: HashMap<usize, &ParallelGroup> = HashMap::new();
+        //
+        // Slice A (Phase-7 — Par codegen: return values, 2026-05-09):
+        // groups that define a binding consumed *outside* the group are
+        // no longer dropped; instead `compute_return_slots` materializes
+        // a per-group `Vec<ReturnSlot>` and `emit_par_run` synthesizes a
+        // parent-allocated return struct that branches write into and
+        // the parent reads back after `karac_par_run` joins. Empty-slot
+        // groups (the parallax-lite shape — three `writes(R_i)` with no
+        // captured binding read outside) preserve the slice-2 behavior
+        // exactly: empty `Vec<ReturnSlot>` flows through the same path
+        // and emits byte-equivalent IR (modulo the spawn-site IDs
+        // already minted per group).
+        let mut group_starts: HashMap<usize, (&ParallelGroup, Vec<ReturnSlot<'ctx>>)> =
+            HashMap::new();
         let mut covered: HashSet<usize> = HashSet::new();
         for group in &decision.parallel_groups {
             if group.is_trivial {
@@ -4008,13 +4048,11 @@ impl<'ctx> Codegen<'ctx> {
             {
                 continue;
             }
-            if self.group_defines_binding_used_outside(group, body) {
-                continue;
-            }
             let Some(&min_idx) = group.statement_indices.iter().min() else {
                 continue;
             };
-            group_starts.insert(min_idx, group);
+            let slots = self.compute_return_slots(group, body);
+            group_starts.insert(min_idx, (group, slots));
             for &i in &group.statement_indices {
                 covered.insert(i);
             }
@@ -4022,7 +4060,7 @@ impl<'ctx> Codegen<'ctx> {
 
         let mut i = 0;
         while i < n {
-            if let Some(group) = group_starts.get(&i) {
+            if let Some((group, return_slots)) = group_starts.get(&i).cloned() {
                 let group_stmts: Vec<Stmt> = group
                     .statement_indices
                     .iter()
@@ -4035,7 +4073,62 @@ impl<'ctx> Codegen<'ctx> {
                 // inferred `par_run` — rather than the whole function-
                 // body span (slice 2's MVP).
                 let group_span = body.stmts[group.statement_indices[0]].span.clone();
-                self.emit_par_run(&group_stmts, &group_span)?;
+                let slot_values = self.emit_par_run(&group_stmts, &group_span, &return_slots)?;
+                // Slice A (sub-step g): bind each loaded slot value as a
+                // fresh let-binding in the surrounding function-body
+                // scope so subsequent stmts referencing the slot's
+                // binding-name resolve through the parent's variables
+                // table just like any other in-scope local. For owned
+                // heap-bearing slot types (Vec / String — same {ptr,
+                // len, cap} layout) we register the parent alloca for
+                // scope-exit `track_vec_var` cleanup so the moved-in
+                // buffer is freed exactly once at the end of the
+                // surrounding function body. The branch's
+                // `scope_cleanup_actions` are discarded on
+                // `emit_par_branch_fn` exit, so the branch alloca is
+                // a stranded view of the same bytes — no double-free
+                // risk (decision iii: move-only slot semantics with
+                // the parent as unique owner).
+                if let Some(parent_fn) = self.current_fn {
+                    let vec_st: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
+                    for slot in &return_slots {
+                        if let Some(loaded) = slot_values.get(&slot.binding_name) {
+                            let alloca = self.create_entry_alloca(
+                                parent_fn,
+                                &slot.binding_name,
+                                slot.llvm_ty,
+                            );
+                            self.builder.build_store(alloca, *loaded).unwrap();
+                            self.variables.insert(
+                                slot.binding_name.clone(),
+                                VarSlot {
+                                    ptr: alloca,
+                                    ty: slot.llvm_ty,
+                                },
+                            );
+                            if slot.llvm_ty == vec_st {
+                                // Vec/String slot — register a placeholder
+                                // i64 element type (matches the
+                                // `is_runtime_introspection_call` shape
+                                // already in compile_stmt) and queue the
+                                // scope-exit free. Codegen-side method
+                                // dispatch on the slot binding (`.len()`,
+                                // `.is_empty()`) ignores the element
+                                // type; first-class-T-aware ops
+                                // (`.push(...)`, indexing) require an
+                                // explicit annotation on the
+                                // outside-of-group binding (out of
+                                // scope for slice A — the demo path
+                                // does not push into slot Vecs).
+                                self.vec_elem_types.insert(
+                                    slot.binding_name.clone(),
+                                    self.context.i64_type().into(),
+                                );
+                                self.track_vec_var(alloca);
+                            }
+                        }
+                    }
+                }
                 let max_idx = group.statement_indices.iter().copied().max().unwrap_or(i);
                 i = max_idx + 1;
             } else if covered.contains(&i) {
@@ -4072,39 +4165,72 @@ impl<'ctx> Codegen<'ctx> {
         matches!(&stmt.kind, StmtKind::Expr(e) if matches!(&e.kind, ExprKind::Par(_)))
     }
 
-    /// True iff any binding defined by a stmt in `group` is read by a
-    /// stmt outside the group (or by `body.final_expr`). The existing
-    /// `karac_par_run` lowering captures variables *into* branch fns
-    /// but does not propagate let-bindings *out*, so a let inside an
-    /// auto-par group would be invisible to later stmts in the function
-    /// body. This guard is conservative — slice 2 deliberately leaves
-    /// capture-back as out-of-scope; it matches the same limitation
-    /// the explicit `par {}` codegen has today.
-    fn group_defines_binding_used_outside(&self, group: &ParallelGroup, body: &Block) -> bool {
-        // 1. Collect names defined by stmts in this group.
-        let in_group: HashSet<usize> = group.statement_indices.iter().copied().collect();
-        let mut defined: HashSet<String> = HashSet::new();
-        for &idx in &in_group {
-            if idx >= body.stmts.len() {
+    /// Compute the per-group set of class-(ii) bindings — let-bindings
+    /// defined inside the group's branches and read by stmts outside the
+    /// group (or by `body.final_expr`). Slice A (Phase-7 — Par codegen:
+    /// return values) replaces slice 2's drop-the-group gate with this
+    /// function: each returned slot becomes a field in the synthesized
+    /// `__karac_ParGroup_<id>_Returns` struct, the matching branch fn
+    /// writes the alloca's value into the slot, and the parent reads it
+    /// back after `karac_par_run` joins.
+    ///
+    /// The slot's `branch_index` is the position-within-group of the
+    /// stmt (sorted by `statement_indices`), matching the index passed
+    /// to `emit_par_branch_fn` so the slot-write emitter can dispatch
+    /// per branch. Empty-result groups (the parallax-lite shape — three
+    /// `writes(R_i)` with no binding read outside) return an empty Vec;
+    /// `emit_par_run` then takes the same path with no slot machinery
+    /// and emits byte-equivalent IR to slice 2.
+    ///
+    /// Bindings whose LLVM type can't be inferred (no annotation, no
+    /// resolvable callee return type) are conservatively dropped from
+    /// the slot list — those let-bindings will not be visible outside
+    /// the group, but the rest of the group still parallelizes. In
+    /// practice this only fires for closure / dynamic-dispatch RHSes
+    /// that don't appear in the auto-par-eligible set.
+    fn compute_return_slots(&self, group: &ParallelGroup, body: &Block) -> Vec<ReturnSlot<'ctx>> {
+        // 1. Collect names defined by stmts in this group, mapped to
+        //    their branch_index (position in statement_indices when
+        //    sorted). The branch fn order in `emit_par_run` follows the
+        //    same sort: `group_stmts` is built by iterating
+        //    `statement_indices` in their stored order. We sort here to
+        //    keep slot layout deterministic regardless of analyzer
+        //    iteration order.
+        let mut sorted_indices = group.statement_indices.clone();
+        sorted_indices.sort_unstable();
+        let in_group: HashSet<usize> = sorted_indices.iter().copied().collect();
+
+        // Per-binding metadata: which branch defines it, and what's the
+        // statement reference for type inference.
+        let mut defined: HashMap<String, (usize, &Stmt)> = HashMap::new();
+        for (branch_idx, &stmt_idx) in sorted_indices.iter().enumerate() {
+            if stmt_idx >= body.stmts.len() {
                 continue;
             }
-            match &body.stmts[idx].kind {
+            let stmt = &body.stmts[stmt_idx];
+            match &stmt.kind {
                 StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
-                    for name in pattern.binding_names() {
-                        defined.insert(name);
+                    if let PatternKind::Binding(name) = &pattern.kind {
+                        defined.insert(name.clone(), (branch_idx, stmt));
                     }
                 }
-                StmtKind::LetUninit { name, .. } => {
-                    defined.insert(name.clone());
+                StmtKind::LetUninit { name: _, .. } => {
+                    // LetUninit has no immediate value; tracked only as a
+                    // "name defined" — the slot value is whatever later
+                    // assignment writes. Slice A doesn't lift this case
+                    // (would require slot writes from arbitrary assigns).
                 }
                 _ => {}
             }
         }
         if defined.is_empty() {
-            return false;
+            return Vec::new();
         }
 
-        // 2. Walk every other stmt + final_expr collecting reads.
+        // 2. Walk every stmt outside the group + final_expr collecting
+        //    reads. Names actually consumed outside become slots; names
+        //    only used inside the group remain class-(i) — branch-local
+        //    allocas with no slot.
         let mut refs: HashSet<String> = HashSet::new();
         let mut defs: HashSet<String> = HashSet::new();
         for (idx, stmt) in body.stmts.iter().enumerate() {
@@ -4134,7 +4260,60 @@ impl<'ctx> Codegen<'ctx> {
             self.refs_in_expr(e, &mut refs, &mut defs);
         }
 
-        defined.iter().any(|n| refs.contains(n))
+        // 3. For each defined name read outside, infer the LLVM type.
+        //    Sort by binding_name within each branch for deterministic
+        //    slot layout.
+        let mut slots: Vec<ReturnSlot<'ctx>> = Vec::new();
+        let mut names_with_branch: Vec<(usize, String, &Stmt)> = defined
+            .into_iter()
+            .filter(|(name, _)| refs.contains(name))
+            .map(|(name, (branch_idx, stmt))| (branch_idx, name, stmt))
+            .collect();
+        names_with_branch.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+        for (branch_idx, name, stmt) in names_with_branch {
+            if let Some(llvm_ty) = self.infer_let_binding_llvm_type(stmt) {
+                slots.push(ReturnSlot {
+                    binding_name: name,
+                    branch_index: branch_idx,
+                    llvm_ty,
+                });
+            }
+        }
+        slots
+    }
+
+    /// Infer the LLVM type produced by a let-statement's RHS. Used by
+    /// `compute_return_slots` to size each return-struct field before
+    /// the branch fn is emitted. Tries (in order): explicit type
+    /// annotation on the let, declared return type of a free-function
+    /// call. Returns `None` for shapes the slot mechanism doesn't
+    /// support (closures, untyped lets without annotations, generic
+    /// monomorphized bodies that haven't been declared yet) — the
+    /// caller drops the binding from the slot list, leaving it as a
+    /// branch-local class-(i) binding instead.
+    fn infer_let_binding_llvm_type(&self, stmt: &Stmt) -> Option<BasicTypeEnum<'ctx>> {
+        let (ty_ann, value): (Option<&TypeExpr>, &Expr) = match &stmt.kind {
+            StmtKind::Let { ty, value, .. } | StmtKind::LetElse { ty, value, .. } => {
+                (ty.as_ref(), value)
+            }
+            _ => return None,
+        };
+        if let Some(te) = ty_ann {
+            return Some(self.llvm_type_for_type_expr(te));
+        }
+        // Fallback: free-function call — read the declared return type
+        // from the LLVM function declaration the parser/declare-pass
+        // already minted.
+        if let ExprKind::Call { callee, .. } = &value.kind {
+            if let ExprKind::Identifier(name) = &callee.kind {
+                if let Some(fn_val) = self.module.get_function(name) {
+                    if let Some(ret) = fn_val.get_type().get_return_type() {
+                        return Some(ret);
+                    }
+                }
+            }
+        }
+        None
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
@@ -13558,7 +13737,15 @@ impl<'ctx> Codegen<'ctx> {
     /// alongside the work-stealing scheduler.
     #[allow(clippy::result_large_err)]
     fn compile_par_block(&mut self, block: &Block) -> Result<BasicValueEnum<'ctx>, String> {
-        self.emit_par_run(&block.stmts, &block.span)
+        // Slice A: explicit `par {}` blocks pass an empty slot list — the
+        // par-block-as-expression doesn't have outer let-bindings to feed,
+        // so the slot mechanism is dormant on this path. The auto-par
+        // dispatch site in `compile_function_body` is the only call site
+        // that supplies a non-empty slot list today. Lifting this for
+        // `let x = par { ... }` is a v1.x extension noted in the slice-A
+        // out-of-scope list.
+        self.emit_par_run(&block.stmts, &block.span, &[])?;
+        Ok(self.context.i64_type().const_int(0, false).into())
     }
 
     /// Lower a list of statements to a `karac_par_run` runtime dispatch.
@@ -13571,22 +13758,53 @@ impl<'ctx> Codegen<'ctx> {
     /// inferred path it is best-effort the function-body span (per-stmt
     /// span resolution is slice 3's concern). Trivial fan-outs (zero or
     /// one statement) compile sequentially without invoking the runtime.
+    ///
+    /// **Slice A (Phase-7 — Par codegen: return values, 2026-05-09):**
+    /// `return_slots` carries the per-group set of let-bindings whose
+    /// values must flow out of the parallel group to subsequent stmts in
+    /// the surrounding function body. For each non-empty slot list, this
+    /// function: (1) synthesizes a parent-allocated return struct
+    /// `__karac_ParGroup_<spawn_site_id>_Returns` with one field per
+    /// slot in slot-order; (2) passes its pointer through the env-struct
+    /// as a trailing field so each branch can write to it; (3) the
+    /// branch fn writes its produced value(s) into the assigned
+    /// field(s) right after the let-binding's local alloca is filled,
+    /// before the branch returns; (4) after `karac_par_run` joins, the
+    /// parent loads each slot back into a `HashMap<String,
+    /// BasicValueEnum>` keyed by binding-name. The caller (the auto-par
+    /// dispatch site in `compile_function_body`) consumes the map to
+    /// bind each loaded value as a fresh local in the function-body
+    /// scope. Empty `return_slots` reduces to slice 2's behavior:
+    /// no return-struct alloca, no slot field on the env-struct, no
+    /// loads after the runtime call.
     #[allow(clippy::result_large_err)]
     fn emit_par_run(
         &mut self,
         stmts: &[Stmt],
         span: &Span,
-    ) -> Result<BasicValueEnum<'ctx>, String> {
-        let unit = self.context.i64_type().const_int(0, false).into();
-
+        return_slots: &[ReturnSlot<'ctx>],
+    ) -> Result<HashMap<String, BasicValueEnum<'ctx>>, String> {
         // Zero statements: nothing to do. Single statement: no parallelism
         // needed — compile in place to avoid the runtime call overhead.
+        // The slot map is populated by reading each slot's binding from
+        // `self.variables` after `compile_stmt` runs, so the caller's
+        // outside-of-group reads still resolve.
         if stmts.is_empty() {
-            return Ok(unit);
+            return Ok(HashMap::new());
         }
         if stmts.len() == 1 {
             self.compile_stmt(&stmts[0])?;
-            return Ok(unit);
+            let mut map: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
+            for slot in return_slots {
+                if let Some(local) = self.variables.get(&slot.binding_name).copied() {
+                    let v = self
+                        .builder
+                        .build_load(local.ty, local.ptr, &slot.binding_name)
+                        .unwrap();
+                    map.insert(slot.binding_name.clone(), v);
+                }
+            }
+            return Ok(map);
         }
 
         // 1. Collect the union of captured variables across all branch statements.
@@ -13610,16 +13828,22 @@ impl<'ctx> Codegen<'ctx> {
         captures.sort(); // deterministic order
 
         // 2. Build the shared env struct. Captured user locals fill the
-        //    leading slots; the trailing slot is always a `*const
-        //    ProviderFrame` snapshot of the calling thread's stack head
-        //    (Theme 6 sub-step 5 — provider inheritance). Each branch
-        //    fn re-seeds its TLS from this slot at prologue time so
-        //    `with_provider[R]` bindings established outside the par
-        //    block stay visible to spawned workers.
+        //    leading slots; the next slot (added in slice 4) is the
+        //    `*const ProviderFrame` snapshot of the calling thread's
+        //    stack head (Theme 6 sub-step 5 — provider inheritance).
+        //    The final slot (added in slice A) is a `*mut
+        //    ParGroupReturns` pointing at the parent-allocated return
+        //    struct — branches dereference and write through it. The
+        //    env-struct grows by one pointer field whether the slot
+        //    list is empty or not (ABI uniformity — keeps the env-
+        //    struct shape predictable per spawn-site for downstream
+        //    debugger introspection).
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let mut env_field_types: Vec<BasicTypeEnum<'ctx>> =
             captures.iter().map(|n| self.variables[n].ty).collect();
         let provider_head_idx = env_field_types.len();
+        env_field_types.push(ptr_ty.into());
+        let par_returns_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
@@ -13661,21 +13885,61 @@ impl<'ctx> Codegen<'ctx> {
             )
             .unwrap()
             .into_struct_value();
+
+        // Slice A: mint the per-group return-struct type and alloca it
+        // in the parent frame. We use the spawn-site ID (recorded just
+        // below by `record_spawn_site`) as the type-name disambiguator.
+        // To know the ID before recording, we mint it here and pass it
+        // through. The struct lives module-scope as a named LLVM struct
+        // so re-emission collisions are caught by inkwell. Empty slot
+        // list → no struct, no alloca, the env-struct's
+        // `__par_returns` field is a null `ptr` (never dereferenced
+        // because the branch's slot-write path is dead code without
+        // slots).
+        let par_id = self.record_spawn_site(span, Some(stmts.len() as u32));
+        let return_struct_ty: Option<StructType<'ctx>> = if return_slots.is_empty() {
+            None
+        } else {
+            let name = format!("__karac_ParGroup_{par_id}_Returns");
+            let st = self.context.opaque_struct_type(&name);
+            let field_tys: Vec<BasicTypeEnum<'ctx>> =
+                return_slots.iter().map(|s| s.llvm_ty).collect();
+            st.set_body(&field_tys, false);
+            Some(st)
+        };
+        let return_struct_alloca: PointerValue<'ctx> = if let Some(st) = return_struct_ty {
+            self.create_entry_alloca(outer_fn, "__par_returns", st.into())
+        } else {
+            ptr_ty.const_null()
+        };
+        env_agg = self
+            .builder
+            .build_insert_value(
+                env_agg,
+                return_struct_alloca,
+                par_returns_idx as u32,
+                "__par_env_returns",
+            )
+            .unwrap()
+            .into_struct_value();
         self.builder.build_store(env_alloca, env_agg).unwrap();
 
         // 4. Generate one branch function per statement.
-        //    Mint the SpawnSiteId via `record_spawn_site` (Debugger
-        //    Contract slice 3): the helper bumps `par_counter`, returns
-        //    the assigned ID, and pushes a metadata record carrying the
-        //    par-block's `(file, line, col)` and static branch count for
-        //    `KARAC_SPAWN_SITES` to emit at the end of compilation.
-        //    Both call sites of `emit_par_run` (explicit `par {}` via
-        //    `compile_par_block`, inferred groups via
-        //    `compile_function_body`) flow through this single
-        //    recording site.
-        let par_id = self.record_spawn_site(span, Some(stmts.len() as u32));
+        //    The SpawnSiteId minted above is reused as the branch fn
+        //    name disambiguator and as the `karac_par_run` argument
+        //    (Debugger Contract slice 4: the runtime uses it to
+        //    populate `KaracFrame::spawn_site_id` for slice 5's
+        //    enumeration surface).
         let mut branch_fn_ptrs: Vec<PointerValue<'ctx>> = Vec::with_capacity(stmts.len());
         for (i, stmt) in stmts.iter().enumerate() {
+            // Per-branch slot list: only the slots whose `branch_index`
+            // matches this branch flow into `emit_par_branch_fn` for
+            // slot-write emission. Branches with no slots emit unchanged.
+            let branch_slots: Vec<ReturnSlot<'ctx>> = return_slots
+                .iter()
+                .filter(|s| s.branch_index == i)
+                .cloned()
+                .collect();
             let fn_ptr = self.emit_par_branch_fn(
                 par_id,
                 i,
@@ -13683,6 +13947,10 @@ impl<'ctx> Codegen<'ctx> {
                 &captures,
                 &env_field_types,
                 env_struct_ty,
+                par_returns_idx,
+                return_struct_ty,
+                &branch_slots,
+                return_slots,
             )?;
             branch_fn_ptrs.push(fn_ptr);
         }
@@ -13730,16 +13998,60 @@ impl<'ctx> Codegen<'ctx> {
             )
             .unwrap();
 
-        Ok(unit)
+        // 7. Slice A: load each return slot back from the parent-allocated
+        //    return struct. The runtime barrier inside `karac_par_run`
+        //    guarantees all branch fns completed before this point, so
+        //    every slot the analyzer assigned is initialized (decision
+        //    iii — move-only slot semantics with no destructor; the
+        //    barrier replaces the destructor that would otherwise
+        //    enforce ordering).
+        let mut slot_values: HashMap<String, BasicValueEnum<'ctx>> = HashMap::new();
+        if let Some(st) = return_struct_ty {
+            for (field_idx, slot) in return_slots.iter().enumerate() {
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        st,
+                        return_struct_alloca,
+                        field_idx as u32,
+                        &format!("__par_slot_{}_ptr", slot.binding_name),
+                    )
+                    .unwrap();
+                let val = self
+                    .builder
+                    .build_load(slot.llvm_ty, field_ptr, &slot.binding_name)
+                    .unwrap();
+                slot_values.insert(slot.binding_name.clone(), val);
+            }
+        }
+        Ok(slot_values)
     }
 
     /// Generate the branch function for a single par-block statement.
-    /// Signature: `void __par_branch_<par_id>_<i>(ptr ctx)`.
+    /// Signature: `void __par_branch_<par_id>_<i>(ptr ctx, ptr cancel_flag)`.
     ///
     /// The function unpacks captured locals from the shared env struct,
     /// compiles the statement, and returns. Captures are loaded as fresh
     /// allocas so the statement body sees them as ordinary locals.
+    ///
+    /// **Slice A (Phase-7 — Par codegen: return values):** when
+    /// `branch_slots` is non-empty, after the statement body's
+    /// `compile_stmt` succeeds, this function emits a load+store
+    /// sequence for each assigned slot — loading the just-bound
+    /// variable's value out of its branch-local alloca and storing it
+    /// into the matching field of the parent-allocated return struct
+    /// (reached via the `__par_returns` field of the env struct). The
+    /// store happens *before* the branch fn's `ret void`, so by the
+    /// time `karac_par_run`'s join barrier returns to the parent every
+    /// slot the analyzer assigned is initialized. Move-only semantics
+    /// (decision iii): the branch's `scope_cleanup_actions` are
+    /// discarded on `emit_par_branch_fn` exit (the existing
+    /// `mem::take`/restore dance), so destructor-bearing slot values
+    /// move into the slot rather than being dropped at branch end —
+    /// the parent's load + subsequent `track_*` is the unique cleanup
+    /// owner.
     #[allow(clippy::result_large_err)]
+    #[allow(clippy::too_many_arguments)]
     fn emit_par_branch_fn(
         &mut self,
         par_id: u32,
@@ -13748,6 +14060,10 @@ impl<'ctx> Codegen<'ctx> {
         captures: &[String],
         env_field_types: &[BasicTypeEnum<'ctx>],
         env_struct_ty: StructType<'ctx>,
+        par_returns_idx: usize,
+        return_struct_ty: Option<StructType<'ctx>>,
+        branch_slots: &[ReturnSlot<'ctx>],
+        all_slots: &[ReturnSlot<'ctx>],
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -13866,6 +14182,84 @@ impl<'ctx> Codegen<'ctx> {
 
         // Compile the statement body. Any errors surface to the outer context.
         let stmt_result = self.compile_stmt(stmt);
+
+        // Slice A: emit slot writes for class-(ii) bindings produced by
+        // this branch. Walk `branch_slots` (the slots whose
+        // `branch_index == index`), find the matching variable in
+        // `self.variables` (just bound by the let inside `compile_stmt`
+        // above), load it, then store into the parent-allocated return
+        // struct's field at the slot's position in `all_slots`. Done
+        // before the branch fn's `ret` so the runtime barrier inside
+        // `karac_par_run` correctly orders the writes against the
+        // parent's subsequent load.
+        let stmt_ok = stmt_result.is_ok()
+            && self
+                .builder
+                .get_insert_block()
+                .unwrap()
+                .get_terminator()
+                .is_none();
+        if stmt_ok && !branch_slots.is_empty() {
+            if let Some(rt_struct) = return_struct_ty {
+                // Reload the env-struct here to extract the
+                // `__par_returns` pointer. We can't keep a stale value
+                // from prologue because `compile_stmt` may have emitted
+                // arbitrary basic blocks between then and now; safer to
+                // re-load.
+                let env_val = self
+                    .builder
+                    .build_load::<BasicTypeEnum<'ctx>>(
+                        env_struct_ty.into(),
+                        env_ptr,
+                        "__env_for_returns",
+                    )
+                    .unwrap();
+                let returns_ptr_v = self
+                    .builder
+                    .build_extract_value(
+                        env_val.into_struct_value(),
+                        par_returns_idx as u32,
+                        "__par_returns_ptr",
+                    )
+                    .unwrap();
+                let returns_ptr = returns_ptr_v.into_pointer_value();
+                for slot in branch_slots {
+                    // Find this slot's index in the all-slots list (i.e.
+                    // its field position in the return struct). Linear
+                    // search — slot lists are tiny (≤ branch count).
+                    let Some(field_idx) = all_slots
+                        .iter()
+                        .position(|s| s.binding_name == slot.binding_name)
+                    else {
+                        continue;
+                    };
+                    let Some(local) = self.variables.get(&slot.binding_name).copied() else {
+                        // Variable wasn't bound (compile_stmt error path,
+                        // class-(ii) binding shape mismatch, etc.) — skip
+                        // the slot write defensively.
+                        continue;
+                    };
+                    let val = self
+                        .builder
+                        .build_load(
+                            local.ty,
+                            local.ptr,
+                            &format!("__par_slot_{}_load", slot.binding_name),
+                        )
+                        .unwrap();
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            rt_struct,
+                            returns_ptr,
+                            field_idx as u32,
+                            &format!("__par_slot_{}_dst", slot.binding_name),
+                        )
+                        .unwrap();
+                    self.builder.build_store(field_ptr, val).unwrap();
+                }
+            }
+        }
 
         // Terminate the branch function. The par-block API discards branch
         // return values in this first cut.

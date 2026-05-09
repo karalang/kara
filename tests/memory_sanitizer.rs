@@ -683,6 +683,184 @@ fn main() {
         );
     }
 
+    /// Variant of `run_under_asan` that threads `ConcurrencyAnalysis`
+    /// into codegen. Slice A (Phase-7 — Par codegen: return values)
+    /// turns class-(ii) let-bindings inside an inferred parallel
+    /// group into parent-allocated return-slot reads after
+    /// `karac_par_run` joins. The plain `run_under_asan` passes
+    /// `None` for concurrency, which leaves auto-par dispatch dormant
+    /// and exercises only the existing sequential codepath.
+    fn run_under_asan_with_concurrency(
+        src: &str,
+        label: &str,
+    ) -> Option<(String, std::process::ExitStatus)> {
+        use karac::codegen::compile_to_object_with_options;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let mut parsed = karac::parse(src);
+        if !parsed.errors.is_empty() {
+            eprintln!("[{label}] parse errors: {:?}", parsed.errors);
+            return None;
+        }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_asan_par_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_asan_par_{}_{}", std::process::id(), id);
+
+        if let Err(e) = compile_to_object_with_options(
+            &parsed.program,
+            &obj_path,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        ) {
+            eprintln!("[{label}] compile_to_object_with_options failed: {e}");
+            return None;
+        }
+        if !Path::new(&obj_path).exists() {
+            eprintln!("[{label}] object file missing after compile_to_object");
+            return None;
+        }
+        if let Err(e) =
+            link_executable_with_sanitizer(&obj_path, &exe_path, &["-fsanitize=address"])
+        {
+            eprintln!("[{label}] link_executable_with_sanitizer failed: {e}");
+            let _ = std::fs::remove_file(&obj_path);
+            return None;
+        }
+
+        let asan_options = if cfg!(target_os = "macos") {
+            "abort_on_error=0:exitcode=23"
+        } else {
+            "detect_leaks=1:abort_on_error=0:exitcode=23"
+        };
+        let output = Command::new(&exe_path)
+            .env("ASAN_OPTIONS", asan_options)
+            .output();
+
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+
+        match output {
+            Ok(out) => {
+                let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                if !out.status.success() {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    eprintln!("[{label}] binary exited non-zero:\n{stderr}");
+                }
+                Some((stdout, out.status))
+            }
+            Err(e) => {
+                eprintln!("[{label}] failed to run binary: {e}");
+                None
+            }
+        }
+    }
+
+    fn assert_clean_asan_run_with_concurrency(src: &str, expected_stdout: &[&str], label: &str) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan_with_concurrency(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        assert!(
+            status.success(),
+            "[{label}] ASAN reported a memory error (exit code {:?}). \
+             See stderr above — look for `LeakSanitizer`, `heap-use-after-free`, \
+             or `double-free`.",
+            status.code()
+        );
+        let got: Vec<&str> = stdout.trim().lines().collect();
+        assert_eq!(
+            got, expected_stdout,
+            "[{label}] unexpected stdout (ASAN passed, but output mismatched)"
+        );
+    }
+
+    // ── Slice A: auto-par return slots, move-only no-double-drop ──
+    //
+    // Phase-7 Slice A (Par codegen: return values, 2026-05-09) lifts
+    // the slice-2 `group_defines_binding_used_outside` gate by
+    // materializing a parent-allocated return struct and per-branch
+    // slot writes. Decision (iii) of the slice locks in move-only
+    // slot semantics — the branch's `scope_cleanup_actions` are
+    // discarded on `emit_par_branch_fn` exit so destructor-bearing
+    // values bit-copied through the slot don't double-drop, and the
+    // parent's `track_vec_var` is the unique cleanup owner. This
+    // test exercises that contract under ASAN with destructor-bearing
+    // `Vec[i64]` slot values: four branches each construct a fresh
+    // `Vec[i64]`, the parent reads each back from its slot via the
+    // synthesized `__karac_ParGroup_*_Returns` struct, sums their
+    // lengths into the printed result, and the parent's scope-exit
+    // cleanup releases the four heap buffers exactly once.
+
+    #[test]
+    fn test_auto_par_returns_no_use_after_move_no_double_drop() {
+        // Each `read_*` builds a fresh `Vec[i64]` of three elements;
+        // the parent sums the four `.len()` values and prints `12`.
+        // Disjoint resources (`R0`..`R3`) make the four reads eligible
+        // for auto-par grouping; the typed return value forces the
+        // slot mechanism to fire (slice 2 would have dropped the
+        // group via the use-outside gate).
+        assert_clean_asan_run_with_concurrency(
+            r#"
+effect resource R0;
+effect resource R1;
+effect resource R2;
+effect resource R3;
+
+fn make_v0() -> Vec[i64] reads(R0) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    v
+}
+fn make_v1() -> Vec[i64] reads(R1) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(11_i64);
+    v.push(21_i64);
+    v.push(31_i64);
+    v
+}
+fn make_v2() -> Vec[i64] reads(R2) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(12_i64);
+    v.push(22_i64);
+    v.push(32_i64);
+    v
+}
+fn make_v3() -> Vec[i64] reads(R3) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(13_i64);
+    v.push(23_i64);
+    v.push(33_i64);
+    v
+}
+
+fn main() {
+    let v0 = make_v0();
+    let v1 = make_v1();
+    let v2 = make_v2();
+    let v3 = make_v3();
+    println(v0.len() + v1.len() + v2.len() + v3.len());
+}
+"#,
+            &["12"],
+            "auto_par_returns_no_use_after_move_no_double_drop",
+        );
+    }
+
     #[test]
     fn asan_vec_clone_repeat_stresses_scope_cleanup() {
         // Clone in a fresh scope across multiple loop iterations —
