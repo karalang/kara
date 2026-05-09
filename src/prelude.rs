@@ -94,6 +94,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Client",
     "Response",
     "HttpError",
+    // Slice B (2026-05-09): minimal `std.http` server surface.
+    // `Server` hosts the `serve_static` entry that v1's smoke test uses;
+    // `Request` is the forward-compat opaque marker for the future
+    // handler-dispatch path.
+    "Server",
+    "Request",
     "Base64",
     "Hex",
     "Url",
@@ -1089,6 +1095,8 @@ mod tests {
             &["status", "body", "header"],
         );
         assert_inherent_impl_compiler_builtin("http.kara", "HttpError", &["message"]);
+        // Slice B (2026-05-09): server surface.
+        assert_inherent_impl_compiler_builtin("http.kara", "Server", &["serve_static"]);
     }
 
     #[test]

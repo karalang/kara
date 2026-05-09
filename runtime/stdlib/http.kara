@@ -1,10 +1,32 @@
 // runtime/stdlib/http.kara
 //
-// CR-202 slice 6.1g / 6.3. HTTP client surface (Client / Response /
-// HttpError). Method signatures migrated to `impl` blocks 2026-05-06;
-// instance dispatch still routes through `infer_http_*_method` /
-// `eval_http_*_method`, so the impl bodies are `#[compiler_builtin]`
-// placeholders.
+// HTTP surface — both client (CR-202 slice 6.1g / 6.3) and server
+// (Slice B, 2026-05-09). Both routes share the `Response` /
+// `HttpError` types so user code that builds a `Response` with the
+// builder can either return it from a `Server.serve` handler or — in a
+// future client-builder follow-up — adapt it for `Client.send`.
+//
+// **Slice B locked design choices (2026-05-09):**
+//   (i)   B1 server-only minimal — `Server`, `Request`, `Response`,
+//         `serve()`. No middleware / TLS / HTTP/2 / WebSocket.
+//   (ii)  B2 hyper backing through `karac-runtime` FFI; mirrors Slice
+//         F's `serde_json` pattern.
+//   (iii) B3 fallback (b) — non-polymorphic `serve()`. Free-fn
+//         effect-set parameterization (`fn serve[E](handler: fn(...)
+//         -> Response with E)`) isn't typechecker-supported yet (Theme
+//         6 settled the trait-method shape but free-fn shape is the
+//         open delta). v1's smoke-test surface uses
+//         `Server.serve_static(body)` — a fixed-body responder — so
+//         the v1 entry doesn't depend on fn-pointer-as-free-fn-arg
+//         codegen. Polymorphic `serve[E]` + arbitrary handler dispatch
+//         lands in a follow-up.
+//   (iv)  B4 two-layer concurrency — runtime spins a tokio multi-
+//         thread runtime; per-request hyper invokes the Kāra handler
+//         synchronously via `tokio::task::block_in_place`.
+//   (v)   B5 one bound-zero-port smoke test — see
+//         `tests/http_server.rs`.
+
+// ── Client surface (existing, unchanged) ──────────────────────────────
 
 struct Client { }
 
@@ -46,4 +68,47 @@ impl Response {
 impl HttpError {
     #[compiler_builtin]
     fn message(ref self) -> String { "" }
+}
+
+// ── Server surface (Slice B, 2026-05-09) ──────────────────────────────
+
+// `Server` is an opaque marker; v1 has no per-server state because
+// `Server.serve_static` is a "bind + serve until process exit"
+// operation that takes the address as an argument rather than holding
+// it on a Server value. The struct exists for forward compat — once
+// fn-pointer-as-free-fn-arg codegen lands, `Server.bind(addr)` returns
+// a `Server` carrying the bound `TcpListener`'s file descriptor and
+// `Server.serve(handler)` is the corresponding non-static dispatcher.
+struct Server { }
+
+// `Request` is the translated form of an inbound hyper request; v1's
+// smoke surface doesn't expose any methods because the smoke handler
+// uses a fixed body for all paths. Once the full handler-dispatch path
+// lands, `path() -> String` / `method() -> String` / etc. fire
+// through FFI helpers on the `KaracHttpRequest` C struct exposed by
+// the runtime crate.
+struct Request { }
+
+impl Server {
+    // Bind to `addr` (e.g. `"127.0.0.1:0"`) and serve every request
+    // with a `200 OK` carrying `body` as the response body and
+    // `content-type: application/json`. Blocks the calling thread
+    // until the process exits or the runtime returns a non-zero code
+    // (which is mapped here to `Err(HttpError)`).
+    //
+    // **Smoke-test convention.** When the address is `127.0.0.1:0`
+    // (or any other ephemeral-port form), the runtime emits a
+    // `BOUND_PORT=<n>\n` line to stdout before entering the accept
+    // loop — `tests/http_server.rs` reads this back to know which
+    // port to GET against.
+    //
+    // **Fallback for v1.** This is the locked design (b) entry. Once
+    // free-fn fn-ptr-as-arg codegen lands (a Phase 7 follow-up), this
+    // entry is joined by `Server.serve(handler)` taking a
+    // `fn(Request) -> Response` argument; `serve_static` then becomes
+    // a thin wrapper over the handler form.
+    #[compiler_builtin]
+    fn serve_static(addr: String, body: String) -> Result[Unit, HttpError] {
+        Err(HttpError { message: "" })
+    }
 }

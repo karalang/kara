@@ -1158,6 +1158,29 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // ── Slice B: HTTP server FFI surface (minimal `std.http`) ────
+        //
+        // `karac_runtime_serve_http_static(addr: *const c_char, body: *const u8,
+        // body_len: usize) -> i32` — bind on `addr`, serve every
+        // request with a 200/JSON response carrying `body` as the
+        // payload. v1's smoke handler. Real handler-fn-ptr dispatch
+        // lands in a follow-up; see the Slice B close-out under
+        // `wip-list1.md`.
+        //
+        // Return code: 0 on graceful shutdown (currently unreachable —
+        // the accept loop runs forever); non-zero on bind / runtime-
+        // construction failure. Codegen translates the return into a
+        // `Result[Unit, HttpError]` per the Kāra-side
+        // `Server.serve_static` signature.
+        let karac_runtime_serve_http_static_type = context
+            .i32_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        let _karac_runtime_serve_http_static_fn = module.add_function(
+            "karac_runtime_serve_http_static",
+            karac_runtime_serve_http_static_type,
+            Some(Linkage::External),
+        );
+
         // ── Map runtime extern declarations ──────────────────────────────
         // All map methods use opaque ptr for the map handle and key/value
         // pointers. Sizes and fn-pointers are passed as i64 / ptr.
@@ -6249,6 +6272,233 @@ impl<'ctx> Codegen<'ctx> {
                     return Ok(agg.into());
                 }
                 _ => {}
+            }
+        }
+
+        // Slice B (2026-05-09): `Server.serve_static(addr, body)` —
+        // hyper-backed minimal smoke entry. Dispatches to
+        // `karac_runtime_serve_http_static`. Both args are Kāra
+        // `String`s `{ptr, i64, i64}`; the runtime requires a null-
+        // terminated C string for `addr`, so we allocate a `len+1`
+        // buffer, memcpy + null-terminate. The body is passed as raw
+        // bytes (`ptr` + `len`) — no null-termination needed.
+        //
+        // The returned i32 is mapped into a Kāra `Result[Unit, HttpError]`:
+        // 0 → `Ok(())`, non-zero → `Err(HttpError { message })` with a
+        // pinned message string per non-zero code (matches the runtime
+        // crate's return-code table).
+        if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
+            {
+                let addr_val = self.compile_expr(&_args[0].value)?;
+                let body_val = self.compile_expr(&_args[1].value)?;
+                let addr_sv = addr_val.into_struct_value();
+                let body_sv = body_val.into_struct_value();
+                let addr_ptr = self
+                    .builder
+                    .build_extract_value(addr_sv, 0, "addr.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let addr_len = self
+                    .builder
+                    .build_extract_value(addr_sv, 1, "addr.len")
+                    .unwrap()
+                    .into_int_value();
+                let body_ptr = self
+                    .builder
+                    .build_extract_value(body_sv, 0, "body.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let body_len = self
+                    .builder
+                    .build_extract_value(body_sv, 1, "body.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Allocate addr_len + 1 bytes, memcpy, null-terminate.
+                let one = self.context.i64_type().const_int(1, false);
+                let needed = self
+                    .builder
+                    .build_int_add(addr_len, one, "addr.cstr.len")
+                    .unwrap();
+                let cstr_buf = self
+                    .builder
+                    .build_call(self.malloc_fn, &[needed.into()], "addr.cstr.buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder
+                    .build_memcpy(cstr_buf, 1, addr_ptr, 1, addr_len)
+                    .unwrap();
+                let i8_ty = self.context.i8_type();
+                let zero_byte = i8_ty.const_int(0, false);
+                let term_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(i8_ty, cstr_buf, &[addr_len], "addr.cstr.term")
+                        .unwrap()
+                };
+                self.builder.build_store(term_ptr, zero_byte).unwrap();
+
+                let serve_fn = self
+                    .module
+                    .get_function("karac_runtime_serve_http_static")
+                    .expect("karac_runtime_serve_http_static declared in Codegen::new");
+                let call = self
+                    .builder
+                    .build_call(
+                        serve_fn,
+                        &[cstr_buf.into(), body_ptr.into(), body_len.into()],
+                        "http.serve_static.call",
+                    )
+                    .unwrap();
+                let rc_i32 = call.try_as_basic_value().unwrap_basic().into_int_value();
+
+                // Free the cstr buffer (smoke path: the runtime call
+                // typically blocks forever, so this free is unreachable
+                // — but on bind failure the call returns immediately
+                // and we want clean shutdown).
+                self.builder
+                    .build_call(
+                        self.module.get_function("free").unwrap_or_else(|| {
+                            let free_ty = self.context.void_type().fn_type(
+                                &[self.context.ptr_type(AddressSpace::default()).into()],
+                                false,
+                            );
+                            self.module
+                                .add_function("free", free_ty, Some(Linkage::External))
+                        }),
+                        &[cstr_buf.into()],
+                        "addr.cstr.free",
+                    )
+                    .unwrap();
+
+                // Build `Result[Unit, HttpError]`. Layout per Slice CP
+                // compound-payload enum codegen: tag at word 0, payload
+                // at words 1..N. For a `Result[Unit, HttpError]`:
+                //   - Ok(()): tag=0 (Ok), payload all zero
+                //   - Err(HttpError { message: String }): tag=1, payload =
+                //     `String` `{ptr, len, cap}` (3 words)
+                //
+                // Look up the layout — `Result` is registered as part of
+                // the prelude pass.
+                let result_layout = self
+                    .enum_layouts
+                    .get("Result")
+                    .expect("Result layout registered before Server.serve_static dispatch");
+                let result_ty = result_layout.llvm_type;
+                let total_fields = result_ty.count_fields() as u64;
+                let i64_ty = self.context.i64_type();
+                let fn_val = self
+                    .current_fn
+                    .ok_or_else(|| "Server.serve_static called outside fn".to_string())?;
+                let result_slot =
+                    self.create_entry_alloca(fn_val, "http.serve_static.result", result_ty.into());
+
+                // Branch on rc == 0.
+                let rc_zero = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        rc_i32,
+                        self.context.i32_type().const_int(0, false),
+                        "rc.is_zero",
+                    )
+                    .unwrap();
+                let ok_bb = self.context.append_basic_block(fn_val, "serve.ok");
+                let err_bb = self.context.append_basic_block(fn_val, "serve.err");
+                let cont_bb = self.context.append_basic_block(fn_val, "serve.cont");
+                self.builder
+                    .build_conditional_branch(rc_zero, ok_bb, err_bb)
+                    .unwrap();
+
+                // Ok arm: zero out tag + payload (Unit payload is empty).
+                self.builder.position_at_end(ok_bb);
+                let zero_w = i64_ty.const_int(0, false);
+                for w in 0..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_w).unwrap();
+                }
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // Err arm: tag=1, payload = HttpError { message: <pinned> }.
+                self.builder.position_at_end(err_bb);
+                let one_w = i64_ty.const_int(1, false);
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(result_ty, result_slot, 0, "err.tag")
+                    .unwrap();
+                self.builder.build_store(tag_ptr, one_w).unwrap();
+
+                // Build a minimal HttpError String payload —
+                // `"http: serve failed"`. Heap-allocated so the
+                // standard String free-on-scope-exit path doesn't
+                // double-free a global.
+                let msg = "http: serve failed";
+                let msg_global = self
+                    .builder
+                    .build_global_string_ptr(msg, "http.serve.err.msg")
+                    .unwrap();
+                let msg_len = i64_ty.const_int(msg.len() as u64, false);
+                let msg_buf = self
+                    .builder
+                    .build_call(self.malloc_fn, &[msg_len.into()], "err.msg.buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                self.builder
+                    .build_memcpy(msg_buf, 1, msg_global.as_pointer_value(), 1, msg_len)
+                    .unwrap();
+
+                // Payload offset: tag is field 0; payload is fields 1..N.
+                // HttpError = `{ message: String }` = `{ptr, len, cap}` =
+                // 3 i64 words. Stored at fields 1, 2, 3.
+                let msg_ptr_buf_int = self
+                    .builder
+                    .build_ptr_to_int(msg_buf, i64_ty, "err.msg.ptr.i64")
+                    .unwrap();
+                if total_fields > 1 {
+                    let p1 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 1, "err.payload.ptr")
+                        .unwrap();
+                    self.builder.build_store(p1, msg_ptr_buf_int).unwrap();
+                }
+                if total_fields > 2 {
+                    let p2 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 2, "err.payload.len")
+                        .unwrap();
+                    self.builder.build_store(p2, msg_len).unwrap();
+                }
+                if total_fields > 3 {
+                    let p3 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 3, "err.payload.cap")
+                        .unwrap();
+                    self.builder.build_store(p3, msg_len).unwrap();
+                }
+                // Zero out remaining payload words (if Result's payload
+                // is wider than 3 due to other variants in the program).
+                for w in 4..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("err.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_w).unwrap();
+                }
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // Cont: load + return the result aggregate.
+                self.builder.position_at_end(cont_bb);
+                let result = self
+                    .builder
+                    .build_load(result_ty, result_slot, "http.serve_static.result.val")
+                    .unwrap();
+                return Ok(result);
             }
         }
 

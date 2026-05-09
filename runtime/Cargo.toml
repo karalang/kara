@@ -17,6 +17,24 @@ crate-type = ["staticlib"]
 # iterates in input insertion order, not alphabetical.
 serde_json = { version = "1", features = ["preserve_order"] }
 
+# Slice B (`std.http` server, minimal): backing impl for
+# `karac_runtime_serve_http`. Per locked design choice (ii) — hyper
+# behind an FFI boundary, mirroring Slice F's serde_json pattern. HTTP/1
+# only (locked design (i): no HTTP/2 negotiation tuning); `server`
+# feature is what wires up the connection-acceptor + service driver.
+hyper = { version = "1", features = ["server", "http1"] }
+# `hyper-util` ships hyper 1's reusable server harness (`auto::Builder`,
+# `TokioExecutor`, `TokioIo`); hyper 1 itself is just the protocol core.
+hyper-util = { version = "0.1", features = ["server-auto", "tokio", "http1"] }
+# Tokio multi-thread runtime — locked design (iv): per-request hyper
+# invokes the Kāra handler synchronously via `tokio::task::block_in_place`,
+# which requires the multi-thread flavor.
+tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
+# Adapter between the std `Future` type and hyper's Body trait — `http_body_util`
+# ships `Full<Bytes>`, the trivial body type used for fixed-size responses.
+http-body-util = "0.1"
+bytes = "1"
+
 # Note: the runtime's release-profile `panic = "abort"` setting lives in
 # the workspace root `Cargo.toml` (cargo ignores `[profile.*]` in
 # non-root manifests with a warning). See the workspace Cargo.toml's

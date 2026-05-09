@@ -1684,6 +1684,516 @@ pub unsafe extern "C" fn karac_runtime_json_free_string(s: *mut std::os::raw::c_
     drop(std::ffi::CString::from_raw(s));
 }
 
+// ── Slice B: HTTP server FFI surface (minimal `std.http`) ─────────────────
+//
+// Per locked design choices (2026-05-09):
+//   (i)   B1 server-only minimal — `Server`, `Request`, `Response`, `serve()`.
+//         No client (the existing client surface in `runtime/stdlib/http.kara`
+//         is a separate Phase 8 entry); no middleware / TLS / HTTP/2 /
+//         WebSocket.
+//   (ii)  B2 hyper backing through this FFI boundary; mirrors Slice F's
+//         `serde_json` shape (variant-payload structs, raw-pointer ownership
+//         routed back through `karac_runtime_*_free` exports).
+//   (iii) B3 fallback (b) — non-polymorphic `serve(handler: fn(Request) -> Response)`
+//         with effect-erasure at the FFI boundary. Effect-set parameter syntax
+//         on free fns isn't typechecker-supported yet (Theme 6 settled the
+//         trait-method shape but free-fn shape is the open delta); polymorphic
+//         `serve[E]` is additive once that lands.
+//   (iv)  B4 two-layer concurrency — hyper's `tokio::runtime::Runtime` (multi-
+//         thread flavor) is built inside `karac_runtime_serve_http`; per-request
+//         hyper invokes the Kāra handler synchronously through
+//         `tokio::task::block_in_place`, so the handler can sleep / do
+//         compute work without breaking the executor.
+//   (v)   B5 one bound-zero-port smoke test — see `tests/http_server.rs`.
+
+/// FFI representation of an inbound hyper `Request<Body>` surfaced to the
+/// Kāra-side handler. All pointers are owned by the runtime for the
+/// duration of the handler call; the handler reads the values but must
+/// not free them.
+///
+/// Strings are null-terminated UTF-8 (CString-allocated). The body buffer
+/// is raw bytes (`body_ptr` may be null when `body_len == 0`).
+///
+/// Headers are conveyed as parallel arrays of `headers_len` entries; both
+/// keys and values are CString-allocated. v1's smoke surface doesn't yet
+/// exercise header round-trip on the response side — the request-side
+/// arrays exist so the handler *could* read headers, but the v1 response
+/// builder ignores per-call header insertion (locked design (i): minimal
+/// surface; full header round-trip is a v1.5 follow-up).
+#[repr(C)]
+pub struct KaracHttpRequest {
+    pub method: *const std::os::raw::c_char,
+    pub path: *const std::os::raw::c_char,
+    pub query: *const std::os::raw::c_char,
+    pub headers_keys: *const *const std::os::raw::c_char,
+    pub headers_vals: *const *const std::os::raw::c_char,
+    pub headers_len: usize,
+    pub body_ptr: *const u8,
+    pub body_len: usize,
+}
+
+/// FFI representation of an outbound `Response` produced by the handler.
+/// The runtime allocates the buffers; the handler writes them; the
+/// runtime translates back to hyper's `Response<Full<Bytes>>` and frees
+/// the buffers after the response is sent on the wire.
+///
+/// `status` is initialized to 200 by `karac_runtime_serve_http` before
+/// the handler is invoked; the handler may overwrite it (e.g. 500 on
+/// internal error). `body_ptr`/`body_len`/`body_cap` describe a
+/// contiguous byte buffer the runtime takes ownership of after the
+/// handler returns; `body_cap` is the allocation size (matches `body_len`
+/// for v1's tightly-packed byte buffers, but the field exists for
+/// future-compat with growable response builders).
+///
+/// `headers_*` are parallel arrays the handler can populate; v1's smoke
+/// path leaves them at `(null, null, 0, 0)`.
+#[repr(C)]
+pub struct KaracHttpResponse {
+    pub status: u16,
+    pub body_ptr: *mut u8,
+    pub body_len: usize,
+    pub body_cap: usize,
+    pub headers_keys: *mut *mut std::os::raw::c_char,
+    pub headers_vals: *mut *mut std::os::raw::c_char,
+    pub headers_len: usize,
+    pub headers_cap: usize,
+}
+
+/// Allocate a fresh response-body buffer and write it into the response
+/// slot. Called from Kāra-side handler bodies that have constructed a
+/// `String`/`Bytes` body to emit; the runtime takes ownership of `bytes`
+/// for the duration of the request-handling task and frees it after the
+/// response is sent.
+///
+/// # Safety
+///
+/// `response` must point at a writable `KaracHttpResponse` slot. `bytes`
+/// must point at an initialized buffer of `len` bytes (or be null with
+/// `len == 0`). Caller must not alias the buffer after this call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_response_set_body(
+    response: *mut KaracHttpResponse,
+    bytes: *const u8,
+    len: usize,
+) {
+    if response.is_null() {
+        return;
+    }
+    let resp = &mut *response;
+    // Free any previously set body before overwriting.
+    if !resp.body_ptr.is_null() && resp.body_cap > 0 {
+        let slice = std::slice::from_raw_parts_mut(resp.body_ptr, resp.body_cap);
+        drop(Box::from_raw(slice as *mut [u8]));
+    }
+    if bytes.is_null() || len == 0 {
+        resp.body_ptr = std::ptr::null_mut();
+        resp.body_len = 0;
+        resp.body_cap = 0;
+        return;
+    }
+    let src = std::slice::from_raw_parts(bytes, len);
+    let buf: Box<[u8]> = src.to_vec().into_boxed_slice();
+    let cap = buf.len();
+    let raw = Box::into_raw(buf) as *mut u8;
+    resp.body_ptr = raw;
+    resp.body_len = len;
+    resp.body_cap = cap;
+}
+
+/// Set the HTTP status code on the response slot.
+///
+/// # Safety
+///
+/// `response` must point at a writable `KaracHttpResponse` slot.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_response_set_status(
+    response: *mut KaracHttpResponse,
+    status: u16,
+) {
+    if response.is_null() {
+        return;
+    }
+    (*response).status = status;
+}
+
+/// Read the request path as a null-terminated UTF-8 string. Returned
+/// pointer is owned by the runtime for the duration of the handler
+/// call; caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_path(
+    request: *const KaracHttpRequest,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    (*request).path
+}
+
+/// Read the request method as a null-terminated UTF-8 string. Returned
+/// pointer is owned by the runtime; caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_method(
+    request: *const KaracHttpRequest,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    (*request).method
+}
+
+/// Synchronously serve HTTP/1.1 traffic on `addr_cstr` until a fatal
+/// error breaks the accept loop. The Kāra-side handler is invoked
+/// through `tokio::task::block_in_place` per request so it can do
+/// arbitrary compute / sleep without blocking other tokio tasks.
+///
+/// **Returned port shim.** `bound_port_out` (when non-null) receives
+/// the actual port the OS bound — this lets `bind("127.0.0.1:0")` work
+/// for tests that read the port from the binary's stdout. The port is
+/// written before the accept loop starts; readers may read it as soon
+/// as they observe a non-zero value.
+///
+/// Return code: 0 on graceful shutdown (currently never reached — the
+/// accept loop runs forever until the process exits); non-zero on bind
+/// failure / runtime construction failure.
+///
+/// # Safety
+///
+/// `addr_cstr` must be a valid null-terminated C string of the form
+/// `"<ip>:<port>"`. `handler` must be a valid `extern "C"` function
+/// pointer with the documented signature; the handler is invoked from
+/// a tokio worker thread (potentially many threads concurrently) and
+/// must be thread-safe. `bound_port_out` may be null; if non-null it
+/// must point at writable `u16` storage that lives until at least the
+/// accept loop has been entered.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_serve_http(
+    addr_cstr: *const std::os::raw::c_char,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    bound_port_out: *mut u16,
+) -> i32 {
+    if addr_cstr.is_null() {
+        return 1;
+    }
+    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+    let addr_str = match cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return 3,
+    };
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return 4,
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+            Ok(l) => l,
+            Err(_) => return 5,
+        };
+        if let Ok(local) = listener.local_addr() {
+            if !bound_port_out.is_null() {
+                *bound_port_out = local.port();
+            }
+            // Smoke-test convention (B5): print the bound port on a
+            // dedicated `BOUND_PORT=<n>\n` stdout line so the test
+            // harness can read it back when binding to `127.0.0.1:0`
+            // (the OS picks an ephemeral port). Real-world apps
+            // typically bind to a fixed port; this line is a
+            // debug-friendly side-channel rather than a contract surface.
+            // Flushed explicitly so the parent process can sync against
+            // it without waiting on stdout's stdio buffer.
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+            let _ = stdout.flush();
+        }
+        loop {
+            let (stream, _peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let io = hyper_util::rt::TokioIo::new(stream);
+            tokio::spawn(async move {
+                let svc = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| async move {
+                        serve_request(req, handler).await
+                    },
+                );
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    })
+}
+
+/// Serve a single hardcoded JSON body for every incoming GET request on
+/// `addr_cstr`. This is the **minimal smoke surface** Slice B's B5 test
+/// exercises: it bypasses the full handler-fn-ptr codegen path while
+/// still proving the FFI + hyper + tokio integration end-to-end.
+/// Real handler dispatch flows through `karac_runtime_serve_http`
+/// (above); the static-body variant exists so v1's smoke test can pin
+/// the bind / serve / respond contract before fn-pointer-as-arg codegen
+/// for free fns lands (a follow-up — see Slice B's close-out).
+///
+/// Behavior: every incoming request returns `200 OK` with the supplied
+/// body bytes and `content-type: application/json`. A `BOUND_PORT=<n>\n`
+/// line is emitted to stdout before the accept loop starts so test
+/// harnesses can read the bound port from a `127.0.0.1:0` bind.
+///
+/// Return code: 0 on graceful shutdown (currently never reached); non-
+/// zero on bind failure / runtime construction failure.
+///
+/// # Safety
+///
+/// `addr_cstr` must be a valid null-terminated C string of the form
+/// `"<ip>:<port>"`. `body_ptr` must point at `body_len` initialized
+/// bytes (or be null with `body_len == 0`). The runtime copies the body
+/// before returning so the caller's buffer can be freed immediately.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_serve_http_static(
+    addr_cstr: *const std::os::raw::c_char,
+    body_ptr: *const u8,
+    body_len: usize,
+) -> i32 {
+    if addr_cstr.is_null() {
+        return 1;
+    }
+    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+    let addr_str = match cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return 3,
+    };
+    let body_owned: bytes::Bytes = if body_ptr.is_null() || body_len == 0 {
+        bytes::Bytes::new()
+    } else {
+        let slice = std::slice::from_raw_parts(body_ptr, body_len);
+        bytes::Bytes::copy_from_slice(slice)
+    };
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return 4,
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+            Ok(l) => l,
+            Err(_) => return 5,
+        };
+        if let Ok(local) = listener.local_addr() {
+            // Smoke-test convention: emit `BOUND_PORT=<n>\n` so the
+            // test harness can sync the GET against the actual bound
+            // port.
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+            let _ = stdout.flush();
+        }
+        loop {
+            let (stream, _peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let body_clone = body_owned.clone();
+            let io = hyper_util::rt::TokioIo::new(stream);
+            tokio::spawn(async move {
+                let svc = hyper::service::service_fn(
+                    move |_req: hyper::Request<hyper::body::Incoming>| {
+                        let body = body_clone.clone();
+                        async move {
+                            let resp = hyper::Response::builder()
+                                .status(200)
+                                .header("content-type", "application/json")
+                                .body(http_body_util::Full::new(body))
+                                .unwrap();
+                            Ok::<_, std::convert::Infallible>(resp)
+                        }
+                    },
+                );
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    })
+}
+
+/// Translate a single hyper `Request<Incoming>` into our `KaracHttpRequest`
+/// FFI struct, invoke the Kāra handler synchronously through
+/// `block_in_place`, then translate the populated `KaracHttpResponse`
+/// back into a hyper `Response<Full<Bytes>>`.
+///
+/// **Send safety.** The FFI structs hold raw pointers, which are not
+/// `Send`. We avoid that hazard by performing all of body-collection +
+/// CString building + the synchronous handler call + buffer reclaim
+/// *inside* a single `block_in_place` body — no raw pointer ever crosses
+/// an `.await` point, so the surrounding async future stays `Send` for
+/// `tokio::spawn`. The body is drained synchronously inside
+/// `block_in_place` via `Handle::current().block_on(...)` on the body
+/// stream's `collect().await`.
+async fn serve_request(
+    req: hyper::Request<hyper::body::Incoming>,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+) -> Result<hyper::Response<http_body_util::Full<bytes::Bytes>>, std::convert::Infallible> {
+    use http_body_util::BodyExt;
+
+    let (parts, body) = req.into_parts();
+
+    // Drain the body before entering the FFI call. This is the only
+    // `.await` point in this function; the resulting `bytes::Bytes` is
+    // `Send` and the rest of the work runs inside `block_in_place`.
+    let body_bytes = match body.collect().await {
+        Ok(c) => c.to_bytes(),
+        Err(_) => bytes::Bytes::new(),
+    };
+
+    let method_str = parts.method.as_str().to_string();
+    let path_str = parts.uri.path().to_string();
+    let query_str = parts.uri.query().unwrap_or("").to_string();
+    let header_pairs: Vec<(String, String)> = parts
+        .headers
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+
+    let (status, body_out, panicked) = tokio::task::block_in_place(move || {
+        let method_cstr = std::ffi::CString::new(method_str).unwrap_or_default();
+        let path_cstr = std::ffi::CString::new(path_str).unwrap_or_default();
+        let query_cstr = std::ffi::CString::new(query_str).unwrap_or_default();
+        let mut hdr_keys: Vec<std::ffi::CString> = Vec::with_capacity(header_pairs.len());
+        let mut hdr_vals: Vec<std::ffi::CString> = Vec::with_capacity(header_pairs.len());
+        for (k, v) in header_pairs.into_iter() {
+            hdr_keys.push(std::ffi::CString::new(k).unwrap_or_default());
+            hdr_vals.push(std::ffi::CString::new(v).unwrap_or_default());
+        }
+        let hdr_keys_ptrs: Vec<*const std::os::raw::c_char> =
+            hdr_keys.iter().map(|c| c.as_ptr()).collect();
+        let hdr_vals_ptrs: Vec<*const std::os::raw::c_char> =
+            hdr_vals.iter().map(|c| c.as_ptr()).collect();
+
+        let req_struct = KaracHttpRequest {
+            method: method_cstr.as_ptr(),
+            path: path_cstr.as_ptr(),
+            query: query_cstr.as_ptr(),
+            headers_keys: hdr_keys_ptrs.as_ptr(),
+            headers_vals: hdr_vals_ptrs.as_ptr(),
+            headers_len: hdr_keys_ptrs.len(),
+            body_ptr: if body_bytes.is_empty() {
+                std::ptr::null()
+            } else {
+                body_bytes.as_ptr()
+            },
+            body_len: body_bytes.len(),
+        };
+
+        let mut resp_struct = KaracHttpResponse {
+            status: 200,
+            body_ptr: std::ptr::null_mut(),
+            body_len: 0,
+            body_cap: 0,
+            headers_keys: std::ptr::null_mut(),
+            headers_vals: std::ptr::null_mut(),
+            headers_len: 0,
+            headers_cap: 0,
+        };
+
+        let req_ptr: *const KaracHttpRequest = &req_struct;
+        let resp_ptr: *mut KaracHttpResponse = &mut resp_struct;
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            handler(req_ptr, resp_ptr);
+        }))
+        .is_err();
+
+        // Reclaim the response body buffer (if any) and copy out the
+        // live bytes. The `Box<[u8]>` drops at the end of this scope,
+        // freeing the runtime-allocated buffer.
+        let body_out = if resp_struct.body_ptr.is_null() || resp_struct.body_len == 0 {
+            bytes::Bytes::new()
+        } else {
+            let cap = resp_struct.body_cap.max(resp_struct.body_len);
+            // SAFETY: by the FFI contract on
+            // `karac_runtime_http_response_set_body`, `body_ptr` /
+            // `body_cap` are paired Box-into-raw values whose ownership
+            // returns to us at the end of the request-handling task.
+            let owned: Box<[u8]> = unsafe {
+                let raw_slice = std::slice::from_raw_parts_mut(resp_struct.body_ptr, cap);
+                Box::from_raw(raw_slice as *mut [u8])
+            };
+            bytes::Bytes::copy_from_slice(&owned[..resp_struct.body_len])
+        };
+
+        // The cstrings + ptr vecs (and `req_struct`) drop at end of
+        // scope here; `method_cstr` etc. are still bound so the
+        // borrowed `*const c_char` pointers stay live across the
+        // handler call. We don't need explicit `drop` calls — the
+        // pointer-bearing locals stay live until the closure returns,
+        // which is exactly what we want, and clippy flags explicit
+        // drops on non-Drop types.
+        let _keep = (
+            &method_cstr,
+            &path_cstr,
+            &query_cstr,
+            &hdr_keys,
+            &hdr_vals,
+            &hdr_keys_ptrs,
+            &hdr_vals_ptrs,
+        );
+
+        (resp_struct.status, body_out, panicked)
+    });
+
+    if panicked {
+        let msg = b"Internal Server Error\n";
+        let body = http_body_util::Full::new(bytes::Bytes::copy_from_slice(msg));
+        let resp = hyper::Response::builder()
+            .status(500)
+            .header("content-type", "text/plain")
+            .body(body)
+            .unwrap();
+        return Ok(resp);
+    }
+
+    // v1's response builder doesn't surface user headers (`headers_len`
+    // is always zero on the response slot). Set a sensible default
+    // content-type so curl / reqwest read the body cleanly. Smoke path
+    // uses `application/json`.
+    let response = hyper::Response::builder()
+        .status(status)
+        .header("content-type", "application/json")
+        .body(http_body_util::Full::new(body_out))
+        .unwrap_or_else(|_| {
+            hyper::Response::new(http_body_util::Full::new(bytes::Bytes::from_static(
+                b"response build failed",
+            )))
+        });
+    Ok(response)
+}
+
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
 //
 // The runtime crate's `cargo test -p karac-runtime` binary has its own
