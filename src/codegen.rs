@@ -3716,6 +3716,7 @@ impl<'ctx> Codegen<'ctx> {
     ///   - `ExprKind::Identifier(n)` whose `var_type_names[n]` is set
     ///     (covers `let p = MyProvider { ... }; with_provider[R](p, ...)`);
     ///   - `ExprKind::StructLit { name, ... }` for inline construction.
+    ///
     /// Other shapes (function-return values, field projections, etc.)
     /// fall through and the caller emits a codegen error.
     fn infer_provider_type_name(&self, expr: &Expr) -> Option<String> {
@@ -3948,7 +3949,7 @@ impl<'ctx> Codegen<'ctx> {
         trait_name: &str,
         method: &str,
     ) -> Option<inkwell::types::FunctionType<'ctx>> {
-        for ((target, t), _) in &self.provider_vtables {
+        for (target, t) in self.provider_vtables.keys() {
             if t == trait_name {
                 let qualified = format!("{}.{}", target, method);
                 if let Some(f) = self.module.get_function(&qualified) {
@@ -11857,22 +11858,15 @@ impl<'ctx> Codegen<'ctx> {
             // bug fixed in this slice. `get_data_ptr` returns the alloca
             // for owned bindings and the dereferenced pointer for ref
             // params, so we use it uniformly when GEP'ing into a struct.
-            if let Some(&inner_ty) = self.ref_params.get(var_name) {
-                if let BasicTypeEnum::StructType(struct_ty) = inner_ty {
-                    if let Some(idx) = self.field_index_for(object, field) {
-                        if let Some(ptr) = self.get_data_ptr(var_name) {
-                            let field_ptr = self
-                                .builder
-                                .build_struct_gep(
-                                    struct_ty,
-                                    ptr,
-                                    idx,
-                                    &format!("ref_{}_ptr", field),
-                                )
-                                .unwrap();
-                            self.builder.build_store(field_ptr, new_val).unwrap();
-                            return Ok(());
-                        }
+            if let Some(&BasicTypeEnum::StructType(struct_ty)) = self.ref_params.get(var_name) {
+                if let Some(idx) = self.field_index_for(object, field) {
+                    if let Some(ptr) = self.get_data_ptr(var_name) {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(struct_ty, ptr, idx, &format!("ref_{}_ptr", field))
+                            .unwrap();
+                        self.builder.build_store(field_ptr, new_val).unwrap();
+                        return Ok(());
                     }
                 }
             }
@@ -13014,7 +13008,7 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
             BasicValueEnum::ArrayValue(av) => {
-                let len = av.get_type().len() as u32;
+                let len = av.get_type().len();
                 for i in 0..len {
                     let f = self
                         .builder

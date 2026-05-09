@@ -419,7 +419,7 @@ mod parallax_tests {
         // appear exactly once. Auto-par may permute the fetch order
         // (concurrent execution), but the join has to sequence after
         // all four — the "got dashboard" line ALWAYS appears last.
-        let last_line = stdout.lines().filter(|l| !l.is_empty()).last();
+        let last_line = stdout.lines().rfind(|l| !l.is_empty());
         assert_eq!(
             last_line,
             Some("got dashboard"),
