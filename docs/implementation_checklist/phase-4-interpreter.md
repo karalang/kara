@@ -675,3 +675,32 @@
   **Why deferred rather than fixed inline.** Each fix touches the typechecker's coercion rules, all three are intertwined (likely share infrastructure), and the existing 2,500+ tests rely on the current rules — changing them safely needs more than a one-shot patch. The pre-existing String-only path is itself unexplained and should be understood (intentional special case? incidental?) before the rule is generalized.
 
   **Tracked under** [`wip-staging.md` § Carry-forward / blocked § Borrow-return inference + call-site auto-ref gaps](wip-staging.md) — state **needs design discussion**, with the String-only-path investigation as the explicit prerequisite before plan drafting can begin. Promotes to wip-list2 (or graduates inline as a phase-4 slice) once the investigation closes.
+
+- [ ] **Interpreter `Vec.new` dispatch arm.** The path-string match in `src/interpreter.rs:3795-3905` wires `Map.new`, `Set.new`, `SortedSet.new`, `Atomic.new`, `Channel.new`, `Client.new`, `Runtime.list_par_blocks`, `Runtime.list_tasks`, etc., but has **no `Vec.new` arm** — `karac run` panics with `internal error: entered unreachable code: path 'Vec.new' not found at <site>; should be caught by resolver`. Resolver registers `Vec` in `PRELUDE_TYPES` (`src/prelude.rs:71`); typechecker treats `Vec.new` as the canonical empty-Vec constructor (recovery hint at `src/typechecker.rs:2520-2524`); effectchecker recognizes the path (`src/effectchecker.rs:419`); only the interpreter dispatch is missing. Surfaced 2026-05-09 by the LeetCode 3629 kata while scaffolding `bfs_sieve.kara`.
+
+  *Slice plan (drafted 2026-05-09) — Interpreter `Vec.new` dispatch arm.*
+
+  Add the missing path-string arm so `Vec.new()` returns an empty `Value::Array` through the existing `Value::array_of` constructor (already used by `Runtime.list_par_blocks` / `Runtime.list_tasks` at `src/interpreter.rs:3830-3831`). Both Array and Vec are represented as `Value::Array` at runtime per the comment at `src/interpreter.rs:2391`. **No design forks** — shape is fully determined by the existing `Map.new` / `Set.new` arm pattern; the only ambiguity (whether to emit `Value::Array` vs a hypothetical `Value::Vec` variant) is settled by the existing runtime representation.
+
+  *Sub-steps.*
+  - **(a)** Insert a new arm immediately after the `"Map.new"` arm at `src/interpreter.rs:3833`, mirroring the established pattern: `"Vec.new" => { return Value::array_of(Vec::new()); }`. Single-line addition.
+  - **(b)** Add an end-to-end interpreter test in `tests/interpreter.rs` under a new `// ── Prelude constructors: Vec.new ──` section (or append to an existing prelude-constructor section if one already exists). The test exercises construction → push → length-read → indexed read end-to-end through `karac run`, asserting the dispatch lights up correctly.
+
+  *Tests* (1 new):
+  - `test_interpreter_vec_new_construct_push_len` — runs `let mut v: Vec[i64] = Vec.new(); v.push(1); v.push(2); v.push(3); println(v.len()); println(v[0]); println(v[2]);` and asserts stdout is `3\n1\n3\n`. Pins both the dispatch arm AND that pushed values round-trip through the existing Vec method machinery (which already works on `Value::Array`-backed bindings).
+
+  *Files expected to change.* `src/interpreter.rs` — single-arm addition (~3 lines). `tests/interpreter.rs` — 1 new test (~25 lines including scaffolding). This doc — flip status to `[x]` and add a 1-line "What landed" close-out paragraph. Total ~30 LoC.
+
+  *Out of scope.*
+  - **`Vec.filled(n, val)` / `Vec.with_capacity(n)` / other Vec constructors.** Only `Vec.new()` is gappy today — the other constructors either don't exist on the type yet or already dispatch through different paths. File-and-fix-when-surfaced rather than pre-emptively widen.
+  - **Codegen-side parity verification.** Codegen already handles `Vec.new` (used in existing Vec-payload tests including the CP slice's `test_compound_enum_vec_payload_round_trip`); this slice is interpreter-only.
+  - **The full Vec runtime gap surface from LeetCode 3629** — this is sub-item (a) of three (the other two are codegen Vec indexed write + codegen method dispatch on indexed receivers; both tracked as separate slices in `phase-7-codegen.md`).
+
+  *Hard-stop triggers.*
+  - **`Value::array_of` doesn't accept an empty `Vec<Value>`.** Verify by inspection — the function signature at `src/interpreter.rs:794-797` takes `Vec<Value>` and wraps in `Arc::new(RwLock::new(items))`; an empty input is well-defined. **Default fallback:** none needed — this is a non-issue; flagged only because the slice is so small that any unexpected friction is itself a signal.
+  - **The arm collides with an existing `"Vec.new"` registration somewhere unexpected** (e.g., a generic intrinsic dispatch ahead of the path-string match block). Verify by `grep -n '"Vec.new"' src/interpreter.rs` before the change — should return zero hits today. **Default fallback:** if an existing dispatch shadows the new arm, the slice is the wrong place and the existing dispatch needs auditing (the bug report would be different from "no Vec.new arm").
+  - **`tests/interpreter.rs` lacks a clean prelude-constructor test pattern to reuse.** Existing tests test through `karac run` E2E or through direct interpreter API depending on the section. **Default fallback:** mirror whichever pattern the closest existing `Map.new` / `Set.new` test uses; if none exists, follow the pattern in `tests/interpreter.rs` for any `karac run`-driven E2E test.
+
+  State: **plan drafted to autonomous-friendly bar 2026-05-09.** No prerequisites — resolver / typechecker / effectchecker already recognize the path. Pure interpreter work; no parser, ast, lowering, or codegen changes. Estimated time: 15-30 min (the smallest slice in the active queue).
+
+  **Phase target.** Phase 4 — tree-walk interpreter dispatch surface. Closes one of three Vec runtime gaps surfaced by the LeetCode 3629 kata (`bfs_sieve.kara`); the other two ((b) codegen Vec indexed write, (c) codegen method dispatch on indexed receivers) live in `phase-7-codegen.md`. Sub-item (a) of three; lights up `karac run`-driven Vec.new() exercising end-to-end and unblocks any kata or example that uses `let v: Vec[T] = Vec.new()` through the interpreter pipeline.
