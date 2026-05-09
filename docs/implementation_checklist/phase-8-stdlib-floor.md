@@ -687,9 +687,7 @@ The `with_provider[R]` mechanism is spec'd in `design.md` and parsed today, but 
   - **Parameterized providers** (`UserDB[tenant_id]`) — Theme 6 deviation 4 deferred this; out of v1 scope.
   - **Real I/O simulation via sleep primitives** — runtime exposes no sleep today; busy-compute kernel is the v1 fallback.
   - **`#[derive(Debug)]` / `#[derive(Eq)]` on the data types** — debug printing in the e2e tests uses explicit `println` statements with hand-formatted strings.
-  - **`Vec[T]` return through Slice A's per-branch return slots** — open as `tests/par_codegen.rs::test_auto_par_vec_return_undefined_var_repro` (`#[ignore]`-gated regression). Once the gap closes, Slice C's fixture can grow back to `Vec[T]` returns additively.
-  - **Chained-field println on a moved-in struct's nested field** (`d.profile.name` returns `0`) — pre-existing codegen bug surfaced by Slice C, reproducible standalone outside Slice A; out of slice scope.
-  - **Multi-file project-mode codegen** — `cargo run --release` from inside `examples/parallax/` doesn't emit a binary today (parallax-lite ships in this state too); use the concat-and-compile pattern documented in `examples/parallax/README.md`.
+  - **Multi-file project-mode codegen** — `cargo run --release` from inside `examples/parallax/` doesn't emit a binary today (parallax-lite ships in this state too); use the concat-and-compile pattern documented in `examples/parallax/README.md`. Tracked as CR-24 follow-up per the parallax-lite README.
 
  **Phase classification:** all items below ship in Phase 11 (long-tail) per roadmap.md, except `std.json` which is floor (Phase 8) and is tagged inline. See `design.md § Numerical Types (Tensor, Column, DataFrame)`, `design.md § Numeric Semantics > Literal-involved promotion`, and `design.md § Entry Point > Script mode` for semantics; `syntax.md § 2 Program Structure`, `§ 6.2 Type Syntax`, and `§ 6.4 Generic Parameters` for grammar.
 
