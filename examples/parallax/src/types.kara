@@ -1,0 +1,63 @@
+// types.kara — Owned data types returned by the four provider fetches
+// and joined into the canonical `Dashboard` aggregate.
+//
+// All five types are plain `struct` (not `shared struct`) per design
+// lock C4 — each fetched value is an owned move target for Slice A's
+// per-branch return slots. The slot ABI ships the produced value
+// through `__karac_ParGroup_<id>_Returns.field_n` directly; no RC
+// indirection is involved.
+//
+// **Slice A return-shape gap (deviation from C2/C5 plan, 2026-05-09):**
+// The plan called for `Vec[Order] / Vec[Notification] / Vec[Recommendation]`
+// returns — repeated rows. Verified at the par_codegen integration
+// level (see `tests/par_codegen.rs::test_auto_par_vec_return_undefined_var_repro`)
+// that a `Vec[T]`-typed return through Slice A's per-branch return
+// slots fails codegen with "Undefined variable" — the slot ABI
+// classifies `Vec` shapes via `llvm_type_for_type_expr` correctly but
+// the parent-side rebinding from `slot_values` doesn't carry the slot
+// through to `self.variables` for downstream stmts in some Vec shape
+// path. Per the slice plan's hard-stop trigger 1 default fallback (b),
+// we reduced the fixture to shapes Slice A demonstrably handles:
+// each fetch returns a *single-row* struct (the latest order, top
+// notification, top recommendation) instead of a `Vec[T]`. The demo's
+// fan-out+join shape — four typed results joined into a `Dashboard`
+// aggregate — is preserved; the row-vs-rows shape change is a
+// fixture-level workaround, not a demo-shape regression.
+//
+// Field shape rationale (per design lock C5, fixture key = 42):
+//   - Profile carries a primitive id + two Strings — exercises Slice A's
+//     return-slot ABI on a small struct mixing scalar and heap-allocated
+//     String fields.
+//   - Order / Notification / Recommendation are single rows the
+//     respective providers return — each is a small owned struct
+//     exercising the same struct-through-slot ABI Profile does.
+//   - Dashboard is the four-field aggregator the workload's tail
+//     expression constructs from the four let-bindings.
+
+pub struct Profile {
+    user_id: i64,
+    name: String,
+    email: String,
+}
+
+pub struct Order {
+    order_id: i64,
+    total_cents: i64,
+}
+
+pub struct Notification {
+    kind: i64,
+    message: String,
+}
+
+pub struct Recommendation {
+    item_id: i64,
+    score: f64,
+}
+
+pub struct Dashboard {
+    profile: Profile,
+    latest_order: Order,
+    top_notification: Notification,
+    top_recommendation: Recommendation,
+}

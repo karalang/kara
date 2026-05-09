@@ -770,4 +770,78 @@ fn main() {
             "no slot pointer/load instructions should appear; IR:\n{ir}"
         );
     }
+
+    /// Slice A return-shape gap reproduction (filed as Slice C
+    /// `phase-8-stdlib-floor.md` hard-stop trigger 1 fallback (a),
+    /// 2026-05-09): a `Vec[T]` typed return through Slice A's
+    /// per-branch return slots fails codegen with `Undefined variable
+    /// '<binding>'` when the slot binding is consumed by a downstream
+    /// statement after the par-run barrier. `compute_return_slots`
+    /// recognises `Vec[T]` (`llvm_type_for_type_expr` returns the
+    /// `vec_struct_type`), so the slot is materialized — but the
+    /// parent-side rebinding into `self.variables` doesn't surface
+    /// the slot binding for one of the let-targets in some Vec shape
+    /// path, so a subsequent reference like `use_v(b)` fails with
+    /// "Undefined variable 'b'" before the loaded slot value is
+    /// re-bound.
+    ///
+    /// `#[ignore]`-gated as a known regression to track until the
+    /// underlying mechanism in `compile_function_body`'s slot
+    /// rebinding path lands a fix. Slice C reduced its demo fixture
+    /// to single-row struct returns (`Order` instead of `Vec[Order]`)
+    /// to side-step this gap; once the gap closes, Slice C's demo
+    /// fixture can grow back to `Vec[T]` returns additively.
+    #[test]
+    #[ignore]
+    fn test_auto_par_vec_return_undefined_var_repro() {
+        // Build the runtime is unnecessary — the failure is a codegen-
+        // time error, not a link/exec issue. We invoke the in-process
+        // `ir_for_with_concurrency` and assert the codegen call
+        // produces the diagnostic.
+        let src = r#"
+effect resource R1;
+effect resource R2;
+
+fn fetch_a() -> Vec[i64] reads(R1) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(42);
+    v
+}
+
+fn fetch_b() -> Vec[i64] reads(R2) {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(99);
+    v
+}
+
+fn use_v(v: Vec[i64]) { println(v.len()); }
+
+fn main() {
+    let a: Vec[i64] = fetch_a();
+    let b: Vec[i64] = fetch_b();
+    use_v(a);
+    use_v(b);
+}
+"#;
+        use karac::codegen::compile_to_ir_with_options;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let res = compile_to_ir_with_options(&parsed.program, None, Some(&analysis), None, None);
+        assert!(
+            res.is_err(),
+            "expected codegen failure on Vec[T] auto-par return shape; \
+             got Ok IR — gap is closed and this regression test should be \
+             un-ignored or removed"
+        );
+        let err = format!("{}", res.err().unwrap());
+        assert!(
+            err.contains("Undefined variable 'b'") || err.contains("Undefined variable 'a'"),
+            "expected `Undefined variable` diagnostic; got: {err}"
+        );
+    }
 }

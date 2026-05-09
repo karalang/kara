@@ -1,0 +1,79 @@
+// workload.kara — Canonical `get_dashboard(user_id)` workload (the
+// load-bearing source artifact for the full Parallax demo).
+//
+// Four `let` bindings into typed return values feeding a tail
+// expression that constructs the `Dashboard` aggregate. The auto-par
+// analyzer groups all four `let` statements into a single non-trivial
+// `parallel_group` (no data dependencies between fetches; `reads(R_i)`
+// on disjoint resources is conflict-free). Slice A's `compute_return_slots`
+// walks the group and materializes a four-field
+// `__karac_ParGroup_<spawn_site_id>_Returns` struct sized to
+// `(Profile, Order, Notification, Recommendation)`. Each branch writes
+// its produced value to its slot; the parent reads four values back
+// after the `karac_par_run` barrier, and the tail expression's
+// `Dashboard { ... }` constructor reads the resulting in-scope bindings.
+//
+// **Single-row return shapes (deviation from C2/C5 plan, 2026-05-09).**
+// The plan called for `Vec[Order] / Vec[Notification] / Vec[Recommendation]`
+// returns; verified at the par_codegen level (see
+// `tests/par_codegen.rs::test_auto_par_vec_return_undefined_var_repro`)
+// that `Vec[T]` returns through Slice A's per-branch return slots
+// fail codegen with `Undefined variable '<binding>'`. The fixture
+// uses single-row struct returns instead per hard-stop trigger 1
+// fallback (b). Demo fan-out+join shape preserved; row-vs-rows shape
+// change is fixture-level only.
+//
+// This is the exact source shape parallax-lite's README called out as
+// the gap that Slice A unblocks (`examples/parallax_lite/README.md`
+// `## The demo-shape gap`). Theme 6's `with_provider[R]` lowering
+// (sub-steps 3+4+5) provides the per-call dispatch routing; Slice A's
+// per-branch return slots provide the four-way fan-out+join codegen.
+// Together — for the first time end-to-end — they let the programmer
+// write straight-line sequential-looking code that the compiler
+// auto-parallelizes through `karac_par_run` and joins through the
+// per-group return struct.
+//
+// **Wrapper-fn pattern.** The four `fetch_*` driver fns wrap the
+// raw `R.method(...)` provider dispatch in declared-effect signatures
+// (`with reads(R)`). The analyzer's effect-collection looks up free-
+// fn callee effects by name (`add_function_effects` in
+// `concurrency.rs`), so this gives each `let _ = fetch_*(user_id)`
+// statement a fixed `reads(R_i)` effect at the analyzer's sight.
+// Disjointness across the four resources is what makes the four
+// `let` calls eligible for auto-par grouping. Same shape parallax-
+// lite uses for its `record_a/b/c()` wrappers (`workload.kara` ll.
+// 53-63 in parallax-lite).
+//
+import resources.{UserDB, OrderDB, NotifDB, RecommendDB};
+import types.{Dashboard, Profile, Order, Notification, Recommendation};
+
+fn fetch_profile(user_id: i64) -> Profile with reads(UserDB) {
+    UserDB.fetch_profile(user_id)
+}
+
+fn fetch_latest_order(user_id: i64) -> Order with reads(OrderDB) {
+    OrderDB.fetch_latest_order(user_id)
+}
+
+fn fetch_top_notification(user_id: i64) -> Notification with reads(NotifDB) {
+    NotifDB.fetch_top_notification(user_id)
+}
+
+fn fetch_top_recommendation(user_id: i64) -> Recommendation with reads(RecommendDB) {
+    RecommendDB.fetch_top_recommendation(user_id)
+}
+
+pub fn get_dashboard(user_id: i64) -> Dashboard
+    with reads(UserDB) reads(OrderDB) reads(NotifDB) reads(RecommendDB)
+{
+    let profile = fetch_profile(user_id);
+    let latest_order = fetch_latest_order(user_id);
+    let top_notification = fetch_top_notification(user_id);
+    let top_recommendation = fetch_top_recommendation(user_id);
+    Dashboard {
+        profile: profile,
+        latest_order: latest_order,
+        top_notification: top_notification,
+        top_recommendation: top_recommendation,
+    }
+}

@@ -1,0 +1,50 @@
+// main.kara — Entry point for the full Parallax demo.
+//
+// Four-deep nested `with_provider[R]` chain per design lock C6.
+// Theme 6 closed at three-deep nesting (parallax-lite); four-deep is
+// the additive extension exercised here for the first time. The
+// runtime's TLS-backed `PROVIDER_STACK_HEAD` walk is depth-agnostic
+// (each `with_provider` push prepends a frame; `karac_provider_lookup`
+// walks linearly until it finds the matching resource ID), so the
+// extra frame is a constant-time additional hop per dispatch.
+//
+// `let mut <provider>` bindings are required because Theme 6's
+// lowering walks the binding's `mut`/non-`mut` mode for the alloca
+// shape; the runtime treats each provider as borrowed for the
+// duration of the closure scope. Mirrors parallax-lite's `main.kara`
+// pattern (`let mut pa = InMemoryMetrics.new();`).
+//
+// Inside the innermost closure, `get_dashboard(42)` runs the four-
+// branch fan-out+join through `karac_par_run`. The provider stack
+// snapshot taken at par-block entry (Theme 6 sub-step 5) flows into
+// each spawned worker's TLS, so each `R.fetch_*` lookup inside its
+// branch resolves through the four-frame stack.
+
+import providers.{InMemoryUserDB, InMemoryOrderDB, InMemoryNotifDB, InMemoryRecommendDB};
+import resources.{UserDB, OrderDB, NotifDB, RecommendDB};
+import workload.get_dashboard;
+
+fn main() {
+    let mut u = InMemoryUserDB.new();
+    let mut o = InMemoryOrderDB.new();
+    let mut n = InMemoryNotifDB.new();
+    let mut r = InMemoryRecommendDB.new();
+    with_provider[UserDB](u, || {
+        with_provider[OrderDB](o, || {
+            with_provider[NotifDB](n, || {
+                with_provider[RecommendDB](r, || {
+                    let dashboard = get_dashboard(42);
+                    // Note: nested-field println of `dashboard.profile.name`
+                    // is gated on a pre-existing codegen gap (chained-field
+                    // access through a moved-in struct currently lowers the
+                    // load incorrectly — single-level access is fine).
+                    // For end-to-end visibility we surface the dashboard's
+                    // existence via the side-channel "fetch_*" markers each
+                    // provider's busy-compute kernel emits, plus this
+                    // confirmation line.
+                    println("got dashboard");
+                });
+            });
+        });
+    });
+}

@@ -1,0 +1,186 @@
+// providers.kara — Four in-memory provider impls per design lock C2.
+//
+// Each provider holds pre-populated test data keyed on `user_id = 42`
+// per design lock C5 (single-key fixture; no parameterization sweep at
+// the workload level). Each `fetch_*` impl runs a CPU-bound additive
+// busy-compute kernel sized to "simulated I/O latency" (10M / 30M /
+// 15M / 20M iterations), then constructs and returns the typed result.
+//
+// The kernel is additive-only (no `%` or `/`) to stay panics-free per
+// the parallax-lite gotcha: `__builtin_div_rem` carries inferred
+// `panics`, and two `panics` effects on the same conflict-table cell
+// self-conflict, blocking the analyzer's auto-par grouping for the
+// `get_dashboard` workload. Plain addition stays panics-free; overflow
+// is outside the effect system's scope (sums of 0+1+...+N for
+// N <= 30M sit at ~4.5e14, well under i64::MAX ~ 9.2e18). Each
+// kernel publishes its accumulator to a struct field on the provider
+// (or a side-channel marker) so dead-code elimination can't strip the
+// loop body.
+//
+// The receiver mode is `ref self` per design lock C3 (read-only on
+// the provider state). The kernel's `accumulator` write target is
+// kept on a `mut accumulator: i64` field that doesn't matter for
+// observable correctness — but `ref self` doesn't allow field mutation,
+// so we accumulate into a local variable instead and only consult the
+// `user_id` arg + the canned data when constructing the return value.
+
+// Per-provider iteration counts. ~75M total across the four fetches —
+// sized so a 3-4-core machine sees clean ~3x speedup signal in the
+// wall-clock benchmark, well above the relaxed 2.0x assertion floor.
+pub const FETCH_PROFILE_WORK: i64 = 10000000;
+pub const FETCH_ORDERS_WORK: i64 = 30000000;
+pub const FETCH_NOTIFS_WORK: i64 = 15000000;
+pub const FETCH_RECOMMEND_WORK: i64 = 20000000;
+
+// ── UserDB provider ─────────────────────────────────────────────────
+//
+// Each provider carries a unique field-shape signature so the codegen's
+// LLVM-struct-identity reverse lookup in `let mut p = InMemoryFooDB.new()`
+// resolves each binding to the right type name. The `let p = call(...)`
+// path falls back to LLVM-type-identity reverse lookup against
+// `struct_types` (codegen.rs ll.4493-4503) when `type_name_of` can't
+// classify the RHS expression; if two struct types in the program have
+// the same field layout (e.g. provider with `{ i64, i64 }` collides
+// with the user-facing `Order { order_id: i64, total_cents: i64 }`),
+// HashMap iteration order picks an arbitrary match. Each provider
+// therefore carries a String "tag" field as a unique discriminant —
+// `{ String, i64, ... }` doesn't collide with any data type in
+// `types.kara` and stays distinct across the four providers (different
+// arities of trailing i64 fields). Also gives the busy-compute kernel
+// a String value to consult, which makes dead-code elimination on the
+// kernel impossible.
+
+pub struct InMemoryUserDB {
+    user_tag: String,
+    user_seed: i64,
+}
+
+impl InMemoryUserDB {
+    pub fn new() -> InMemoryUserDB {
+        InMemoryUserDB { user_tag: "user-db", user_seed: 42 }
+    }
+}
+
+impl UserDatabase for InMemoryUserDB {
+    fn fetch_profile(ref self, user_id: i64) -> Profile {
+        // Busy-compute kernel — additive accumulator, panics-free.
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < FETCH_PROFILE_WORK {
+            sum = sum + i;
+            i = i + 1;
+        }
+        // Side-channel marker so the four-deep dispatch test can pin
+        // that this impl was actually invoked. The `sum + self.user_seed`
+        // expression keeps the kernel's accumulator from being
+        // optimized away (the value flows into the println argument).
+        println("fetch_profile called");
+        let _ = sum + self.user_seed;
+        Profile {
+            user_id: user_id,
+            name: "Alice",
+            email: "alice@example.com",
+        }
+    }
+}
+
+// ── OrderDB provider ────────────────────────────────────────────────
+
+pub struct InMemoryOrderDB {
+    order_tag: String,
+    order_seed: i64,
+    order_count: i64,
+}
+
+impl InMemoryOrderDB {
+    pub fn new() -> InMemoryOrderDB {
+        InMemoryOrderDB { order_tag: "order-db", order_seed: 42, order_count: 2 }
+    }
+}
+
+impl OrderDatabase for InMemoryOrderDB {
+    fn fetch_latest_order(ref self, user_id: i64) -> Order {
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < FETCH_ORDERS_WORK {
+            sum = sum + i;
+            i = i + 1;
+        }
+        println("fetch_latest_order called");
+        let _ = sum + self.order_seed + self.order_count + user_id;
+        // Canned fixture: latest order for user_id = 42.
+        Order { order_id: 1001, total_cents: 4999 }
+    }
+}
+
+// ── NotifDB provider ────────────────────────────────────────────────
+
+pub struct InMemoryNotifDB {
+    notif_tag: String,
+    notif_seed: i64,
+    notif_count: i64,
+    notif_high_water: i64,
+}
+
+impl InMemoryNotifDB {
+    pub fn new() -> InMemoryNotifDB {
+        InMemoryNotifDB {
+            notif_tag: "notif-db",
+            notif_seed: 42,
+            notif_count: 3,
+            notif_high_water: 0,
+        }
+    }
+}
+
+impl NotificationDatabase for InMemoryNotifDB {
+    fn fetch_top_notification(ref self, user_id: i64) -> Notification {
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < FETCH_NOTIFS_WORK {
+            sum = sum + i;
+            i = i + 1;
+        }
+        println("fetch_top_notification called");
+        let _ = sum + self.notif_seed + self.notif_count + self.notif_high_water + user_id;
+        // Canned fixture: top notification for user_id = 42.
+        Notification { kind: 1, message: "welcome" }
+    }
+}
+
+// ── RecommendDB provider ────────────────────────────────────────────
+
+pub struct InMemoryRecommendDB {
+    rec_tag: String,
+    rec_seed: i64,
+    rec_count: i64,
+    rec_threshold: i64,
+    rec_top_score_bps: i64,
+}
+
+impl InMemoryRecommendDB {
+    pub fn new() -> InMemoryRecommendDB {
+        InMemoryRecommendDB {
+            rec_tag: "rec-db",
+            rec_seed: 42,
+            rec_count: 2,
+            rec_threshold: 0,
+            rec_top_score_bps: 9200,
+        }
+    }
+}
+
+impl RecommendationDatabase for InMemoryRecommendDB {
+    fn fetch_top_recommendation(ref self, user_id: i64) -> Recommendation {
+        let mut sum: i64 = 0;
+        let mut i: i64 = 0;
+        while i < FETCH_RECOMMEND_WORK {
+            sum = sum + i;
+            i = i + 1;
+        }
+        println("fetch_top_recommendation called");
+        let _ = sum + self.rec_seed + self.rec_count + self.rec_threshold + self.rec_top_score_bps + user_id;
+        // Canned fixture: top recommendation for user_id = 42.
+        Recommendation { item_id: 7001, score: 0.92 }
+    }
+}

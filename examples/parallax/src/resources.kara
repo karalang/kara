@@ -1,0 +1,24 @@
+// resources.kara — Four typed effect resources, one per provider trait.
+//
+// The four resources are each bound to a single-method trait per design
+// lock C1. The resource binding is what carries the effect verb at the
+// call site: a call `UserDB.fetch_profile(42)` inside a function body
+// surfaces as `reads(UserDB)` in the analyzer's effect set.
+//
+// Disjointness across the four — `reads(UserDB)` vs `reads(OrderDB)` vs
+// `reads(NotifDB)` vs `reads(RecommendDB)` — is what makes the four
+// `let` bindings inside `get_dashboard` eligible for auto-par grouping
+// (no conflict edges between them in the analyzer's conflict table).
+// The resulting parallel_group fans out via `karac_par_run` across four
+// branch fns, each writing its produced value to its slot in the
+// per-group return struct (Slice A's mechanism).
+//
+// Source-declaration order assigns resource IDs 0/1/2/3 to UserDB /
+// OrderDB / NotifDB / RecommendDB respectively; both `with_provider[R]`
+// push calls in `main.kara` and the `R.fetch_*` lookup calls inside
+// the workload reference these IDs through the runtime ABI.
+
+pub effect resource UserDB: UserDatabase;
+pub effect resource OrderDB: OrderDatabase;
+pub effect resource NotifDB: NotificationDatabase;
+pub effect resource RecommendDB: RecommendationDatabase;

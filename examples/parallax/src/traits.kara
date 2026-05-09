@@ -1,0 +1,38 @@
+// traits.kara — Four single-method provider traits per design lock C1.
+//
+// Each trait is single-method (one `fetch_*`) returning typed result
+// data. Resource-disjointness is the auto-par grouping signal: if the
+// four were collapsed into one big trait, the four `let p = R.fetch...`
+// bindings would still be groupable (the resource binding still drives
+// the conflict table), but the four-trait factoring makes the
+// resource-discipline story explicit at the trait level too.
+//
+// Receiver mode is `ref self` per design lock C3 — read-only access
+// (each fetch carries a `reads(R)` effect via the resource binding,
+// not `writes(R)`). `ref self` first-param codegen landed Theme 6
+// prerequisite `9ed72c9` and is the supported path.
+//
+// No effect annotations on the trait method signatures — effects flow
+// from the resource binding (`pub effect resource UserDB: UserDatabase;`
+// in `resources.kara`) and surface at each `UserDB.fetch_*` call site
+// as `reads(UserDB)`. Trait-method signatures stay effect-clean to
+// preserve provider implementation flexibility (an in-memory provider
+// might be pure where a real-DB provider carries `blocks` and
+// `panics`; the impl's effects flow back through the resource binding,
+// not the trait declaration).
+
+pub trait UserDatabase {
+    fn fetch_profile(ref self, user_id: i64) -> Profile;
+}
+
+pub trait OrderDatabase {
+    fn fetch_latest_order(ref self, user_id: i64) -> Order;
+}
+
+pub trait NotificationDatabase {
+    fn fetch_top_notification(ref self, user_id: i64) -> Notification;
+}
+
+pub trait RecommendationDatabase {
+    fn fetch_top_recommendation(ref self, user_id: i64) -> Recommendation;
+}
