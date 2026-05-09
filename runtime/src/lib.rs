@@ -702,7 +702,7 @@ pub unsafe extern "C" fn karac_runtime_list_par_blocks_into(out: *mut KaracVec) 
     // to a raw byte address.
     let sites_len = KARAC_SPAWN_SITES_LEN as usize;
     let sites_base: *const KaracSpawnSiteEntry =
-        &KARAC_SPAWN_SITES as *const _ as *const KaracSpawnSiteEntry;
+        &KARAC_SPAWN_SITES as *const _ as *const () as *const KaracSpawnSiteEntry;
 
     let elem_size = std::mem::size_of::<KaracParBlockInfo>();
     let layout = std::alloc::Layout::from_size_align(elem_size * count, 8)

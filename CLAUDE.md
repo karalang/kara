@@ -10,12 +10,14 @@ cargo test                             # Run non-codegen tests (lexer, parser, r
 cargo test --features llvm             # Run ALL tests including codegen E2E + memory_sanitizer (ASAN)
 cargo test lexer                       # Run a single test file (e.g., tests/lexer.rs)
 cargo test -- test_name                # Run a single test by name
-cargo clippy --all --tests -- -D warnings  # Lint (must be clean before declaring work done)
+cargo clippy --all --all-targets -- -D warnings  # Lint (must be clean before declaring work done)
 cargo fmt --all                        # Format all files
 cargo fmt --all -- --check             # Verify formatted (must be clean before declaring work done — peer to clippy)
 ```
 
 **`cargo fmt --all -- --check` is a hard pre-commit gate, peer to clippy.** Both must clear before any commit lands. **First action of any new coding session or slice:** run `cargo fmt --all -- --check`. If it fails, fix with `cargo fmt --all` and land as a standalone `chore: cargo fmt cleanup` commit *before* starting feature work. Don't pull fmt drift into a feature commit; don't surgically revert drift to keep a commit scoped — both patterns push cleanup to CI and let drift accumulate in the meantime.
+
+**Use `--all-targets`, not `--tests`, on the clippy gate.** `--tests` only builds the test target (cfg(test)), so any lint that fires only in production cfg slips through. The runtime crate has cfg-gated type definitions (e.g. `KARAC_SPAWN_SITES` is `extern KaracSpawnSiteEntry` in production but a `SpawnSiteEntryStandIn` wrapper under cfg(test)) — clippy lints on those code paths only fire in the cfg where they're real, and CI runs `cargo clippy --all -- -D warnings` (no `--tests`). `--all-targets` builds lib + bins + tests + examples + benches, each in its own cfg, so it covers both surfaces.
 
 **Codegen and memory-sanitizer tests are gated on `--features llvm`.** Plain `cargo test` will skip `tests/codegen.rs`, `tests/par_codegen.rs`, and `tests/memory_sanitizer.rs` entirely (the modules are `#[cfg(feature = "llvm")]`). Always use `--features llvm` when verifying codegen-related work; otherwise you will miss real regressions.
 
