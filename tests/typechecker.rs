@@ -9930,3 +9930,53 @@ fn test_alias_expanded_at_impl_registration() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── Compound-payload enum codegen — typechecker carve-out ──
+//
+// Slice CP (Phase 7.2 — 2026-05-09) rejects nested value-enum
+// payloads at the typechecker so codegen's recursive layout pass
+// doesn't have to bound infinite recursion. `Vec[Inner]`, `shared
+// SharedInner`, and tuple/struct nesting are all fine — only direct
+// `enum Outer { V(Inner) }` where `Inner` is a value enum is the v1
+// carve-out (CP5). The diagnostic surfaces as
+// `error[E_ENUM_NESTED_ENUM_PAYLOAD]`.
+
+#[test]
+fn test_compound_enum_nested_enum_payload_diagnostic() {
+    let errors = typecheck_errors(
+        "enum Inner { A, B }\n\
+         enum Outer { V1(Inner) }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_ENUM_NESTED_ENUM_PAYLOAD")),
+        "expected E_ENUM_NESTED_ENUM_PAYLOAD, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_compound_enum_nested_enum_payload_via_vec_is_allowed() {
+    // CP5's carve-out is direct enum-in-enum nesting only. Wrapping
+    // the inner enum in a `Vec` (or any other heap-indirected
+    // collection) terminates the size recursion at one indirection
+    // and is allowed.
+    karac::typecheck(
+        &karac::parse(
+            "enum Inner { A, B }\n\
+             enum Outer { V1(Vec[Inner]) }\n\
+             fn main() {}",
+        )
+        .program,
+        &karac::resolve(
+            &karac::parse(
+                "enum Inner { A, B }\n\
+                 enum Outer { V1(Vec[Inner]) }\n\
+                 fn main() {}",
+            )
+            .program,
+        ),
+    );
+}

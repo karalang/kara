@@ -320,8 +320,22 @@ struct EnumLayout<'ctx> {
     llvm_type: StructType<'ctx>,
     /// variant name → discriminant tag (0, 1, 2, …)
     tags: HashMap<String, u64>,
-    /// variant name → number of payload word fields
+    /// variant name → number of source-position payload fields. Preserved
+    /// verbatim from `VariantKind::Tuple(tys).len()` / `Struct(fields).len()`
+    /// so existing pattern-binding code that counts source fields keeps
+    /// working unchanged.
     field_counts: HashMap<String, usize>,
+    /// Compound-payload enum codegen (Phase 7.2 Slice CP) — per-variant
+    /// per-field word range in the unified payload area. Each variant's
+    /// vec entry has one `(start_word, num_words)` pair per source field
+    /// (in declaration order). The variant's total payload-word count is
+    /// the last field's `start + num_words`; the enum-wide payload-area
+    /// width is `max_payload_words = max(variant_totals)`. Used by
+    /// construction (`try_compile_enum_variant`) to write per-field word
+    /// streams instead of single-i64-coerced collapse, and by
+    /// destructure (`bind_pattern_values` `TupleVariant` arm) to read
+    /// each field's word range and reconstruct the original aggregate.
+    field_word_offsets: HashMap<String, Vec<(usize, usize)>>,
 }
 
 // ── SoA layout metadata ─────────────────────────────────────────
@@ -2721,19 +2735,44 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     fn declare_enums(&mut self, program: &Program) {
+        // Phase 1: register names. Sub-step (b) typeof-recursion in
+        // `payload_word_count_for_type_expr` looks up nested user types,
+        // so we need every enum/struct name registered before we can size
+        // any variant. We can't compute layouts in a single pass over
+        // `program.items` because variant payload types may reference
+        // sibling enums declared further down.
         for item in &program.items {
             if let Item::EnumDef(e) = item {
-                // Compute max payload words across all variants.
-                let max_words = e
-                    .variants
-                    .iter()
-                    .map(|v| match &v.kind {
-                        VariantKind::Unit => 0,
-                        VariantKind::Tuple(tys) => tys.len(),
-                        VariantKind::Struct(fields) => fields.len(),
-                    })
-                    .max()
-                    .unwrap_or(0);
+                let _ = e; // names already collected via declare_structs and the seed pass
+            }
+        }
+
+        for item in &program.items {
+            if let Item::EnumDef(e) = item {
+                // CP4 / CP5: compute per-variant per-field word offsets,
+                // sized via the recursive helper. The variant's total
+                // payload-word count is the last entry's `start + num_words`
+                // (or 0 for unit variants); the enum-wide payload-area
+                // width is `max(variant_totals)`.
+                let mut field_word_offsets: HashMap<String, Vec<(usize, usize)>> = HashMap::new();
+                let mut variant_totals: Vec<usize> = Vec::with_capacity(e.variants.len());
+                for v in &e.variants {
+                    let mut offsets: Vec<(usize, usize)> = Vec::new();
+                    let mut running: usize = 0;
+                    let field_tys: Vec<&TypeExpr> = match &v.kind {
+                        VariantKind::Unit => Vec::new(),
+                        VariantKind::Tuple(tys) => tys.iter().collect(),
+                        VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+                    };
+                    for ty in field_tys {
+                        let n = self.payload_word_count_for_type_expr(ty, &e.name, &v.name);
+                        offsets.push((running, n));
+                        running += n;
+                    }
+                    variant_totals.push(running);
+                    field_word_offsets.insert(v.name.clone(), offsets);
+                }
+                let max_words = variant_totals.iter().copied().max().unwrap_or(0);
 
                 // Build the unified LLVM type: { i64 tag, i64 w0, ..., i64 wN }
                 let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
@@ -2778,9 +2817,114 @@ impl<'ctx> Codegen<'ctx> {
                         llvm_type,
                         tags,
                         field_counts,
+                        field_word_offsets,
                     },
                 );
             }
+        }
+    }
+
+    /// Compound-payload enum codegen (CP5) — recursive per-field word-count
+    /// computation. Returns the number of i64 payload words required to
+    /// store a value of `ty` in a variant's payload area.
+    ///
+    /// Word counts:
+    /// - primitives (i8..i64, u8..u64, usize, f32, f64, bool, char, unit): 1
+    /// - `String`, `Vec[T]`: 3 (data + len + cap)
+    /// - `Slice[T]` / `mut Slice[T]`: 2 (data + len)
+    /// - tuple `(T1, T2, …)`: sum of components
+    /// - user struct: sum over fields (recursive)
+    /// - user enum (nested in another enum's payload): rejected (CP5 carve-out)
+    /// - everything else: 1 (conservative; matches `coerce_to_i64` fallback)
+    ///
+    /// `outer_enum` / `outer_variant` are passed for diagnostic context
+    /// when nested enum payloads are rejected.
+    fn payload_word_count_for_type_expr(
+        &self,
+        ty: &TypeExpr,
+        outer_enum: &str,
+        outer_variant: &str,
+    ) -> usize {
+        match &ty.kind {
+            TypeKind::Path(path) => {
+                let name = path.segments.first().map(|s| s.as_str()).unwrap_or("");
+                match name {
+                    // 3-word aggregates: { ptr, i64 len, i64 cap }
+                    "String" | "Vec" => 3,
+                    // 2-word aggregates: { ptr, i64 len }
+                    "Slice" => 2,
+                    // Heap-pointer handles; one word.
+                    "Map" | "Set" | "SortedSet" => 1,
+                    // Single-word primitives.
+                    "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    | "isize" | "f32" | "f64" | "bool" | "char" | "Unit" => 1,
+                    // Other path types: dispatch based on whether it's a
+                    // user-defined struct / enum / shared type already
+                    // registered. Order matters: shared types (RC pointers)
+                    // are 1 word; structs recurse; enum-in-enum payload is
+                    // the v1 carve-out and emits an error.
+                    _ => {
+                        let _ = (outer_enum, outer_variant); // diagnostic context — emitted by typechecker
+                        if self.shared_types.contains_key(name) {
+                            // RC pointer — single word.
+                            1
+                        } else if self.enum_layouts.contains_key(name) {
+                            // Direct enum-in-enum payload — rejected at v1
+                            // (CP5 carve-out) by the typechecker's
+                            // E_ENUM_NESTED_ENUM_PAYLOAD diagnostic. If we
+                            // reach here, the typecheck stage didn't fail
+                            // (or this is an stdlib-baked enum the
+                            // typechecker can't see); fall back to a
+                            // single i64-payload word so codegen produces
+                            // *something* runnable rather than crashing
+                            // out of the layout pass.
+                            1
+                        } else if let Some(struct_ty) = self.struct_types.get(name).copied() {
+                            // User struct — sum of LLVM field widths in i64 words.
+                            // We can't recurse through TypeExpr here (we lost
+                            // it after declare_structs); fall back to LLVM
+                            // field count, which is accurate for primitive-
+                            // and pointer-typed fields. Aggregate-typed
+                            // fields (a struct field that is itself a
+                            // String/Vec) inflate by their LLVM struct
+                            // arity automatically.
+                            Self::llvm_type_word_count(struct_ty.into())
+                        } else {
+                            // Unknown name (generic type param, builtin not yet
+                            // registered, …) — conservative 1 word.
+                            1
+                        }
+                    }
+                }
+            }
+            TypeKind::Tuple(elems) if elems.is_empty() => 1, // unit
+            TypeKind::Tuple(elems) => elems
+                .iter()
+                .map(|t| self.payload_word_count_for_type_expr(t, outer_enum, outer_variant))
+                .sum(),
+            TypeKind::Ref(_) | TypeKind::MutRef(_) => 1, // pointer
+            TypeKind::MutSlice(_) => 2,                  // { ptr, len }
+            _ => 1,
+        }
+    }
+
+    /// Compute the i64-word count of an LLVM aggregate type. Used by
+    /// `payload_word_count_for_type_expr` for user structs whose source
+    /// `TypeExpr` isn't directly available (we only kept the resolved
+    /// LLVM `StructType`). Recursive: nested aggregates inflate by their
+    /// own field count.
+    fn llvm_type_word_count(ty: BasicTypeEnum<'ctx>) -> usize {
+        match ty {
+            BasicTypeEnum::IntType(_)
+            | BasicTypeEnum::FloatType(_)
+            | BasicTypeEnum::PointerType(_) => 1,
+            BasicTypeEnum::StructType(st) => (0..st.count_fields())
+                .map(|i| Self::llvm_type_word_count(st.get_field_type_at_index(i).unwrap()))
+                .sum(),
+            BasicTypeEnum::ArrayType(at) => {
+                Self::llvm_type_word_count(at.get_element_type()) * (at.len() as usize)
+            }
+            _ => 1,
         }
     }
 
@@ -2799,12 +2943,16 @@ impl<'ctx> Codegen<'ctx> {
             let mut field_counts = HashMap::new();
             field_counts.insert("None".to_string(), 0usize);
             field_counts.insert("Some".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("None".to_string(), Vec::new());
+            field_word_offsets.insert("Some".to_string(), vec![(0, 1)]);
             self.enum_layouts.insert(
                 "Option".to_string(),
                 EnumLayout {
                     llvm_type: enum_type,
                     tags,
                     field_counts,
+                    field_word_offsets,
                 },
             );
         }
@@ -2817,12 +2965,16 @@ impl<'ctx> Codegen<'ctx> {
             let mut field_counts = HashMap::new();
             field_counts.insert("Err".to_string(), 1usize);
             field_counts.insert("Ok".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Err".to_string(), vec![(0, 1)]);
+            field_word_offsets.insert("Ok".to_string(), vec![(0, 1)]);
             self.enum_layouts.insert(
                 "Result".to_string(),
                 EnumLayout {
                     llvm_type: enum_type,
                     tags,
                     field_counts,
+                    field_word_offsets,
                 },
             );
         }
@@ -5729,6 +5881,21 @@ impl<'ctx> Codegen<'ctx> {
                 .unwrap()
                 .into_struct_value();
             return Ok(agg.into());
+        }
+        // Qualified enum-variant constructor: `Enum.Variant(args)`.
+        // The bare-name path (`Variant(args)`) is handled by
+        // `try_compile_enum_variant` from `compile_call`; the qualified
+        // form lands here. Look up the layout for `type_name`, verify
+        // `method` is one of its variants, and dispatch through the
+        // shared variant-construction helper. Compound-payload enum
+        // codegen (Slice CP) makes this path matter for round-tripping
+        // String / Vec / user-struct payloads.
+        if let Some(layout) = self.enum_layouts.get(type_name) {
+            if layout.tags.contains_key(method) {
+                if let Some(v) = self.try_compile_enum_variant(method, _args)? {
+                    return Ok(v);
+                }
+            }
         }
         // User impl-block method: if a function named `Type.method` exists
         // in the module (declared by the impl-block pass in `compile`),
@@ -12052,15 +12219,32 @@ impl<'ctx> Codegen<'ctx> {
             self.builder
                 .build_store(tag_ptr, i64_t.const_int(tag, false))
                 .unwrap();
-            // Payload words at heap indices 2, 3, …
+            // Payload words at heap indices 2, 3, … . Shared enums share
+            // the same per-variant `field_word_offsets` layout as
+            // non-shared enums; the heap struct's payload-word count is
+            // sized to `max_payload_words` at declare time. Each source
+            // field decomposes into its assigned word range.
+            let offsets: Vec<(usize, usize)> = self.enum_layouts[&enum_name]
+                .field_word_offsets
+                .get(name)
+                .cloned()
+                .unwrap_or_default();
             for (i, arg) in args.iter().enumerate() {
                 let val = self.compile_expr(&arg.value)?;
-                let word = self.coerce_to_i64(val)?;
-                let word_ptr = self
-                    .builder
-                    .build_struct_gep(info.heap_type, ptr, (i + 2) as u32, "sh_word")
-                    .unwrap();
-                self.builder.build_store(word_ptr, word).unwrap();
+                let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+                let words = self.coerce_to_payload_words(val, num_words)?;
+                for (j, w) in words.into_iter().enumerate() {
+                    let word_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            info.heap_type,
+                            ptr,
+                            (start_word + j + 2) as u32, // +2 for refcount + tag
+                            "sh_word",
+                        )
+                        .unwrap();
+                    self.builder.build_store(word_ptr, w).unwrap();
+                }
             }
             return Ok(Some(ptr.into()));
         }
@@ -12075,19 +12259,128 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap()
             .into_struct_value();
 
-        // Store payload args as fields 1, 2, …
+        // Compound-payload enum codegen (CP4): consult the variant's
+        // `field_word_offsets` so each source field's value is written
+        // into its assigned word range (start_word .. start_word +
+        // num_words). Multi-word aggregates (String / Vec / user
+        // structs / tuples) decompose to a sequence of i64 words via
+        // `coerce_to_payload_words`; primitives produce a single word
+        // and match the legacy `coerce_to_i64` path. Reading back is
+        // the destructure path's job (see `bind_pattern_values`).
+        let offsets: Vec<(usize, usize)> = self.enum_layouts[&enum_name]
+            .field_word_offsets
+            .get(name)
+            .cloned()
+            .unwrap_or_default();
         for (i, arg) in args.iter().enumerate() {
             let val = self.compile_expr(&arg.value)?;
-            // Coerce to i64 for storage in the uniform payload
-            let word = self.coerce_to_i64(val)?;
-            agg = self
-                .builder
-                .build_insert_value(agg, word, (i + 1) as u32, "word")
-                .unwrap()
-                .into_struct_value();
+            let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1)); // legacy fallback if layout missing
+            let words = self.coerce_to_payload_words(val, num_words)?;
+            for (j, w) in words.into_iter().enumerate() {
+                agg = self
+                    .builder
+                    .build_insert_value(
+                        agg,
+                        w,
+                        (start_word + j + 1) as u32, // +1 for tag field
+                        "word",
+                    )
+                    .unwrap()
+                    .into_struct_value();
+            }
         }
 
         Ok(Some(agg.into()))
+    }
+
+    /// Compound-payload enum codegen (CP4 helper) — decompose an
+    /// arbitrary `BasicValueEnum` into exactly `num_words` i64 words
+    /// suitable for storage in an enum payload area. Primitives (bool /
+    /// int / float / pointer) always produce one word via `coerce_to_i64`;
+    /// `num_words == 1` therefore short-circuits to the existing
+    /// behaviour. Aggregates (String / Vec / user struct / tuple)
+    /// destructure via `extract_value` over their LLVM-field layout and
+    /// recurse on each field.
+    ///
+    /// If the supplied value's natural word count differs from the
+    /// requested `num_words`, the result is padded with zeros (over-shoot)
+    /// or truncated (under-shoot). Both branches log nothing — they're
+    /// the safety nets for the fallback paths in
+    /// `payload_word_count_for_type_expr` (which conservatively
+    /// returns 1 for unknown types).
+    fn coerce_to_payload_words(
+        &self,
+        val: BasicValueEnum<'ctx>,
+        num_words: usize,
+    ) -> Result<Vec<inkwell::values::IntValue<'ctx>>, String> {
+        // Primitive fast path.
+        if num_words <= 1 {
+            return Ok(vec![self.coerce_to_i64(val)?]);
+        }
+        let mut out: Vec<inkwell::values::IntValue<'ctx>> = Vec::with_capacity(num_words);
+        match val {
+            BasicValueEnum::StructValue(sv) => {
+                let n_fields = sv.get_type().count_fields();
+                for i in 0..n_fields {
+                    let f = self
+                        .builder
+                        .build_extract_value(sv, i, "pl.f")
+                        .map_err(|e| {
+                            format!(
+                                "coerce_to_payload_words: extract_value failed at field {}: {:?}",
+                                i, e
+                            )
+                        })?;
+                    // Recurse: a struct field can itself be an aggregate
+                    // (e.g. a user struct whose field is a String). Each
+                    // top-level LLVM field of `sv` contributes its own
+                    // word count to the running total.
+                    let sub_count = match f {
+                        BasicValueEnum::StructValue(ssv) => ssv.get_type().count_fields() as usize,
+                        BasicValueEnum::ArrayValue(av) => av.get_type().len() as usize,
+                        _ => 1,
+                    };
+                    let sub_words = if sub_count <= 1 {
+                        vec![self.coerce_to_i64(f)?]
+                    } else {
+                        self.coerce_to_payload_words(f, sub_count)?
+                    };
+                    for w in sub_words {
+                        if out.len() < num_words {
+                            out.push(w);
+                        }
+                    }
+                }
+            }
+            BasicValueEnum::ArrayValue(av) => {
+                let len = av.get_type().len() as u32;
+                for i in 0..len {
+                    let f = self
+                        .builder
+                        .build_extract_value(av, i, "pl.a")
+                        .map_err(|e| {
+                            format!(
+                                "coerce_to_payload_words: extract_value (array) failed at {}: {:?}",
+                                i, e
+                            )
+                        })?;
+                    if out.len() >= num_words {
+                        break;
+                    }
+                    out.push(self.coerce_to_i64(f)?);
+                }
+            }
+            _ => {
+                out.push(self.coerce_to_i64(val)?);
+            }
+        }
+        // Pad / truncate to exact width.
+        let i64_t = self.context.i64_type();
+        while out.len() < num_words {
+            out.push(i64_t.const_int(0, false));
+        }
+        out.truncate(num_words);
+        Ok(out)
     }
 
     /// Coerce an arbitrary value to i64 for storage in an enum payload word.
@@ -13601,6 +13894,104 @@ impl<'ctx> Codegen<'ctx> {
         None
     }
 
+    /// Compound-payload enum codegen (CP4 destructure side helper) —
+    /// reconstruct an aggregate `BasicValueEnum` from a sequence of i64
+    /// payload words loaded from a variant's payload area. Single-word
+    /// fields short-circuit to the legacy single-i64 binding (the
+    /// pattern's `Binding` arm already handles struct-payload
+    /// reconstitution). Multi-word fields look up the binding's
+    /// recorded type via `pattern_binding_types` (set by the
+    /// typechecker's `check_pattern_against`) and use the matching LLVM
+    /// type to reassemble: 3-word `String` / `Vec[T]` rebuild as
+    /// `vec_struct_type` (`{ ptr, i64, i64 }`); 2-word `Slice[T]`
+    /// rebuild as `slice_struct_type`; user struct fields rebuild as
+    /// the registered LLVM struct type.
+    fn reconstruct_payload_value(
+        &self,
+        sub_pat: &Pattern,
+        field_words: &[inkwell::values::IntValue<'ctx>],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Single-word: keep legacy single-i64 binding shape. The
+        // PatternKind::Binding arm handles single-field struct
+        // reconstitution downstream via `pattern_binding_types`.
+        if field_words.len() <= 1 {
+            let w = field_words
+                .first()
+                .copied()
+                .unwrap_or_else(|| i64_t.const_int(0, false));
+            return Ok(w.into());
+        }
+        // Multi-word: resolve the binding's surface type to choose the
+        // target LLVM aggregate type.
+        let key = (sub_pat.span.offset, sub_pat.span.length);
+        let type_name = self.pattern_binding_types.get(&key).cloned();
+        let target_ty: Option<BasicTypeEnum<'ctx>> =
+            type_name.as_ref().and_then(|n| match n.as_str() {
+                "String" | "str" | "Vec" => Some(self.vec_struct_type().into()),
+                "Slice" => Some(self.slice_struct_type().into()),
+                _ => self.struct_types.get(n.as_str()).map(|st| (*st).into()),
+            });
+        // Heuristic fallback when the typechecker didn't record a name:
+        // 3 words → vec/string shape; 2 words → slice shape.
+        let target_ty: BasicTypeEnum<'ctx> = target_ty.unwrap_or_else(|| match field_words.len() {
+            3 => self.vec_struct_type().into(),
+            2 => self.slice_struct_type().into(),
+            _ => self.vec_struct_type().into(),
+        });
+        let st = match target_ty {
+            BasicTypeEnum::StructType(s) => s,
+            _ => self.vec_struct_type(),
+        };
+        let mut agg = st.get_undef();
+        // Reconstruct field-by-field. Each LLVM field of the target
+        // struct corresponds to one i64 word in source-declaration order
+        // (matches `coerce_to_payload_words`'s decomposition shape).
+        let n_fields = st.count_fields() as usize;
+        for i in 0..n_fields {
+            if i >= field_words.len() {
+                break;
+            }
+            let word = field_words[i];
+            let field_ty = st
+                .get_field_type_at_index(i as u32)
+                .ok_or_else(|| format!("field type at index {} missing", i))?;
+            let field_val: BasicValueEnum<'ctx> = match field_ty {
+                BasicTypeEnum::IntType(it) => {
+                    if it.get_bit_width() == 64 {
+                        word.into()
+                    } else if it.get_bit_width() < 64 {
+                        self.builder
+                            .build_int_truncate(word, it, "pl.tr")
+                            .unwrap()
+                            .into()
+                    } else {
+                        self.builder
+                            .build_int_z_extend(word, it, "pl.zx")
+                            .unwrap()
+                            .into()
+                    }
+                }
+                BasicTypeEnum::FloatType(ft) => {
+                    self.builder.build_bit_cast(word, ft, "pl.fc").unwrap()
+                }
+                BasicTypeEnum::PointerType(_) => self
+                    .builder
+                    .build_int_to_ptr(word, ptr_ty, "pl.itop")
+                    .unwrap()
+                    .into(),
+                _ => word.into(),
+            };
+            agg = self
+                .builder
+                .build_insert_value(agg, field_val, i as u32, "pl.iv")
+                .unwrap()
+                .into_struct_value();
+        }
+        Ok(agg.into())
+    }
+
     /// Bind variable names from a pattern against the scrutinee value.
     fn bind_pattern_values(
         &mut self,
@@ -13667,30 +14058,69 @@ impl<'ctx> Codegen<'ctx> {
                         ty: scrut.get_type(),
                     },
                 );
+                // Compound-payload enum codegen (CP4): when the
+                // typechecker recorded a surface name for this binding
+                // (set in `check_pattern_against`), propagate it to
+                // `var_type_names` so subsequent method-dispatch (e.g.
+                // `xs.len()` on a `Vec[T]` payload) routes to the right
+                // collection type. The Vec/String/Slice families are
+                // looked up by name in `compile_method_call` via this
+                // table; user struct types use it for `.field` access.
+                let key = (pattern.span.offset, pattern.span.length);
+                if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
+                    self.var_type_names.insert(name.clone(), type_name);
+                }
                 Ok(())
             }
             PatternKind::TupleVariant { path, patterns } => {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
+                // Compound-payload enum codegen (CP4 destructure side):
+                // resolve the variant's per-field word ranges from the
+                // enum layout. Falls back to "one word per field at
+                // sequential offsets" if the layout is missing (legacy
+                // shape compatibility for tests/IR snippets that don't
+                // declare an enum).
+                let offsets: Vec<(usize, usize)> = self
+                    .enum_layouts
+                    .values()
+                    .find(|l| l.tags.contains_key(variant_name))
+                    .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
+                    .unwrap_or_else(|| (0..patterns.len()).map(|i| (i, 1)).collect());
+
                 // Shared enum: extract payload via GEP (words at heap index 2+).
                 if let BasicValueEnum::PointerValue(ptr) = scrut {
                     for (enum_name, layout) in &self.enum_layouts.clone() {
                         if layout.tags.contains_key(variant_name) {
                             if let Some(info) = self.shared_types.get(enum_name).cloned() {
                                 for (i, sub_pat) in patterns.iter().enumerate() {
-                                    let word_ptr = self
-                                        .builder
-                                        .build_struct_gep(
-                                            info.heap_type,
-                                            ptr,
-                                            (i + 2) as u32,
-                                            "sh_payload",
-                                        )
-                                        .unwrap();
-                                    let word = self
-                                        .builder
-                                        .build_load(self.context.i64_type(), word_ptr, "payload")
-                                        .unwrap();
-                                    self.bind_pattern_values(sub_pat, word)?;
+                                    let (start_word, num_words) =
+                                        offsets.get(i).copied().unwrap_or((i, 1));
+                                    let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
+                                        Vec::with_capacity(num_words);
+                                    for j in 0..num_words {
+                                        let word_ptr = self
+                                            .builder
+                                            .build_struct_gep(
+                                                info.heap_type,
+                                                ptr,
+                                                (start_word + j + 2) as u32,
+                                                "sh_payload",
+                                            )
+                                            .unwrap();
+                                        let w = self
+                                            .builder
+                                            .build_load(
+                                                self.context.i64_type(),
+                                                word_ptr,
+                                                "payload",
+                                            )
+                                            .unwrap()
+                                            .into_int_value();
+                                        field_words.push(w);
+                                    }
+                                    let bound =
+                                        self.reconstruct_payload_value(sub_pat, &field_words)?;
+                                    self.bind_pattern_values(sub_pat, bound)?;
                                 }
                                 return Ok(());
                             }
@@ -13700,11 +14130,23 @@ impl<'ctx> Codegen<'ctx> {
                 // Non-shared enum: extract payload words from the struct value.
                 if let BasicValueEnum::StructValue(sv) = scrut {
                     for (i, sub_pat) in patterns.iter().enumerate() {
-                        let word = self
-                            .builder
-                            .build_extract_value(sv, (i + 1) as u32, "payload")
-                            .unwrap();
-                        self.bind_pattern_values(sub_pat, word)?;
+                        let (start_word, num_words) = offsets.get(i).copied().unwrap_or((i, 1));
+                        let mut field_words: Vec<inkwell::values::IntValue<'ctx>> =
+                            Vec::with_capacity(num_words);
+                        for j in 0..num_words {
+                            let w = self
+                                .builder
+                                .build_extract_value(
+                                    sv,
+                                    (start_word + j + 1) as u32, // +1 for tag
+                                    "payload",
+                                )
+                                .unwrap()
+                                .into_int_value();
+                            field_words.push(w);
+                        }
+                        let bound = self.reconstruct_payload_value(sub_pat, &field_words)?;
+                        self.bind_pattern_values(sub_pat, bound)?;
                     }
                 }
                 Ok(())

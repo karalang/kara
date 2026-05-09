@@ -2263,6 +2263,7 @@ impl<'a> TypeChecker<'a> {
         self.validate_derive_copy();
         self.validate_copy_implies_clone();
         self.validate_derived_traits_recursive();
+        self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();
         self.check_items();
@@ -4066,6 +4067,73 @@ impl<'a> TypeChecker<'a> {
         self.validate_derived_trait("Ord", |this, ty| this.type_supports_ord(ty));
         self.validate_derived_trait("PartialOrd", |this, ty| this.type_supports_partial_ord(ty));
         self.validate_derive_display_on_enums();
+    }
+
+    /// Compound-payload enum codegen (Slice CP, CP5 carve-out) —
+    /// reject enum variants whose payload field type is itself a
+    /// (non-shared) user enum. v1 ships single-level enum-payload
+    /// nesting only; the layout pass cannot size a recursively-nested
+    /// payload area without an infinite-recursion guard, and the
+    /// canonical workaround is to wrap the inner enum in `Vec`,
+    /// `shared` (RC pointer), or a `Box`-style indirection. Recursion
+    /// through `Vec[T]`, `Slice[T]`, tuples, or `shared` enums is
+    /// fine — those layers stop the size recursion at one indirection.
+    fn validate_enum_payload_no_nested_enum(&mut self) {
+        // Collect enum names for the carve-out check. `shared` enums
+        // are heap-allocated via RC, so a payload field of type
+        // `SharedFoo` is a single pointer word and is allowed.
+        let value_enum_names: std::collections::HashSet<String> = self
+            .program
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Item::EnumDef(e) if !e.is_shared => Some(e.name.clone()),
+                _ => None,
+            })
+            .collect();
+
+        // Walk every enum variant and inspect its payload field types.
+        // The payload field's `TypeExpr` -> head segment is the
+        // user-visible type name; if that name is a value enum, emit
+        // the diagnostic. We only flag the *direct* head; recursion
+        // through `Vec[Inner]` etc. is intentionally allowed
+        // (CP5 carve-out is about size-recursion, not name presence).
+        let items: Vec<_> = self.program.items.clone();
+        for item in &items {
+            if let Item::EnumDef(e) = item {
+                if e.is_shared {
+                    continue;
+                }
+                for variant in &e.variants {
+                    let field_tys: Vec<&TypeExpr> = match &variant.kind {
+                        VariantKind::Unit => Vec::new(),
+                        VariantKind::Tuple(tys) => tys.iter().collect(),
+                        VariantKind::Struct(fields) => fields.iter().map(|f| &f.ty).collect(),
+                    };
+                    for ty in field_tys {
+                        if let TypeKind::Path(path) = &ty.kind {
+                            if let Some(head) = path.segments.first() {
+                                if value_enum_names.contains(head) {
+                                    self.type_error(
+                                        format!(
+                                            "error[E_ENUM_NESTED_ENUM_PAYLOAD]: enum variant \
+                                             '{}.{}' has a payload of nested enum type '{}' — \
+                                             v1 only supports up to one level of enum nesting; \
+                                             either flatten the variant, mark the inner enum as \
+                                             `shared` (RC pointer), or wrap it in a `Vec` / \
+                                             collection layer",
+                                            e.name, variant.name, head
+                                        ),
+                                        variant.span.clone(),
+                                        TypeErrorKind::TypeMismatch,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /// `#[derive(Display)]` on enums only works for all-unit-variant enums.

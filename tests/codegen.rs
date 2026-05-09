@@ -7397,4 +7397,215 @@ fn main() {
             ir
         );
     }
+
+    // ── Compound-payload enum codegen ─────────────────────────────
+    //
+    // Slice CP (Phase 7.2 — 2026-05-09) lights up multi-word payload
+    // round-trip for `enum E { V(String) }`, `enum E { V(Vec[T]) }`,
+    // user-struct payloads, and tag-gated mixed-width variants. Before
+    // this slice the construction path collapsed any non-primitive
+    // payload to a single zero word via `coerce_to_i64`'s catch-all.
+    // The 8 tests below pin the layout machinery: (1) `String`
+    // round-trip, (2) `Vec[i64]` round-trip via function dispatch
+    // (because pattern-bound Vec methods don't yet have elem-type
+    // re-registration — see CP slice's "Out of scope, still open"),
+    // (3) `Vec[(String, i64)]` (the Slice F `Json.Object` shape),
+    // (4) user-struct payload, (5) mixed-width V1 narrow path,
+    // (6) mixed-width V2 wide path, (7) two-string-variant payload-
+    // area sharing, (8) regression gate for `IoError.Other(String)`.
+
+    #[test]
+    fn test_compound_enum_string_payload_round_trip() {
+        let out = run_program(
+            r#"
+enum E { V(String) }
+fn main() {
+    let e = V("alice");
+    match e {
+        V(s) => println(s),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "alice");
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_vec_payload_round_trip() {
+        // Method dispatch on the bound `xs` is not registered with
+        // `vec_elem_types` at match-arm bind time (the typechecker's
+        // `pattern_binding_types` map is name-only, not parameterized);
+        // route the Vec through a `ref Vec[i64]` parameter so the
+        // existing function-arg path registers the elem type.
+        let out = run_program(
+            r#"
+enum E { V(Vec[i64]) }
+fn sum(xs: ref Vec[i64]) -> i64 {
+    let mut acc = 0;
+    for x in xs { acc = acc + x; }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(8);
+    let e = V(v);
+    match e {
+        V(xs) => println(sum(xs)),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15");
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_vec_of_tuples_payload_round_trip() {
+        // Slice F's `Json.Object` shape: `Vec[(String, i64)]`.
+        // Tuples are compound aggregates, so this exercises the
+        // recursive payload-word computation through the Vec layer
+        // (Vec → 3 words; tuple-element type is ignored at the Vec
+        // level since heap memory is the elem buffer).
+        let out = run_program(
+            r#"
+enum E { V(Vec[(String, i64)]) }
+fn count(xs: ref Vec[(String, i64)]) -> i64 {
+    xs.len()
+}
+fn main() {
+    let mut v: Vec[(String, i64)] = Vec.new();
+    v.push(("alpha", 1));
+    v.push(("beta", 2));
+    let e = V(v);
+    match e {
+        V(xs) => println(count(xs)),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_user_struct_payload_round_trip() {
+        let out = run_program(
+            r#"
+struct Point { x: i64, y: i64 }
+enum E { V(Point) }
+fn main() {
+    let p = Point { x: 3, y: 4 };
+    let e = V(p);
+    match e {
+        V(q) => {
+            println(q.x);
+            println(q.y);
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "4"]);
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_mixed_width_variants_v1_uses_one_word() {
+        let out = run_program(
+            r#"
+enum E { V1(i64), V2(String) }
+fn main() {
+    let e = V1(42);
+    match e {
+        V1(x) => println(x),
+        V2(_s) => println(99),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_mixed_width_variants_v2_uses_three_words() {
+        let out = run_program(
+            r#"
+enum E { V1(i64), V2(String) }
+fn main() {
+    let e = V2("hello");
+    match e {
+        V1(_x) => println(0),
+        V2(s) => println(s),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "hello");
+        }
+    }
+
+    #[test]
+    fn test_compound_enum_two_variants_both_string_payload_share_words() {
+        let out = run_program(
+            r#"
+enum E { V1(String), V2(String) }
+fn main() {
+    let a = V1("first");
+    let b = V2("second");
+    match a {
+        V1(s) => println(s),
+        V2(_s) => println("nope"),
+    }
+    match b {
+        V1(_s) => println("nope"),
+        V2(s) => println(s),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["first", "second"]);
+        }
+    }
+
+    #[test]
+    fn test_io_error_other_string_round_trip() {
+        // The regression gate for Slice CP. Pins the previously-latent
+        // gap where `coerce_to_i64`'s catch-all silently zeroed any
+        // multi-word payload. The IoError prelude type isn't spliced
+        // into `program.items` for parser-mode tests, so we mirror its
+        // shape with `MyIoErr` to stand in for the round-trip
+        // semantics. If this test ever regresses, the latent gap has
+        // returned and the slice CP layout machinery has drifted.
+        let out = run_program(
+            r#"
+enum MyIoErr {
+    NotFound,
+    PermissionDenied,
+    Other(String),
+}
+fn main() {
+    let e = MyIoErr.Other("disk full");
+    match e {
+        Other(msg) => println(msg),
+        _ => println("wrong variant"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "disk full");
+        }
+    }
 }
