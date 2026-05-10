@@ -375,3 +375,98 @@ which is the busy_loop critical-path itself). The headline is
 made by *under-load behavior* — same place `karac_par_run`'s
 work-helping pays off. So the next H2 probe should also be
 A/B-tested with the connection sweep, not just cold-start.
+
+### 2026-05-10 — H2 step 1 (cheap part) — null result, but clean code stays
+
+**Probe.** Eliminated intermediate `String` allocations in the
+trampoline (`runtime/src/lib.rs:serve_request`). Previously each
+request did `.to_string()` on `parts.method.as_str()`,
+`parts.uri.path()`, `parts.uri.query()`, plus `.to_string()` on
+each header key/value pair — buying owned `String`s that were
+immediately consumed by `CString::new(...)`. The `.to_string()`
+calls were unnecessary because `CString::new` accepts
+`Into<Vec<u8>>` which `&str` satisfies directly. Saved
+allocations per request: **3 (path/method/query) + 2N (header
+pairs)**. For our wrk-driven bench (Host + User-Agent + Accept
+≈ N=3), that's 9 allocs/req eliminated.
+
+**Bench result — Kāra row, before vs after H2 step 1:**
+
+| -c    | mode | rps before | rps after | p50 before | p50 after | p99 before | p99 after |
+|-------|------|------------|-----------|------------|-----------|------------|-----------|
+| 100   | =1   | 731        | 727       | 133        | 133       | 289        | 300       |
+| 100   | =0   | 736        | 732       | 134        | 135       | 257        | 262       |
+| 1000  | =1   | 687        | 690       | 1200       | 1240      | 1950       | 1960      |
+| 1000  | =0   | 734        | 726       | 707        | 837       | 1950       | 1960      |
+| 5000  | =1   | 679        | 673       | 1190       | 1370      | 1980       | 1980      |
+| 5000  | =0   | 729        | 722       | 769        | 809       | 1970       | 1960      |
+
+**Δ across all rows: within 1 % run-to-run noise.** Eliminating
+9 allocations per request did not move any measurable metric.
+
+**What this tells us.** At our ~700 rps scale, ~6 K
+allocations/sec sit well below where macOS's `malloc` becomes a
+hot path (~1-10 M ops/sec is typical onset). The H2 hypothesis
+listed allocator pressure as a candidate; this probe rules out
+"the *intermediate* `String` allocations on the trampoline path
+are bottlenecking us". The full H2 thesis (Request/Response
+packing, per-request `String::from(req.path())` returned to the
+handler, `Bytes::copy_from_slice` for the response body, hyper
+`Response` building) still has remaining surface — but the
+*cheap-to-eliminate* fraction is null.
+
+**Decision: keep the change.** No perf regression; cleaner code
+(the `&str` view path more accurately reflects the FFI's actual
+needs); reduces allocator traffic (even if not at a level that
+matters today, every order of magnitude of throughput growth
+makes it matter more). Doesn't ship a perf headline; ships a
+quality-of-implementation improvement.
+
+**What's left in H2 to probe (and what to expect).**
+
+1. **Length-prefixed FFI** to eliminate the per-request
+   `CString` allocations. Requires changing `KaracHttpRequest`
+   shape from `*const c_char` (null-terminated) to `(*const u8,
+   usize)`, updating `karac_runtime_http_request_path` to return
+   a `(ptr, len)` pair, and threading the change through Kāra-
+   side codegen for `req.path()`. Eliminates 3+N allocs per
+   request — at our scale, expected impact: same null result
+   (allocator isn't the bottleneck). At 100 K+ rps it would
+   matter.
+2. **Borrowed accessors with lifetime threading** — the full
+   design from `demo_ideas.md § Slice E` "Out of scope". Adds
+   `ref StringSlice` to Kāra's borrow checker and lifetime-
+   threads hyper's request through the FFI boundary. Big
+   surface; payoff is at high-throughput / no-work shapes,
+   not at our CPU-saturated bench.
+3. **Inline trampoline** — emit shim body at handler call site
+   instead of as separate symbol. Saves one PLT indirection per
+   request; at 700 rps × ~10 ns = 7 µs/sec of CPU. Negligible
+   for the bench; matters at hyper-class scale.
+4. **`#[repr(C)]`-compatible Request** — let user code see
+   hyper's bytes directly, no packing layer. Largest design
+   surface; biggest payoff. But like (2), pays off at no-work
+   throughput, not CPU-saturated.
+
+**Honest assessment of H2's remaining work for the Parallax
+bench.** None of (1)-(4) will meaningfully move the bench
+numbers. The bench is saturated on busy_loop CPU, not on HTTP
+overhead. The investigation's goals split:
+- For *clean runtime architecture*: (1) is worth shipping as a
+  v1.x improvement when we touch the FFI for other reasons.
+  (2)-(4) are post-v1 design depth.
+- For *hitting 1M+ rps on a no-work bench*: (1) + (3) + (4)
+  would each contribute roughly 10-30 % to the hyper-floor
+  ceiling, which is itself ~500 K-1 M rps for HTTP/1 plaintext
+  on this hardware.
+
+**Recommended pivot.** Rather than pursue H2 (1)-(4) sequentially
+under the current "Parallax-bench-throughput" framing — none of
+them will move it — switch the framing. Either (a) build a
+separate *plaintext-throughput* bench (no busy_loops, just
+return a static "OK") and pursue H2 (1)-(4) against it, where
+the impact is measurable; or (b) accept the current numbers as
+the Parallax story (Kāra at parity with Rust on CPU-bound fan-
+out, with significantly better tail latency) and pursue H2 work
+when there's an unrelated need (e.g., FFI surface change for
+header-round-trip support).

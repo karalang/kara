@@ -2232,15 +2232,6 @@ async fn serve_request(
         Err(_) => bytes::Bytes::new(),
     };
 
-    let method_str = parts.method.as_str().to_string();
-    let path_str = parts.uri.path().to_string();
-    let query_str = parts.uri.query().unwrap_or("").to_string();
-    let header_pairs: Vec<(String, String)> = parts
-        .headers
-        .iter()
-        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
-        .collect();
-
     // H1 probe surface (`docs/investigations/http_layer_perf.md`):
     // `KARAC_HTTP_BLOCK_IN_PLACE=0` skips the `block_in_place`
     // wrapper and runs the handler closure directly on the tokio
@@ -2254,15 +2245,27 @@ async fn serve_request(
         std::env::var("KARAC_HTTP_BLOCK_IN_PLACE").as_deref(),
         Ok("0")
     );
+    // H2 step 1 (cheap part) — eliminate intermediate `String` allocs.
+    // `parts` is moved into the closure and `&str` views are taken
+    // *inside* it, then handed straight to `CString::new` (which
+    // accepts `Into<Vec<u8>>` and so takes `&str` directly). Saves
+    // ~3 String allocs (method/path/query) + 2N for headers per
+    // request. The CString allocs themselves remain — killing those
+    // requires a length-prefixed FFI shape (next step). See
+    // `docs/investigations/http_layer_perf.md § H2`.
     let invoke = move || {
+        let method_str: &str = parts.method.as_str();
+        let path_str: &str = parts.uri.path();
+        let query_str: &str = parts.uri.query().unwrap_or("");
         let method_cstr = std::ffi::CString::new(method_str).unwrap_or_default();
         let path_cstr = std::ffi::CString::new(path_str).unwrap_or_default();
         let query_cstr = std::ffi::CString::new(query_str).unwrap_or_default();
-        let mut hdr_keys: Vec<std::ffi::CString> = Vec::with_capacity(header_pairs.len());
-        let mut hdr_vals: Vec<std::ffi::CString> = Vec::with_capacity(header_pairs.len());
-        for (k, v) in header_pairs.into_iter() {
-            hdr_keys.push(std::ffi::CString::new(k).unwrap_or_default());
-            hdr_vals.push(std::ffi::CString::new(v).unwrap_or_default());
+        let header_count = parts.headers.len();
+        let mut hdr_keys: Vec<std::ffi::CString> = Vec::with_capacity(header_count);
+        let mut hdr_vals: Vec<std::ffi::CString> = Vec::with_capacity(header_count);
+        for (k, v) in parts.headers.iter() {
+            hdr_keys.push(std::ffi::CString::new(k.as_str()).unwrap_or_default());
+            hdr_vals.push(std::ffi::CString::new(v.to_str().unwrap_or("")).unwrap_or_default());
         }
         let hdr_keys_ptrs: Vec<*const std::os::raw::c_char> =
             hdr_keys.iter().map(|c| c.as_ptr()).collect();
