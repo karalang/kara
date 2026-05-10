@@ -1,0 +1,12 @@
+{
+  "name": "parallax-bench-node",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Slice E — Node reference impl for the three-language Parallax bench (single-process per F4).",
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}

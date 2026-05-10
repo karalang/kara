@@ -1,5 +1,12 @@
 [workspace]
 members = ["runtime"]
+# Slice E (Parallax bench harness, 2026-05-09) — the `examples/parallax/
+# bench/rust/` subproject is a self-contained reference implementation
+# of the bench server in idiomatic tokio + hyper. Excluded from the
+# karac-rust workspace so its dep tree (hyper / tokio / hyper-util)
+# resolves independently of the compiler crate's deps and isn't built
+# as part of `cargo test` in this workspace.
+exclude = ["examples/parallax/bench/rust"]
 
 [package]
 name = "karac"

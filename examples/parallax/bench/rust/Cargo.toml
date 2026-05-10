@@ -1,0 +1,18 @@
+[package]
+name = "parallax-bench-rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone — not part of the karac-rust workspace. Slice E F4: Rust
+# is the natural perf ceiling and uses the same tokio runtime stack as
+# Kāra; isolating its dep tree keeps the workspace's cargo resolve
+# from churning on hyper / tower / axum versions when this bench
+# crate's deps update.
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+bytes = "1"
