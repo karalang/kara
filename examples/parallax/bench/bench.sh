@@ -339,13 +339,68 @@ run_wrk_aggregated() {
   '
 }
 
+# ── Cold-start probe ────────────────────────────────────────────────
+# Runs a single wrk -t1 -c1 -d1s window immediately after server
+# spawn — captures the first ~100 (varies by impl speed) requests on
+# the cold runtime, before any other wrk traffic touches the server.
+# Emits a row to stdout with the same percentile shape as the
+# steady-state aggregator:
+#   `<name>|cold|<rps>|<rps>|<rps>|<p50>|<p75>|<p90>|<p99>|<max>`
+# (rps cell repeats min/max because cold-start is a single
+# measurement, not aggregated across runs.)
+#
+# Why -t1 -c1 sequential rather than -c100 burst: cold-start as
+# usually framed answers "what does my first user see when they hit a
+# freshly-deployed server?" — a sequential measurement of the first
+# N requests captures the warm-up curve cleanly. Concurrent cold-
+# start (load-during-warmup) is a separate question; if HTTP-layer
+# work needs that view it can land as a follow-up flag. See
+# `docs/investigations/bench_robustness.md § G5`.
+run_cold_start() {
+  port="$1"
+  url="http://127.0.0.1:$port/dashboard/1"
+  out=$(wrk -t1 -c1 -d1s --latency "$url" 2>&1) || true
+  echo "$out" | awk '
+    function to_ms(v,    n, u) {
+      n = v + 0
+      u = v
+      sub(/^[0-9.]+/, "", u)
+      if (u == "us") return n / 1000.0
+      if (u == "ms") return n
+      if (u == "s")  return n * 1000.0
+      if (u == "m")  return n * 60000.0
+      return n
+    }
+    /^Requests\/sec:/ { rps = $2 + 0 }
+    /^[[:space:]]+Latency[[:space:]]+[0-9]/ { lat_max = to_ms($4) }
+    /^[[:space:]]+50%[[:space:]]/  { p50 = to_ms($2) }
+    /^[[:space:]]+75%[[:space:]]/  { p75 = to_ms($2) }
+    /^[[:space:]]+90%[[:space:]]/  { p90 = to_ms($2) }
+    /^[[:space:]]+99%[[:space:]]/  { p99 = to_ms($2) }
+    END {
+      if (rps) {
+        printf "%.2f|%.2f|%.2f|%s|%s|%s|%s|%s\n",
+          rps, rps, rps,
+          (p50 ? sprintf("%.2f", p50) : "NA"),
+          (p75 ? sprintf("%.2f", p75) : "NA"),
+          (p90 ? sprintf("%.2f", p90) : "NA"),
+          (p99 ? sprintf("%.2f", p99) : "NA"),
+          (lat_max ? sprintf("%.2f", lat_max) : "NA")
+      } else {
+        printf "NA|NA|NA|NA|NA|NA|NA|NA\n"
+      }
+    }
+  '
+}
+
 # ── Run one impl across all connection counts ───────────────────────
 # $1 = impl tag (k|r|g|n), $2 = display name, $3 = prepare fn,
 # $4 = run command (path to exe / interp). Builds the impl, launches
-# the server once, runs a one-time warmup, then sweeps connection
+# the server once, runs the cold-start probe, then sweeps connection
 # counts × runs and emits one result row per (impl, conn) to stdout.
 # Rows have the form:
 #   `<name>|<conns>|<rps_med>|<rps_min>|<rps_max>|<p50>|<p75>|<p90>|<p99>|<max>`
+# Cold-start row uses `cold` as the conn marker.
 run_impl() {
   tag="$1"
   name="$2"
@@ -356,14 +411,17 @@ run_impl() {
   fi
   if [ "$DRY_RUN" -eq 1 ]; then
     "$prepare" || true
-    # Emit a placeholder row per connection count so --dry-run output
-    # exercises the same shape as the real output.
+    # Emit placeholder rows so --dry-run output exercises the same
+    # shape as the real output: one cold-start row + one row per
+    # connection count.
+    echo "$name|cold|DRY|DRY|DRY|DRY|DRY|DRY|DRY|DRY"
     for c in $(echo "$CONNECTIONS_LIST" | tr ',' ' '); do
       echo "$name|$c|DRY|DRY|DRY|DRY|DRY|DRY|DRY|DRY"
     done
     return 0
   fi
   if ! "$prepare"; then
+    echo "$name|cold|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP"
     for c in $(echo "$CONNECTIONS_LIST" | tr ',' ' '); do
       echo "$name|$c|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP|SKIP"
     done
@@ -389,6 +447,13 @@ run_impl() {
     trap - EXIT INT TERM
     return 0
   fi
+  # Cold-start probe — runs FIRST, before any other wrk traffic
+  # touches the server. Captures the first ~N requests (N varies by
+  # impl speed in the 1s window) on the cold runtime: per-task
+  # allocator state, lazy-init paths (`karac_par_run`'s `OnceLock`
+  # pool, tokio's blocking-pool first-spawn, V8 tier-up JIT, etc.).
+  cold=$(run_cold_start "$port") || cold="NA|NA|NA|NA|NA|NA|NA|NA"
+  echo "$name|cold|$cold"
   # Optional one-time per-server warmup at the smallest connection
   # count. Default WARMUP_SEC=0 (skipped); see DRY_RUN-section
   # comment on default rationale.
@@ -445,14 +510,33 @@ results="$results
 $out"
 
 echo
-echo "Results — req/s reported as median across $RUNS rounds, [min..max] in brackets;"
-echo "          latencies are median across rounds in milliseconds."
+echo "Cold-start (first ~1s after server spawn, -t1 -c1 sequential)"
+echo
+printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+  "impl" "req/s" "p50 ms" "p75 ms" "p90 ms" "p99 ms" "max ms"
+printf "  %s\n" "-------+----------------------------+----------+----------+----------+----------+----------"
+printf "%s\n" "$results" | while IFS='|' read -r name conns rps_med rps_min rps_max p50 p75 p90 p99 lmax; do
+  [ -z "$name" ] && continue
+  [ "$conns" = "cold" ] || continue
+  if [ "$rps_med" = "DRY" ] || [ "$rps_med" = "SKIP" ] || [ "$rps_med" = "NA" ]; then
+    printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+      "$name" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med"
+  else
+    printf "  %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
+      "$name" "$rps_med" "$p50" "$p75" "$p90" "$p99" "$lmax"
+  fi
+done
+
+echo
+echo "Steady-state — req/s reported as median across $RUNS rounds, [min..max] in brackets;"
+echo "               latencies are median across rounds in milliseconds."
 echo
 printf "  %-6s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
   "impl" "-c" "req/s (med [min..max])" "p50 ms" "p75 ms" "p90 ms" "p99 ms" "max ms"
-printf "  %s\n" "------+--------+----------------------------+----------+----------+----------+----------+----------"
+printf "  %s\n" "-------+--------+----------------------------+----------+----------+----------+----------+----------"
 printf "%s\n" "$results" | while IFS='|' read -r name conns rps_med rps_min rps_max p50 p75 p90 p99 lmax; do
   [ -z "$name" ] && continue
+  [ "$conns" = "cold" ] && continue
   if [ "$rps_med" = "DRY" ] || [ "$rps_med" = "SKIP" ] || [ "$rps_med" = "NA" ]; then
     printf "  %-6s | %-6s | %-26s | %-8s | %-8s | %-8s | %-8s | %-9s\n" \
       "$name" "$conns" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med" "$rps_med"

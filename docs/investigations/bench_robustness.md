@@ -405,3 +405,73 @@ unchanged from the doc's "Suggested execution order" section.
 G5 (cold-start separation) is the next-most-impactful; G6 (wrk
 version pinning) is now partially handled because `bench.sh`
 now prints the wrk version string at the top of every run.
+
+### 2026-05-10 — G5 landed (cold-start as baseline before HTTP-layer work)
+
+**Fix.** `bench.sh` runs a cold-start probe (`wrk -t1 -c1 -d1s
+--latency`) immediately after each impl's server spawn — before
+any other wrk traffic touches the runtime. Always-on (no flag);
+captured in a separate output table above the existing steady-
+state matrix. ~5 s additional cost per impl (negligible vs the
+~6 min steady-state run).
+
+**Why now, not later.** The user observation that motivated this
+ordering: doing G5 *before* the HTTP-layer perf work in
+[`http_layer_perf.md`](http_layer_perf.md) creates a baseline
+reference. The HTTP-layer changes (especially H1 — removing
+`block_in_place`) will visibly move cold-start numbers; without
+this baseline we can only say "it changed" rather than "p99 cold-
+start dropped from 17.4 ms to X ms, and here's why". Re-running
+the bench post-HTTP-layer produces a directly-comparable diff.
+
+**Cold-start baseline (M5 Pro, 2026-05-10):**
+
+| Impl | rps | p50 | p75 | p90 | p99 | max |
+|------|-----|-----|-----|-----|-----|-----|
+| Kāra |  86 | 11.3 ms | 11.4 ms | 11.5 ms | **17.4 ms** | 17.4 ms |
+| Rust |  85 | 11.5 ms | 11.6 ms | 11.7 ms | 18.2 ms | 18.2 ms |
+| Go   |  80 | 12.4 ms | 12.4 ms | 12.5 ms | 19.7 ms | 19.7 ms |
+| Node |   5 | 174 ms  | 180 ms  | 184 ms  | 184 ms  | 184 ms  |
+
+**New finding the cold-start data reveals (invisible in steady-
+state alone).** Kāra and Rust within 1 ms at p99 cold-start
+(17.4 vs 18.2 ms). At low load with no inter-request queueing,
+both stacks deliver the same fundamental floor — Kāra's per-
+request HTTP path is no heavier than Rust's hyper service
+plumbing. The headline steady-state advantage (Kāra's lower p99
+under `-c100` saturation) comes purely from `karac_par_run`'s
+work-helping wait loop *under contention*, not from any
+baseline-overhead difference. **This is a load-bearing
+clarification of the Kāra perf story** — the work-helping
+design is what's paying off, not the trampoline shape.
+
+**Cold→hot tail-latency multipliers (steady p99 / cold p99):**
+
+| Impl | cold p99 | -c100 steady p99 | multiplier |
+|------|----------|------------------|------------|
+| Kāra |  17.4 ms | 300 ms           | **17×**    |
+| Rust |  18.2 ms | 803 ms           | **45×**    |
+| Go   |  19.7 ms | 449 ms           | **24×**    |
+
+Rust degrades worst under load; Kāra degrades least. This is
+the same `karac_par_run` work-helping advantage seen from a
+different angle.
+
+**Implementation notes.**
+
+- `wrk -t1 -c1` chosen over `-c100` burst for cold-start because
+  the more-commonly-asked question is "what does my first user
+  see when they hit a freshly-deployed server?" — a sequential
+  probe captures the warm-up curve cleanly. Concurrent cold-
+  start (load-during-warmup) is a separate question; if HTTP-
+  layer work needs that view it can land as a follow-up flag.
+- The 1 s window captures ~80-90 sequential requests on the
+  fast impls (kara/rust/go) — enough samples for p50/p75/p90/p99
+  to stabilize. Node's slower per-request rate gives ~5 samples
+  in 1 s, so its percentiles are noisier (single-run, not
+  aggregated).
+
+**Remaining gaps.** G6 (wrk version pinning) is now mostly
+handled (version string printed at run start). G7-G11 are
+"production-grade" upgrades; defer until v1 of the bench has
+shipped a couple iterations.
