@@ -4756,32 +4756,36 @@ fn test_method_resolution_no_suggestion_when_nothing_close() {
 
 #[test]
 fn test_method_resolution_specialized_impl_wrong_args_fires_diagnostic() {
-    // `impl Option[Ordering] { fn is_lt(...) }` is the only declaration
-    // of `is_lt` on Option. Calling `is_lt()` on `Option[i32]` must
-    // emit NoMethodFound — args-aware lookup fails, but the silent
-    // fall-through is overridden because `is_lt` exists on a different
-    // specialization of Option.
+    // User declares `is_lt` on `Option[bool]`. Calling `is_lt()` on
+    // `Option[i64]` must emit NoMethodFound — args-aware lookup fails,
+    // but the silent fall-through is overridden because `is_lt` exists
+    // on a different specialization of Option (and also on the baked
+    // `impl Option[Ordering]` from `runtime/stdlib/option.kara`).
+    // Specialization target is `Option[bool]` rather than
+    // `Option[Ordering]` to avoid colliding with the baked stdlib impl
+    // (the no-overlap guard rejects `impl Option[Ordering]`
+    // duplicates).
     let errors = typecheck_errors(
-        "impl Option[Ordering] { fn is_lt(ref self) -> bool { false } }\n\
+        "impl Option[bool] { fn is_lt(ref self) -> bool { false } }\n\
          fn main() { let o: Option[i64] = Some(5); o.is_lt(); }",
     );
     assert!(
         errors
             .iter()
             .any(|e| e.kind == TypeErrorKind::NoMethodFound),
-        "expected NoMethodFound for Option[i64].is_lt() against impl Option[Ordering], got: {:?}",
+        "expected NoMethodFound for Option[i64].is_lt() against impl Option[bool], got: {:?}",
         errors.iter().map(|e| &e.kind).collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn test_method_resolution_specialized_impl_correct_args_resolves() {
-    // Same impl, but called on the matching `Option[Ordering]`
+    // Same impl, but called on the matching `Option[bool]`
     // instantiation — must resolve cleanly with no NoMethodFound
     // diagnostic from the args-specialization tightening.
     typecheck_ok(
-        "impl Option[Ordering] { fn is_lt(ref self) -> bool { false } }\n\
-         fn main() { let o: Option[Ordering] = Some(Ordering.Less); o.is_lt(); }",
+        "impl Option[bool] { fn is_lt(ref self) -> bool { false } }\n\
+         fn main() { let o: Option[bool] = Some(true); o.is_lt(); }",
     );
 }
 

@@ -20,3 +20,19 @@ enum Option[T] {
     Some(T),
     None,
 }
+
+// Partial-comparison helpers for `Option[Ordering]`. Per design.md §
+// Comparison Traits (lines 5268-5277): `None` — "incomparable" — yields
+// `false` for every predicate, matching IEEE-754's `NaN < 5.0`,
+// `5.0 > NaN`, and `NaN == NaN` all being `false`. The baked-impl-walk
+// (precedent: `runtime/stdlib/ordering.kara:20-26`) registers this block
+// automatically; args-aware impl-table lookup (shipped 2026-05-08 at
+// `2b867a4`) routes `Option[Ordering].is_lt(...)` here while leaving
+// `Option[T].is_lt(...)` undefined for other T.
+impl Option[Ordering] {
+    fn is_lt(ref self) -> bool { match self { Some(Ordering.Less) => true, _ => false } }
+    fn is_le(ref self) -> bool { match self { Some(Ordering.Less) | Some(Ordering.Equal) => true, _ => false } }
+    fn is_gt(ref self) -> bool { match self { Some(Ordering.Greater) => true, _ => false } }
+    fn is_ge(ref self) -> bool { match self { Some(Ordering.Greater) | Some(Ordering.Equal) => true, _ => false } }
+    fn is_eq(ref self) -> bool { match self { Some(Ordering.Equal) => true, _ => false } }
+}

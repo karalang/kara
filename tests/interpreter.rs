@@ -2462,6 +2462,50 @@ fn test_ordering_helper_methods() {
 }
 
 #[test]
+fn test_option_ordering_helper_methods() {
+    // `impl Option[Ordering] { fn is_lt … }` per design.md § Comparison
+    // Traits (lines 5268-5277). Lives in baked source
+    // `runtime/stdlib/option.kara`. None yields `false` for every
+    // predicate (IEEE-754 NaN semantics). Exercises 4 inputs × 5
+    // helpers = 20 round-trips through the args-aware impl-table lookup
+    // (`Option[Ordering]` impl wins over the absence on generic
+    // `Option[T]`).
+    let output = run("fn main() {\n\
+             let lt: Option[Ordering] = Some(Ordering.Less);\n\
+             let eq: Option[Ordering] = Some(Ordering.Equal);\n\
+             let gt: Option[Ordering] = Some(Ordering.Greater);\n\
+             let none: Option[Ordering] = None;\n\
+             println(lt.is_lt());\n\
+             println(lt.is_le());\n\
+             println(lt.is_gt());\n\
+             println(lt.is_ge());\n\
+             println(lt.is_eq());\n\
+             println(eq.is_lt());\n\
+             println(eq.is_le());\n\
+             println(eq.is_gt());\n\
+             println(eq.is_ge());\n\
+             println(eq.is_eq());\n\
+             println(gt.is_lt());\n\
+             println(gt.is_le());\n\
+             println(gt.is_gt());\n\
+             println(gt.is_ge());\n\
+             println(gt.is_eq());\n\
+             println(none.is_lt());\n\
+             println(none.is_le());\n\
+             println(none.is_gt());\n\
+             println(none.is_ge());\n\
+             println(none.is_eq());\n\
+         }");
+    assert_eq!(
+        output,
+        "true\ntrue\nfalse\nfalse\nfalse\n\
+         false\ntrue\nfalse\ntrue\ntrue\n\
+         false\nfalse\ntrue\ntrue\nfalse\n\
+         false\nfalse\nfalse\nfalse\nfalse\n",
+    );
+}
+
+#[test]
 fn test_memory_ordering_variants() {
     let output = run("fn main() {\n\
              let r = MemoryOrdering.Relaxed;\n\
