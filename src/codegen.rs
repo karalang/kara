@@ -6380,6 +6380,7 @@ impl<'ctx> Codegen<'ctx> {
         method: &str,
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let args = _args;
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower
@@ -7057,6 +7058,111 @@ impl<'ctx> Codegen<'ctx> {
             } else {
                 Ok(basic_val.unwrap_basic())
             };
+        }
+
+        // `Vec.filled(n: i64, val: T) -> Vec[T]` — produces n copies of
+        // val. Spec at design.md:1631. Codegen: malloc(n * sizeof(elem)),
+        // loop i=0..n filling each slot with `val`, return
+        // `{data=buf, len=n, cap=n}`. Without this, the assoc-call falls
+        // through to the default i64 zero return and the let-binding
+        // allocates an i64-sized alloca for a Vec-typed binding —
+        // `v.len()` then GEPs past the alloca into stack garbage, the
+        // scope-exit cleanup `free`s a garbage pointer, and the binary
+        // exits SIGTRAP / SIGSEGV.
+        //
+        // Limitation: the per-slot store is `build_store(elem_ptr, val)`
+        // which is a bit-copy. For aggregate element types whose Kāra
+        // semantics need deep clone per slot (matches the interpreter's
+        // `deep_clone_value` fix at `beb7310` for nested-collection
+        // element types), the bit-copy aliases storage. The kata's
+        // `Vec.filled(cap + 1, Vec.new())` is safe because Vec.new
+        // returns an empty `{null, 0, 0}` aggregate — every slot points
+        // at null and the first `factors[j].push(...)` allocates a
+        // fresh buffer per row. Non-empty aggregate element types
+        // need a Clone-codegen upgrade (separate slice).
+        if type_name == "Vec" && method == "filled" {
+            if args.len() < 2 {
+                return Err("Vec.filled requires 2 arguments (n, val)".to_string());
+            }
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            let val = self.compile_expr(&args[1].value)?;
+            let elem_ty = val.get_type();
+            let elem_size = elem_ty.size_of().unwrap();
+            let i64_t = self.context.i64_type();
+            let fn_val = self.current_fn.unwrap();
+
+            // Allocate buffer: malloc(n * sizeof(elem)). `free(malloc(0))`
+            // is well-defined; we don't special-case n == 0.
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(n, elem_size, "filled.alloc_bytes")
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(self.malloc_fn, &[alloc_bytes.into()], "filled.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            // Fill loop: for i in 0..n { buf[i] = val }
+            let counter = self.create_entry_alloca(fn_val, "filled.i", i64_t.into());
+            self.builder
+                .build_store(counter, i64_t.const_int(0, false))
+                .unwrap();
+            let cond_bb = self.context.append_basic_block(fn_val, "filled.cond");
+            let body_bb = self.context.append_basic_block(fn_val, "filled.body");
+            let exit_bb = self.context.append_basic_block(fn_val, "filled.exit");
+
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(cond_bb);
+            let cur = self
+                .builder
+                .build_load(i64_t, counter, "filled.cur")
+                .unwrap()
+                .into_int_value();
+            let cond = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::ULT, cur, n, "filled.lt")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cond, body_bb, exit_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, buf, &[cur], "filled.elem.ptr")
+                    .unwrap()
+            };
+            self.builder.build_store(elem_ptr, val).unwrap();
+            let one = i64_t.const_int(1, false);
+            let next = self.builder.build_int_add(cur, one, "filled.next").unwrap();
+            self.builder.build_store(counter, next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(exit_bb);
+
+            // Build {data=buf, len=n, cap=n} aggregate.
+            let vec_ty = self.vec_struct_type();
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, buf, 0, "vec.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 1, "vec.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 2, "vec.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
         }
 
         if (type_name == "Vec" || type_name == "VecDeque") && method == "new" {

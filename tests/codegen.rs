@@ -1875,6 +1875,77 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_filled_i64_primitive() {
+        // `Vec.filled(n, val)` for a primitive element type — malloc +
+        // fill loop emit the {data, len, cap} aggregate. Before the
+        // fix, the assoc-call fell through to the default i64 zero
+        // return, the let-binding allocated an i64 alloca for a Vec-
+        // typed binding, and any later method dispatch GEP'd past it
+        // into stack garbage (SIGTRAP at runtime, "Built" at build).
+        let out = run_program(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.filled(3, 42);
+    println(v.len());
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n42\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_filled_bool_with_indexed_write() {
+        // Kata's `Vec.filled(n, false)` shape — followed by indexed
+        // writes flipping selected slots true.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[bool] = Vec.filled(4, false);
+    v[2] = true;
+    let mut i = 0i64;
+    while i < 4 {
+        println(v[i]);
+        i = i + 1;
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "false\nfalse\ntrue\nfalse");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_filled_nested_vec_independent_after_push() {
+        // The kata's sieve init shape: `Vec.filled(n, Vec.new())`.
+        // The per-slot bit-copy of the `Vec.new()` aggregate stores
+        // `{null, 0, 0}` into each slot — pointers all start at
+        // null, so the first `grid[i].push(...)` allocates a fresh
+        // buffer per row (no aliasing). Equivalent to the
+        // interpreter's deep-clone fix at `beb7310`, but achieved
+        // structurally rather than via a clone helper because
+        // empty Vec storage has no data pointer to alias.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.filled(3, Vec.new());
+    grid[0].push(99);
+    println(grid[0].len());
+    println(grid[1].len());
+    println(grid[2].len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1\n0\n0");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_push_back_len_is_empty() {
         // VecDeque codegen v1 surface: `new` + `push_back` + `len` +
         // `is_empty` mirror Vec's `{ptr, len, cap}` layout exactly.
