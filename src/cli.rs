@@ -2630,10 +2630,37 @@ fn cmd_build_project(output: OutputMode) {
             Vec::new()
         };
 
+    // Theme 4 (2026-05-10) — multi-file project-mode codegen. Per-module
+    // resolve + typecheck above produce per-file diagnostics; once those
+    // pass, the codegen path concatenates all module items (in topological
+    // order, dropping `import` declarations + the synthetic prelude) into a
+    // single super-program and drives it through the existing single-file
+    // pipeline (`lower` → `effectcheck` → `ownershipcheck` →
+    // `concurrencycheck` → codegen → link). Per-module wiring of the post-
+    // typecheck phases would lose cross-module callee-effect visibility
+    // (concurrency analysis depends on knowing imported functions' effects);
+    // the super-program approach gives correct cross-module analysis at the
+    // cost of less granular file-context in late-phase diagnostics. Symbol
+    // mangling deferred to v2 — cross-module function-name collisions
+    // surface as duplicate-symbol errors at the LLVM linker (clear failure,
+    // ungainly diagnostic; structured detection is a follow-up).
+    let mut codegen_status: BuildCodegenStatus = BuildCodegenStatus::Skipped;
+    if !cfg!(feature = "llvm") {
+        // Mirror the single-file `cmd_build` no-llvm fallback (line ~2393).
+        codegen_status = BuildCodegenStatus::NoLlvmFeature;
+    } else if parse_errors.is_empty()
+        && cycles.is_empty()
+        && resolve_errors.is_empty()
+        && type_errors.is_empty()
+    {
+        codegen_status = run_multi_file_codegen(&tree, &mf, &root);
+    }
+
     let failed = !parse_errors.is_empty()
         || !cycles.is_empty()
         || !resolve_errors.is_empty()
-        || !type_errors.is_empty();
+        || !type_errors.is_empty()
+        || matches!(codegen_status, BuildCodegenStatus::Failed { .. });
 
     match output {
         OutputMode::Text => {
@@ -2669,13 +2696,25 @@ fn cmd_build_project(output: OutputMode) {
                         .iter()
                         .map(|re| re.errors.len())
                         .sum::<usize>()
-                    + type_errors.iter().map(|te| te.errors.len()).sum::<usize>();
+                    + type_errors.iter().map(|te| te.errors.len()).sum::<usize>()
+                    + codegen_status.error_count();
+                if let BuildCodegenStatus::Failed { phase, message } = &codegen_status {
+                    eprintln!("error[{phase}]: {message}");
+                }
                 eprintln!("\n{total} error(s) found.");
                 process::exit(1);
             }
-            eprintln!(
-                "note: project-mode build runs through cross-module typechecking in CR-24 slice 6 — effect / ownership / codegen across modules land in later slices."
-            );
+            match &codegen_status {
+                BuildCodegenStatus::Built { exe_path } => {
+                    println!("Built: {}", exe_path.display());
+                }
+                BuildCodegenStatus::NoLlvmFeature => {
+                    eprintln!(
+                        "note: karac build requires the llvm feature; project type-checked but no executable was produced."
+                    );
+                }
+                BuildCodegenStatus::Skipped | BuildCodegenStatus::Failed { .. } => {}
+            }
         }
         OutputMode::Json => {
             let warnings: Vec<String> = mf
@@ -2693,10 +2732,24 @@ fn cmd_build_project(output: OutputMode) {
             diags.extend(cycles_json(&cycles, &tree));
             diags.extend(resolve_errors_json(&resolve_errors));
             diags.extend(type_errors_json(&type_errors));
+            if let BuildCodegenStatus::Failed { phase, message } = &codegen_status {
+                diags.push(format!(
+                    "{{\"severity\":\"error\",\"phase\":{},\"message\":{}}}",
+                    json_string(phase),
+                    json_string(message),
+                ));
+            }
             let modules = render_walked_modules_json(&walked);
             let status = if failed { "error" } else { "ok" };
+            let output_field = match &codegen_status {
+                BuildCodegenStatus::Built { exe_path } => format!(
+                    ",\"output\":{}",
+                    json_string(&exe_path.display().to_string()),
+                ),
+                _ => String::new(),
+            };
             println!(
-                "{{\"status\":{},\"project\":{},\"edition\":{},\"root\":{},\"target\":{},\"entry\":{},\"modules\":[{}],\"diagnostics\":[{}]}}",
+                "{{\"status\":{},\"project\":{},\"edition\":{},\"root\":{},\"target\":{},\"entry\":{},\"modules\":[{}],\"diagnostics\":[{}]{}}}",
                 json_string(status),
                 json_string(&mf.name),
                 json_string(&mf.edition),
@@ -2705,6 +2758,7 @@ fn cmd_build_project(output: OutputMode) {
                 json_string(entry_label(walked.entry)),
                 modules,
                 diags.join(","),
+                output_field,
             );
             if failed {
                 process::exit(1);
@@ -2748,6 +2802,25 @@ fn cmd_build_project(output: OutputMode) {
             for entry in type_errors_jsonl(&type_errors) {
                 println!("{entry}");
             }
+            if let BuildCodegenStatus::Failed { phase, message } = &codegen_status {
+                emit_jsonl_event(
+                    "codegen_error",
+                    &format!(
+                        "\"phase\":{},\"message\":{}",
+                        json_string(phase),
+                        json_string(message),
+                    ),
+                );
+            }
+            if let BuildCodegenStatus::Built { exe_path } = &codegen_status {
+                emit_jsonl_event(
+                    "build_artifact",
+                    &format!(
+                        "\"output\":{}",
+                        json_string(&exe_path.display().to_string())
+                    ),
+                );
+            }
             emit_jsonl_event(
                 "build_complete",
                 &format!(
@@ -2759,7 +2832,8 @@ fn cmd_build_project(output: OutputMode) {
                             .iter()
                             .map(|re| re.errors.len())
                             .sum::<usize>()
-                        + type_errors.iter().map(|te| te.errors.len()).sum::<usize>(),
+                        + type_errors.iter().map(|te| te.errors.len()).sum::<usize>()
+                        + codegen_status.error_count(),
                 ),
             );
             if failed {
@@ -2767,6 +2841,257 @@ fn cmd_build_project(output: OutputMode) {
             }
         }
     }
+}
+
+/// Result of the Theme 4 multi-file codegen pass appended to
+/// [`cmd_build_project`]. Each variant maps to a downstream output mode
+/// (text "Built: ..." line / JSON `"output"` field / JSONL
+/// `build_artifact` event). `Built` and `Failed` are only constructed
+/// under `cfg(feature = "llvm")` since the codegen pass itself is gated
+/// on the same feature.
+#[cfg_attr(not(feature = "llvm"), allow(dead_code))]
+#[derive(Debug, Clone)]
+enum BuildCodegenStatus {
+    /// Earlier per-module phases failed (parse / cycles / resolve /
+    /// typecheck), so codegen never ran. Output modes don't emit anything
+    /// extra in this case — the per-phase diagnostics carry the failure.
+    Skipped,
+    /// `karac` was built without the `llvm` feature; project type-checks
+    /// but no executable can be produced. Mirrors the single-file
+    /// `cmd_build` no-llvm branch.
+    NoLlvmFeature,
+    /// All phases succeeded; the linked executable is at `exe_path`.
+    Built { exe_path: PathBuf },
+    /// Late-phase failure (effect / ownership / concurrency / codegen /
+    /// link). `phase` names the failing phase for the diagnostic output;
+    /// `message` is the rendered error.
+    Failed { phase: String, message: String },
+}
+
+impl BuildCodegenStatus {
+    fn error_count(&self) -> usize {
+        match self {
+            BuildCodegenStatus::Failed { .. } => 1,
+            _ => 0,
+        }
+    }
+}
+
+/// Drive the multi-file codegen path: concatenate all module items into a
+/// single super-program (in topological order, dropping `import`
+/// declarations and the synthetic prelude), run the post-typecheck
+/// pipeline (lower / effect / ownership / concurrency), then codegen +
+/// link. Caller has already verified parse / cycles / resolve / typecheck
+/// passed; this function returns a structured status the caller renders
+/// per output mode.
+///
+/// **Multi-module diagnostics caveat.** Per-file diagnostics for the
+/// post-typecheck phases (effect / ownership / concurrency) are not
+/// emitted by this path — those phases run on the merged super-program
+/// where item spans no longer carry a file-of-origin. Per-file
+/// diagnostics for parse / cycles / resolve / typecheck still fire
+/// upstream of this call. v2 follow-up: thread the per-module file-path
+/// map through the super-program so late-phase diagnostics can recover
+/// file context.
+#[cfg(feature = "llvm")]
+fn run_multi_file_codegen(
+    tree: &ProgramTree,
+    mf: &crate::manifest::Manifest,
+    project_root: &std::path::Path,
+) -> BuildCodegenStatus {
+    // 1. Topological emission order — dependencies before dependents.
+    let order = module::emission_order(tree);
+
+    // 2. Concatenate items. Drop `import` declarations (their effect was
+    // resolved upstream by per-module resolve) and skip synthetic
+    // modules. Items keep their original spans, which downstream
+    // diagnostics use for line:col reporting.
+    let mut super_items: Vec<Item> = Vec::new();
+    for &id in &order {
+        let m = &tree.modules[id];
+        if m.is_synthetic {
+            continue;
+        }
+        for item in &m.items {
+            if matches!(item, Item::Import(_)) {
+                continue;
+            }
+            super_items.push(item.clone());
+        }
+    }
+    let super_program = Program {
+        items: super_items,
+        ..Program::default()
+    };
+
+    // 3. Drive the rest of the pipeline by hand-constructing a Pipeline
+    // with the synthetic ParseResult. This mirrors what `Pipeline::new`
+    // would do on a single-file source, except we skip the parse step
+    // entirely (we have a pre-built Program already).
+    let parsed = ParseResult {
+        program: super_program,
+        errors: Vec::new(),
+    };
+    let mut pipeline = Pipeline {
+        filename: mf.name.clone(),
+        parsed,
+        resolved: None,
+        typed: None,
+        effects: None,
+        ownership: None,
+        concurrency: None,
+        provider_escape: None,
+        profile: crate::manifest::CompileProfile::Default,
+    };
+    pipeline.resolve();
+    if pipeline.has_resolve_errors() {
+        return BuildCodegenStatus::Failed {
+            phase: "resolve".to_string(),
+            message: format_pipeline_errors(&pipeline, "resolve"),
+        };
+    }
+    pipeline.typecheck();
+    if pipeline
+        .typed
+        .as_ref()
+        .is_some_and(|t| !t.errors.is_empty())
+    {
+        return BuildCodegenStatus::Failed {
+            phase: "typecheck".to_string(),
+            message: format_pipeline_errors(&pipeline, "typecheck"),
+        };
+    }
+    pipeline.lower();
+    pipeline.effectcheck();
+    if pipeline
+        .effects
+        .as_ref()
+        .is_some_and(|e| !e.errors.is_empty())
+    {
+        return BuildCodegenStatus::Failed {
+            phase: "effect".to_string(),
+            message: format_pipeline_errors(&pipeline, "effect"),
+        };
+    }
+    pipeline.ownershipcheck();
+    if pipeline
+        .ownership
+        .as_ref()
+        .is_some_and(|o| !o.errors.is_empty())
+    {
+        return BuildCodegenStatus::Failed {
+            phase: "ownership".to_string(),
+            message: format_pipeline_errors(&pipeline, "ownership"),
+        };
+    }
+    pipeline.concurrencycheck();
+    if pipeline.has_fatal_errors() {
+        return BuildCodegenStatus::Failed {
+            phase: "checks".to_string(),
+            message: "late-phase analysis failed".to_string(),
+        };
+    }
+
+    // 4. Codegen — write to a temp object then link to the manifest's
+    // `name` field as the binary basename in the project root.
+    let exe_path = project_root.join(&mf.name);
+    let obj_path = std::env::temp_dir().join(format!(
+        "karac_proj_{}_{}.o",
+        std::process::id(),
+        mf.name.replace(['/', '\\'], "_"),
+    ));
+
+    if let Err(e) = crate::codegen::compile_to_object_with_options(
+        &pipeline.parsed.program,
+        &obj_path.to_string_lossy(),
+        pipeline.ownership.as_ref(),
+        pipeline.concurrency.as_ref(),
+        None,
+        None,
+    ) {
+        let _ = std::fs::remove_file(&obj_path);
+        return BuildCodegenStatus::Failed {
+            phase: "codegen".to_string(),
+            message: format!("codegen failed: {e}"),
+        };
+    }
+    if let Err(e) =
+        crate::codegen::link_executable(&obj_path.to_string_lossy(), &exe_path.to_string_lossy())
+    {
+        let _ = std::fs::remove_file(&obj_path);
+        return BuildCodegenStatus::Failed {
+            phase: "link".to_string(),
+            message: format!("link failed: {e}"),
+        };
+    }
+    let _ = std::fs::remove_file(&obj_path);
+    BuildCodegenStatus::Built { exe_path }
+}
+
+/// Stub for the no-llvm build — never invoked because the caller gates
+/// on `cfg!(feature = "llvm")`. Kept as a parallel signature so the call
+/// site doesn't need cfg gating itself.
+#[cfg(not(feature = "llvm"))]
+fn run_multi_file_codegen(
+    _tree: &ProgramTree,
+    _mf: &crate::manifest::Manifest,
+    _project_root: &std::path::Path,
+) -> BuildCodegenStatus {
+    BuildCodegenStatus::NoLlvmFeature
+}
+
+#[cfg(feature = "llvm")]
+fn format_pipeline_errors(pipeline: &Pipeline, phase: &str) -> String {
+    use std::fmt::Write;
+    let mut out = format!("multi-file {phase} failed:");
+    match phase {
+        "resolve" => {
+            if let Some(r) = &pipeline.resolved {
+                for e in &r.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}:{}: {}",
+                        e.span.line, e.span.column, e.message,
+                    );
+                }
+            }
+        }
+        "typecheck" => {
+            if let Some(t) = &pipeline.typed {
+                for e in &t.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}:{}: {}",
+                        e.span.line, e.span.column, e.message,
+                    );
+                }
+            }
+        }
+        "effect" => {
+            if let Some(e) = &pipeline.effects {
+                for err in &e.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}:{}: {}",
+                        err.span.line, err.span.column, err.message,
+                    );
+                }
+            }
+        }
+        "ownership" => {
+            if let Some(o) = &pipeline.ownership {
+                for err in &o.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}:{}: {}",
+                        err.span.line, err.span.column, err.message,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 fn print_parse_errors_text(parse_errors: &[ModuleParseErrors]) {

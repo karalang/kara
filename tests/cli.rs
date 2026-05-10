@@ -760,21 +760,193 @@ fn test_build_project_empty_src_dir_fails() {
 }
 
 #[test]
-fn test_build_project_reports_slice_6_note() {
-    // The project-mode build now runs through cross-module typechecking
-    // (slice 6); the trailing progress note advertises subsequent slices.
-    let tmp = scratch_project("note-text");
+fn test_build_project_emits_built_line_or_no_llvm_note() {
+    // Theme 4 (2026-05-10): the project-mode build now drives codegen
+    // through to a linked executable. Under `cfg(feature = "llvm")`,
+    // stdout carries `Built: <path>`; without the llvm feature, stderr
+    // carries the no-llvm fallback note. Either way, the build should
+    // report a successful exit for a trivially-correct project.
+    let tmp = scratch_project("built-line");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
 
     let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let built = stdout.contains("Built: ") || stderr.contains("requires the llvm feature");
+    assert!(
+        built,
+        "expected `Built: ...` (llvm path) or no-llvm fallback note; stdout={stdout} stderr={stderr}",
+    );
+}
+
+// ── Theme 4: multi-file project-mode codegen ────────────────────
+//
+// Theme 4 wires `cmd_build_project` through the existing single-file
+// codegen path by concatenating all module items (in topological order,
+// dropping `import` declarations + the synthetic prelude) into a single
+// super-program and driving it through `lower` → `effect` → `ownership`
+// → `concurrency` → codegen → link. Symbol mangling is deferred to v2;
+// cross-module function-name collisions surface as resolve-time errors
+// against the merged super-program (clear diagnostic, no mangling
+// ambiguity).
+//
+// All four tests below are gated `#[cfg(feature = "llvm")]` because the
+// codegen output they verify only exists when llvm is built in.
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_codegen_two_files_runs() {
+    let tmp = scratch_project("codegen-two-files");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"two_file_demo\"\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import greet.add;\n\
+         fn main() {\n    println(add(2, 3));\n}\n",
+    );
+    write(
+        &tmp.join("src/greet.kara"),
+        "pub fn add(x: i64, y: i64) -> i64 { x + y }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    assert!(
+        out.status.success(),
+        "build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("Built: "),
+        "expected `Built: ...` line; stdout={stdout}",
+    );
+
+    let exe_path = tmp.join("two_file_demo");
+    let run = std::process::Command::new(&exe_path).output();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let run = run.expect("executable should be runnable");
+    assert!(
+        run.status.success(),
+        "executable failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "5");
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_codegen_three_module_chain_runs() {
+    // Pins topological emission order — `db.users` must declare its
+    // symbols before `db` references them, which must declare before
+    // `main`. The super-program builder concatenates in
+    // dependency-first order via `module::emission_order`.
+    let tmp = scratch_project("codegen-three-chain");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"chain_demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "import db.fetch_count;\n\
+         fn main() { println(fetch_count()); }\n",
+    );
+    write(
+        &tmp.join("src/db.kara"),
+        "import db.users.user_count;\n\
+         pub fn fetch_count() -> i64 { user_count() + 1 }\n",
+    );
+    write(
+        &tmp.join("src/db/users.kara"),
+        "pub fn user_count() -> i64 { 42 }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    assert!(
+        out.status.success(),
+        "build failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let exe_path = tmp.join("chain_demo");
+    let run = std::process::Command::new(&exe_path).output();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let run = run.expect("executable should be runnable");
+    assert!(
+        run.status.success(),
+        "executable failed: stderr={}",
+        String::from_utf8_lossy(&run.stderr),
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "43");
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_codegen_cross_module_collision_diagnostic() {
+    // Symbol mangling is deferred to v2 (per the Theme 4 plan revision);
+    // for now, cross-module function-name collisions fall out as a
+    // resolve-time error against the merged super-program. The
+    // diagnostic is structured (mentions the colliding name) but
+    // file-context is absent until the v2 follow-up adds per-module
+    // span threading. Pins the no-silent-overwrite invariant.
+    let tmp = scratch_project("codegen-collision");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"collide_demo\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/a.kara"),
+        "pub fn shared_name() -> i64 { 1 }\n",
+    );
+    write(
+        &tmp.join("src/b.kara"),
+        "pub fn shared_name() -> i64 { 2 }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "build should fail on cross-module collision",
+    );
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("slice 6"),
-        "expected slice-6 progress note, got stderr={stderr}",
+        stderr.contains("shared_name") && stderr.contains("already defined"),
+        "expected collision diagnostic naming `shared_name`; stderr={stderr}",
     );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_project_codegen_manifest_name_becomes_binary_name() {
+    let tmp = scratch_project("codegen-binname");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"my_renamed_app\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() { println(7); }\n");
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    assert!(
+        out.status.success(),
+        "build failed: stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+
+    let exe_path = tmp.join("my_renamed_app");
+    let exe_exists = exe_path.exists();
+    let run = std::process::Command::new(&exe_path).output();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        exe_exists,
+        "expected binary at <project>/my_renamed_app derived from manifest name",
+    );
+    let run = run.expect("executable should be runnable");
+    assert_eq!(String::from_utf8_lossy(&run.stdout).trim(), "7");
 }
 
 #[test]

@@ -496,6 +496,89 @@ fn format_module_path(path: &[String]) -> String {
 /// `ModuleId`, and within a cycle the reported node order starts at the
 /// smallest `ModuleId` in the SCC and proceeds along a BFS-shortest cycle
 /// from that node back to itself.
+/// Topological emission order over [`ProgramTree::graph`] — dependencies
+/// (importees) appear before their dependents (importers). Used by the
+/// multi-file codegen path to concatenate module items in an order where
+/// each module's items see only items from already-emitted modules.
+///
+/// Iterative DFS reverse-postorder rooted at every module (not just
+/// [`ProgramTree::root`]) so disconnected modules — files in `src/`
+/// that no other file imports — still appear in the output. Synthetic
+/// modules are excluded; the multi-file codegen path doesn't compile
+/// them.
+///
+/// This function assumes the graph is acyclic. Callers should run
+/// [`detect_cycles`] first and abort if any cycle is reported; passing
+/// a cyclic graph here produces a meaningless ordering. A debug-mode
+/// assertion fires if the recursion depth grows beyond
+/// `tree.modules.len()`, which can only happen on a cyclic input.
+pub fn emission_order(tree: &ProgramTree) -> Vec<ModuleId> {
+    let n = tree.modules.len();
+    if n == 0 {
+        return Vec::new();
+    }
+    let mut adj: Vec<Vec<ModuleId>> = vec![Vec::new(); n];
+    for &(u, v) in &tree.graph.edges {
+        if u < n && v < n {
+            adj[u].push(v);
+        }
+    }
+    for list in adj.iter_mut() {
+        list.sort();
+        list.dedup();
+    }
+
+    enum State {
+        Enter(ModuleId),
+        Exit(ModuleId),
+    }
+
+    let mut visited = vec![false; n];
+    let mut out: Vec<ModuleId> = Vec::with_capacity(n);
+    // Roots in stable order: tree.root first, then any other module not yet
+    // visited (covers disconnected components and synthetic prelude).
+    let mut roots: Vec<ModuleId> = Vec::with_capacity(n);
+    if tree.root < n {
+        roots.push(tree.root);
+    }
+    for id in 0..n {
+        if id != tree.root {
+            roots.push(id);
+        }
+    }
+
+    for root in roots {
+        if visited[root] {
+            continue;
+        }
+        let mut stack: Vec<State> = vec![State::Enter(root)];
+        while let Some(frame) = stack.pop() {
+            match frame {
+                State::Enter(v) => {
+                    if visited[v] {
+                        continue;
+                    }
+                    visited[v] = true;
+                    stack.push(State::Exit(v));
+                    // Push children in reverse so popping gives them in
+                    // sorted order — preserves determinism across runs.
+                    for &w in adj[v].iter().rev() {
+                        if !visited[w] {
+                            stack.push(State::Enter(w));
+                        }
+                    }
+                }
+                State::Exit(v) => {
+                    if !tree.modules[v].is_synthetic {
+                        out.push(v);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 pub fn detect_cycles(tree: &ProgramTree) -> Vec<Cycle> {
     let n = tree.modules.len();
     if n == 0 {
