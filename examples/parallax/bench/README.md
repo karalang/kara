@@ -91,30 +91,44 @@ regression gate.
 
 ## Throughput results
 
-**Measured on 2026-05-09**, Apple M5 Pro (10P + 8E cores, 18 logical
-CPUs), 64 GB RAM, macOS 26.4.1, `wrk 4.2.0`. `bench.sh` defaults
-(`-t4 -c100`, 10s warmup + 30s measurement, sequential per-impl
-runs).
+**Measured on 2026-05-09** (post-`karac_par_run` worker-pool fix,
+`3953a14`), Apple M5 Pro (10P + 8E cores, 18 logical CPUs), 64 GB
+RAM, macOS 26.4.1, `wrk 4.2.0`. `bench.sh` defaults (`-t4 -c100`,
+10s warmup + 30s measurement, sequential per-impl runs).
 
 | Impl   | req/s     | p99 latency | Notes                       |
 |--------|-----------|-------------|-----------------------------|
-| Rust   | 45,731.33 | 5.16 ms     | tokio + hyper + `tokio::join!` (perf ceiling reference) |
-| Go     |  7,695.31 | 58.58 ms    | `net/http` + goroutines + `sync.WaitGroup`, default `GOMAXPROCS` |
-| Kāra   |  1,089.99 | 438.18 ms   | auto-par fan-out, default tokio workers |
-| Node   |     92.55 | 1.10 s      | `http` + `Promise.all`, single-process per F4 |
+| Rust   | 47,312.86 | 5.09 ms     | tokio + hyper + `tokio::join!` (perf ceiling reference) |
+| Go     |  7,598.96 | 64.36 ms    | `net/http` + goroutines + `sync.WaitGroup`, default `GOMAXPROCS` |
+| Kāra   |  1,053.75 | 237.76 ms   | auto-par fan-out via long-lived global pool |
+| Node   |     93.62 | 1.10 s      | `http` + `Promise.all`, single-process per F4 |
 
 **How to read this.** The Rust row sets the cohort's perf ceiling
 because Kāra's runtime sits on the same tokio multi-thread scheduler.
-Rust ÷ Kāra ≈ 42×; that gap is what auto-par's value-type ABI +
+Rust ÷ Kāra ≈ 45×; that gap is what auto-par's value-type ABI +
 handler trampoline + monomorphization-conservative codegen cost
-relative to hand-written `tokio::join!`. The gap is large; it is also
-the *first* end-to-end measurement of this stack under sustained
-load, so most of it is recoverable headroom (see [`docs/demo_ideas.md
-§ Slice E`](../../../docs/demo_ideas.md) "Out of scope" — gap-closure
-path conditional on F3). Go's row reflects `net/http` + goroutines on
-default `GOMAXPROCS`; Node's row reflects single-process `Promise.all`
-serializing four CPU-bound busy loops on the event-loop thread (F4
-footnote — cluster-mode Node would multiply by ≈ `num_cpus`).
+relative to hand-written `tokio::join!`. Most of it is recoverable
+headroom (see [`docs/demo_ideas.md § Slice E`](../../../docs/demo_ideas.md)
+"Out of scope" — gap-closure path conditional on F3, and
+[`docs/investigations/parallax_perf.md`](../../../docs/investigations/parallax_perf.md)
+for the open root-cause investigation). Go's row reflects `net/http`
++ goroutines on default `GOMAXPROCS`; Node's row reflects single-
+process `Promise.all` serializing four CPU-bound busy loops on the
+event-loop thread (F4 footnote — cluster-mode Node would multiply by
+≈ `num_cpus`).
+
+**History.** The first verification run (`4f7b72d`) measured Kāra at
+1,089.99 req/s / 438.18 ms p99. Profiling diagnosed that 60 % of the
+process's CPU was being spent in `mach_vm_protect` setting up
+pthread stack guard pages — `karac_par_run` was creating fresh OS
+threads on every fan-out call. Replacing that with a long-lived
+worker pool (`3953a14`) **dropped p99 by 46 %** (438 → 238 ms) and
+moved CPU spent on the actual benchmark work from 7.5 % to 66.7 %
+of samples. Throughput is essentially unchanged because the bench
+is `wrk`-connection-bound, not pool-capacity-bound (with `-c100`
+keep-alive connections, throughput ≈ 100 / per-request-wall-clock-
+latency, regardless of CPU efficiency). The full diagnostic story
+lives at [`docs/investigations/parallax_perf.md`](../../../docs/investigations/parallax_perf.md).
 
 ## Fairness controls (F4)
 
