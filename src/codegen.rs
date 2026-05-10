@@ -4755,7 +4755,15 @@ impl<'ctx> Codegen<'ctx> {
             let Some(&min_idx) = group.statement_indices.iter().min() else {
                 continue;
             };
-            let slots = self.compute_return_slots(group, body);
+            // Drop the group when any binding read outside has an
+            // un-typeable RHS — emitting it without that binding's
+            // return slot produces "Undefined variable" at the
+            // later read site. Sequential fallback is correct
+            // (the analyzer's parallelization is an optimization
+            // hint, not a semantic requirement).
+            let Some(slots) = self.compute_return_slots_checked(group, body) else {
+                continue;
+            };
             group_starts.insert(min_idx, (group, slots));
             for &i in &group.statement_indices {
                 covered.insert(i);
@@ -4914,7 +4922,20 @@ impl<'ctx> Codegen<'ctx> {
     /// the group, but the rest of the group still parallelizes. In
     /// practice this only fires for closure / dynamic-dispatch RHSes
     /// that don't appear in the auto-par-eligible set.
-    fn compute_return_slots(&self, group: &ParallelGroup, body: &Block) -> Vec<ReturnSlot<'ctx>> {
+    /// Compute return slots, returning `None` when some binding read
+    /// outside the group has an RHS shape `infer_let_binding_llvm_type`
+    /// can't recover the LLVM type from. In that case the caller
+    /// should drop the par-group entirely and fall back to sequential
+    /// compilation — emitting it with the binding silently absent from
+    /// the slot list left the binding as a class-(i) branch-local
+    /// alloca with no parent-scope propagation, producing
+    /// "Undefined variable" errors at every later read site
+    /// (the LeetCode 3629 kata's `compile_slice_index` panic family).
+    fn compute_return_slots_checked(
+        &self,
+        group: &ParallelGroup,
+        body: &Block,
+    ) -> Option<Vec<ReturnSlot<'ctx>>> {
         // 1. Collect names defined by stmts in this group, mapped to
         //    their branch_index (position in statement_indices when
         //    sorted). The branch fn order in `emit_par_run` follows the
@@ -4950,7 +4971,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         if defined.is_empty() {
-            return Vec::new();
+            return Some(Vec::new());
         }
 
         // 2. Walk every stmt outside the group + final_expr collecting
@@ -5003,9 +5024,17 @@ impl<'ctx> Codegen<'ctx> {
                     branch_index: branch_idx,
                     llvm_ty,
                 });
+            } else {
+                // RHS shape we can't recover the LLVM type from. Bail
+                // — the caller drops the par-group and falls back to
+                // sequential compilation. Emitting the group with the
+                // binding silently absent leaves it as a class-(i)
+                // branch-local alloca and every later read site
+                // fails with "Undefined variable".
+                return None;
             }
         }
-        slots
+        Some(slots)
     }
 
     /// Infer the LLVM type produced by a let-statement's RHS. Used by
@@ -5039,7 +5068,30 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
-        None
+        // Fallback: alias of an in-scope variable — `let n = p` where `p`
+        // is a param or earlier local. Read the type directly from the
+        // variables table. Without this, auto-parallelization treats `n`
+        // as un-typeable, drops it from the return-slot list, and the
+        // tail-expression reference fails with "Undefined variable 'n'"
+        // because the par-branch's local alloca never propagates to the
+        // parent scope.
+        if let ExprKind::Identifier(name) = &value.kind {
+            if let Some(slot) = self.variables.get(name) {
+                return Some(slot.ty);
+            }
+        }
+        // Integer / bool literals carry their type directly. Sized
+        // integer suffixes (`0i32`, `5u8`, …) map through
+        // `const_int_for_suffix`'s sizing rules; the unsuffixed default
+        // is `i64`, matching `const_int_for_suffix`. Same for floats.
+        match &value.kind {
+            ExprKind::Integer(_, sfx) => Some(self.const_int_for_suffix(0, *sfx).get_type().into()),
+            ExprKind::Float(_, sfx) => {
+                Some(self.const_float_for_suffix(0.0, *sfx).get_type().into())
+            }
+            ExprKind::Bool(_) => Some(self.context.bool_type().into()),
+            _ => None,
+        }
     }
 
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
@@ -17447,6 +17499,20 @@ impl<'ctx> Codegen<'ctx> {
                         self.refs_in_expr(inner, refs, defs);
                     }
                 }
+            }
+            // `a[i]` indexes: walk both the indexed object and the
+            // index expr. Without this, an auto-par branch fn whose
+            // stmts read `nums[j]` would miss `nums` in its capture
+            // set — the env-struct unpack would never bind `nums` in
+            // the branch's `self.variables`, and `compile_slice_index`
+            // (or `compile_vec_index` / `compile_map_index`) would
+            // panic at the `get_data_ptr(name).unwrap()` site when
+            // the slice/vec/map registries still report the type
+            // (registered in the parent) but the variables table
+            // doesn't have the alloca.
+            ExprKind::Index { object, index } => {
+                self.refs_in_expr(object, refs, defs);
+                self.refs_in_expr(index, refs, defs);
             }
             _ => {}
         }

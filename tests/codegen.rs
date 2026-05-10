@@ -1875,6 +1875,107 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_auto_par_propagates_let_bindings_with_identifier_rhs() {
+        // `let n = p; let v: Vec[T] = Vec.new()` are independent
+        // statements, so the concurrency analyzer groups them as
+        // parallelizable. Before the fix, `infer_let_binding_llvm_type`
+        // returned None for `let n = p` (Identifier RHS, no type
+        // annotation), so the return-slot machinery silently dropped
+        // `n` — the tail-expression read failed with "Undefined
+        // variable 'n'". Fix: extend the inference to read the RHS
+        // identifier's type from `self.variables`.
+        let out = run_program(
+            r#"
+fn foo(p: i64) -> i64 {
+    let n = p;
+    let v: Vec[i64] = Vec.new();
+    let _ = v.len();
+    n
+}
+fn main() { println(foo(3)); }
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
+    #[test]
+    fn test_e2e_auto_par_drops_untypeable_return_slot_groups() {
+        // `let n = nums.len()` has a MethodCall RHS that the
+        // let-binding type inference can't recover. Auto-par groups
+        // would silently drop the `n` slot before the fix — `n` then
+        // became a class-(i) branch-local with no parent propagation,
+        // surfacing later as "Undefined variable 'n'" at the read
+        // site. Fix: when any needed-outside binding has un-typeable
+        // RHS, `compute_return_slots_checked` returns None and the
+        // caller drops the par-group, falling back to sequential
+        // compilation (correct, just slower).
+        let out = run_program(
+            r#"
+fn foo(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.new();
+    for _ in 0..n { visited.push(false); }
+    visited[0] = true;
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        sum = sum + nums[i];
+        i = i + 1;
+    }
+    sum
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(foo(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_auto_par_captures_indexed_access_base() {
+        // `refs_in_expr` was missing an `ExprKind::Index` arm — so
+        // `nums[j]` inside a par-branch body didn't walk into `nums`,
+        // and `nums` was missed from the capture set. The branch fn
+        // then ran with `nums` absent from `self.variables`, panicking
+        // at `compile_slice_index`'s `get_data_ptr(name).unwrap()`.
+        // Repro shape: function with a Slice param, a Vec/Map
+        // declaration (forms an independent par-group with the
+        // length binding), and a later block that indexes the slice.
+        let out = run_program(
+            r#"
+fn min_jumps(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.new();
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    for _ in 0..n { visited.push(false); }
+    visited[0] = true;
+    let mut sum = 0i64;
+    let mut i = 0i64;
+    while i < n {
+        sum = sum + nums[i];
+        i = i + 1;
+    }
+    let _ = bucket.len();
+    sum
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(min_jumps(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_slice_iter_propagates_outer_mutable_writes() {
         // Same shape as the Vec case but for `Slice[T].iter()` —
         // sibling of the previous test; `compile_for`'s `_ =>` arm
