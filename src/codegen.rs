@@ -15749,6 +15749,73 @@ impl<'ctx> Codegen<'ctx> {
         None
     }
 
+    /// Compound-payload enum codegen (tuple-destructure helper) —
+    /// per-element word count for a destructure sub-pattern. Mirrors
+    /// the construction-side `payload_word_count_for_type_expr` shape
+    /// but reads typechecker-recorded surface names (`pattern_binding_types`)
+    /// off the pattern instead of source-level `TypeExpr`. Used by the
+    /// Tuple arm in `reconstruct_payload_value` to slice the variant's
+    /// flat payload-word vector into per-element ranges.
+    ///
+    /// - Vec / String → 3 words (vec struct shape)
+    /// - Slice → 2 words (slice struct shape)
+    /// - Registered user struct → its LLVM word count
+    /// - Tuple sub-pattern → recursive sum
+    /// - Primitive binding / wildcard / unknown → 1 word
+    fn pattern_payload_word_count(&self, pat: &Pattern) -> usize {
+        match &pat.kind {
+            PatternKind::Tuple(elems) => elems
+                .iter()
+                .map(|p| self.pattern_payload_word_count(p))
+                .sum(),
+            PatternKind::Binding(_) => {
+                let key = (pat.span.offset, pat.span.length);
+                match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
+                    Some("Vec") | Some("String") => 3,
+                    Some("Slice") => 2,
+                    Some(name) => self
+                        .struct_types
+                        .get(name)
+                        .map(|st| Self::llvm_type_word_count((*st).into()))
+                        .unwrap_or(1),
+                    None => 1,
+                }
+            }
+            _ => 1,
+        }
+    }
+
+    /// Compound-payload enum codegen (tuple-destructure helper) —
+    /// LLVM type for a destructure sub-pattern's reconstructed value.
+    /// Used by the Tuple arm in `reconstruct_payload_value` to build
+    /// the surrounding tuple struct type whose fields hold each
+    /// element's reconstructed aggregate.
+    fn pattern_payload_llvm_type(&self, pat: &Pattern) -> BasicTypeEnum<'ctx> {
+        match &pat.kind {
+            PatternKind::Tuple(elems) => {
+                let elem_tys: Vec<BasicTypeEnum<'ctx>> = elems
+                    .iter()
+                    .map(|p| self.pattern_payload_llvm_type(p))
+                    .collect();
+                self.context.struct_type(&elem_tys, false).into()
+            }
+            PatternKind::Binding(_) => {
+                let key = (pat.span.offset, pat.span.length);
+                match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
+                    Some("Vec") | Some("String") => self.vec_struct_type().into(),
+                    Some("Slice") => self.slice_struct_type().into(),
+                    Some(name) => self
+                        .struct_types
+                        .get(name)
+                        .map(|st| (*st).into())
+                        .unwrap_or_else(|| self.context.i64_type().into()),
+                    None => self.context.i64_type().into(),
+                }
+            }
+            _ => self.context.i64_type().into(),
+        }
+    }
+
     /// Compound-payload enum codegen (CP4 destructure side helper) —
     /// reconstruct an aggregate `BasicValueEnum` from a sequence of i64
     /// payload words loaded from a variant's payload area. Single-word
@@ -15760,7 +15827,9 @@ impl<'ctx> Codegen<'ctx> {
     /// type to reassemble: 3-word `String` / `Vec[T]` rebuild as
     /// `vec_struct_type` (`{ ptr, i64, i64 }`); 2-word `Slice[T]`
     /// rebuild as `slice_struct_type`; user struct fields rebuild as
-    /// the registered LLVM struct type.
+    /// the registered LLVM struct type. Tuple sub-patterns dispatch
+    /// through a per-element walk that uses `pattern_payload_word_count`
+    /// to slice `field_words` and recurses for nested tuples.
     fn reconstruct_payload_value(
         &self,
         sub_pat: &Pattern,
@@ -15768,6 +15837,35 @@ impl<'ctx> Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Tuple sub-pattern: walk per-element, reconstruct each into its
+        // own LLVM aggregate (or single word for primitive elements),
+        // then pack into a tuple struct value. The element word counts
+        // come from `pattern_payload_word_count` which mirrors the
+        // construction-side `payload_word_count_for_type_expr` logic on
+        // pattern shape (Vec/String=3, Slice=2, struct=struct-fields,
+        // primitive/wildcard=1; tuple=sum). Recursive on nested tuples.
+        if let PatternKind::Tuple(elems) = &sub_pat.kind {
+            let elem_tys: Vec<BasicTypeEnum<'ctx>> = elems
+                .iter()
+                .map(|p| self.pattern_payload_llvm_type(p))
+                .collect();
+            let tuple_ty = self.context.struct_type(&elem_tys, false);
+            let mut agg = tuple_ty.get_undef();
+            let mut cursor = 0usize;
+            for (i, sub) in elems.iter().enumerate() {
+                let n = self.pattern_payload_word_count(sub);
+                let end = (cursor + n).min(field_words.len());
+                let slice = &field_words[cursor..end];
+                let elem_val = self.reconstruct_payload_value(sub, slice)?;
+                agg = self
+                    .builder
+                    .build_insert_value(agg, elem_val, i as u32, "tup.iv")
+                    .unwrap()
+                    .into_struct_value();
+                cursor = end;
+            }
+            return Ok(agg.into());
+        }
         // Single-word: keep legacy single-i64 binding shape. The
         // PatternKind::Binding arm handles single-field struct
         // reconstitution downstream via `pattern_binding_types`.
@@ -16035,6 +16133,25 @@ impl<'ctx> Codegen<'ctx> {
                 // Bind variables from first sub-pattern (all alternatives must bind same names)
                 if let Some(first) = pats.first() {
                     self.bind_pattern_values(first, scrut)?;
+                }
+                Ok(())
+            }
+            // Compound-payload tuple-payload destructure (CP follow-up):
+            // mirrors the let-pattern Tuple arm in `bind_pattern`. The
+            // scrutinee here is the tuple-shaped struct value produced by
+            // `reconstruct_payload_value`'s Tuple branch; per-element
+            // extracts dispatch back through `bind_pattern_values` so
+            // nested tuples / leaf bindings / wildcards compose
+            // uniformly.
+            PatternKind::Tuple(pats) => {
+                if let BasicValueEnum::StructValue(sv) = scrut {
+                    for (idx, pat) in pats.iter().enumerate() {
+                        let elem = self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "tup.elem")
+                            .unwrap();
+                        self.bind_pattern_values(pat, elem)?;
+                    }
                 }
                 Ok(())
             }

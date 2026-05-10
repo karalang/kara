@@ -12329,12 +12329,20 @@ impl<'a> TypeChecker<'a> {
                 self.local_scope.insert(name.clone(), expected.clone());
                 // Mirror bind_pattern_types's side-table write so codegen
                 // can reconstitute struct payloads for match-arm bindings.
+                // `Type::Str` registers `"String"` parallel to how
+                // `Type::Named { name: "Vec" }` registers `"Vec"` —
+                // required by the tuple-payload destructure path
+                // (`pattern_payload_word_count`) for variant-payload
+                // tuples containing String elements (Theme 5, 2026-05-10).
                 if let Type::Named {
                     name: type_name, ..
                 } = expected
                 {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                } else if matches!(expected, Type::Str) {
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), "String".to_string());
                 }
                 // PB sibling slice (2026-05-09): mirror
                 // `bind_pattern_types`'s sibling-table write so direct
@@ -12620,14 +12628,24 @@ impl<'a> TypeChecker<'a> {
                 self.local_scope.insert(name.clone(), ty.clone());
                 // Record the surface type for codegen so it can reconstitute
                 // struct payloads from the i64 word at match-arm bind sites
-                // (see TypeCheckResult.pattern_binding_types). Only Named
-                // types need this — primitives and references don't.
+                // (see TypeCheckResult.pattern_binding_types). Named types
+                // record under their canonical name; `Type::Str` registers
+                // its 3-word `String` surface name parallel to how
+                // `Type::Named { name: "Vec" }` registers `"Vec"` —
+                // required by the tuple-payload destructure path
+                // (`pattern_payload_word_count`) which needs to slice a
+                // flat tuple payload into per-element word ranges.
+                // Other primitives and references stay unrecorded — their
+                // 1-word default matches their actual layout.
                 if let Type::Named {
                     name: type_name, ..
                 } = ty
                 {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                } else if matches!(ty, Type::Str) {
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), "String".to_string());
                 }
                 // PB sibling slice (2026-05-09): record the inner element
                 // type for `Vec[T]` / `Slice[T]` bindings so codegen can

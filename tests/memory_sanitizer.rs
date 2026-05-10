@@ -988,4 +988,34 @@ fn main() {
             "vec_clone_repeat_stresses_scope_cleanup",
         );
     }
+
+    // ── Compound-payload tuple-payload destructure ────────────────
+    // Theme 5 (2026-05-10) — heap-bearing element inside a tuple payload
+    // survives destructure with no double-free / use-after-free. The
+    // String element is constructed at the call site, moved into the
+    // variant payload, then re-bound on the destructure side; per-element
+    // word reconstruction must hand off ownership cleanly so the buffer
+    // is freed exactly once at scope exit.
+
+    #[test]
+    fn asan_compound_tuple_payload_string_int() {
+        assert_clean_asan_run(
+            r#"
+enum E { V((String, i64)) }
+fn main() {
+    let mut s = String.new();
+    s.push_str("payload");
+    let e = V((s, 7));
+    match e {
+        V((t, n)) => {
+            println(t.len());
+            println(n);
+        }
+    }
+}
+"#,
+            &["7", "7"],
+            "compound_tuple_payload_string_int",
+        );
+    }
 }

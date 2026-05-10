@@ -8121,26 +8121,12 @@ fn main() {
     }
 
     #[test]
-    #[ignore]
     fn test_pattern_bound_nested_tuple_vec_payload() {
-        // PB5 cross-check: nested destructure where the variant payload
-        // is itself a tuple `(Vec[i64], i64)`. The typechecker side
-        // works correctly (`check_pattern_against`'s Tuple arm recurses
-        // into each element type, so the inner Vec binding picks up
-        // the element-type registration via the PB sibling table). The
-        // codegen-side gap is independent of this slice: the variant-
-        // payload-tuple reconstruction path in `bind_pattern_values` /
-        // `reconstruct_payload_value` doesn't recurse into a Tuple
-        // sub-pattern (PatternKind::Tuple falls through to
-        // `_ => Ok(())`), and `reconstruct_payload_value` heuristically
-        // picks a Vec-shaped target for any 4-word reconstruction
-        // — collapsing the (Vec, i64) tuple to a Vec value before the
-        // pattern-walker sees the inner names. Lifting this requires
-        // a separate slice covering tuple-payload destructure; tracked
-        // via this `#[ignore]`'d gate. Once the codegen-side recursion
-        // lands, drop the `#[ignore]` and confirm the PB sibling table
-        // already handles the typechecker side (no additional PB work
-        // expected).
+        // PB5 cross-check / Theme 5 headline regression gate: nested
+        // destructure where the variant payload is itself a tuple
+        // `(Vec[i64], i64)`. Lights up after Theme 5 (compound-payload
+        // tuple-payload destructure) added the Tuple branch in
+        // `bind_pattern_values` + `reconstruct_payload_value`.
         let out = run_program(
             r#"
 enum E { V((Vec[i64], i64)) }
@@ -8163,6 +8149,118 @@ fn main() {
         if let Some(out) = out {
             let lines: Vec<&str> = out.trim().lines().collect();
             assert_eq!(lines, vec!["4", "100"]);
+        }
+    }
+
+    // ── Compound-payload tuple-payload destructure ──
+    //
+    // Theme 5 (2026-05-10) — the Tuple arm in `bind_pattern_values` +
+    // `reconstruct_payload_value` lights up `match e { V((a, b)) => ... }`
+    // for variant-payload tuples of arbitrary primitive / aggregate /
+    // recursive-tuple shape. The headline test above
+    // (`test_pattern_bound_nested_tuple_vec_payload`) pins the original
+    // `#[ignore]`'d cross-check; the four below exercise the full grid
+    // of element shapes (primitive×primitive, heap×primitive, nested
+    // tuples, three-element tuples).
+
+    #[test]
+    fn test_compound_tuple_payload_int_int() {
+        // Smallest non-trivial case: two-i64 tuple. Verifies per-element
+        // word-offset dispatch handles primitive payloads correctly
+        // without depending on heap-bearing aggregates.
+        let out = run_program(
+            r#"
+enum E { V((i64, i64)) }
+fn main() {
+    let e = V((7, 35));
+    match e {
+        V((a, b)) => println(a + b),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_compound_tuple_payload_string_int() {
+        // Heap-bearing element survives destructure with no double-free
+        // / use-after-free (further pinned by ASAN test below).
+        let out = run_program(
+            r#"
+enum E { V((String, i64)) }
+fn main() {
+    let e = V(("hello", 42));
+    match e {
+        V((s, n)) => {
+            println(s);
+            println(n);
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["hello", "42"]);
+        }
+    }
+
+    #[test]
+    fn test_compound_tuple_payload_nested() {
+        // TP5 — recursive tuple destructure works through one nesting
+        // layer. `((i64, i64), String)` decomposes to inner-tuple +
+        // string element via the recursive `reconstruct_payload_value`
+        // / `bind_pattern_values` Tuple branches.
+        let out = run_program(
+            r#"
+enum E { V(((i64, i64), String)) }
+fn main() {
+    let e = V(((10, 20), "nested"));
+    match e {
+        V(((a, b), s)) => {
+            println(a + b);
+            println(s);
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["30", "nested"]);
+        }
+    }
+
+    #[test]
+    fn test_compound_tuple_payload_three_elements() {
+        // Three-element tuple with mixed heap-bearing + primitive
+        // elements. Verifies the per-element offset walk handles N≥3
+        // correctly (the field_words slice cursor advances past each
+        // element's word count without overrunning).
+        let out = run_program(
+            r#"
+enum E { V((Vec[i64], String, i64)) }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(11);
+    v.push(22);
+    let e = V((v, "tag", 99));
+    match e {
+        V((xs, s, n)) => {
+            println(xs.len());
+            println(s);
+            println(n);
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "tag", "99"]);
         }
     }
 
