@@ -1,6 +1,7 @@
 # Parallax bench — robustness + realism gaps
 
-**Status:** open. **Started:** 2026-05-10. **Owner:** unassigned.
+**Status:** Partially landed (G1-G5 shipped); G6-G11 deferred.
+**Started:** 2026-05-10. **Owner:** unassigned.
 
 The Parallax bench (`examples/parallax/bench/`) shipped as a
 side-by-side throughput artifact for Demo 1 (Slice E, `4f7b72d`).
@@ -9,6 +10,34 @@ revealed structural gaps in *how it measures*, not just *what it
 measures*. This doc enumerates those gaps and their fixes —
 distinct from [`http_layer_perf.md`](http_layer_perf.md) which
 tracks the path to higher throughput numbers.
+
+## Status snapshot
+
+| Gap | Status | Outcome |
+|---|---|---|
+| G1: optimization-eaten busy_loops | ✓ Shipped (`5ef2ea6`) | Hash-mix kernel + observable fold across all 4 impls. |
+| G2: connection-count sweep | ✓ Shipped (`d8a124e`) | `--connections=A,B,C` (default 100/1000/5000). |
+| G3: multi-run statistics | ✓ Shipped (`d8a124e`) | `--runs=N` (default 3); median + [min..max]. |
+| G4: percentile distribution | ✓ Shipped (`d8a124e`) | p50/p75/p90/p99/max parsed from `wrk --latency`. |
+| G5: cold-start baseline | ✓ Shipped (`d3b06f6`) | Always-on cold-start probe per impl. |
+| G6: wrk version pinning | Partially handled | Version printed at run start; not pinned in install docs. |
+| G7: same-machine load generator | Deferred | Standalone-machine load gen wants its own slice. |
+| G8: single endpoint | Deferred | Multi-endpoint coverage; no current pressure. |
+| G9: body size variance | Deferred | Small/medium/large body sweep; no current pressure. |
+| G10: regression detection / CI tracking | Deferred | Checked-in `runs/{date}.json` files; manual until nightly bench machine exists. |
+| G11: long-duration soak | Deferred | Hours-long soak for memory/fd-leak detection; large effort. |
+
+**Open follow-up — plaintext-throughput bench shape (new since
+shipped G1-G5).** [`http_layer_perf.md`](http_layer_perf.md)
+investigation paused pending a *no-work* bench shape — under
+the current Parallax bench, HTTP-layer optimizations show null
+results because the bench is CPU-saturated on the four
+busy_loops, not on HTTP overhead. A separate `bench-plaintext.sh`
+(or a `--shape=plaintext` flag on `bench.sh`) that has handlers
+return a static `"OK"` would expose the trampoline + dispatch
+overhead the way TechEmpower-style plaintext benches do. Adding
+this is the prerequisite for productive H2 (2)-(5) work on the
+HTTP layer. Worth ~1 slice of effort.
 
 Cross-refs:
 - Bench harness scaffolding: `ea1d26d`. Verification run:

@@ -1,11 +1,35 @@
 # Parallax bench — perf investigation
 
-**Status:** open. **Started:** 2026-05-09. **Owner:** unassigned.
+**Status:** ✓ Resolved (2026-05-10). **Started:** 2026-05-09.
+**Owner:** unassigned.
 
 This doc captures the diagnostic framing for the throughput gaps
 surfaced by [Slice E's verification run](../../examples/parallax/bench/README.md)
 and lays out concrete next-step probes. The numbers landed; *what
 they mean* did not. This is where that work lives.
+
+## Status snapshot
+
+| Hypothesis | Status | Outcome |
+|---|---|---|
+| H1: thread-per-call fan-out | ✓ Confirmed + fixed | `3953a14` — `karac_par_run` long-lived pool. Thread churn -94%, p99 -46%. |
+| H2: handler trampoline overhead | Partially probed (`cc8214e`) → moved to [`http_layer_perf.md`](http_layer_perf.md) | Trampoline isn't the bottleneck at this bench's CPU-saturated shape; remaining surface tracked separately. |
+| H3: string allocations | Subsumed by H2 | Same conclusion. |
+| H4: cross-FFI inlining | Not probed | Out-of-band cost <2 % at this scale; revisit if a no-work bench shape is built. |
+| H5: effect-tracking bookkeeping | Ruled out (`KARAC_RUNTIME_DEBUG_METADATA=0` probe gave noise) | Not the bottleneck. |
+| Codegen IR-opts (post-H1 finding) | ✓ Shipped (`280ce2d`) | Default LLVM `-O2` pipeline; 92× throughput at the bench's no-work ceiling. |
+
+**Open follow-ups (handed off to other docs/trackers).**
+
+- HTTP-layer perf path-to-1M+ → [`http_layer_perf.md`](http_layer_perf.md).
+  H2/H3/H4 reframed there with bench-shape-aware ranking.
+- Bench measurement infrastructure → [`bench_robustness.md`](bench_robustness.md).
+- Real work-stealing scheduler for `karac_par_run` (per
+  `docs/design.md § Runtime Distribution`) → tracker entry in
+  [`phase-7-codegen.md`](../implementation_checklist/phase-7-codegen.md)
+  ("`karac_par_run`: real work-stealing scheduler").
+- Tunable `karac_par_run` pool size, panic-payload propagation
+  → tracker entries in `phase-7-codegen.md`.
 
 Cross-refs:
 - Bench harness scaffolding: `ea1d26d`. Verification run: `4f7b72d`.

@@ -1,6 +1,7 @@
 # Kāra HTTP layer — path to 1M+ req/s
 
-**Status:** open. **Started:** 2026-05-10. **Owner:** unassigned.
+**Status:** Paused — pending bench-shape decision. **Started:**
+2026-05-10. **Owner:** unassigned.
 
 This doc tracks the diagnostic and execution path from Kāra's
 current Parallax-bench ceiling (~135 K req/s on Apple M5 Pro) to
@@ -9,6 +10,58 @@ in public TechEmpower-style plaintext benches on similar hardware).
 The codegen IR-opts work (`280ce2d`) closed the 1 K → 135 K gap;
 the 135 K → 1 M+ gap is **all in the HTTP-handler dispatch path**
 inside `runtime/src/lib.rs`.
+
+## Status snapshot
+
+| Hypothesis | Status | Outcome |
+|---|---|---|
+| H1: `block_in_place` per request | Probed (`8d1b19b`) | Real but modest: +7 % rps / -41 % p50 at -c1000 with `KARAC_HTTP_BLOCK_IN_PLACE=0`. Env var ships as opt-in; default unchanged pending broader workload-shape study. |
+| H2 step 1: kill intermediate `String` allocs | Shipped (`cc8214e`) | **Null result on bench** (within noise) — allocator pressure isn't the bottleneck at our 700 rps scale. Code is cleaner; kept. |
+| H2 step 2: length-prefixed FFI (kill `CString` allocs) | Deferred | Same null-result expectation at current scale; defer until bench shape changes (see "open follow-ups"). |
+| H2 step 3: borrowed accessors w/ lifetime threading | Deferred | Larger surface (touches Kāra's borrow checker). Same null-result expectation. |
+| H2 step 4: inline trampoline | Deferred | Saves ~1 PLT indirection / req; negligible at this scale. |
+| H2 step 5: `#[repr(C)]` Request | Deferred | Largest design surface; biggest payoff at no-work shape only. |
+| H3: allocator pressure | Effectively ruled out by H2 step 1 | Same finding — not at this scale. |
+| H4: tokio runtime tuning | Not probed | Open. May matter if bench shape changes. |
+| H5: HTTP/1 protocol overhead | Out of scope (Phase 11) | — |
+
+**Why this investigation is paused.** The Parallax bench is
+saturated on busy_loop CPU (~720 rps × 18 cores for the 4-way
+fan-out), not on HTTP-layer overhead. Every HTTP-layer
+optimization probed so far either showed null impact (H2 step 1)
+or modest impact (H1) on the bench numbers — because the
+bottleneck is elsewhere. To productively pursue H2 (2)-(5) the
+right move is **change the bench shape first**: build a
+plaintext-throughput bench (no busy_loops, just return `"OK"`)
+where the HTTP-layer overhead actually shows up. With the
+current bench, further H2 work would be implementation-cost
+without measurable signal.
+
+**Open follow-ups (with where they should resurface).**
+
+- **Plaintext-throughput bench** — required prerequisite to
+  productively pursue H2 (2)-(5). Tracked in
+  [`bench_robustness.md`](bench_robustness.md) as a future
+  bench shape (separate `bench-plaintext.sh` or a `--shape=
+  plaintext` flag on `bench.sh`).
+- **H2 (2)-(5)** — when a no-work bench exists OR when there's
+  an unrelated need to touch the FFI surface (e.g., header-
+  round-trip support — currently locked design (i)). Tracker
+  entries to add to
+  [`phase-7-codegen.md`](../implementation_checklist/phase-7-codegen.md):
+  "HTTP FFI: length-prefixed Request/Response", "HTTP FFI:
+  borrowed accessors with lifetime threading", "HTTP trampoline:
+  inline at call site", "HTTP Request: `#[repr(C)]` zero-copy".
+- **H4 (tokio runtime tuning)** — keep here in this doc.
+  Single-shot probes (`worker_threads`, `max_blocking_threads`)
+  are cheap to A/B if a real-world workload calls for it; not
+  worth running speculatively.
+- **`block_in_place` default change** — env var ships as
+  opt-in. The default-flip decision needs broader workload-
+  shape study (CPU-bound vs I/O-bound vs mixed handlers) and
+  should consider whether `spawn_blocking` is the better shape.
+  Phase 6.3 async-aware handlers will revisit this surface
+  naturally; flagging here so it's not lost.
 
 Cross-refs:
 - Parallax bench investigation: [`parallax_perf.md`](parallax_perf.md).
