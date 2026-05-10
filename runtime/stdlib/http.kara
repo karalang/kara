@@ -89,13 +89,33 @@ effect resource Network;
 // `Server.serve(handler)` is the corresponding non-static dispatcher.
 struct Server { }
 
-// `Request` is the translated form of an inbound hyper request; v1's
-// smoke surface doesn't expose any methods because the smoke handler
-// uses a fixed body for all paths. Once the full handler-dispatch path
-// lands, `path() -> String` / `method() -> String` / etc. fire
-// through FFI helpers on the `KaracHttpRequest` C struct exposed by
-// the runtime crate.
+// `Request` is the translated form of an inbound hyper request. v1's
+// surface ships `path()` + `method()` (F3) — both round-trip through
+// FFI helpers on the runtime's `KaracHttpRequest` C struct and return
+// a fresh owned `String` per call (F2: re-allocates per call rather
+// than borrowing into the runtime-owned struct, which is dropped after
+// the handler returns). `body()`, `query()`, `header()`, `headers()`
+// are deferred to follow-ups.
+//
+// At codegen, `Request` lowers to an opaque pointer wrapping the
+// runtime's `*const KaracHttpRequest` (mirrors `Map[K, V]`'s opaque-
+// ptr precedent). User code never sees the raw pointer — it interacts
+// only through the `path()` / `method()` methods below.
 struct Request { }
+
+impl Request {
+    // Return the request URL path as an owned `String`. The runtime
+    // exposes the path as a borrowed `*const c_char`; this method
+    // copies the bytes so the resulting String outlives the request
+    // struct. Safe to call multiple times — each call allocates fresh.
+    #[compiler_builtin]
+    fn path(ref self) -> String { "" }
+
+    // Return the HTTP method verb (e.g. `"GET"`, `"POST"`) as an owned
+    // `String`. Same lifetime contract as `path()`.
+    #[compiler_builtin]
+    fn method(ref self) -> String { "" }
+}
 
 impl Server {
     // Bind to `addr` (e.g. `"127.0.0.1:0"`) and serve every request
@@ -138,6 +158,15 @@ impl Server {
     // Fn(Request) -> Response with E)` is a one-line declaration
     // change once a real consumer needs it; the typechecker side is
     // already shipped via Theme 6's `with E` machinery.
+    //
+    // **Panic semantics (v1 limitation).** A handler panic terminates
+    // the server process. Kāra's panic lowers to `printf + exit(1)` —
+    // no unwinding — so the per-handler shim cannot intercept. The
+    // runtime's outer `catch_unwind` only sees Rust-side panics from
+    // runtime helpers, not Kāra-side aborts. Structured panic recovery
+    // on the handler path is gated on `std.panic` (separate Phase 8
+    // item); v1 surfaces the abort to operators via a non-zero exit
+    // code on the server binary.
     #[compiler_builtin]
     fn serve(handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })

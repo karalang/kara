@@ -7461,6 +7461,16 @@ impl<'a> Interpreter<'a> {
                     }
                 }
             }
+            // ── Request method dispatch (HTTP handler ABI trampoline, 2026-05-09) ──
+            // F2 owned-String contract: each call returns a freshly-cloned
+            // `Value::String`, so multiple calls to `req.path()` / `.method()`
+            // never collide on a borrowed buffer. v1 returns an empty String
+            // — the interpreter doesn't run a real HTTP server, so there's
+            // no real path/method to surface. Pinned by
+            // `tests/interpreter.rs::test_server_serve_handler_request_path_returns_owned_string`.
+            "path" | "method" if matches!(&obj, Value::Struct { name, .. } if name == "Request") => {
+                return Value::String(String::new());
+            }
             // ── Response / HttpError method dispatch ──────────────────────────
             "status" => {
                 if let Value::Struct {

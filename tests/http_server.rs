@@ -341,32 +341,16 @@ mod http_server_tests {
     /// `test_http_server_serves_hardcoded_handler` (the `serve_static`
     /// equivalent above).
     ///
-    /// **Why this is `#[ignore]`'d at landing.** v1 ships the codegen
-    /// path that lowers `Server.serve(handle)` to a call into
-    /// `karac_runtime_serve_http(addr_cstr, handler_fn_ptr,
-    /// bound_port_out)` — verified by `tests/codegen.rs ::
-    /// test_server_serve_with_free_fn_handler_compiles`. The runtime-
-    /// side contract is that the handler is an `extern "C" fn(*const
-    /// KaracHttpRequest, *mut KaracHttpResponse)` taking two raw
-    /// pointers, but the Kāra-side `fn handle(req: Request) ->
-    /// Response` declaration lowers to a lowering-incompatible
-    /// signature (Kāra's empty-struct `Request` collapses to `i64`
-    /// at the LLVM layer; `Response` is returned by value, not
-    /// written through `*mut KaracHttpResponse`). Per the slice's
-    /// hard-stop trigger 2 fallback, codegen still emits the call —
-    /// LLVM's indirect-call boundary is structurally `ptr` so the
-    /// build succeeds — but invoking the handler at runtime with
-    /// mismatched ABI is undefined behavior. Wiring up the
-    /// trampoline / glue that translates between the FFI struct
-    /// pointers and the Kāra-side `Request` / `Response` value types
-    /// is a separate codegen track (Phase 7.2 § "HTTP handler ABI
-    /// trampoline").
-    ///
-    /// The test stays in-tree as documentation of the missing piece;
-    /// once the trampoline lands, flip the `#[ignore]` and the test
-    /// pins the end-to-end handler-dispatch contract.
+    /// HTTP handler ABI trampoline (2026-05-09): the per-handler shim
+    /// adapts between the user `fn handle(req: Request) -> Response`
+    /// signature and the FFI extern's
+    /// `extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse)`.
+    /// `Request` lowers as an opaque pointer (F2); `Response` status and
+    /// body decompose into the runtime setters. Codegen-side caching is
+    /// pinned by
+    /// `tests/codegen.rs::test_server_serve_handler_shim_caches`;
+    /// this test is the end-to-end runtime exercise.
     #[test]
-    #[ignore]
     fn test_server_serve_handler_smoke() {
         let Some(rt) = runtime_path() else {
             eprintln!(
@@ -377,7 +361,14 @@ mod http_server_tests {
         };
         std::env::set_var("KARAC_RUNTIME", &rt);
 
+        // Response is defined inline because the codegen test pipeline
+        // (`compile_and_link`) doesn't auto-inject stdlib structs; the
+        // user code carries the body shape directly. The `Server.serve`
+        // / `Request.path()` dispatch arms are registered as compiler
+        // builtins regardless.
         let src = r#"
+            struct Response { status: i64, body: String }
+
             fn handle(req: Request) -> Response {
                 Response { status: 200, body: "{}" }
             }
@@ -453,5 +444,132 @@ mod http_server_tests {
         };
         assert_eq!(status, 200, "expected 200 status; body={body:?}");
         assert_eq!(body.trim(), "{}", "expected `{{}}` body; got: {body:?}");
+    }
+
+    // ── HTTP handler ABI trampoline ──
+    //
+    // The two tests below pin the F3 method surface end-to-end:
+    // `Request.path()` and `Request.method()` round-trip through the
+    // runtime externs and yield owned Strings the user handler can
+    // return as the response body.
+
+    /// Run a handler-using server inline against `path` and assert the
+    /// response. Soft-skips when the runtime library isn't built.
+    fn run_handler_smoke(src: &str, request_path: &str) -> Option<(u16, String)> {
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_handler_run_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+        let started = Instant::now();
+        let mut last_err: Option<String> = None;
+        let mut response: Option<(u16, String)> = None;
+        for _ in 0..10 {
+            match http_get(port, request_path) {
+                Ok(r) => {
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        match response {
+            Some(r) => Some(r),
+            None => panic!(
+                "GET {request_path} against 127.0.0.1:{port} never succeeded; \
+                 last error: {:?}",
+                last_err
+            ),
+        }
+    }
+
+    /// `Request.path()` round-trips end-to-end: the user handler reads
+    /// the path from the incoming request and returns it as the
+    /// response body. Pins F2 (opaque-ptr Request shape) + F3
+    /// (`path()` method dispatch) end-to-end.
+    #[test]
+    fn test_server_serve_handler_reads_path() {
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _result = Server.serve(handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/dashboard/42") else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert!(
+            body.contains("/dashboard/42"),
+            "expected response body to echo path /dashboard/42; got: {body:?}"
+        );
+    }
+
+    /// `Request.method()` round-trips end-to-end: the user handler reads
+    /// the HTTP method verb and returns it as the response body. Pins
+    /// the `method()` arm. (POST is not exercised in v1; the GET smoke
+    /// shape is the only verb covered.)
+    #[test]
+    fn test_server_serve_handler_reads_method() {
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.method() }
+            }
+
+            fn main() {
+                let _result = Server.serve(handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/") else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body.trim(),
+            "GET",
+            "expected response body to be `GET`; got: {body:?}"
+        );
     }
 }

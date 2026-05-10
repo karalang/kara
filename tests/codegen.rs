@@ -8447,6 +8447,8 @@ fn main() {
     #[test]
     fn test_server_serve_with_free_fn_handler_compiles() {
         let src = r#"
+struct Response { status: i64, body: String }
+
 fn handle(req: Request) -> Response {
     Response { status: 200, body: "{}" }
 }
@@ -8474,6 +8476,47 @@ fn main() {
         assert!(
             ir_text.contains("karac_runtime_serve_http"),
             "expected the IR to call `karac_runtime_serve_http`; not found"
+        );
+    }
+
+    /// HTTP handler ABI trampoline (2026-05-09): two `Server.serve(handle)`
+    /// calls in one program emit exactly one `_karac_http_shim_handle`
+    /// definition. Pins the per-handler-fn shim cache — without it,
+    /// duplicate emission would either trigger a `module already has a
+    /// function named ...` panic from `LLVMModuleRef::add_function` or
+    /// produce two separate shim definitions and bloat the IR.
+    #[test]
+    fn test_server_serve_handler_shim_caches() {
+        let src = r#"
+struct Response { status: i64, body: String }
+
+fn handle(req: Request) -> Response {
+    Response { status: 200, body: "{}" }
+}
+
+fn main() {
+    let _r1 = Server.serve(handle);
+    let _r2 = Server.serve(handle);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let ir = compile_to_ir(&parsed.program, None, None)
+            .expect("expected dual Server.serve(handle) calls to compile cleanly");
+        let define_count = ir
+            .lines()
+            .filter(|l| l.contains("_karac_http_shim_handle") && l.contains("define"))
+            .count();
+        assert_eq!(
+            define_count, 1,
+            "expected exactly 1 `_karac_http_shim_handle` definition; got {define_count}.\nIR:\n{ir}"
         );
     }
 

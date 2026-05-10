@@ -1106,6 +1106,11 @@ mod tests {
         // follow-up handler-dispatch entry (codegen + thin stdlib
         // declaration; runtime extern at `runtime/src/lib.rs:1879`).
         assert_inherent_impl_compiler_builtin("http.kara", "Server", &["serve_static", "serve"]);
+        // HTTP handler ABI trampoline (2026-05-09): F3 method surface —
+        // `Request.path()` + `Request.method()` round-trip through the
+        // runtime externs and copy bytes into a fresh owned String per
+        // call (F2 owned-String contract).
+        assert_inherent_impl_compiler_builtin("http.kara", "Request", &["path", "method"]);
     }
 
     #[test]

@@ -932,6 +932,13 @@ struct Codegen<'ctx> {
     /// (`Set[(i64, String)]`, `Set[Vec[T]]`) compose through the
     /// TypeExpr-aware hash/eq/Display paths.
     set_elem_type_exprs: HashMap<String, TypeExpr>,
+    /// HTTP handler ABI trampoline (2026-05-09): cache of per-handler-fn
+    /// `extern "C"` shims. Key is the user handler's mangled fn name (e.g.
+    /// `"handle"`); value is the synthesized shim function. Sharing the
+    /// shim across multiple `Server.serve(handler)` calls in one program
+    /// avoids redundant emission and keeps the IR stable. Pinned by
+    /// `tests/codegen.rs::test_server_serve_handler_shim_caches`.
+    http_shim_cache: HashMap<String, FunctionValue<'ctx>>,
     karac_map_new_fn: FunctionValue<'ctx>,
     karac_map_free_fn: FunctionValue<'ctx>,
     karac_map_insert_old_fn: FunctionValue<'ctx>,
@@ -1210,6 +1217,55 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // HTTP handler ABI trampoline (2026-05-09): per-request runtime
+        // externs invoked from the Kāra-side `Request.path()` / `.method()`
+        // methods and from the per-handler shim that decomposes the user-
+        // returned `Response` into the FFI `KaracHttpResponse` slot.
+        //
+        // - `karac_runtime_http_request_path(*const KaracHttpRequest)
+        //    -> *const c_char` — null-terminated UTF-8 path. Lifetime tied
+        //   to the request struct (dropped after the handler returns), so
+        //   `Request.path()` copies into a fresh Kāra String per call (F2).
+        // - `karac_runtime_http_request_method(...)` — same shape, returns
+        //   the HTTP method verb.
+        // - `karac_runtime_http_response_set_status(*mut KaracHttpResponse,
+        //    u16)` — write the status code.
+        // - `karac_runtime_http_response_set_body(*mut KaracHttpResponse,
+        //    *const u8, usize)` — copy a byte buffer into a fresh
+        //   runtime-owned response body.
+        let request_path_type = ptr_type.fn_type(&[ptr_type.into()], false);
+        let _karac_runtime_http_request_path_fn = module.add_function(
+            "karac_runtime_http_request_path",
+            request_path_type,
+            Some(Linkage::External),
+        );
+        let request_method_type = ptr_type.fn_type(&[ptr_type.into()], false);
+        let _karac_runtime_http_request_method_fn = module.add_function(
+            "karac_runtime_http_request_method",
+            request_method_type,
+            Some(Linkage::External),
+        );
+        let response_set_status_type = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), context.i16_type().into()], false);
+        let _karac_runtime_http_response_set_status_fn = module.add_function(
+            "karac_runtime_http_response_set_status",
+            response_set_status_type,
+            Some(Linkage::External),
+        );
+        let response_set_body_type = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        let _karac_runtime_http_response_set_body_fn = module.add_function(
+            "karac_runtime_http_response_set_body",
+            response_set_body_type,
+            Some(Linkage::External),
+        );
+        let strlen_type = i64_type.fn_type(&[ptr_type.into()], false);
+        if module.get_function("strlen").is_none() {
+            module.add_function("strlen", strlen_type, Some(Linkage::External));
+        }
+
         // ── Map runtime extern declarations ──────────────────────────────
         // All map methods use opaque ptr for the map handle and key/value
         // pointers. Sizes and fn-pointers are passed as i64 / ptr.
@@ -1422,6 +1478,7 @@ impl<'ctx> Codegen<'ctx> {
             set_elem_types: HashMap::new(),
             set_elem_type_names: HashMap::new(),
             set_elem_type_exprs: HashMap::new(),
+            http_shim_cache: HashMap::new(),
             karac_map_new_fn,
             karac_map_free_fn,
             karac_map_insert_old_fn,
@@ -1578,6 +1635,16 @@ impl<'ctx> Codegen<'ctx> {
                 // Map[K,V] and Set[T] are opaque heap pointers managed by the
                 // karac_map_* runtime functions.
                 if name == "Map" || name == "Set" || name == "SortedSet" {
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
+                // HTTP handler ABI trampoline (2026-05-09, F2): `Request` is
+                // an opaque heap pointer wrapping the runtime's
+                // `*const KaracHttpRequest`. The shim emitted at the
+                // `Server.serve(handler)` dispatch site packs the FFI request
+                // pointer into this slot before invoking the user handler;
+                // `Request.path()` / `.method()` extract the pointer and
+                // round-trip through the runtime externs.
+                if name == "Request" {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
                 self.llvm_type_for_name(name)
@@ -6584,7 +6651,14 @@ impl<'ctx> Codegen<'ctx> {
             // close-out paragraph in `phase-7-codegen.md`.
             let handler_arg = &_args[0];
             let handler_fn = self.resolve_free_fn_for_handler_arg(&handler_arg.value)?;
-            let handler_ptr = handler_fn.as_global_value().as_pointer_value();
+            // HTTP handler ABI trampoline (2026-05-09): pass the per-handler
+            // shim's address rather than the user fn's directly. The user fn
+            // takes a value-typed `Request` and returns a `Response`; the
+            // FFI extern's handler slot expects
+            // `extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse)`.
+            // The shim adapts between the two ABIs (cached per-handler).
+            let shim_fn = self.emit_http_handler_shim(handler_fn);
+            let handler_ptr = shim_fn.as_global_value().as_pointer_value();
 
             // Build the address C string.
             let addr_str = "127.0.0.1:0";
@@ -7038,6 +7112,20 @@ impl<'ctx> Codegen<'ctx> {
                 if self.set_elem_types.contains_key(name.as_str()) {
                     let name = name.clone();
                     return self.compile_set_method(&name, method, args);
+                }
+                // HTTP handler ABI trampoline (2026-05-09): `Request.path()`
+                // and `Request.method()`. Request is an opaque-ptr value
+                // (F2) wrapping the runtime's `*const KaracHttpRequest`.
+                // Both methods round-trip through runtime externs that
+                // return a borrowed `*const c_char`; we copy the bytes into
+                // a fresh Kāra String per call so the resulting value
+                // outlives the request struct (which the runtime drops
+                // after the handler returns).
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                    && (method == "path" || method == "method")
+                {
+                    let name = name.clone();
+                    return self.compile_request_string_method(&name, method);
                 }
             }
         }
@@ -17386,6 +17474,316 @@ impl<'ctx> Codegen<'ctx> {
                 std::mem::discriminant(&arg.kind)
             )),
         }
+    }
+
+    /// HTTP handler ABI trampoline (2026-05-09).
+    ///
+    /// Emit (or look up from `http_shim_cache`) a per-handler-fn `extern "C"`
+    /// shim that adapts between hyper's FFI signature
+    /// (`*const KaracHttpRequest, *mut KaracHttpResponse`) and the user's
+    /// value-typed `fn(Request) -> Response`. The shim:
+    ///   1. Forwards the request pointer arg as the user fn's `Request`
+    ///      param (Request lowers to `ptr` per F2 — opaque-pointer shape
+    ///      mirroring `Map[K, V]`).
+    ///   2. Calls the user handler.
+    ///   3. Extracts `status` from the returned `Response` aggregate, truncates
+    ///      to u16, and writes it to the response slot via
+    ///      `karac_runtime_http_response_set_status`.
+    ///   4. Extracts the `body` String's `(data_ptr, len)` and copies it
+    ///      into the response slot via
+    ///      `karac_runtime_http_response_set_body`.
+    ///   5. Returns void.
+    ///
+    /// Per-handler caching keeps the IR stable and avoids redundant emission
+    /// when one program calls `Server.serve(handle)` multiple times.
+    /// Pinned by `tests/codegen.rs::test_server_serve_handler_shim_caches`.
+    ///
+    /// **Panic semantics (F1).** The shim does nothing special — Kāra's
+    /// `emit_panic` is `printf + exit(1)`, so handler panics terminate the
+    /// server process. Recovery requires `std.panic` (separate Phase 8 work).
+    fn emit_http_handler_shim(
+        &mut self,
+        handler_fn: inkwell::values::FunctionValue<'ctx>,
+    ) -> inkwell::values::FunctionValue<'ctx> {
+        let user_name = handler_fn
+            .get_name()
+            .to_str()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|_| "handler".to_string());
+        if let Some(&cached) = self.http_shim_cache.get(&user_name) {
+            return cached;
+        }
+        let shim_name = format!("_karac_http_shim_{user_name}");
+        if let Some(existing) = self.module.get_function(&shim_name) {
+            self.http_shim_cache.insert(user_name, existing);
+            return existing;
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+        let i16_ty = self.context.i16_type();
+        let i64_ty = self.context.i64_type();
+        let shim_ty = void_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let shim = self
+            .module
+            .add_function(&shim_name, shim_ty, Some(Linkage::External));
+
+        // Save the builder's current cursor; we'll restore after shim emit
+        // so the caller (`compile_assoc_call` for `Server.serve`) can keep
+        // building the dispatch site's basic block.
+        let saved_block = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(shim);
+
+        let entry = self.context.append_basic_block(shim, "entry");
+        self.builder.position_at_end(entry);
+
+        let req_ptr = shim.get_nth_param(0).unwrap().into_pointer_value();
+        let resp_ptr = shim.get_nth_param(1).unwrap().into_pointer_value();
+
+        // Call the user handler. The user fn's signature is `fn(Request) ->
+        // Response`; with F2's opaque-ptr Request, the Kāra ABI takes a
+        // single `ptr` arg and returns the Response aggregate by value.
+        let call = self
+            .builder
+            .build_call(handler_fn, &[req_ptr.into()], "shim.user.call")
+            .unwrap();
+        let resp_val = call.try_as_basic_value().unwrap_basic();
+        let resp_struct = resp_val.into_struct_value();
+
+        // Response layout: { i64 status, { ptr data, i64 len, i64 cap } body }.
+        // Extract status (i64), truncate to i16 (the runtime extern takes u16
+        // — the i16/u16 distinction is sign-vs-unsigned only at the source
+        // level; the LLVM bit pattern is the same).
+        let status_i64 = self
+            .builder
+            .build_extract_value(resp_struct, 0, "shim.resp.status.i64")
+            .unwrap()
+            .into_int_value();
+        let status_i16 = self
+            .builder
+            .build_int_truncate(status_i64, i16_ty, "shim.resp.status.i16")
+            .unwrap();
+        let set_status_fn = self
+            .module
+            .get_function("karac_runtime_http_response_set_status")
+            .expect("karac_runtime_http_response_set_status declared in Codegen::new");
+        self.builder
+            .build_call(
+                set_status_fn,
+                &[resp_ptr.into(), status_i16.into()],
+                "shim.set_status",
+            )
+            .unwrap();
+
+        // Extract the body String aggregate, then its data pointer + length.
+        let body_struct = self
+            .builder
+            .build_extract_value(resp_struct, 1, "shim.resp.body")
+            .unwrap()
+            .into_struct_value();
+        let body_data = self
+            .builder
+            .build_extract_value(body_struct, 0, "shim.resp.body.data")
+            .unwrap()
+            .into_pointer_value();
+        let body_len = self
+            .builder
+            .build_extract_value(body_struct, 1, "shim.resp.body.len")
+            .unwrap()
+            .into_int_value();
+        // Sign-extend / pass-through to i64 for the runtime call (Kāra's
+        // String len is already i64, so this is a no-op for the typical
+        // path — the explicit extension keeps us robust if a future
+        // String layout uses a narrower len field).
+        let body_len_i64 = self
+            .builder
+            .build_int_z_extend_or_bit_cast(body_len, i64_ty, "shim.resp.body.len.i64")
+            .unwrap();
+        let set_body_fn = self
+            .module
+            .get_function("karac_runtime_http_response_set_body")
+            .expect("karac_runtime_http_response_set_body declared in Codegen::new");
+        self.builder
+            .build_call(
+                set_body_fn,
+                &[resp_ptr.into(), body_data.into(), body_len_i64.into()],
+                "shim.set_body",
+            )
+            .unwrap();
+
+        self.builder.build_return(None).unwrap();
+
+        // Restore cursor.
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_block {
+            self.builder.position_at_end(bb);
+        }
+
+        self.http_shim_cache.insert(user_name, shim);
+        shim
+    }
+
+    /// HTTP handler ABI trampoline (2026-05-09).
+    ///
+    /// Compile `req.path()` / `req.method()` for a `Request`-typed local.
+    /// The receiver's slot stores the opaque `*const KaracHttpRequest` (F2);
+    /// load it, call the matching runtime extern to get a borrowed
+    /// `*const c_char`, then copy the bytes into a fresh Kāra `String`
+    /// `{ data, len, cap }` so the resulting value owns its buffer
+    /// (the runtime drops the request struct after the handler returns,
+    /// invalidating the borrowed pointer).
+    ///
+    /// Pinned by `tests/interpreter.rs::test_server_serve_handler_request_path_returns_owned_string`
+    /// (interpreter parity for the owned-String contract) and
+    /// `tests/http_server.rs::test_server_serve_handler_reads_path` /
+    /// `_reads_method` (end-to-end runtime exercise).
+    fn compile_request_string_method(
+        &mut self,
+        var_name: &str,
+        method: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let extern_name = match method {
+            "path" => "karac_runtime_http_request_path",
+            "method" => "karac_runtime_http_request_method",
+            other => {
+                return Err(format!(
+                    "compile_request_string_method called with unsupported method '{other}'"
+                ));
+            }
+        };
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+
+        // Load the request pointer from the local's alloca.
+        let req_ptr = self
+            .builder
+            .build_load(slot.ty, slot.ptr, &format!("{var_name}.req.load"))
+            .unwrap()
+            .into_pointer_value();
+
+        let extern_fn = self
+            .module
+            .get_function(extern_name)
+            .unwrap_or_else(|| panic!("{extern_name} declared in Codegen::new"));
+        let cstr_ptr = self
+            .builder
+            .build_call(extern_fn, &[req_ptr.into()], &format!("req.{method}.cstr"))
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // strlen(cstr_ptr) → i64.
+        let strlen_fn = self
+            .module
+            .get_function("strlen")
+            .expect("strlen declared in Codegen::new");
+        let len_val = self
+            .builder
+            .build_call(strlen_fn, &[cstr_ptr.into()], &format!("req.{method}.len"))
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        // strlen returns size_t (i64 on 64-bit); ensure i64.
+        let len_i64 = self
+            .builder
+            .build_int_z_extend_or_bit_cast(len_val, i64_ty, &format!("req.{method}.len.i64"))
+            .unwrap();
+
+        // Allocate len bytes (handle len==0 by passing 0 — malloc(0) is
+        // implementation-defined but Vec/String elsewhere uses null for
+        // empty buffers; mirror that here for consistency).
+        let zero = i64_ty.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                len_i64,
+                zero,
+                &format!("req.{method}.is_empty"),
+            )
+            .unwrap();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Request method called outside fn".to_string())?;
+        let alloc_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("req.{method}.alloc"));
+        let empty_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("req.{method}.empty"));
+        let cont_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("req.{method}.cont"));
+
+        // Pre-branch alloca for the resulting (data, len, cap) buffer ptr.
+        let buf_slot = self.create_entry_alloca(fn_val, "req.str.buf", ptr_ty.into());
+
+        self.builder
+            .build_conditional_branch(is_zero, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Empty path: store null buffer.
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(buf_slot, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Non-empty: malloc + memcpy.
+        self.builder.position_at_end(alloc_bb);
+        let buf = self
+            .builder
+            .build_call(
+                self.malloc_fn,
+                &[len_i64.into()],
+                &format!("req.{method}.buf"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(buf, 1, cstr_ptr, 1, len_i64)
+            .unwrap();
+        self.builder.build_store(buf_slot, buf).unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // Cont: assemble the String aggregate.
+        self.builder.position_at_end(cont_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, buf_slot, "req.str.data")
+            .unwrap()
+            .into_pointer_value();
+        let str_ty = self.vec_struct_type();
+        let mut str_val: BasicValueEnum<'ctx> = str_ty.get_undef().into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), data, 0, "req.str.data.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), len_i64, 1, "req.str.len.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), len_i64, 2, "req.str.cap.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        Ok(str_val)
     }
 
     fn load_variable(&self, name: &str) -> Result<BasicValueEnum<'ctx>, String> {

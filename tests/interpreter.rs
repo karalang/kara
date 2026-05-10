@@ -5129,6 +5129,32 @@ fn main() {
     assert_eq!(output, "42\n");
 }
 
+/// HTTP handler ABI trampoline (2026-05-09): F2 owned-String contract.
+/// `Request.path()` (and `.method()`) return owned Strings each call —
+/// the interpreter side mirrors the codegen contract by returning a
+/// fresh `Value::String` per invocation, so two back-to-back calls
+/// don't share a buffer or fight over a borrow. The interpreter
+/// doesn't run a real HTTP server, so the returned String is empty;
+/// what the test pins is the *shape* (owned, not a `ref` borrow) and
+/// repeat-callability.
+#[test]
+fn test_server_serve_handler_request_path_returns_owned_string() {
+    let output = run(r#"
+fn main() {
+    let req = Request { };
+    let p1 = req.path();
+    let p2 = req.path();
+    let m1 = req.method();
+    println(p1.len());
+    println(p2.len());
+    println(m1.len());
+}
+"#);
+    // Empty owned Strings: each `.len()` returns 0, and the chained
+    // calls compose without lifetime conflicts.
+    assert_eq!(output, "0\n0\n0\n");
+}
+
 #[test]
 fn test_for_in_vec_string_calls_len_interp() {
     // Interpreter parity for List 2 / item 3 (codegen for-loop element-type
