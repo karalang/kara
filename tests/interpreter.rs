@@ -66,6 +66,72 @@ fn test_boolean_logic() {
     assert_eq!(run("fn main() { println(true or false); }"), "true\n");
 }
 
+// ── Short-circuit `and` / `or` (roadmap.md:425, 429) ────────────
+
+#[test]
+fn test_and_short_circuits_skips_rhs_fn_call() {
+    // `false and boom()` must NOT call boom().
+    let out = run(r#"
+        fn boom() -> bool { println("called"); true }
+        fn main() {
+            if false and boom() { println("then"); } else { println("else"); }
+        }
+    "#);
+    assert_eq!(out, "else\n");
+}
+
+#[test]
+fn test_or_short_circuits_skips_rhs_fn_call() {
+    // `true or boom()` must NOT call boom().
+    let out = run(r#"
+        fn boom() -> bool { println("called"); true }
+        fn main() {
+            if true or boom() { println("then"); } else { println("else"); }
+        }
+    "#);
+    assert_eq!(out, "then\n");
+}
+
+#[test]
+fn test_and_short_circuits_guards_oob_index() {
+    // `i > 0 and visited[i - 1]` must not crash when i == 0
+    // (RHS would index Vec at -1, but RHS shouldn't run).
+    let out = run_no_errors(
+        r#"
+        fn main() {
+            let visited: Vec[bool] = Vec.new();
+            let i = 0;
+            if i > 0 and visited[i - 1] { println("then"); } else { println("else"); }
+        }
+    "#,
+    );
+    assert_eq!(out, "else\n");
+}
+
+#[test]
+fn test_and_evaluates_rhs_when_lhs_true() {
+    // When LHS doesn't short-circuit, RHS must run.
+    let out = run(r#"
+        fn boom() -> bool { println("called"); true }
+        fn main() {
+            if true and boom() { println("then"); } else { println("else"); }
+        }
+    "#);
+    assert_eq!(out, "called\nthen\n");
+}
+
+#[test]
+fn test_or_evaluates_rhs_when_lhs_false() {
+    // When LHS doesn't short-circuit, RHS must run.
+    let out = run(r#"
+        fn boom() -> bool { println("called"); false }
+        fn main() {
+            if false or boom() { println("then"); } else { println("else"); }
+        }
+    "#);
+    assert_eq!(out, "called\nelse\n");
+}
+
 #[test]
 fn test_comparison() {
     assert_eq!(run("fn main() { println(3 > 2); }"), "true\n");

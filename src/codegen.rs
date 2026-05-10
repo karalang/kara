@@ -5635,11 +5635,19 @@ impl<'ctx> Codegen<'ctx> {
                 // parameter loop (impl methods prepend a `self: Type` param).
                 self.load_variable("self")
             }
-            ExprKind::Binary { op, left, right } => {
-                let lhs = self.compile_expr(left)?;
-                let rhs = self.compile_expr(right)?;
-                self.compile_binop(op, lhs, rhs)
-            }
+            ExprKind::Binary { op, left, right } => match op {
+                // Short-circuit `and`/`or` per documented design
+                // (roadmap.md:425, 429): RHS only evaluates when the
+                // LHS doesn't already determine the result, so RHS
+                // side-effects (panicking index, dropped fn call)
+                // don't fire when short-circuited.
+                BinOp::And | BinOp::Or => self.compile_short_circuit(op, left, right),
+                _ => {
+                    let lhs = self.compile_expr(left)?;
+                    let rhs = self.compile_expr(right)?;
+                    self.compile_binop(op, lhs, rhs)
+                }
+            },
             ExprKind::Unary { op, operand } => {
                 if matches!(op, UnaryOp::Deref) {
                     // `*r` — load the value the reference points to.
@@ -13080,6 +13088,54 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     // ── Binary / unary operators ──────────────────────────────────
+
+    /// Emit short-circuit `and` / `or` per documented design intent
+    /// (roadmap.md:425, 429): the RHS is only compiled into a basic
+    /// block reachable when the LHS doesn't already determine the
+    /// result. Without this, the RHS would emit unconditionally and
+    /// its side-effects (panicking index, dropped fn call) would fire
+    /// even when short-circuited — same shape as the interpreter's
+    /// eager-eval bug fixed in lockstep.
+    fn compile_short_circuit(
+        &mut self,
+        op: &BinOp,
+        left: &Expr,
+        right: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fn_val = self.current_fn.unwrap();
+        let lhs_val = self.compile_expr(left)?.into_int_value();
+        let lhs_end_bb = self.builder.get_insert_block().unwrap();
+
+        let rhs_bb = self.context.append_basic_block(fn_val, "sc.rhs");
+        let merge_bb = self.context.append_basic_block(fn_val, "sc.merge");
+
+        // `and`: lhs true → eval rhs; lhs false → short-circuit to false.
+        // `or`:  lhs true → short-circuit to true; lhs false → eval rhs.
+        let (true_dest, false_dest) = match op {
+            BinOp::And => (rhs_bb, merge_bb),
+            BinOp::Or => (merge_bb, rhs_bb),
+            _ => unreachable!("compile_short_circuit only handles And/Or"),
+        };
+        self.builder
+            .build_conditional_branch(lhs_val, true_dest, false_dest)
+            .unwrap();
+
+        self.builder.position_at_end(rhs_bb);
+        let rhs_val = self.compile_expr(right)?.into_int_value();
+        let rhs_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        self.builder.position_at_end(merge_bb);
+        let bool_ty = self.context.bool_type();
+        let short_const = match op {
+            BinOp::And => bool_ty.const_int(0, false),
+            BinOp::Or => bool_ty.const_int(1, false),
+            _ => unreachable!(),
+        };
+        let phi = self.builder.build_phi(bool_ty, "sc.result").unwrap();
+        phi.add_incoming(&[(&short_const, lhs_end_bb), (&rhs_val, rhs_end_bb)]);
+        Ok(phi.as_basic_value())
+    }
 
     fn compile_binop(
         &mut self,

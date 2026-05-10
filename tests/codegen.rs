@@ -113,6 +113,68 @@ fn accumulate(limit: i64) -> i64 {
         assert!(ir.contains("phi"), "if-else result should use phi node");
     }
 
+    // ── Short-circuit `and` / `or` (roadmap.md:425, 429) ─────────
+
+    #[test]
+    fn test_ir_and_short_circuits_rhs_call() {
+        // `false and boom()` must NOT emit `@boom` on the unconditional
+        // path; it must live inside an `sc.rhs` block reached only when
+        // the LHS is true.
+        let ir = ir_for(
+            r#"
+fn boom() -> bool { true }
+fn use_and(x: bool) -> bool { x and boom() }
+"#,
+        );
+        assert!(
+            ir.contains("sc.rhs"),
+            "expected sc.rhs basic block; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("sc.merge"),
+            "expected sc.merge basic block; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("phi i1"),
+            "expected i1 phi for short-circuit result; IR:\n{ir}"
+        );
+        // The result must come from a phi with a constant `false` (i1 0)
+        // for the short-circuit edge — the LHS-false case never reaches
+        // the boom() call.
+        assert!(
+            ir.contains("phi i1 [ false") || ir.contains("[ false,") || ir.contains("i1 false"),
+            "expected short-circuit constant in phi; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_or_short_circuits_rhs_call() {
+        // `true or boom()` must keep `@boom` behind a conditional branch.
+        let ir = ir_for(
+            r#"
+fn boom() -> bool { false }
+fn use_or(x: bool) -> bool { x or boom() }
+"#,
+        );
+        assert!(
+            ir.contains("sc.rhs"),
+            "expected sc.rhs basic block; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("sc.merge"),
+            "expected sc.merge basic block; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("phi i1"),
+            "expected i1 phi for short-circuit result; IR:\n{ir}"
+        );
+        // Result phi must carry a constant `true` for the short-circuit edge.
+        assert!(
+            ir.contains("phi i1 [ true") || ir.contains("[ true,") || ir.contains("i1 true"),
+            "expected short-circuit constant in phi; IR:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_ir_if_no_else() {
         // `mut` on parameters is not Kāra syntax (modes are inferred).
@@ -561,6 +623,38 @@ fn main() {
         let out = run_program("fn main() { println(true); }");
         if let Some(out) = out {
             assert_eq!(out.trim(), "true");
+        }
+    }
+
+    #[test]
+    fn test_e2e_and_short_circuit_skips_rhs_call() {
+        // `false and boom()` must not call boom() at runtime.
+        let out = run_program(
+            r#"
+fn boom() -> bool { println("called"); true }
+fn main() {
+    if false and boom() { println("then"); } else { println("else"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "else\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_or_short_circuit_skips_rhs_call() {
+        // `true or boom()` must not call boom() at runtime.
+        let out = run_program(
+            r#"
+fn boom() -> bool { println("called"); true }
+fn main() {
+    if true or boom() { println("then"); } else { println("else"); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "then\n");
         }
     }
 

@@ -2349,6 +2349,14 @@ impl<'a> Interpreter<'a> {
 
             // Operators
             ExprKind::Binary { op, left, right } => {
+                // Short-circuit `and`/`or` are documented design intent
+                // (roadmap.md:425, 429) — RHS only evaluates when the
+                // LHS doesn't already determine the result. Routed
+                // through a helper to keep `eval_expr_inner`'s debug-
+                // mode stack frame from bloating recursive callers.
+                if matches!(op, BinOp::And | BinOp::Or) {
+                    return self.eval_short_circuit(op, left, right, &expr.span);
+                }
                 let l = self.eval_expr_inner(left);
                 let r = self.eval_expr_inner(right);
                 self.eval_binary(op, l, r, &expr.span)
@@ -8876,6 +8884,26 @@ impl<'a> Interpreter<'a> {
                 "type mismatch in unary operation at {}:{}; should be caught by typechecker",
                 span.line, span.column
             ),
+        }
+    }
+
+    /// Evaluate `lhs and rhs` / `lhs or rhs` with short-circuit
+    /// semantics — RHS is only evaluated when the LHS doesn't already
+    /// determine the result, so RHS side-effects (panicking index,
+    /// dropped fn call) don't fire when short-circuited.
+    fn eval_short_circuit(&mut self, op: &BinOp, left: &Expr, right: &Expr, span: &Span) -> Value {
+        let lhs = match self.eval_expr_inner(left) {
+            Value::Bool(b) => b,
+            _ => unreachable!(
+                "type mismatch in `{:?}` LHS at {}:{}; should be caught by typechecker",
+                op, span.line, span.column
+            ),
+        };
+        match (op, lhs) {
+            (BinOp::And, false) => Value::Bool(false),
+            (BinOp::Or, true) => Value::Bool(true),
+            (BinOp::And, true) | (BinOp::Or, false) => self.eval_expr_inner(right),
+            _ => unreachable!("eval_short_circuit only handles And/Or"),
         }
     }
 
