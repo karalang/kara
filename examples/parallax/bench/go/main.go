@@ -34,32 +34,36 @@ const (
 	fetchRecommendWork  = 2_700_000
 )
 
+// Hash-mix kernel: a step the Go compiler cannot reduce to closed
+// form (no algebraic identity for `(x*31 + i) mod p`). Replaces the
+// predecessor triangular-sum kernel which release codegen pattern-
+// matched to constant-time arithmetic. See
+// `docs/investigations/bench_robustness.md § G1`. Same kernel + same
+// constants as the Kāra and Rust impls so the four impls measure
+// equivalent work.
 func busyLoop(n int64) int64 {
-	var sum int64 = 0
+	var x int64 = 1
 	for i := int64(0); i < n; i++ {
-		sum += i
+		x = (x*31 + i) % 1073741789
 	}
-	return sum
+	return x
 }
 
 func fetchProfileName(userID int64) string {
-	_ = busyLoop(fetchProfileWork) + userID
+	_ = busyLoop(fetchProfileWork + userID)
 	return "Alice"
 }
 
 func fetchLatestOrderID(userID int64) int64 {
-	_ = busyLoop(fetchOrdersWork) + userID
-	return 1001
+	return busyLoop(fetchOrdersWork + userID)
 }
 
 func fetchTopNotificationKind(userID int64) int64 {
-	_ = busyLoop(fetchNotifsWork) + userID
-	return 1
+	return busyLoop(fetchNotifsWork + userID)
 }
 
 func fetchTopRecommendationID(userID int64) int64 {
-	_ = busyLoop(fetchRecommendWork) + userID
-	return 7001
+	return busyLoop(fetchRecommendWork + userID)
 }
 
 type Profile struct {

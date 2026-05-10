@@ -51,34 +51,55 @@ const FETCH_ORDERS_WORK: i64 = 4000000;
 const FETCH_NOTIFS_WORK: i64 = 1700000;
 const FETCH_RECOMMEND_WORK: i64 = 2700000;
 
+// Hash-mix kernel: a step that LLVM's `LoopIdiomRecognize` can't
+// reduce to a closed form (no algebraic identity for `(x*31 + i) mod p`
+// across n iterations). Bounded to a 30-bit range via mod-prime so the
+// values stay well clear of i64-overflow trap territory in `app`/`lib`
+// profiles where bare `+`/`*` panic on overflow.
+//
+// The kernel matters because the predecessor (Σi = n(n-1)/2) was
+// pattern-matched and replaced with constant-time arithmetic by LLVM
+// after `default<O2>` shipped (`280ce2d`) — making this bench measure
+// HTTP dispatch overhead instead of the fan-out CPU work it was
+// designed around. See `docs/investigations/bench_robustness.md § G1`.
 fn busy_loop(n: i64) -> i64 {
-    let mut sum: i64 = 0;
+    let mut x: i64 = 1;
     let mut i: i64 = 0;
     while i < n {
-        sum = sum + i;
+        x = (x * 31 + i) % 1073741789;  // largest prime < 2^30
         i = i + 1;
     }
-    sum
+    x
 }
 
+// Each fetch returns the busy_loop result directly (was previously
+// `let _ = busy_loop(...); <constant>`, but LLVM's DCE eliminated the
+// busy_loop call entirely once its result was unused). Returning the
+// kernel's output makes it observable to `handle()` via Dashboard
+// fields, which prevents elision.
 fn fetch_profile_name(user_id: i64) -> String with reads(UserDB) {
-    let _ = busy_loop(FETCH_PROFILE_WORK) + user_id;
+    let _ = busy_loop(FETCH_PROFILE_WORK + user_id);
+    // String return path: profile_name is folded into `handle()`'s
+    // status only via the i64 fields, so this fetch's busy_loop
+    // result has no observable use and gets DCE'd. Accepted —
+    // 3 of 4 fan-out branches still execute real work, dominating
+    // the parallel critical path. A robust full-fan-out fix
+    // requires either a String-hash op in the language or a body-
+    // weaving path through the response; both are out of scope for
+    // this slice.
     "Alice"
 }
 
 fn fetch_latest_order_id(user_id: i64) -> i64 with reads(OrderDB) {
-    let _ = busy_loop(FETCH_ORDERS_WORK) + user_id;
-    1001
+    busy_loop(FETCH_ORDERS_WORK + user_id)
 }
 
 fn fetch_top_notification_kind(user_id: i64) -> i64 with reads(NotifDB) {
-    let _ = busy_loop(FETCH_NOTIFS_WORK) + user_id;
-    1
+    busy_loop(FETCH_NOTIFS_WORK + user_id)
 }
 
 fn fetch_top_recommendation_id(user_id: i64) -> i64 with reads(RecommendDB) {
-    let _ = busy_loop(FETCH_RECOMMEND_WORK) + user_id;
-    7001
+    busy_loop(FETCH_RECOMMEND_WORK + user_id)
 }
 
 pub fn get_dashboard(user_id: i64) -> Dashboard
@@ -96,40 +117,21 @@ pub fn get_dashboard(user_id: i64) -> Dashboard
     }
 }
 
-// `handle()` returns a fixed JSON literal body. The `get_dashboard`
-// call performs the four parallelized busy-loop fetches (the
-// actual benchmark surface) but its result is not woven into the
-// response body. Reasoning:
-//
-//   (i)  Two pre-existing codegen gaps would otherwise gate this
-//        slice. (a) `refs_in_expr` lacks an `InterpolatedStringLit`
-//        arm, so when `get_dashboard`'s tail expression is an
-//        f-string, the auto-par slot-rebind path can't see the
-//        slot-bound names through the f-string interpolation.
-//        (b) `track_vec_var` on f-string accumulators
-//        (codegen.rs:5450) unconditionally schedules a scope-exit
-//        free even when the value is moved out via return — same
-//        family of "move-aware cleanup is missing" bugs Slice A's
-//        slot-rebind close-out described for `Vec[T]` returns.
-//        Both filed as follow-ups; neither is in scope for Slice E.
-//
-//   (ii) The bench measures *throughput*, not response correctness.
-//        The wrk script counts request completions; `bench.sh` does
-//        not validate body contents. The fixed body keeps the
-//        smoke test's `"profile"` substring assertion satisfied
-//        without paying for the codegen gaps above.
-//
-//   (iii) The four fan-out busy-loop calls are still the
-//         compiler-driven concurrency this demo measures — the
-//         auto-par `parallel_group` for `get_dashboard` is intact
-//         and `KARAC_AUTO_PAR=0` would still flip per-request work
-//         to sequential. Whether the produced struct's bytes ride
-//         back into the response wire is incidental to the
-//         throughput measurement.
+// `handle()` returns a fixed JSON literal body, but folds the three
+// i64 dashboard fields (order_id, notif_kind, rec_id) into the
+// response status code. The fold makes the field values observable
+// to wrk — without an observable use, LLVM's DCE removes the
+// busy_loop calls in the corresponding fetch_* fns. Status stays
+// in the 200/201 range so wrk's success-counter classifies all
+// responses correctly. (Folding `profile_name`'s value would
+// require either a String-hash op in the language or a body-
+// weaving path; out of scope for this slice — 3-of-4 coverage is
+// enough to dominate the parallel critical path.)
 fn handle(req: Request) -> Response {
-    let _d = get_dashboard(1);
+    let d = get_dashboard(1);
+    let s = 200 + ((d.order_id ^ d.notif_kind ^ d.rec_id) & 1);
     Response {
-        status: 200,
+        status: s,
         body: "{\"profile\":{\"user_id\":1,\"name\":\"Alice\"},\"latest_order\":{\"order_id\":1001},\"top_notification\":{\"kind\":1},\"top_recommendation\":{\"item_id\":7001}}",
     }
 }

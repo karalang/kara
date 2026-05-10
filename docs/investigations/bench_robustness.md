@@ -227,5 +227,89 @@ worth running once per major perf-impacting change.
 
 ## Findings
 
-_(empty — fill in as fixes land; date each entry, link to
-commits or supporting artifacts.)_
+### 2026-05-10 — G1 landed (apples-to-apples kernel + observable fold)
+
+**Fix.** Two changes applied symmetrically across all four bench
+impls (`server.kara`, `main.rs`, `main.go`, `server.js`):
+
+1. **Kernel swap.** Replaced `sum = sum + i` (triangular-sum,
+   recognized by LLVM's `LoopIdiomRecognize` as `n(n-1)/2`) with
+   `x = (x*31 + i) % 1073741789` (hash-mix step; no algebraic
+   identity). The kernel actually runs at any optimization level.
+   Same iteration counts as before (700 K / 4 M / 1.7 M / 2.7 M)
+   so total work-per-request matches the bench's design intent.
+2. **Observable fold.** Three of four `fetch_*` fns return the
+   busy_loop result directly (was `let _ = busy_loop(...);
+   <constant>`, which DCE'd both the call and the wrapping). In
+   `handle()`, the three i64 `Dashboard` fields fold into the
+   response — status code for Kāra (`200 + ((order ^ notif ^ rec)
+   & 1)`), JSON body for Rust/Go/Node (which already had a
+   serializer wired up). One fetch (`fetch_profile_name`) returns
+   `String`/`&str` and its busy_loop result has no observable use;
+   accepted — 3-of-4 fan-out branches dominate the parallel
+   critical path, and folding String values would require
+   String-hash ops or body-weaving that's out of scope here.
+
+**Disasm verification.** `_busy_loop` post-fix is a real loop body
+(~12 inst/iter through the mod-prime arithmetic):
+
+```
+.L:
+  add x9, x9, #0x1            ; i++
+  add x8, x12, x8, lsl #5     ; x = x*32 - x = x*31; then add i
+  smulh x12, x8, x10          ; (x mod p) via Barrett reduction
+  asr   x13, x12, #29
+  ...
+  msub  x8, x12, x11, x8
+  cmp   x9, x0
+  b.lt  .L
+```
+
+`fetch_latest_order_id` calls into `_busy_loop` — confirmed via
+`otool -tV` against the post-fix kara binary.
+
+**Bench result (apples-to-apples).** All four impls at `wrk -t4
+-c100 -d10s+30s`, sequential per-impl runs, same hardware as v3:
+
+| Impl | req/s pre-G1 (DCE'd) | req/s post-G1 (real work) | p99 pre | p99 post |
+|---|---|---|---|---|
+| Rust |  47,489 |   730 | 5.0 ms |   849 ms |
+| Kāra |  97,172 |   711 |  57 ms |   300 ms |
+| Go   |   7,729 |   677 |  62 ms |   982 ms |
+| Node |      93 |   3.0 |  1.0 s |  1.87 s |
+
+**Throughput collapsed to ~700 req/s** for all three multi-core
+impls (within 8 % of each other). The collapse is the bench
+finally measuring the four busy_loops the design called for — at
+~25 ms total CPU work per request × 18 cores ÷ 100 in-flight
+connections, ~720 req/s is the saturation ceiling regardless of
+language. The previous 47 K – 97 K range was all DCE; the current
+~700 range is real fan-out CPU work.
+
+**The honest comparison takeaways.**
+- **Kāra ≈ Rust on throughput** (711 vs 730, 3 % gap). Rust is
+  marginally ahead because tokio's `spawn_blocking` blocking pool
+  (512 threads default) admits more in-flight work than Kāra's
+  bounded `karac_par_run` pool (18 = `num_cpus`). At CPU
+  saturation, neither stretches the other.
+- **Kāra ~1 % ahead of Go.** Roughly equivalent.
+- **Kāra has 3× lower p99 than Rust, 3.3× lower than Go.** This
+  is the bench's load-bearing finding: `karac_par_run`'s work-
+  helping wait loop (tokio worker that called the handler picks
+  up dispatched tasks during its wait) gives effective
+  parallelism beyond the dedicated pool size, smoothing burst
+  response. `tokio::join!(spawn_blocking(...))` hands every
+  branch to a separate blocking thread, paying scheduler-handoff
+  on every branch and producing queueing tail. Go's tail is
+  GC-driven.
+
+The "Kāra is 2× Rust" headline from the v3 numbers was a DCE
+artifact; the v4 numbers are the bench's first credible
+comparison and they show Kāra at parity with Rust on throughput
+and meaningfully ahead on p99 for fan-out workloads.
+
+**G2 / G3 / G4 status.** Not landed yet. The connection-count
+sweep we ran ad-hoc (`-c100`, `-c500`, `-c1000`, `-c2000`) is
+captured in [`http_layer_perf.md`](http_layer_perf.md); folding
+it into `bench.sh` + adding multi-run statistics + parsing
+p99.9 / p99.99 are the next slice on this doc's priority order.

@@ -23,36 +23,39 @@ const FETCH_ORDERS_WORK = 4000000;
 const FETCH_NOTIFS_WORK = 1700000;
 const FETCH_RECOMMEND_WORK = 2700000;
 
+// Hash-mix kernel: a step V8's optimizer cannot reduce to closed
+// form (no algebraic identity for `(x*31 + i) mod p`). Replaces the
+// predecessor triangular-sum kernel which JIT codegen pattern-
+// matched to constant-time arithmetic. See
+// `docs/investigations/bench_robustness.md § G1`. Same kernel + same
+// constants as the Kāra, Rust, and Go impls so the four impls
+// measure equivalent work. `Math.trunc` keeps `x` an integer through
+// the modulo since JS only has `Number` (no integer type); for the
+// values involved (< 2^31), Number's 53-bit mantissa is plenty of
+// headroom.
 function busyLoop(n) {
-  let sum = 0;
+  let x = 1;
   for (let i = 0; i < n; i++) {
-    sum = sum + i;
+    x = (x * 31 + i) % 1073741789;
   }
-  return sum;
+  return x;
 }
 
 async function fetchProfileName(userId) {
-  busyLoop(FETCH_PROFILE_WORK);
-  void userId;
+  busyLoop(FETCH_PROFILE_WORK + userId);
   return 'Alice';
 }
 
 async function fetchLatestOrderId(userId) {
-  busyLoop(FETCH_ORDERS_WORK);
-  void userId;
-  return 1001;
+  return busyLoop(FETCH_ORDERS_WORK + userId);
 }
 
 async function fetchTopNotificationKind(userId) {
-  busyLoop(FETCH_NOTIFS_WORK);
-  void userId;
-  return 1;
+  return busyLoop(FETCH_NOTIFS_WORK + userId);
 }
 
 async function fetchTopRecommendationId(userId) {
-  busyLoop(FETCH_RECOMMEND_WORK);
-  void userId;
-  return 7001;
+  return busyLoop(FETCH_RECOMMEND_WORK + userId);
 }
 
 async function getDashboard(userId) {

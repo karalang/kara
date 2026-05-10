@@ -36,34 +36,38 @@ const FETCH_ORDERS_WORK: i64 = 4_000_000;
 const FETCH_NOTIFS_WORK: i64 = 1_700_000;
 const FETCH_RECOMMEND_WORK: i64 = 2_700_000;
 
+// Hash-mix kernel: a step LLVM's LoopIdiomRecognize cannot reduce to
+// closed form (no algebraic identity for `(x*31 + i) mod p`). Replaces
+// the predecessor `Σi = n(n-1)/2` triangular-sum kernel that release
+// codegen pattern-matched to constant-time arithmetic. See
+// `docs/investigations/bench_robustness.md § G1`. Same kernel as the
+// Kāra impl in `../kara/server.kara` so the four impls measure
+// equivalent work.
 fn busy_loop(n: i64) -> i64 {
-    let mut sum: i64 = 0;
+    let mut x: i64 = 1;
     let mut i: i64 = 0;
     while i < n {
-        sum = sum.wrapping_add(i);
+        x = (x.wrapping_mul(31).wrapping_add(i)) % 1073741789;
         i += 1;
     }
-    sum
+    x
 }
 
 async fn fetch_profile_name(user_id: i64) -> &'static str {
-    let _ = busy_loop(FETCH_PROFILE_WORK).wrapping_add(user_id);
+    let _ = busy_loop(FETCH_PROFILE_WORK + user_id);
     "Alice"
 }
 
 async fn fetch_latest_order_id(user_id: i64) -> i64 {
-    let _ = busy_loop(FETCH_ORDERS_WORK).wrapping_add(user_id);
-    1001
+    busy_loop(FETCH_ORDERS_WORK + user_id)
 }
 
 async fn fetch_top_notification_kind(user_id: i64) -> i64 {
-    let _ = busy_loop(FETCH_NOTIFS_WORK).wrapping_add(user_id);
-    1
+    busy_loop(FETCH_NOTIFS_WORK + user_id)
 }
 
 async fn fetch_top_recommendation_id(user_id: i64) -> i64 {
-    let _ = busy_loop(FETCH_RECOMMEND_WORK).wrapping_add(user_id);
-    7001
+    busy_loop(FETCH_RECOMMEND_WORK + user_id)
 }
 
 struct Dashboard {

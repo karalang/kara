@@ -91,49 +91,100 @@ regression gate.
 
 ## Throughput results
 
-**Measured on 2026-05-10** (post-codegen-IR-opts fix; see History
-below), Apple M5 Pro (10P + 8E cores, 18 logical CPUs), 64 GB RAM,
-macOS 26.4.1, `wrk 4.2.0`. `bench.sh` defaults (`-t4 -c100`, 10s
-warmup + 30s measurement, sequential per-impl runs).
+**Measured on 2026-05-10** (post-G1 — apples-to-apples kernel +
+observable-fold fix; see History below). Apple M5 Pro (10P + 8E
+cores, 18 logical CPUs), 64 GB RAM, macOS 26.4.1, `wrk 4.2.0`.
+`bench.sh` defaults (`-t4 -c100`, 10s warmup + 30s measurement,
+sequential per-impl runs).
 
-| Impl   | req/s     | p99 latency | Notes                       |
-|--------|-----------|-------------|-----------------------------|
-| Kāra   | 97,172.48 |  56.83 ms   | auto-par fan-out, `default<O2>` mid-end passes; busy_loops elided by DCE — see ⚠ below |
-| Rust   | 47,489.12 |   4.98 ms   | tokio + hyper + `tokio::join!`; busy_loops also DCE'd by `rustc` release codegen |
-| Go     |  7,728.67 |  61.87 ms   | `net/http` + goroutines + `sync.WaitGroup`, default `GOMAXPROCS` |
-| Node   |     92.71 |   1.01 s    | `http` + `Promise.all`, single-process per F4 |
+| Impl   | req/s | p99 latency | Notes                       |
+|--------|-------|-------------|-----------------------------|
+| Rust   |   730 |    849 ms   | tokio + hyper + `tokio::join!(spawn_blocking(...))` |
+| **Kāra** | **711** | **300 ms** | auto-par fan-out via long-lived `karac_par_run` worker pool |
+| Go     |   677 |    982 ms   | `net/http` + goroutines + `sync.WaitGroup`, default `GOMAXPROCS` |
+| Node   |   3.0 |   1.87  s   | `http` + `Promise.all`, single-process per F4 |
 
-> **⚠ The bench is currently optimization-eaten and not apples-to-
-> apples.** Both Kāra and Rust release codegen identified the
-> `busy_loop` body as the triangular-number sum (`Σi = n(n-1)/2`)
-> and replaced the loop with the closed-form arithmetic. Rust then
-> dead-code-eliminated the `let _ = busy_loop(...)` calls outright;
-> Kāra's `default<O2>` pass pipeline does the same. Neither impl is
-> actually doing the four 2/5/8/12 ms loops the design intended.
-> The Kāra row's 97 K req/s is the **trampoline + HTTP-path
-> ceiling** (no-op-handler probe gave 108 K) and the Rust row's
-> 47 K reflects per-request hyper/tokio framing on Rust's side
-> being heavier than Kāra's hand-rolled trampoline at the
-> "everything optimizes away" floor — *not* a real fan-out
-> comparison. Re-instating apples-to-apples requires an
-> optimization-barrier in both impls (`black_box` in Rust + a Kāra
-> equivalent extern, or weaving `Dashboard` values into the
-> response body). Tracked at
-> [`docs/investigations/parallax_perf.md § Recommended next step
-> (separate slice)`](../../../docs/investigations/parallax_perf.md).
+**How to read this.** All four impls run the same hash-mix kernel
+(`x = (x*31 + i) % p` over `n` iterations) at the same iteration
+counts (700 K / 4 M / 1.7 M / 2.7 M) — see G1 history below for
+*why* this kernel rather than the original triangular sum. Three
+of the four busy_loops have observable returns through `Dashboard`
+fields that are then folded into each impl's response (status code
+for Kāra, JSON body for Rust/Go/Node), preventing the optimizer
+from eliding them. The fourth (`fetch_profile_name`) returns
+`String`/`&str`; its busy_loop result has no observable use and
+gets DCE'd in all four impls — accepted, since 3-of-4 fan-out
+branches dominate the parallel critical path.
 
-**How to read this for now.** The Kāra row's 97 K is *headline-
-shape correct* — Kāra's compiler now produces optimized native
-code for tight integer kernels at parity with Rust's release
-codegen. The Kāra-vs-Rust *throughput* numbers in this snapshot
-should not be taken as evidence that Kāra is faster than Rust on
-real workloads — it's evidence that both impls' optimizers ate the
-benchmark's intended work, and Kāra's per-request framing is
-lighter than hyper/tokio's. Go's row is unchanged from pre-fix
-(Go's release codegen has done DCE all along; the busy_loops never
-ran in Go either); Node's row is unchanged because V8 is
-conservative on this idiom + single-process serialization
-dominates regardless.
+**Throughput**: Kāra and Rust within ~3 % (711 vs 730).
+Rust marginally ahead because tokio's `spawn_blocking` blocking
+pool (512 threads default) admits more in-flight work per request
+than Kāra's bounded `karac_par_run` pool (18 = num_cpus). At
+saturated CPU load, neither stretches the other meaningfully.
+
+**Tail latency (p99)**: Kāra **3× lower than Rust**, **3.3× lower
+than Go**. Why: Kāra's `karac_par_run` work-helping wait loop
+(tokio worker that called the handler picks up dispatched tasks
+during its wait) gives effective parallelism beyond the dedicated
+pool size, smoothing burst response patterns. Rust's `tokio::join!
+(spawn_blocking(...))` pattern hands every fan-out branch off to a
+separate blocking thread, paying scheduler-handoff cost on every
+branch and producing queueing tail under burst load. Go's tail is
+GC-driven (sustained allocation pressure from per-request
+goroutine + struct churn). The tail-latency gap is the bench's
+clearest demonstration of `karac_par_run`'s value over hand-rolled
+`spawn_blocking` — same throughput, tighter response times.
+
+**Node** is asymmetric by design (F4) — single-process JavaScript
+serializing four CPU-bound busy loops on the event-loop thread.
+Cluster-mode would multiply by ≈ `num_cpus` at the cost of process
+orchestration; not v1 of this bench.
+
+## History
+
+**v1 — first verification run (`4f7b72d`, 2026-05-09).** Kāra at
+1,089.99 req/s / 438.18 ms p99, four-language table populated.
+First end-to-end measurement of the Kāra HTTP stack under sustained
+load. Original triangular-sum busy-loop kernel.
+
+**v2 — `karac_par_run` worker-pool fix (`3953a14`, 2026-05-09).**
+Profiling diagnosed that 60 % of CPU was spent in `mach_vm_protect`
+setting up pthread stack guard pages — `karac_par_run` was creating
+fresh OS threads on every fan-out call. Replaced with a long-lived
+worker pool: thread churn -94 %, p99 -46 % (438 → 238 ms), CPU
+efficiency 9× better. Throughput essentially unchanged because the
+bench was wrk-connection-bound at that point.
+
+**v3 — codegen `default<O2>` pass pipeline (`280ce2d`, 2026-05-10).**
+Probe sweep ruled out runtime + HTTP layer as the throughput
+bottleneck (no-op-handler probe: 108 K req/s). Real bottleneck:
+karac was running zero LLVM mid-end passes on its IR — `mem2reg`
+never fired, locals stayed in stack slots. Wired
+`module.run_passes("default<O2>", …)`. LLVM's `mem2reg` +
+`LoopIdiomRecognize` reduced `busy_loop` to its closed form
+(`Σi = n(n-1)/2`) and DCE then eliminated the dropped results from
+`fetch_*`. Kāra throughput jumped to 97 K req/s, but the bench was
+no longer measuring fan-out work — Rust's release codegen had been
+doing the same elision all along. Numbers became apples-to-oranges
+between impls.
+
+**v4 — apples-to-apples kernel + observable fold (this commit,
+2026-05-10).** Replaced the triangular-sum kernel with a hash-mix
+step `x = (x*31 + i) % p` (no closed form; can't be reduced).
+Updated all four impls (`server.kara`, `main.rs`, `main.go`,
+`server.js`) to use the same kernel + same iteration counts. In
+each impl, `fetch_*` returns the busy_loop result directly (so it's
+observable), and `handle()` folds the `Dashboard.{order_id,
+notif_kind, rec_id}` fields into the response (status XOR for Kāra,
+JSON body for Rust/Go/Node) so DCE can't elide them. Throughput
+fell from 97 K → 711 across all impls because the four busy_loops
+now actually run; the resulting numbers are the bench's first true
+apples-to-apples comparison since v1.
+
+Full investigation log + per-step disassembly + reasoning lives at
+[`docs/investigations/parallax_perf.md`](../../../docs/investigations/parallax_perf.md);
+bench-measurement gaps + their fixes at
+[`docs/investigations/bench_robustness.md`](../../../docs/investigations/bench_robustness.md).
 
 ## History
 
