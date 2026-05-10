@@ -36,10 +36,11 @@ mod clone;
 mod map;
 
 use std::cell::Cell;
+use std::collections::VecDeque;
 use std::ffi::c_void;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 
 /// A single branch of a `par {}` block: a function pointer and its opaque
@@ -97,13 +98,15 @@ pub enum KaracWaitTarget {
 /// Per-worker frame produced by `karac_par_run`. Item (2) of the four-piece
 /// Debugger Contract; see module-level doc.
 ///
-/// Allocated on the worker thread's stack inside the `thread::scope` body,
-/// so `*const KaracFrame` pointers are valid for the lifetime of that
-/// worker's branch invocation. Pointers stored in `ACTIVE_FRAMES` are
-/// removed at frame teardown (success or panic, via `FrameGuard`'s `Drop`)
-/// before the stack frame deallocates. Pointers stored as a child's
-/// `parent` field are safe because Rust's `thread::scope` guarantees the
-/// parent thread's stack outlives all scope-spawned children.
+/// Allocated on the pool worker's stack inside `execute_task`, so
+/// `*const KaracFrame` pointers are valid for the lifetime of that task's
+/// branch invocation. Pointers stored in `ACTIVE_FRAMES` are removed at
+/// frame teardown (success or panic, via `FrameGuard`'s `Drop`) before
+/// the stack frame deallocates. Pointers stored as a child's `parent`
+/// field are safe because `karac_par_run` blocks on the per-call
+/// `Condvar` until every dispatched task has decremented `remaining`, so
+/// the calling thread's stack frame containing the captured
+/// `parent_addr` outlives all dispatched tasks.
 ///
 /// Slice 5's `std.runtime::list_par_blocks()` joins `spawn_site_id` against
 /// the slice-3 `KARAC_SPAWN_SITES` table to fill `(file, line, col)`; the
@@ -150,18 +153,18 @@ thread_local! {
 
 /// Newtype around `*const KaracFrame` that opts into `Send + Sync` for
 /// storage in the cross-thread `ACTIVE_FRAMES` registry. Raw pointers are
-/// `!Send` by default; the soundness comes from the structured-concurrency
-/// invariant that `thread::scope` joins all workers before `karac_par_run`
-/// returns, and `FrameGuard::drop` removes each entry from the registry
-/// before its stack frame deallocates. Iteration via
-/// `karac_runtime_for_each_active_frame` is gated on the registry lock to
-/// rule out reading-while-deregistering races.
+/// `!Send` by default; the soundness comes from `FrameGuard::drop`
+/// removing each entry from the registry before its stack frame
+/// deallocates. Iteration via `karac_runtime_for_each_active_frame` is
+/// gated on the registry lock to rule out reading-while-deregistering
+/// races.
 #[derive(Copy, Clone, PartialEq, Eq)]
 struct FramePtr(*const KaracFrame);
 
 // SAFETY: see the doc-comment above. The runtime is the only writer to
 // `ACTIVE_FRAMES`; pointers are valid by construction (stack-allocated
-// inside a `thread::scope`-bounded worker) and removed before invalidation.
+// inside a pool worker's `execute_task` frame) and removed before
+// invalidation.
 unsafe impl Send for FramePtr {}
 unsafe impl Sync for FramePtr {}
 
@@ -262,28 +265,193 @@ impl Drop for FrameGuard {
     }
 }
 
-/// Execute branches concurrently using a fixed-size thread pool and join
+// ── Long-lived worker pool for `karac_par_run` ─────────────────────────────
+//
+// One global pool of N = `available_parallelism()` (floored at 2) worker
+// threads, lazy-initialized on the first call to `karac_par_run`. Replaces
+// the original per-call `thread::scope` + `s.spawn` impl, which created
+// fresh OS threads on every fan-out — diagnosed as the dominant Parallax
+// bench bottleneck (60 % of CPU in `mach_vm_protect` setting up pthread
+// stack guard pages, 3,344 unique TIDs in 30 s of recording at 1,090 req/s).
+// See `docs/investigations/parallax_perf.md § Findings` for the profile
+// data and `docs/implementation_checklist/phase-7-codegen.md § "karac_par_
+// run: long-lived worker pool"` for the design record.
+//
+// **Per-call sync.** Each `karac_par_run` invocation allocates one
+// `Arc<ParCall>` carrying the cancel flag, remaining-count, and
+// completion `Condvar`. Tasks for the call are pushed to the global queue
+// and pop'd by free workers; each task decrements `remaining` after
+// running and the last task signals `notify`. The caller waits on
+// `notify` until `remaining == 0` before returning — same semantics as
+// the original `thread::scope` join.
+//
+// **Soundness for parent-stack pointers.** The original impl relied on
+// Rust's `thread::scope` guarantee (parent stack outlives all scope-
+// spawned children). The pool impl gives the same guarantee through a
+// different mechanism: `karac_par_run` blocks on the per-call Condvar
+// until every dispatched task has either run to completion or been
+// skipped due to cancel, so the calling thread's stack frame —
+// containing the captured `CURRENT_FRAME` pointer that becomes children's
+// `parent` field — remains valid for the duration of the call.
+//
+// **Nested par + work-helping.** A pool worker can call `karac_par_run`
+// recursively (e.g., one auto-par fan-out's branch contains another).
+// Naively the worker would block on its child call's Condvar; if N
+// workers all do this simultaneously the pool deadlocks (no free worker
+// can pick up the dispatched child tasks). The wait loop in
+// `karac_par_run` therefore work-helps: while waiting for completion it
+// pops + executes any task on the queue. This bounds nested-par recursion
+// only by stack depth, not by pool size. Cost: one extra queue-lock per
+// wait iteration when no help is available — negligible vs the syscall
+// cost the pool replaces.
+//
+// **No graceful shutdown.** Pool workers are pure-compute daemon threads;
+// process exit cleans them up. Real shutdown lands when a destructor or
+// test-teardown surface needs it.
+
+/// Per-call shared state. One `Arc<ParCall>` per `karac_par_run` invocation;
+/// shared between the calling thread and every dispatched task.
+struct ParCall {
+    cancel: AtomicBool,
+    /// Number of tasks not yet completed (decremented by each task on
+    /// finish, including skipped-due-to-cancel). Reaches 0 when the call
+    /// is done; `notify` is signalled at that point.
+    remaining: Mutex<u32>,
+    notify: Condvar,
+    spawn_site_id: u32,
+    /// Calling thread's `CURRENT_FRAME` at the moment of the call,
+    /// captured as a raw-pointer-as-`usize` (see soundness note above).
+    /// Children's `parent` field points here when `track_frames` is true.
+    parent_addr: usize,
+    track_frames: bool,
+}
+
+/// One unit of work for the pool. The `Arc<ParCall>` shared state and the
+/// per-task function pointer + ctx address are all `Send` by construction.
+struct Task {
+    call: Arc<ParCall>,
+    branch_idx: u32,
+    func: unsafe extern "C" fn(*mut c_void, *const AtomicBool),
+    /// Original `*mut c_void` ctx encoded as `usize` so `Task` is `Send`
+    /// without a manual `unsafe impl`. Round-tripped back to `*mut c_void`
+    /// at execution time.
+    ctx_addr: usize,
+}
+
+struct Pool {
+    queue: Mutex<VecDeque<Task>>,
+    cv: Condvar,
+}
+
+static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
+
+fn pool() -> &'static Arc<Pool> {
+    POOL.get_or_init(|| {
+        let n = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .max(2);
+        let pool = Arc::new(Pool {
+            queue: Mutex::new(VecDeque::new()),
+            cv: Condvar::new(),
+        });
+        for _ in 0..n {
+            let p = Arc::clone(&pool);
+            thread::spawn(move || worker_loop(p));
+        }
+        pool
+    })
+}
+
+fn worker_loop(pool: Arc<Pool>) {
+    loop {
+        let task = {
+            let mut q = pool.queue.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                if let Some(t) = q.pop_front() {
+                    break t;
+                }
+                q = pool.cv.wait(q).unwrap_or_else(|p| p.into_inner());
+            }
+        };
+        execute_task(task);
+    }
+}
+
+/// Execute one task: skip if its call has been cancelled, otherwise run
+/// the branch fn under a `FrameGuard` (when frame-tracking is on) and
+/// `catch_unwind`. Always decrements `remaining` and signals `notify` on
+/// the last task — even on panic, so the caller doesn't hang.
+fn execute_task(task: Task) {
+    let call = &task.call;
+    let cancelled = call.cancel.load(Ordering::Relaxed);
+
+    if !cancelled {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+            if call.track_frames {
+                let frame = KaracFrame {
+                    parent: call.parent_addr as *const KaracFrame,
+                    spawn_site_id: call.spawn_site_id,
+                    worker_index: task.branch_idx,
+                    wait_target: KaracWaitTarget::None,
+                };
+                let _guard = FrameGuard::new(&frame);
+                (task.func)(
+                    task.ctx_addr as *mut c_void,
+                    &call.cancel as *const AtomicBool,
+                );
+                // `_guard` drops here, deregistering the frame. On panic
+                // the unwind path still runs Drop.
+            } else {
+                (task.func)(
+                    task.ctx_addr as *mut c_void,
+                    &call.cancel as *const AtomicBool,
+                );
+            }
+        }));
+        if result.is_err() {
+            // Fail-fast: cancel siblings still in the queue.
+            call.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    // Decrement-and-signal happens unconditionally so the caller's
+    // wait loop terminates regardless of cancel/panic.
+    let last = {
+        let mut r = call.remaining.lock().unwrap_or_else(|p| p.into_inner());
+        *r -= 1;
+        *r == 0
+    };
+    if last {
+        call.notify.notify_all();
+    }
+}
+
+/// Execute branches concurrently on the global worker pool and join
 /// before returning.
 ///
-/// **Thread pool**: min(branch_count, available_parallelism) worker threads.
-/// Each worker grabs the next branch index via an atomic counter —
-/// simple work distribution without external dependencies.
+/// **Pool dispatch**: tasks are pushed onto the global queue; the N
+/// long-lived pool workers pop and execute them. The caller blocks on
+/// the per-call `Condvar` until every task has decremented `remaining`,
+/// work-helping while waiting (see module-level comment) so nested
+/// `karac_par_run` calls from pool workers can't deadlock.
 ///
-/// **Fail-fast cancellation**: an internal `AtomicBool` cancel flag is set
-/// when any branch panics. Workers check the flag before picking up new
-/// branches, so remaining branches are skipped after a failure. Branches
-/// already running complete (completion-wins at branch granularity).
+/// **Fail-fast cancellation**: an internal `AtomicBool` cancel flag is
+/// set when any branch panics. Tasks still in the queue are skipped on
+/// pickup; tasks already running run to completion (completion-wins at
+/// branch granularity). On panic the cancel signal is the only thing
+/// that survives — the panic payload is swallowed by `catch_unwind`;
+/// caller-visible panic propagation is a deferred follow-up.
 ///
 /// **Frame tracking (Debugger Contract slice 4).** When
-/// `runtime_debug_metadata_enabled()` is `true`, each branch runs inside a
-/// `FrameGuard` that stack-allocates a `KaracFrame { parent, spawn_site_id,
-/// worker_index, wait_target: KaracWaitTarget::None }` and registers it in
-/// `ACTIVE_FRAMES` for slice 5's enumeration surface. `parent` is captured
-/// from the calling thread's `CURRENT_FRAME` before `thread::scope` starts,
-/// so workers spawned inside another worker's branch see the outer worker's
-/// frame as their parent (nested-par chain). When the gate is off the
-/// function runs the existing thread::scope loop unchanged — no allocation,
-/// no bookkeeping.
+/// `runtime_debug_metadata_enabled()` is `true`, each task runs inside a
+/// `FrameGuard` that stack-allocates a `KaracFrame { parent,
+/// spawn_site_id, worker_index, wait_target: KaracWaitTarget::None }`
+/// and registers it in `ACTIVE_FRAMES`. `parent` is captured from the
+/// calling thread's `CURRENT_FRAME` at call entry; tasks dispatched into
+/// this call carry that pointer as their `parent` field. When the gate
+/// is off the function runs without frame allocation or registry
+/// bookkeeping.
 ///
 /// **Result collection**: not yet implemented — branches return void.
 /// Error propagation via typed results is a Phase 6.2 follow-up.
@@ -293,16 +461,16 @@ impl Drop for FrameGuard {
 /// - `branches` / `count`: array of `KaracBranch` descriptors (one per
 ///   parallel statement in the source `par {}` block).
 /// - `spawn_site_id`: identifies the par site for slice 4's `KaracFrame`
-///   metadata. Indexes into the slice-3 `KARAC_SPAWN_SITES` table emitted
-///   by codegen so slice 5 can join `(file, line, col)`. Ignored when
-///   `runtime_debug_metadata_enabled() == false`.
+///   metadata. Indexes into the slice-3 `KARAC_SPAWN_SITES` table
+///   emitted by codegen so slice 5 can join `(file, line, col)`.
+///   Ignored when `runtime_debug_metadata_enabled() == false`.
 ///
 /// # Safety
 ///
 /// `branches` must point to `count` valid `KaracBranch` values; each
 /// branch's `func` must be a valid function pointer and `ctx` must be a
-/// pointer the `func` is prepared to receive. The compiler always satisfies
-/// these preconditions.
+/// pointer the `func` is prepared to receive. The compiler always
+/// satisfies these preconditions.
 #[no_mangle]
 pub unsafe extern "C" fn karac_par_run(
     branches: *const KaracBranch,
@@ -313,75 +481,65 @@ pub unsafe extern "C" fn karac_par_run(
         return;
     }
 
-    let pool_size = thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(4)
-        .min(count);
-
-    // Copy branch descriptors so thread closures can capture them by reference.
-    let copied: Vec<(unsafe extern "C" fn(*mut c_void, *const AtomicBool), usize)> = (0..count)
-        .map(|i| {
-            let b = &*branches.add(i);
-            (b.func, b.ctx as usize)
-        })
-        .collect();
-
-    let cancel = AtomicBool::new(false);
-    let next_idx = AtomicUsize::new(0);
     let track_frames = runtime_debug_metadata_enabled();
-    // Capture the calling thread's current frame *before* `thread::scope`
-    // — children's `parent` field points at this. Cast through `usize` so
-    // the closure captures a `Send + Sync` integer rather than the raw
-    // pointer (which Rust's auto-trait inference flags as `!Send`).
-    // Soundness: `thread::scope` guarantees the calling thread's stack
-    // outlives all scope-spawned children, so the address remains valid
-    // for the duration of the join.
     let parent_addr: usize = if track_frames {
         CURRENT_FRAME.with(|c| c.get()) as usize
     } else {
         0
     };
 
-    thread::scope(|s| {
-        for _ in 0..pool_size {
-            s.spawn(|| {
-                loop {
-                    // Check cancel before picking up new work.
-                    if cancel.load(Ordering::Relaxed) {
-                        break;
-                    }
-                    let idx = next_idx.fetch_add(1, Ordering::Relaxed);
-                    if idx >= count {
-                        break;
-                    }
-                    let (func, ctx) = copied[idx];
-                    let result =
-                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
-                            if track_frames {
-                                let frame = KaracFrame {
-                                    parent: parent_addr as *const KaracFrame,
-                                    spawn_site_id,
-                                    worker_index: idx as u32,
-                                    wait_target: KaracWaitTarget::None,
-                                };
-                                let _guard = FrameGuard::new(&frame);
-                                func(ctx as *mut c_void, &cancel as *const AtomicBool);
-                                // `_guard` drops here on normal return,
-                                // deregistering the frame. On panic the
-                                // unwind path still runs Drop.
-                            } else {
-                                func(ctx as *mut c_void, &cancel as *const AtomicBool);
-                            }
-                        }));
-                    if result.is_err() {
-                        // Fail-fast: signal other workers to stop.
-                        cancel.store(true, Ordering::Relaxed);
-                    }
-                }
+    let call = Arc::new(ParCall {
+        cancel: AtomicBool::new(false),
+        remaining: Mutex::new(count as u32),
+        notify: Condvar::new(),
+        spawn_site_id,
+        parent_addr,
+        track_frames,
+    });
+
+    let p = pool();
+    {
+        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+        for i in 0..count {
+            let b = &*branches.add(i);
+            q.push_back(Task {
+                call: Arc::clone(&call),
+                branch_idx: i as u32,
+                func: b.func,
+                ctx_addr: b.ctx as usize,
             });
         }
-        // Implicit join at scope end — all workers finish before we return.
-    });
+    }
+    p.cv.notify_all();
+
+    // Wait for all tasks to complete. While waiting, opportunistically
+    // help by executing pending tasks — protects nested `karac_par_run`
+    // calls from pool exhaustion.
+    loop {
+        // Done?
+        {
+            let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+            if *r == 0 {
+                return;
+            }
+        }
+        // Try to help.
+        let next_task = {
+            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.pop_front()
+        };
+        if let Some(task) = next_task {
+            execute_task(task);
+            continue;
+        }
+        // Nothing to help with — block until a task we dispatched
+        // signals completion.
+        let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+        if *r == 0 {
+            return;
+        }
+        let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
+    }
 }
 
 /// Public extern getter for slice 5 / tests. Returns the current thread's
@@ -940,7 +1098,9 @@ pub extern "C" fn karac_provider_lookup(resource_id: u32) -> ProviderLookupResul
 /// `head` must point to a `ProviderFrame` whose lifetime spans the entire
 /// par-block (it's the parent's frame, which lives until `karac_par_run`
 /// returns, which lives until all branches join — so the lifetime is
-/// satisfied by `thread::scope`'s join guarantee).
+/// satisfied by `karac_par_run`'s per-call Condvar wait, which holds the
+/// caller frame open until every dispatched task has decremented
+/// `remaining`).
 #[no_mangle]
 pub unsafe extern "C" fn karac_provider_set_stack_head(head: *const ProviderFrame) {
     PROVIDER_STACK_HEAD.with(|c| c.set(head));
@@ -2279,8 +2439,10 @@ mod tests {
     //! Frame-pointer cross-thread shuttling uses `usize` casts so the
     //! `*const KaracFrame` (which is `!Send`) crosses the thread boundary
     //! as a plain integer; the runtime never relies on Rust's auto-Send
-    //! inference for these pointers (the soundness comes from
-    //! `thread::scope`'s lifetime guarantee, not Send).
+    //! inference for these pointers. Soundness now comes from
+    //! `karac_par_run`'s per-call Condvar wait, which keeps the calling
+    //! thread's frame alive until every dispatched task has finished —
+    //! see `ParCall` doc-comments above.
     use super::*;
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Barrier, Mutex};

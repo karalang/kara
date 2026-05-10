@@ -444,3 +444,94 @@ rolled crossbeam channels) and re-run the bench. The expected
 throughput after the fix is the validation criterion — if the Kāra
 row jumps to 3 K+ req/s, the diagnosis was correct and we move on
 to H2; if it doesn't, we have a different problem.
+
+### 2026-05-09 — H1 fix landed, partial win (throughput plateau at ~1.06 K req/s)
+
+**Source confirmation.** `runtime/src/lib.rs:345-347` (pre-fix) was the
+smoking gun verbatim: `thread::scope(|s| { for _ in 0..pool_size {
+s.spawn(|| { ... } })`. Per-call thread spawn confirmed.
+
+**Fix landed.** `runtime/src/lib.rs` rewrite — long-lived global pool
+(`OnceLock<Arc<Pool>>`, `Mutex<VecDeque<Task>>` + `Condvar`,
+`available_parallelism()`-sized worker count). Caller blocks on a
+per-call `Arc<ParCall>`'s `Condvar`; tasks decrement `remaining` on
+completion; last task signals. Wait loop work-helps to prevent pool
+exhaustion under nested-par. Design record at
+[`phase-7-codegen.md § "karac_par_run: long-lived worker pool"`](../implementation_checklist/phase-7-codegen.md).
+ABI unchanged; codegen unaffected; 802 tests + 21 runtime unit tests
+green; clippy / fmt clean.
+
+**Re-profile under same `wrk -t4 -c100` load** (`profile_kara_v2.json.gz`,
+samply 30 s):
+
+| Metric | Pre-fix (`4f7b72d`) | Post-fix | Change |
+|---|---|---|---|
+| Throughput (req/s) | 1,090 | 1,062 | -3 % (noise) |
+| p50 latency | 75 ms | 90 ms | +20 % |
+| p99 latency | 438 ms | 266 ms | **-39 %** |
+| Unique threads in 30 s | 3,344 | **213** | **-94 %** |
+| Top-of-stack `busy_loop` | 7.5 % | **66.7 %** | **+790 %** |
+| Top-of-stack `mach_vm_protect` | 60.1 % | 26.6 % | **-56 %** |
+| Top-of-stack other kernel | ~25 % | ~5 % | -80 % |
+
+**Diagnosis:** H1 was *correctly identified* as a real problem and
+the fix *fully resolves it*. Thread-creation overhead is gone; the
+program now spends two-thirds of its CPU on the work it was designed
+to do (vs < 8 % before). p99 dropped meaningfully (438 → 266 ms),
+which is the user-visible quality-of-service win.
+
+**The throughput estimate was wrong.** The slice plan estimated
+3-5 K req/s post-fix; reality is 1.06 K. Why: the bench is **wrk-
+connection-bound, not pool-capacity-bound**. With `-c100` keep-alive
+connections, throughput = connections / per-request-wall-clock-
+latency = 100 / 0.09 s ≈ 1.1 K req/s, which matches the measured
+number almost exactly. Pre-fix, the same identity held: 100 / 0.075
+≈ 1.3 K, with p99 jitter pulling the average to 1.09 K. The pool fix
+reduced p99 (because slow tail requests no longer pay the 4× thread-
+spawn syscall cost) but didn't move p50 — so connection-throughput
+math gives the same result. Higher p99 was *masking* the real
+ceiling, not setting it.
+
+**What's bounding p50 then.** Per-request wall-clock with the pool
+fix is dominated by the four `busy_loop`s themselves (2-4 ms total
+parallel). The remaining ~85 ms of p50 latency is everywhere else —
+HTTP parse / response-build, mutex contention on `ACTIVE_FRAMES` (4
+register + 4 deregister per request) and the global pool queue
+(4 push + 4 pop per request), Arc allocation, the handler trampoline
+(H2). None of these were investigated before the H1 fix because they
+were behind H1's noise floor; now they're the surface.
+
+**Hypotheses for the new throughput ceiling, ranked.** *(These
+displace H2-H5 of the original ranking — H2 / H3 are still candidates
+but their ranking changes now that we have post-fix data.)*
+
+1. **`ACTIVE_FRAMES` mutex contention.** 4 register + 4 deregister
+   per request × 1,000 req/s = 8,000 lock acquisitions/sec on a
+   single global mutex, plus the 4-task-per-request worker contention
+   on the same lock. Likely the dominant in-runtime cost now.
+   Probe: `KARAC_RUNTIME_DEBUG_METADATA=0` env var disables frame
+   tracking entirely (skipping the lock); if throughput jumps,
+   confirmed. Mitigation: per-thread-local active-frame slot +
+   periodic flush, or a sharded lock by thread-id hash.
+2. **Global pool queue mutex contention.** Same shape as (1) but
+   on `Pool::queue`. Probe: `lock_api`-style instrumentation, or
+   replace with a lock-free MPMC queue (crossbeam-deque) and re-bench.
+3. **Handler trampoline overhead (original H2).** Still on the
+   call path of every request. The closure path enumerated in
+   `docs/demo_ideas.md § Slice E` "Out of scope" remains valid —
+   borrowed accessors first, inline trampoline second. Probe: a no-
+   op-handler bench gives the trampoline-only ceiling.
+4. **`block_in_place` + tokio worker churn.** The hyper service
+   invokes the Kāra handler synchronously via `block_in_place`,
+   which converts the current tokio worker into a blocking thread
+   and tokio spawns a replacement. Under sustained `-c100` load,
+   tokio's blocking pool churns. Probe: `tokio_unstable` runtime
+   stats, or a non-`block_in_place` execution path for the handler
+   (large change — defer until (1)-(3) are ruled out).
+
+**Recommended next step.** Probe (1) — set
+`KARAC_RUNTIME_DEBUG_METADATA=0` and re-run the bench. Single env
+var, zero-LoC change, gives us instant signal on whether the
+`ACTIVE_FRAMES` mutex is the next bottleneck. If yes, the fix is
+either to make frame tracking lock-free or to gate it on a more
+selective signal (debug builds only, off in `--release`).
