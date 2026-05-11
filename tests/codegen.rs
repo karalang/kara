@@ -6032,6 +6032,39 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_map_entry_or_insert_trailing_push() {
+        // Canonical kata idiom from `design.md § Entry[K, V]`:
+        // `bucket.entry(k).or_insert(Vec.new()).push(v)`.
+        // Exercises the new entry-chain-receiver method dispatch:
+        // the chain produces a `*mut Vec[i64]` slot pointer; the
+        // trailing `.push(v)` mutates the in-storage Vec via the
+        // synth identifier; subsequent chains on the same key see
+        // the accumulated contents through the same slot pointer
+        // (verifies both the vacant-install and occupied-passthrough
+        // paths). A trailing `.len()` read on the same chain shape
+        // confirms read-side method dispatch through the slot.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    bucket.entry(1_i64).or_insert(Vec.new()).push(10_i64);
+    bucket.entry(1_i64).or_insert(Vec.new()).push(20_i64);
+    bucket.entry(1_i64).or_insert(Vec.new()).push(30_i64);
+    bucket.entry(2_i64).or_insert(Vec.new()).push(99_i64);
+    let n1 = bucket.entry(1_i64).or_insert(Vec.new()).len();
+    let n2 = bucket.entry(2_i64).or_insert(Vec.new()).len();
+    println(n1);
+    println(n2);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "1"]);
+        }
+    }
+
     // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
     //    "Clone trait surface for collections") ───────────────────────────
 

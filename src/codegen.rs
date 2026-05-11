@@ -7292,6 +7292,19 @@ impl<'ctx> Codegen<'ctx> {
             return self.compile_indexed_receiver_method(inner, index, method, args, call_span);
         }
 
+        // Trailing-method dispatch on an entry-chain receiver — e.g.
+        // `bucket.entry(p).or_insert(Vec.new()).push(j)`. The chain
+        // produces a slot pointer (`*mut V`); the synth-identifier
+        // pattern (mirrors MR-slice indexed-receiver dispatch) wraps it
+        // so the recursive call resolves `.method(args)` through the
+        // regular identifier-keyed flow. Returns Some(_) only when the
+        // receiver is a recognised or_insert / or_insert_with chain.
+        if let Some(value) =
+            self.compile_entry_chain_receiver_method(object, method, args, call_span)?
+        {
+            return Ok(value);
+        }
+
         // Map.entry(k) chain dispatch — `m.entry(k){.and_modify(f)}*.{or_insert(d)|
         // or_insert_with(f)|and_modify(f)}` is lowered as a single sequence
         // around one `karac_map_entry` call so the slot pointer stays valid
@@ -7885,6 +7898,150 @@ impl<'ctx> Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         result
+    }
+
+    /// Trailing-method dispatch on an entry-chain receiver. When the call
+    /// is
+    /// `<m.entry(k){.and_modify(f)}*.{or_insert|or_insert_with}(d)>.method(args)`,
+    /// the inner chain produces a slot pointer (`*mut V`, the LLVM
+    /// realisation of `mut ref V` per `design.md § Entry[K, V]`).
+    /// Mirrors `compile_indexed_receiver_method`: mint a synth identifier
+    /// bound to the slot pointer with V's side-tables populated, recurse
+    /// into `compile_method_call` with the synth as receiver, tear down on
+    /// exit. Closes the LeetCode 3629 kata's canonical
+    /// `bucket.entry(p).or_insert(Vec.new()).push(j)` shape.
+    ///
+    /// Returns `Ok(None)` when the receiver isn't a recognised
+    /// or_insert / or_insert_with chain, so the caller falls through to
+    /// the regular dispatch (which surfaces its own diagnostic for
+    /// unrecognised non-identifier receivers).
+    fn compile_entry_chain_receiver_method(
+        &mut self,
+        inner_object: &Expr,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // Inner receiver must itself be a method call ending in
+        // or_insert / or_insert_with. and_modify-terminal returns the
+        // Entry struct, not a slot pointer, so we don't peel that here.
+        let ExprKind::MethodCall {
+            object: chain_recv,
+            method: inner_method,
+            args: inner_args,
+            ..
+        } = &inner_object.kind
+        else {
+            return Ok(None);
+        };
+        if !matches!(inner_method.as_str(), "or_insert" | "or_insert_with") {
+            return Ok(None);
+        }
+
+        // Walk chain_recv (peeling and_modify wrappers) to find the map
+        // identifier. Mirrors the loop in `try_compile_entry_chain`.
+        let map_name = {
+            let mut current: &Expr = chain_recv;
+            loop {
+                let ExprKind::MethodCall {
+                    object: inner_obj,
+                    method: m,
+                    args: inner_args2,
+                    ..
+                } = &current.kind
+                else {
+                    return Ok(None);
+                };
+                if m == "entry" && inner_args2.len() == 1 {
+                    let ExprKind::Identifier(name) = &inner_obj.kind else {
+                        return Ok(None);
+                    };
+                    break name.clone();
+                } else if m == "and_modify" && inner_args2.len() == 1 {
+                    current = inner_obj;
+                } else {
+                    return Ok(None);
+                }
+            }
+        };
+
+        // Receiver must be a tracked Map variable; without map_val_types
+        // we can't size the synth slot.
+        if !self.map_key_types.contains_key(map_name.as_str()) {
+            return Ok(None);
+        }
+        let val_te = self
+            .var_elem_type_exprs
+            .get(map_name.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "codegen: entry-chain trailing-method '{}' on map '{}' \
+                     — value TypeExpr unknown",
+                    method, map_name
+                )
+            })?;
+        let val_ty = *self.map_val_types.get(map_name.as_str()).ok_or_else(|| {
+            format!(
+                "codegen: entry-chain trailing-method '{}' on map '{}' \
+                     — value LLVM type unknown",
+                method, map_name
+            )
+        })?;
+
+        // Compile the inner chain — returns the slot pointer (`*mut V`).
+        let slot_value = self
+            .try_compile_entry_chain(chain_recv, inner_method, inner_args)?
+            .ok_or_else(|| {
+                format!(
+                    "codegen: entry-chain trailing-method '{}' — inner chain \
+                     '{}' unexpectedly didn't compile as an entry chain",
+                    method, inner_method
+                )
+            })?;
+        let slot_ptr = slot_value.into_pointer_value();
+
+        // Mint the synth identifier. Same teardown contract as
+        // compile_indexed_receiver_method — entries are bookkeeping for
+        // the recursive dispatch only; synth owns no allocation.
+        let synth = format!("__entry_slot_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: slot_ptr,
+                ty: val_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &val_te);
+        if let TypeKind::Path(path) = &val_te.kind {
+            if let Some(seg) = path.segments.first() {
+                if self.struct_types.contains_key(seg.as_str()) {
+                    self.var_type_names.insert(synth.clone(), seg.clone());
+                }
+            }
+        }
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: inner_object.span.clone(),
+        };
+        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.map_key_types.remove(&synth);
+        self.map_val_types.remove(&synth);
+        self.map_key_type_names.remove(&synth);
+        self.map_key_type_exprs.remove(&synth);
+        self.set_elem_types.remove(&synth);
+        self.set_elem_type_names.remove(&synth);
+        self.set_elem_type_exprs.remove(&synth);
+
+        Ok(Some(result?))
     }
 
     /// Slice MR: lower `outer[i]` for an outer Vec[T] receiver into an
