@@ -1879,6 +1879,67 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_nested_indexed_read_vec_of_vec() {
+        // `grid[0][0]` — nested indexed read on `Vec[Vec[i64]]`.
+        // Codegen synthesizes a fresh identifier for the inner
+        // `grid[0]` (pointing into grid's storage) and re-dispatches
+        // the outer index through the existing identifier-keyed path.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut grid: Vec[Vec[i64]] = Vec.filled(3, Vec.new());
+    grid[0].push(99);
+    grid[0].push(11);
+    grid[2].push(42);
+    let v = grid[0][0];
+    let w = grid[0][1];
+    let x = grid[2][0];
+    println(v);
+    println(w);
+    println(x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "99\n11\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_group_return_slot_preserves_vec_bool_elem_type() {
+        // Regression: when auto-par groups `let v: Vec[bool] = ...`
+        // with another stmt, the return-slot rebind in
+        // `compile_function_body` was unconditionally overwriting
+        // `vec_elem_types[v]` to i64 (the placeholder). Later
+        // `not v[i]` then loaded an i64 instead of bool, lowered
+        // through `xor i64 …, -1`, and the short-circuit phi
+        // rejected the i64 operand against an i1 result. Fix uses
+        // `entry().or_insert_with(...)` to preserve the let's
+        // annotated element type.
+        let out = run_program(
+            r#"
+fn helper(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut visited: Vec[bool] = Vec.filled(n, false);
+    let mut bucket: Map[i64, i64] = Map.new();
+    let i = 1i64;
+    if i > 0 and not visited[i - 1] {
+        return 1;
+    }
+    0
+}
+fn main() {
+    let a: Array[i64, 3] = [1, 2, 3];
+    println(helper(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "1");
+        }
+    }
+
+    #[test]
     fn test_e2e_match_some_node_let_destructure_tuple_payload() {
         // The kata's canonical BFS shape: `Some(node) => let (i, d) = node`
         // where `node: (i64, i64)` is reconstituted as a tuple struct

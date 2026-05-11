@@ -4857,17 +4857,22 @@ impl<'ctx> Codegen<'ctx> {
                                 // Vec/String slot — register a placeholder
                                 // i64 element type (matches the
                                 // `is_runtime_introspection_call` shape
-                                // already in compile_stmt). Codegen-side
-                                // method dispatch on the slot binding
-                                // (`.len()`, `.is_empty()`) ignores the
-                                // element type; first-class-T-aware ops
-                                // (`.push(...)`, indexing) require an
-                                // explicit annotation on the
-                                // outside-of-group binding.
-                                self.vec_elem_types.insert(
-                                    slot.binding_name.clone(),
-                                    self.context.i64_type().into(),
-                                );
+                                // already in compile_stmt) ONLY if no
+                                // entry exists. Without the `or_insert`
+                                // guard, an existing element-type
+                                // registration from the let-statement's
+                                // annotation (e.g. `let v: Vec[bool] =
+                                // Vec.filled(...)`) inside the par-group
+                                // would be overwritten with i64, breaking
+                                // downstream indexed reads / writes
+                                // ("PHI node operands are not the same
+                                // type as the result" on `not v[i]`
+                                // shapes). First-class-T-aware ops still
+                                // require an annotation; this preserves
+                                // it when present.
+                                self.vec_elem_types
+                                    .entry(slot.binding_name.clone())
+                                    .or_insert_with(|| self.context.i64_type().into());
                                 // **No `track_vec_var` here.** Slice A's
                                 // original close-out registered the
                                 // parent alloca for scope-exit free, but
@@ -7674,6 +7679,106 @@ impl<'ctx> Codegen<'ctx> {
         self.set_elem_type_names.remove(&synth);
         self.set_elem_type_exprs.remove(&synth);
 
+        result
+    }
+
+    /// Nested indexed read codegen (`a[i][j]`) — sibling to
+    /// `compile_indexed_receiver_method` (MR slice). The outer
+    /// container `a` must be a named variable in v1; chained
+    /// `a[i][j][k]` rejected with a clear diagnostic. The inner index
+    /// lowers to an element pointer via the same per-container
+    /// machinery (`lower_indexed_elem_ptr_vec` / `_slice` / `_array`),
+    /// a synth identifier is minted with the right side-table
+    /// registrations, then `compile_index` is re-invoked with the
+    /// synth as the outer object so the existing identifier-keyed
+    /// dispatch (`compile_vec_index` / `compile_slice_index` /
+    /// generic Array path) handles the second index correctly.
+    fn compile_nested_index_read(
+        &mut self,
+        inner_object: &Expr,
+        inner_idx: &Expr,
+        outer_idx: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // MR5 symmetric guard: chained `a[i][j][k]` not supported.
+        if matches!(inner_object.kind, ExprKind::Index { .. }) {
+            return Err(
+                "codegen: chained indexed reads (`a[i][j][k]`) are deferred to v1.x; \
+                 bind the intermediate element to a temporary first"
+                    .to_string(),
+            );
+        }
+        let outer_name = if let ExprKind::Identifier(name) = &inner_object.kind {
+            name.clone()
+        } else {
+            return Err(
+                "codegen: nested indexed read requires the outer container to be a \
+                 named variable in v1 (got non-identifier inner expression)"
+                    .to_string(),
+            );
+        };
+        // Recover the element TypeExpr — needed to populate the synth
+        // identifier's vec_elem_types / slice_elem_types registrations.
+        let elem_te = self
+            .var_elem_type_exprs
+            .get(outer_name.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "codegen: nested indexed read on '{}' — element TypeExpr unknown \
+                     (outer is not a tracked Vec/Slice/Array variable)",
+                    outer_name
+                )
+            })?;
+        // Lower the inner `outer[i]` to an element pointer + LLVM type.
+        let (elem_ptr, elem_ll_ty) = if self.vec_elem_types.contains_key(outer_name.as_str()) {
+            self.lower_indexed_elem_ptr_vec(&outer_name, inner_idx)?
+        } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+            self.lower_indexed_elem_ptr_slice(&outer_name, inner_idx)?
+        } else {
+            let slot = self
+                .variables
+                .get(outer_name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "codegen: nested indexed read — outer '{}' has no slot",
+                        outer_name
+                    )
+                })?;
+            if let BasicTypeEnum::ArrayType(_) = slot.ty {
+                self.lower_indexed_elem_ptr_array(slot, inner_idx)?
+            } else {
+                return Err(format!(
+                    "codegen: nested indexed read on '{}' — outer is not a Vec/Slice/Array",
+                    outer_name
+                ));
+            }
+        };
+        // Mint a synth identifier so the recursive call sees the
+        // inner element as a regular Vec/Slice/Array variable.
+        let synth = format!("__indexed_elem_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: elem_ptr,
+                ty: elem_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &elem_te);
+        // Rebuild the outer Index expression against the synth
+        // identifier and dispatch.
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: inner_object.span.clone(),
+        };
+        let result = self.compile_index(&synth_expr, outer_idx);
+        // Tear down the per-call synth registrations so subsequent
+        // dispatch sites don't see a stale entry.
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
         result
     }
 
@@ -12862,6 +12967,24 @@ impl<'ctx> Codegen<'ctx> {
             if let Some(elem_ty) = self.infer_elem_from_source(object) {
                 return self.compile_range_slice(object, start, end, *inclusive, elem_ty);
             }
+        }
+
+        // Nested indexed read (`grid[i][j]` / `factors[v][0]`): the
+        // outer container's element type is itself a Vec / Slice /
+        // Array, so the inner Index expression yields an aggregate
+        // value that the generic fall-through can't handle. Lower
+        // the inner index to an element pointer via the existing
+        // indexed-receiver machinery, mint a synth identifier so the
+        // recursive dispatch sees a regular variable, and recurse.
+        // Single-level nesting only — chained `a[i][j][k]` rejected
+        // upstream by `compile_indexed_receiver_method`'s MR5 guard,
+        // applied symmetrically here.
+        if let ExprKind::Index {
+            object: inner,
+            index: inner_idx,
+        } = &object.kind
+        {
+            return self.compile_nested_index_read(inner, inner_idx, index);
         }
 
         // Slice variable indexing: before the fast-path alloca lookup, check
