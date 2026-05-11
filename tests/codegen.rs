@@ -1808,22 +1808,101 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_pop() {
+    fn test_e2e_vec_pop_returns_option() {
+        // `Vec.pop` now returns `Option[T]` per design.md (was raw
+        // element pre-2026-05-10). Match destructure unwraps Some,
+        // None on empty. Previous test asserted raw shape; the
+        // semantic upgrade aligns codegen with the spec + interpreter.
         let out = run_program(
             r#"
 fn main() {
     let mut v: Vec[i64] = Vec.new();
     v.push(10);
     v.push(20);
-    let x = v.pop();
-    println(x);
+    match v.pop() {
+        Some(x) => println(x),
+        None => println(0),
+    }
     println(v.len());
+    match v.pop() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+    match v.pop() {
+        Some(_) => println(99),
+        None => println(0),
+    }
 }
 "#,
         );
         if let Some(out) = out {
             let lines: Vec<&str> = out.trim().lines().collect();
-            assert_eq!(lines, vec!["20", "1"]);
+            assert_eq!(lines, vec!["20", "1", "10", "0"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_deque_pop_front_returns_option_with_tuple_payload() {
+        // The LeetCode 3629 kata's blocking shape: VecDeque[(i64, i64)]
+        // BFS frontier with `pop_front()` returning `Option[(i64,i64)]`.
+        // Multi-word Option payload via the bumped layout +
+        // `coerce_to_payload_words(val, 3)` construction; destructure
+        // uses the direct-pattern form `Some((i, d))` which routes
+        // through the existing tuple-payload reconstruction machinery.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut q: VecDeque[(i64, i64)] = VecDeque.new();
+    q.push_back((0, 0));
+    let mut sum = 0i64;
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some((i, d)) => {
+                sum = sum + i + d;
+                if i < 3 {
+                    q.push_back((i + 1, d + 1));
+                }
+            },
+        }
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // BFS: pop (0,0) sum+=0; push (1,1) → pop sum+=2 (2);
+            // push (2,2) → pop sum+=4 (6); push (3,3) → pop sum+=6 (12);
+            // i==3 no push; empty → break. Total 12.
+            assert_eq!(out.trim(), "12");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_deque_pop_back_returns_option() {
+        // Sibling: pop_back on a primitive-element VecDeque returns
+        // Option[i64] — same multi-word path, but the value only
+        // populates w0 (w1/w2 padded with zeros).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(1);
+    q.push_back(2);
+    q.push_back(3);
+    match q.pop_back() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+    match q.pop_back() {
+        Some(x) => println(x),
+        None => println(0),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2");
         }
     }
 
@@ -1991,11 +2070,10 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_deque_pop_back_alias_of_pop() {
-        // `pop_back` aliases existing `pop` — returns raw element
-        // (not Option) for consistency with the existing Vec.pop
-        // codegen behavior. The Option-wrap upgrade is tracked as
-        // a separate slice (compound-payload Option construction).
+    fn test_e2e_vec_deque_pop_back_alias_of_pop_returns_option() {
+        // `pop_back` shares the `pop` arm — both return `Option[T]`
+        // after the 2026-05-10 Option-wrap upgrade. Match unwraps
+        // Some; None on empty.
         let out = run_program(
             r#"
 fn main() {
@@ -2003,8 +2081,10 @@ fn main() {
     q.push_back(1);
     q.push_back(2);
     q.push_back(3);
-    let x = q.pop_back();
-    println(x);
+    match q.pop_back() {
+        Some(x) => println(x),
+        None => println(0),
+    }
     println(q.len());
 }
 "#,

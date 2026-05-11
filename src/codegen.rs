@@ -3442,9 +3442,26 @@ impl<'ctx> Codegen<'ctx> {
     /// and methods like `first`/`last`/`get` can produce properly typed LLVM.
     fn seed_builtin_enum_layouts(&mut self) {
         let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
-        let enum_type = self.context.struct_type(&[i64_t, i64_t], false);
+        // Option[T]: { i64 tag, i64 w0, i64 w1, i64 w2 } — payload widened
+        // to 3 i64 words (from the original 1) so tuple `(i64, i64)`
+        // payloads (the kata's `VecDeque[(i64,i64)].pop_front()` element
+        // shape) and 3-word aggregates (`Vec[T]` / `String` ABI =
+        // `{ptr, len, cap}`) fit. Backwards-compatible with the legacy
+        // single-word consumers (`Vec.first` / `Vec.last` / `Map.get` /
+        // `Map.insert` / etc.) — they `build_insert_value` only at
+        // indices 0 (tag) and 1 (w0); trailing fields default to undef.
+        // Match destructure pulls per-binding word count via
+        // `pattern_payload_word_count` (see `reconstruct_payload_value`)
+        // — single-word bindings still extract only w0, not all 3.
+        let enum_type = self
+            .context
+            .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
+        let option_payload_words = 3usize;
 
-        // Option[T]: { i64 tag, i64 w0 }  — None(tag=0) | Some(tag=1, w0=value)
+        // Option[T]:
+        //   None(tag=0)
+        //   Some(tag=1, w0..w(N-1)=payload words; N varies per use site
+        //   via `coerce_to_payload_words` at construction)
         if !self.enum_layouts.contains_key("Option") {
             let mut tags = HashMap::new();
             tags.insert("None".to_string(), 0u64);
@@ -3454,18 +3471,22 @@ impl<'ctx> Codegen<'ctx> {
             field_counts.insert("Some".to_string(), 1usize);
             let mut field_word_offsets = HashMap::new();
             field_word_offsets.insert("None".to_string(), Vec::new());
-            field_word_offsets.insert("Some".to_string(), vec![(0, 1)]);
-            // DP slice: Option[T] is generic; the seeded single-word
-            // payload shape can't carry String/Vec, so drop kinds are
-            // uniformly None — the drop function (if synthesized) is
-            // a pure tag-switch with default `ret`. Higher-arity
-            // monomorphizations of Option that route String/Vec
-            // through the variant payload aren't seeded here; user-
-            // declared enums with explicit String/Vec payloads go
-            // through the regular `declare_enums` path.
+            // Some's single source field spans the full payload area.
+            // `reconstruct_payload_value` slices this to the binding's
+            // natural width (1 for primitives, 2 for Slice, 3 for
+            // Vec/String, sum for tuples).
+            field_word_offsets.insert("Some".to_string(), vec![(0, option_payload_words)]);
+            // DP slice: Option[T] is generic; the seeded shape can't
+            // synthesize per-monomorphization drop kinds, so uniformly
+            // None — the drop function (if synthesized) is a pure
+            // tag-switch with default `ret`. User-declared enums with
+            // explicit String/Vec payloads go through `declare_enums`.
             let mut field_drop_kinds = HashMap::new();
             field_drop_kinds.insert("None".to_string(), Vec::new());
-            field_drop_kinds.insert("Some".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert(
+                "Some".to_string(),
+                std::iter::repeat_n(EnumDropKind::None, option_payload_words).collect(),
+            );
             self.enum_layouts.insert(
                 "Option".to_string(),
                 EnumLayout {
@@ -3480,6 +3501,13 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         // Result[T, E]: { i64 tag, i64 w0 }  — Err(tag=0, w0=err) | Ok(tag=1, w0=val)
+        // Kept at the legacy single-word payload shape: every Result
+        // consumer in the codebase (including the `?` operator's
+        // hardcoded `enum_ty` in `compile_question`) assumes
+        // `{i64, i64}`. Widening Result would require updating those
+        // sites in lockstep; the Vec.pop / VecDeque.pop_* upgrade
+        // doesn't depend on Result, so we leave it untouched.
+        let result_enum_type = self.context.struct_type(&[i64_t, i64_t], false);
         if !self.enum_layouts.contains_key("Result") {
             let mut tags = HashMap::new();
             tags.insert("Err".to_string(), 0u64);
@@ -3496,7 +3524,7 @@ impl<'ctx> Codegen<'ctx> {
             self.enum_layouts.insert(
                 "Result".to_string(),
                 EnumLayout {
-                    llvm_type: enum_type,
+                    llvm_type: result_enum_type,
                     tags,
                     field_counts,
                     field_word_offsets,
@@ -5858,10 +5886,20 @@ impl<'ctx> Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let val = self.compile_expr(inner)?;
         let i64_t = self.context.i64_type();
-        let enum_ty = self.context.struct_type(
-            &[BasicTypeEnum::IntType(i64_t), BasicTypeEnum::IntType(i64_t)],
-            false,
-        );
+        // The early-return struct must match the enclosing function's
+        // declared LLVM return type. Result keeps the legacy
+        // `{i64, i64}` layout; Option was widened to
+        // `{i64, i64, i64, i64}` to fit multi-word payloads (tuple,
+        // Vec, String). Pull the actual return type from the function
+        // declaration instead of hardcoding a narrow shape.
+        let fn_val = self.current_fn.unwrap();
+        let enum_ty = match fn_val.get_type().get_return_type() {
+            Some(BasicTypeEnum::StructType(s)) => s,
+            _ => self.context.struct_type(
+                &[BasicTypeEnum::IntType(i64_t), BasicTypeEnum::IntType(i64_t)],
+                false,
+            ),
+        };
 
         // Extract tag (field 0) and payload word (field 1)
         let tag = self
@@ -8078,21 +8116,15 @@ impl<'ctx> Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            // `pop_back` aliases `pop`; `pop_front` is deferred until
-            // the existing Vec.pop returns Option (it currently
-            // returns the raw element value — see `test_e2e_vec_pop`
-            // which expects `20` not `Some(20)`). Both `pop_back` and
-            // `pop_front` should return `Option[T]` per design.md, but
-            // shipping that requires Option construction for arbitrary
-            // payload widths (compound-payload Option) — a broader
-            // codegen slice tracked separately.
-            "pop_front" => Err(format!(
-                "codegen: `{method}` on VecDeque[T] is not yet supported \
-                 (depends on Option-returning pop — same gap as existing \
-                 Vec.pop). Use `pop` / `pop_back` (returns raw value) \
-                 for now, or run through `karac run` (interpreter)."
-            )),
-            "pop" | "pop_back" => {
+            // `Vec.pop` / `VecDeque.pop_back` / `VecDeque.pop_front` —
+            // return `Option[T]` per design.md. None when empty;
+            // Some(elem) when non-empty. Multi-word payload via
+            // `coerce_to_payload_words` so tuple / Vec / String
+            // element types fit the widened Option layout. pop_back
+            // / pop drop the element at `len-1`; pop_front loads at
+            // index 0 and memmoves the remaining tail left by 1.
+            "pop" | "pop_back" | "pop_front" => {
+                let is_front = method == "pop_front";
                 let len_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
@@ -8103,29 +8135,129 @@ impl<'ctx> Codegen<'ctx> {
                     .unwrap();
                 let len = self
                     .builder
-                    .build_load(i64_t, len_ptr, "len")
+                    .build_load(i64_t, len_ptr, "pop.len")
                     .unwrap()
                     .into_int_value();
                 let data = self
                     .builder
-                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .build_load(ptr_ty, data_ptr_ptr, "pop.data")
                     .unwrap()
                     .into_pointer_value();
 
-                let one = i64_t.const_int(1, false);
-                let new_len = self.builder.build_int_sub(len, one, "new_len").unwrap();
-                self.builder.build_store(len_ptr, new_len).unwrap();
+                let fn_val = self.current_fn.unwrap();
+                let empty_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.empty"));
+                let some_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.some"));
+                let merge_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("{method}.merge"));
 
-                let elem_ptr = unsafe {
+                let zero = i64_t.const_int(0, false);
+                let is_empty = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "pop.is_empty")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_empty, empty_bb, some_bb)
+                    .unwrap();
+
+                // Empty branch: no len decrement, no load.
+                self.builder.position_at_end(empty_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Some branch: load elem, decrement len, memmove (front
+                // only). Compute payload words from the loaded value.
+                self.builder.position_at_end(some_bb);
+                let one = i64_t.const_int(1, false);
+                let read_idx = if is_front {
+                    zero
+                } else {
                     self.builder
-                        .build_gep(elem_ty, data, &[new_len], "pop.ptr")
+                        .build_int_sub(len, one, "pop.last_idx")
                         .unwrap()
                 };
-                let val = self
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[read_idx], "pop.elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self
                     .builder
-                    .build_load(elem_ty, elem_ptr, "pop.val")
+                    .build_load(elem_ty, elem_ptr, "pop.elem")
                     .unwrap();
-                Ok(val)
+                if is_front {
+                    // memmove(data, data + 1, (len - 1) * sizeof(elem))
+                    let tail_count = self
+                        .builder
+                        .build_int_sub(len, one, "pop.tail_count")
+                        .unwrap();
+                    let elem_size = elem_ty.size_of().unwrap();
+                    let tail_bytes = self
+                        .builder
+                        .build_int_mul(tail_count, elem_size, "pop.tail_bytes")
+                        .unwrap();
+                    let src = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, data, &[one], "pop.shift.src")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_memmove(data, 8, src, 8, tail_bytes)
+                        .unwrap();
+                }
+                let new_len = self.builder.build_int_sub(len, one, "pop.new_len").unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+                let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
+                let some_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge: build Option struct via phi on tag + each
+                // payload word. PHI nodes MUST be grouped at the top
+                // of the basic block (LLVM rule), so create all phis
+                // first, then build_insert_value into the aggregate.
+                self.builder.position_at_end(merge_bb);
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let tag_phi = self.builder.build_phi(i64_t, "pop.opt.tag").unwrap();
+                tag_phi.add_incoming(&[(&zero, empty_bb), (&one, some_end_bb)]);
+                let mut word_phis: Vec<inkwell::values::PhiValue<'ctx>> =
+                    Vec::with_capacity(some_payload_words.len());
+                for (i, w) in some_payload_words.iter().enumerate() {
+                    let word_phi = self
+                        .builder
+                        .build_phi(i64_t, &format!("pop.opt.w{i}"))
+                        .unwrap();
+                    word_phi.add_incoming(&[(&zero, empty_bb), (w, some_end_bb)]);
+                    word_phis.push(word_phi);
+                }
+                let mut agg: BasicValueEnum<'ctx> = option_ty.get_undef().into();
+                agg = self
+                    .builder
+                    .build_insert_value(
+                        agg.into_struct_value(),
+                        tag_phi.as_basic_value(),
+                        0,
+                        "pop.opt.tag.ins",
+                    )
+                    .unwrap()
+                    .into_struct_value()
+                    .into();
+                for (i, phi) in word_phis.iter().enumerate() {
+                    agg = self
+                        .builder
+                        .build_insert_value(
+                            agg.into_struct_value(),
+                            phi.as_basic_value(),
+                            (i + 1) as u32,
+                            &format!("pop.opt.w{i}.ins"),
+                        )
+                        .unwrap()
+                        .into_struct_value()
+                        .into();
+                }
+                Ok(agg)
             }
             "push_str" => {
                 if args.is_empty() {
@@ -16294,7 +16426,15 @@ impl<'ctx> Codegen<'ctx> {
         // Single-word: keep legacy single-i64 binding shape. The
         // PatternKind::Binding arm handles single-field struct
         // reconstitution downstream via `pattern_binding_types`.
-        if field_words.len() <= 1 {
+        // Gate on the BINDING's natural width (not the slice length)
+        // so widened variant payloads (e.g. the seeded `Option[T]`
+        // bumped to 3 i64 payload words to fit tuple/Vec/String
+        // payloads from `Vec.pop` / `VecDeque.pop_*`) don't force
+        // primitive bindings through the multi-word reconstruction
+        // path. The slice may legitimately carry more words than the
+        // binding consumes — trailing words are undef.
+        let want_words = self.pattern_payload_word_count(sub_pat);
+        if want_words <= 1 || field_words.len() <= 1 {
             let w = field_words
                 .first()
                 .copied()
@@ -16479,14 +16619,33 @@ impl<'ctx> Codegen<'ctx> {
                 let variant_name = path.last().map(|s| s.as_str()).unwrap_or("");
                 // Compound-payload enum codegen (CP4 destructure side):
                 // resolve the variant's per-field word ranges from the
-                // enum layout. Falls back to "one word per field at
-                // sequential offsets" if the layout is missing (legacy
-                // shape compatibility for tests/IR snippets that don't
-                // declare an enum).
+                // enum layout. When multiple enums share a variant name
+                // (e.g., the built-in `Option.Some` and a user-defined
+                // `MyOption.Some`), prefer the layout whose LLVM struct
+                // type matches the scrutinee's type — `enum_layouts`
+                // HashMap iteration order is non-deterministic, so a
+                // bare `.values().find(...)` would mis-pick. Falls back
+                // to "one word per field at sequential offsets" if no
+                // layout matches (legacy IR-snippet compatibility).
+                let scrut_struct_ty = match scrut {
+                    BasicValueEnum::StructValue(sv) => Some(sv.get_type()),
+                    _ => None,
+                };
                 let offsets: Vec<(usize, usize)> = self
                     .enum_layouts
                     .values()
-                    .find(|l| l.tags.contains_key(variant_name))
+                    .find(|l| {
+                        l.tags.contains_key(variant_name)
+                            && scrut_struct_ty
+                                .as_ref()
+                                .map(|t| &l.llvm_type == t)
+                                .unwrap_or(true)
+                    })
+                    .or_else(|| {
+                        self.enum_layouts
+                            .values()
+                            .find(|l| l.tags.contains_key(variant_name))
+                    })
                     .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
                     .unwrap_or_else(|| (0..patterns.len()).map(|i| (i, 1)).collect());
 
