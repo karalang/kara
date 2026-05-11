@@ -8793,7 +8793,6 @@ impl<'ctx> Codegen<'ctx> {
                 Ok(is_empty.into())
             }
             "first" | "last" => {
-                let option_ty = self.enum_layouts["Option"].llvm_type;
                 let len_ptr = self
                     .builder
                     .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
@@ -8851,39 +8850,33 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap()
                 };
                 let elem_val = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
-                let elem_word = self.coerce_to_i64(elem_val)?;
+                // Multi-word payload: split V into 3 i64 words to fit the
+                // widened Option layout (`{i64 tag, i64 w0, i64 w1, i64 w2}`
+                // — see `seed_builtin_enum_layouts` line 3445). Mirrors the
+                // `Vec.pop` precedent (line 8580). Single-word V (i64, ptr,
+                // bool, etc.) flows through `coerce_to_payload_words`'s
+                // primitive fast path; multi-word V (Vec, String, tuples)
+                // gets per-field decomposition. Without this, non-scalar V
+                // truncates to its first word and the destructure-side
+                // `pattern_payload_word_count` reads undef for fields 2..=3.
+                let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
+                let some_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 
-                // Merge — phi on tag and payload word, then build Option struct.
+                // Merge — phi on tag and per-payload-word, then build Option struct.
                 self.builder.position_at_end(merge_bb);
-                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
-                tag_phi.add_incoming(&[
-                    (&i64_t.const_int(0, false), empty_bb),
-                    (&i64_t.const_int(1, false), some_bb),
-                ]);
-                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
-                word_phi.add_incoming(&[
-                    (&i64_t.const_int(0, false), empty_bb),
-                    (&elem_word, some_bb),
-                ]);
-                let mut agg = option_ty.get_undef();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
-                    .unwrap()
-                    .into_struct_value();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
-                    .unwrap()
-                    .into_struct_value();
-                Ok(agg.into())
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    some_end_bb,
+                    empty_bb,
+                    "opt",
+                );
+                Ok(agg)
             }
             "get" => {
                 if args.is_empty() {
                     return Err("Vec.get requires an index argument".to_string());
                 }
-                let option_ty = self.enum_layouts["Option"].llvm_type;
                 let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
                 let len_ptr = self
                     .builder
@@ -8929,31 +8922,21 @@ impl<'ctx> Codegen<'ctx> {
                         .unwrap()
                 };
                 let elem_val = self.builder.build_load(elem_ty, elem_ptr, "elem").unwrap();
-                let elem_word = self.coerce_to_i64(elem_val)?;
+                // Multi-word payload via `coerce_to_payload_words` — see
+                // `Vec.first`/`Vec.last` arm above for the rationale.
+                let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
+                let valid_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 
                 // Merge — phi, then build Option struct.
                 self.builder.position_at_end(merge_bb);
-                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
-                tag_phi.add_incoming(&[
-                    (&i64_t.const_int(0, false), oob_bb),
-                    (&i64_t.const_int(1, false), valid_bb),
-                ]);
-                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
-                word_phi
-                    .add_incoming(&[(&i64_t.const_int(0, false), oob_bb), (&elem_word, valid_bb)]);
-                let mut agg = option_ty.get_undef();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
-                    .unwrap()
-                    .into_struct_value();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
-                    .unwrap()
-                    .into_struct_value();
-                Ok(agg.into())
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    valid_end_bb,
+                    oob_bb,
+                    "opt",
+                );
+                Ok(agg)
             }
             _ => Ok(self.context.i64_type().const_int(0, false).into()),
         }
@@ -11392,7 +11375,6 @@ impl<'ctx> Codegen<'ctx> {
                 if args.len() < 2 {
                     return Err("Map.insert requires key and value arguments".to_string());
                 }
-                let option_ty = self.enum_layouts["Option"].llvm_type;
                 let key_val = self.compile_expr(&args[0].value)?;
                 let val_val = self.compile_expr(&args[1].value)?;
                 let fn_val = self.current_fn.unwrap();
@@ -11429,37 +11411,26 @@ impl<'ctx> Codegen<'ctx> {
                     .builder
                     .build_load(val_ty, old_slot, "map.ins.old")
                     .unwrap();
-                let old_word = self.coerce_to_i64(old_val)?;
+                // Multi-word payload via `coerce_to_payload_words` — see
+                // `Vec.first`/`Vec.last` arm for the rationale.
+                let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;
+                let some_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(none_bb);
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(merge_bb);
-                let tag_phi = self.builder.build_phi(i64_t, "ins.opt.tag").unwrap();
-                tag_phi.add_incoming(&[
-                    (&i64_t.const_int(1, false), some_bb),
-                    (&i64_t.const_int(0, false), none_bb),
-                ]);
-                let word_phi = self.builder.build_phi(i64_t, "ins.opt.word").unwrap();
-                word_phi
-                    .add_incoming(&[(&old_word, some_bb), (&i64_t.const_int(0, false), none_bb)]);
-                let mut agg = option_ty.get_undef();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "ins.opt.tag.f")
-                    .unwrap()
-                    .into_struct_value();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "ins.opt.word.f")
-                    .unwrap()
-                    .into_struct_value();
-                Ok(agg.into())
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    some_end_bb,
+                    none_bb,
+                    "ins.opt",
+                );
+                Ok(agg)
             }
             "get" => {
                 if args.is_empty() {
                     return Err("Map.get requires a key argument".to_string());
                 }
-                let option_ty = self.enum_layouts["Option"].llvm_type;
                 let key_val = self.compile_expr(&args[0].value)?;
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.get.key", key_ty);
@@ -11488,13 +11459,16 @@ impl<'ctx> Codegen<'ctx> {
                     .build_conditional_branch(found, found_bb, notfound_bb)
                     .unwrap();
 
-                // Found — load value and coerce to i64 payload.
+                // Found — load value and split into payload words.
                 self.builder.position_at_end(found_bb);
                 let elem_val = self
                     .builder
                     .build_load(val_ty, val_slot, "map.get.val")
                     .unwrap();
-                let elem_word = self.coerce_to_i64(elem_val)?;
+                // Multi-word payload via `coerce_to_payload_words` — see
+                // `Vec.first`/`Vec.last` arm for the rationale.
+                let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
+                let found_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
 
                 // Not found.
@@ -11503,34 +11477,18 @@ impl<'ctx> Codegen<'ctx> {
 
                 // Merge — phi and build Option struct.
                 self.builder.position_at_end(merge_bb);
-                let tag_phi = self.builder.build_phi(i64_t, "opt.tag").unwrap();
-                tag_phi.add_incoming(&[
-                    (&i64_t.const_int(1, false), found_bb),
-                    (&i64_t.const_int(0, false), notfound_bb),
-                ]);
-                let word_phi = self.builder.build_phi(i64_t, "opt.word").unwrap();
-                word_phi.add_incoming(&[
-                    (&elem_word, found_bb),
-                    (&i64_t.const_int(0, false), notfound_bb),
-                ]);
-                let mut agg = option_ty.get_undef();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "opt.tag.f")
-                    .unwrap()
-                    .into_struct_value();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "opt.word.f")
-                    .unwrap()
-                    .into_struct_value();
-                Ok(agg.into())
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    found_end_bb,
+                    notfound_bb,
+                    "opt",
+                );
+                Ok(agg)
             }
             "remove" => {
                 if args.is_empty() {
                     return Err("Map.remove requires a key argument".to_string());
                 }
-                let option_ty = self.enum_layouts["Option"].llvm_type;
                 let key_val = self.compile_expr(&args[0].value)?;
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.remove.key", key_ty);
@@ -11559,33 +11517,21 @@ impl<'ctx> Codegen<'ctx> {
                     .builder
                     .build_load(val_ty, old_slot, "map.rm.old")
                     .unwrap();
-                let old_word = self.coerce_to_i64(old_val)?;
+                // Multi-word payload via `coerce_to_payload_words` — see
+                // `Vec.first`/`Vec.last` arm for the rationale.
+                let some_payload_words = self.coerce_to_payload_words(old_val, 3)?;
+                let found_end_bb = self.builder.get_insert_block().unwrap();
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(notfound_bb);
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
                 self.builder.position_at_end(merge_bb);
-                let tag_phi = self.builder.build_phi(i64_t, "rm.opt.tag").unwrap();
-                tag_phi.add_incoming(&[
-                    (&i64_t.const_int(1, false), found_bb),
-                    (&i64_t.const_int(0, false), notfound_bb),
-                ]);
-                let word_phi = self.builder.build_phi(i64_t, "rm.opt.word").unwrap();
-                word_phi.add_incoming(&[
-                    (&old_word, found_bb),
-                    (&i64_t.const_int(0, false), notfound_bb),
-                ]);
-                let mut agg = option_ty.get_undef();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, tag_phi.as_basic_value(), 0, "rm.opt.tag.f")
-                    .unwrap()
-                    .into_struct_value();
-                agg = self
-                    .builder
-                    .build_insert_value(agg, word_phi.as_basic_value(), 1, "rm.opt.word.f")
-                    .unwrap()
-                    .into_struct_value();
-                Ok(agg.into())
+                let agg = self.build_option_some_via_phis(
+                    &some_payload_words,
+                    found_end_bb,
+                    notfound_bb,
+                    "rm.opt",
+                );
+                Ok(agg)
             }
             "contains_key" => {
                 if args.is_empty() {
@@ -15048,6 +14994,70 @@ impl<'ctx> Codegen<'ctx> {
         }
         out.truncate(num_words);
         Ok(out)
+    }
+
+    /// Build an `Option[V]` aggregate at the merge BB via per-payload-word phis.
+    /// Mirrors the `Vec.pop` precedent at line 8588: 1 tag phi + 3 word phis,
+    /// then `build_insert_value` at fields 0..=3. Caller is responsible for
+    /// having computed `some_payload_words` (length 3, via
+    /// `coerce_to_payload_words(elem_val, 3)`) inside the some-end BB and
+    /// having positioned the builder at the merge BB. None-side fills all
+    /// payload words with 0; tag is 1 on the some side and 0 on the none side.
+    fn build_option_some_via_phis(
+        &self,
+        some_payload_words: &[inkwell::values::IntValue<'ctx>],
+        some_end_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        none_bb: inkwell::basic_block::BasicBlock<'ctx>,
+        name_prefix: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let i64_t = self.context.i64_type();
+        let zero = i64_t.const_int(0, false);
+        let one = i64_t.const_int(1, false);
+        let option_ty = self.enum_layouts["Option"].llvm_type;
+
+        let tag_phi = self
+            .builder
+            .build_phi(i64_t, &format!("{name_prefix}.tag"))
+            .unwrap();
+        tag_phi.add_incoming(&[(&zero, none_bb), (&one, some_end_bb)]);
+
+        let mut word_phis: Vec<inkwell::values::PhiValue<'ctx>> =
+            Vec::with_capacity(some_payload_words.len());
+        for (i, w) in some_payload_words.iter().enumerate() {
+            let phi = self
+                .builder
+                .build_phi(i64_t, &format!("{name_prefix}.w{i}"))
+                .unwrap();
+            phi.add_incoming(&[(&zero, none_bb), (w, some_end_bb)]);
+            word_phis.push(phi);
+        }
+
+        let mut agg: BasicValueEnum<'ctx> = option_ty.get_undef().into();
+        agg = self
+            .builder
+            .build_insert_value(
+                agg.into_struct_value(),
+                tag_phi.as_basic_value(),
+                0,
+                &format!("{name_prefix}.tag.f"),
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        for (i, phi) in word_phis.iter().enumerate() {
+            agg = self
+                .builder
+                .build_insert_value(
+                    agg.into_struct_value(),
+                    phi.as_basic_value(),
+                    (i + 1) as u32,
+                    &format!("{name_prefix}.w{i}.f"),
+                )
+                .unwrap()
+                .into_struct_value()
+                .into();
+        }
+        agg
     }
 
     /// Coerce an arbitrary value to i64 for storage in an enum payload word.

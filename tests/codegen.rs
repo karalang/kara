@@ -6065,6 +6065,58 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_map_get_remove_with_vec_value_payload() {
+        // Bisected from the LeetCode 3629 codegen-vs-interpreter divergence.
+        // Pins `Map.get` and `Map.remove` returning `Option[Vec[i64]]`:
+        // the `Some(v) => v.len()` arm must reconstruct the full Vec
+        // (3 LLVM words: ptr, len, cap) from the Option's payload fields.
+        // Before the per-payload-word fix, `coerce_to_i64` truncated the
+        // Vec to a single word and the destructure read undef for fields
+        // 2 and 3 — producing garbage `len()` reads and reordered output.
+        // After the fix, both paths round-trip the full payload.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    bucket.entry(2_i64).or_insert(Vec.new()).push(10_i64);
+    bucket.entry(2_i64).or_insert(Vec.new()).push(20_i64);
+    bucket.entry(2_i64).or_insert(Vec.new()).push(30_i64);
+    bucket.entry(3_i64).or_insert(Vec.new()).push(99_i64);
+
+    match bucket.get(2_i64) {
+        Some(v) => { println(v.len()); },
+        None    => { println(-1_i64); },
+    }
+    match bucket.get(3_i64) {
+        Some(v) => { println(v.len()); },
+        None    => { println(-1_i64); },
+    }
+
+    match bucket.remove(2_i64) {
+        Some(indices) => {
+            for j in indices.into_iter() {
+                println(j);
+            }
+        },
+        None => { println(-1_i64); },
+    }
+
+    println(bucket.len());
+
+    match bucket.remove(2_i64) {
+        Some(_) => { println(99_i64); },
+        None    => { println(0_i64); },
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "1", "10", "20", "30", "1", "0"]);
+        }
+    }
+
     // ── Clone trait surface (canonical: phase-8-stdlib-floor.md
     //    "Clone trait surface for collections") ───────────────────────────
 
