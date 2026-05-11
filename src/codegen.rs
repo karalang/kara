@@ -14368,16 +14368,28 @@ impl<'ctx> Codegen<'ctx> {
         name: &str,
         args: &[CallArg],
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
-        // Find which enum this variant belongs to.
+        // Find which enum this variant belongs to. Prefer
+        // user-declared enums over the seeded built-ins (`Option`,
+        // `Result`) when a variant name (`Some` / `None` / `Ok` /
+        // `Err`) collides — without this preference, HashMap
+        // iteration order non-deterministically picks the wider seeded
+        // `Option` layout for a user-defined `MyOption.Some(...)`
+        // construction, producing a {i64,i64,i64,i64} value where
+        // the user fn expects {i64, i64}. Symmetric to the destructure
+        // disambiguation in `bind_pattern_values`.
         let enum_name = {
-            let mut found = None;
+            let mut user_match: Option<String> = None;
+            let mut seed_match: Option<String> = None;
             for (en, layout) in &self.enum_layouts {
                 if layout.tags.contains_key(name) {
-                    found = Some(en.clone());
-                    break;
+                    if en == "Option" || en == "Result" {
+                        seed_match.get_or_insert_with(|| en.clone());
+                    } else {
+                        user_match.get_or_insert_with(|| en.clone());
+                    }
                 }
             }
-            found
+            user_match.or(seed_match)
         };
 
         let enum_name = match enum_name {
@@ -16327,6 +16339,26 @@ impl<'ctx> Codegen<'ctx> {
                 .sum(),
             PatternKind::Binding(_) => {
                 let key = (pat.span.offset, pat.span.length);
+                // Tuple-typed bindings (e.g. `Some(node)` where node is
+                // `(i64, i64)`) — sum element widths from the recorded
+                // tuple `TypeExpr` so multi-word payloads reconstitute
+                // as the right-shaped tuple struct.
+                if matches!(
+                    self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    Some("Tuple")
+                ) {
+                    if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                        if let TypeKind::Tuple(elems) = &te.kind {
+                            return elems
+                                .iter()
+                                .map(|el| {
+                                    Self::llvm_type_word_count(self.llvm_type_for_type_expr(el))
+                                })
+                                .sum::<usize>()
+                                .max(1);
+                        }
+                    }
+                }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
                     Some("Vec") | Some("String") => 3,
                     Some("Slice") => 2,
@@ -16358,6 +16390,20 @@ impl<'ctx> Codegen<'ctx> {
             }
             PatternKind::Binding(_) => {
                 let key = (pat.span.offset, pat.span.length);
+                // Tuple-typed binding: lower the recorded tuple
+                // `TypeExpr` to its LLVM struct type so the
+                // reconstruction builds a value with the right shape
+                // for downstream `let (a, b) = node` destructure.
+                if matches!(
+                    self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                    Some("Tuple")
+                ) {
+                    if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                        if matches!(te.kind, TypeKind::Tuple(_)) {
+                            return self.llvm_type_for_type_expr(te);
+                        }
+                    }
+                }
                 match self.pattern_binding_types.get(&key).map(|s| s.as_str()) {
                     Some("Vec") | Some("String") => self.vec_struct_type().into(),
                     Some("Slice") => self.slice_struct_type().into(),
@@ -16441,9 +16487,60 @@ impl<'ctx> Codegen<'ctx> {
                 .unwrap_or_else(|| i64_t.const_int(0, false));
             return Ok(w.into());
         }
+        // Tuple-typed binding (e.g. `Some(node)` where node: (i64, i64)):
+        // walk per-element from the recorded tuple `TypeExpr` and pack
+        // into the tuple struct value. Mirrors the Tuple sub-pattern
+        // branch above but reads element types from the typechecker
+        // side-table instead of sub-pattern shapes.
+        let key = (sub_pat.span.offset, sub_pat.span.length);
+        if matches!(
+            self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+            Some("Tuple")
+        ) {
+            if let Some(te) = self.pattern_binding_inner_types.get(&key) {
+                if let TypeKind::Tuple(elem_tes) = &te.kind {
+                    let elem_llvm_tys: Vec<BasicTypeEnum<'ctx>> = elem_tes
+                        .iter()
+                        .map(|et| self.llvm_type_for_type_expr(et))
+                        .collect();
+                    let tuple_ty = self.context.struct_type(&elem_llvm_tys, false);
+                    let mut agg = tuple_ty.get_undef();
+                    let mut cursor = 0usize;
+                    for (i, elem_ty) in elem_llvm_tys.iter().enumerate() {
+                        let n = Self::llvm_type_word_count(*elem_ty).max(1);
+                        let end = (cursor + n).min(field_words.len());
+                        let slice = &field_words[cursor..end];
+                        // Primitive single-word elements coerce the
+                        // word back to the declared LLVM type (int/bool
+                        // bit-cast); multi-word elements aren't expected
+                        // here but fall back to the first word as a
+                        // safety net.
+                        let raw = slice
+                            .first()
+                            .copied()
+                            .unwrap_or_else(|| i64_t.const_int(0, false));
+                        let elem_val: BasicValueEnum<'ctx> = match *elem_ty {
+                            BasicTypeEnum::IntType(it) if it.get_bit_width() != 64 => self
+                                .builder
+                                .build_int_truncate(raw, it, "tup.elem.tr")
+                                .unwrap()
+                                .into(),
+                            BasicTypeEnum::IntType(_) => raw.into(),
+                            _ => raw.into(),
+                        };
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, elem_val, i as u32, "tup.bind.iv")
+                            .unwrap()
+                            .into_struct_value();
+                        cursor = end;
+                    }
+                    return Ok(agg.into());
+                }
+            }
+        }
         // Multi-word: resolve the binding's surface type to choose the
         // target LLVM aggregate type.
-        let key = (sub_pat.span.offset, sub_pat.span.length);
         let type_name = self.pattern_binding_types.get(&key).cloned();
         let target_ty: Option<BasicTypeEnum<'ctx>> =
             type_name.as_ref().and_then(|n| match n.as_str() {

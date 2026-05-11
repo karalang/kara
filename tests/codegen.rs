@@ -1879,6 +1879,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_some_node_let_destructure_tuple_payload() {
+        // The kata's canonical BFS shape: `Some(node) => let (i, d) = node`
+        // where `node: (i64, i64)` is reconstituted as a tuple struct
+        // value from the multi-word Option payload. The typechecker
+        // records the tuple `TypeExpr` in `pattern_binding_inner_types`
+        // (tagged "Tuple" in `pattern_binding_types`); codegen's
+        // `reconstruct_payload_value` Binding arm walks the recorded
+        // element types and builds a tuple struct from `field_words`.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut q: VecDeque[(i64, i64)] = VecDeque.new();
+    q.push_back((3, 30));
+    q.push_back((7, 70));
+    loop {
+        match q.pop_front() {
+            None => { break; },
+            Some(node) => {
+                let (a, b) = node;
+                println(a);
+                println(b);
+            },
+        }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n30\n7\n70");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_pop_back_returns_option() {
         // Sibling: pop_back on a primitive-element VecDeque returns
         // Option[i64] — same multi-word path, but the value only

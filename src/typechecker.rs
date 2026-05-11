@@ -9944,6 +9944,66 @@ impl<'a> TypeChecker<'a> {
             }
         }
 
+        // `Vec[T].pop()` / `Vec[T].pop_back()` and `VecDeque[T]`'s
+        // `pop_front` / `pop_back` all return `Option[T]` per design.md.
+        // The codegen-side pop arm builds an `Option[T]` aggregate via
+        // multi-word payload words (commit 76263d1); without the
+        // typechecker recording the return type, an unannotated
+        // `match q.pop_front() { Some(node) => ... }` infers scrutinee
+        // type `Error` and pattern bindings lose their tuple types,
+        // breaking the `Some(node) => let (a, b) = node` shape's
+        // tuple-binding reconstitution in codegen.
+        if matches!(method, "pop" | "pop_back" | "pop_front") && args.is_empty() {
+            let element_ty = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = element_ty {
+                return Type::Named {
+                    name: "Option".to_string(),
+                    args: vec![elem],
+                };
+            }
+        }
+
+        // `VecDeque[T].push_back(item)` / `push_front(item)` — slot
+        // check sibling to `Vec.push`. Returns `Type::Unit`.
+        if matches!(method, "push_back" | "push_front") && args.len() == 1 {
+            let element_ty = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = element_ty {
+                let arg_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(&elem, &arg_ty, args[0].value.span.clone());
+                return Type::Unit;
+            }
+        }
+
         // `String` method dispatch. `Type::Str` is not `Type::Named` so it
         // also falls through the generic branch; handle it here.
         if obj_ty == Type::Str {
@@ -12719,6 +12779,21 @@ impl<'a> TypeChecker<'a> {
     /// entry from the existing `Type::Named` write. PB sibling slice
     /// (2026-05-09).
     fn record_pattern_inner_type(&mut self, pattern: &Pattern, ty: &Type) {
+        // Tuple bindings (e.g. `Some(node)` where `node: (i64, i64)`):
+        // record the whole tuple `TypeExpr` so codegen can reconstruct
+        // a tuple struct from the multi-word payload. Without this,
+        // `pattern_binding_types` skips anonymous tuple shapes and
+        // the codegen's `reconstruct_payload_value` Binding arm falls
+        // through to single-word — the downstream `let (a, b) = node`
+        // then fails because `node` isn't a struct value.
+        if let Type::Tuple(_) = ty {
+            let tup_te = Self::type_to_type_expr(ty);
+            self.pattern_binding_inner_types
+                .insert(SpanKey::from_span(&pattern.span), tup_te);
+            self.pattern_binding_types
+                .insert(SpanKey::from_span(&pattern.span), "Tuple".to_string());
+            return;
+        }
         let (elem, name): (Option<&Type>, Option<&'static str>) = match ty {
             Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
                 (Some(&args[0]), None)
