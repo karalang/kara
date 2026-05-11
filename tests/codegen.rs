@@ -1879,6 +1879,35 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_in_indexed_iter() {
+        // `for p in coll[i].iter()` — the iter peel-off in
+        // `compile_for` recurses on the receiver, but for an
+        // indexed receiver the recursion would land on an Index
+        // expression which falls through to the silent `_ =>` arm.
+        // Fix: synthesize a temp identifier for the indexed
+        // element and recurse with it, mirroring
+        // `compile_nested_index_read`. Pins the kata's
+        // `for p in factors[v].iter() { bucket.entry(p)... }` shape.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut factors: Vec[Vec[i64]] = Vec.filled(7, Vec.new());
+    factors[6].push(2);
+    factors[6].push(3);
+    let mut sum = 0i64;
+    for p in factors[6].iter() {
+        sum = sum + p;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5");
+        }
+    }
+
+    #[test]
     fn test_e2e_function_returning_vec_of_vec_no_double_free() {
         // Move-aware scope-exit cleanup: when a function returns a
         // tracked Vec / String binding via the tail expression, the

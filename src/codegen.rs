@@ -7713,6 +7713,91 @@ impl<'ctx> Codegen<'ctx> {
     /// synth as the outer object so the existing identifier-keyed
     /// dispatch (`compile_vec_index` / `compile_slice_index` /
     /// generic Array path) handles the second index correctly.
+    /// Drive `for x in coll[i].iter()` codegen by synthesizing a
+    /// temp identifier for the indexed receiver, registering it in
+    /// the appropriate elem-type tables, and recursing into
+    /// `compile_for` with the synth as the iterable. Mirrors
+    /// `compile_nested_index_read` for the read-only side.
+    fn compile_for_indexed_iter(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        outer: &Expr,
+        idx: &Expr,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        if matches!(outer.kind, ExprKind::Index { .. }) {
+            return Err(
+                "codegen: `for x in a[i][j].iter()` (chained indexed receiver) \
+                 is deferred — bind the intermediate element first"
+                    .to_string(),
+            );
+        }
+        let outer_name = if let ExprKind::Identifier(name) = &outer.kind {
+            name.clone()
+        } else {
+            return Err(
+                "codegen: indexed-receiver `.iter()` requires the outer container \
+                 to be a named variable in v1"
+                    .to_string(),
+            );
+        };
+        let elem_te = self
+            .var_elem_type_exprs
+            .get(outer_name.as_str())
+            .cloned()
+            .ok_or_else(|| {
+                format!(
+                    "codegen: `for x in {}[i].iter()` — outer element TypeExpr unknown",
+                    outer_name
+                )
+            })?;
+        let (elem_ptr, elem_ll_ty) = if self.vec_elem_types.contains_key(outer_name.as_str()) {
+            self.lower_indexed_elem_ptr_vec(&outer_name, idx)?
+        } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+            self.lower_indexed_elem_ptr_slice(&outer_name, idx)?
+        } else {
+            let slot = self
+                .variables
+                .get(outer_name.as_str())
+                .copied()
+                .ok_or_else(|| {
+                    format!(
+                        "codegen: `for x in {}[i].iter()` — outer has no slot",
+                        outer_name
+                    )
+                })?;
+            if let BasicTypeEnum::ArrayType(_) = slot.ty {
+                self.lower_indexed_elem_ptr_array(slot, idx)?
+            } else {
+                return Err(format!(
+                    "codegen: `for x in {}[i].iter()` — outer is not a Vec/Slice/Array",
+                    outer_name
+                ));
+            }
+        };
+        let synth = format!("__indexed_elem_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: elem_ptr,
+                ty: elem_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &elem_te);
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: outer.span.clone(),
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        result
+    }
+
     fn compile_nested_index_read(
         &mut self,
         inner_object: &Expr,
@@ -14923,6 +15008,19 @@ impl<'ctx> Codegen<'ctx> {
         } = &iterable.kind
         {
             if args.is_empty() && (method == "iter" || method == "into_iter") {
+                // Indexed receiver (`coll[i].iter()`): synthesize a
+                // temp identifier pointing into `coll`'s storage and
+                // recurse, mirroring `compile_nested_index_read`.
+                // Without this, the recursed `compile_for` sees an
+                // Index expression and falls through the dispatch
+                // match's `_ =>` arm — the body never executes.
+                if let ExprKind::Index {
+                    object: outer,
+                    index: idx,
+                } = &object.kind
+                {
+                    return self.compile_for_indexed_iter(label, pattern, outer, idx, body);
+                }
                 return self.compile_for(label, pattern, object, body);
             }
             // `for j in (start..end).step_by(n)` — the only chained
