@@ -1879,6 +1879,71 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_for_range_step_by_codegen() {
+        // `for j in (start..=end).step_by(n)` — the iterator-adaptor
+        // chain previously fell through `compile_for`'s match to the
+        // silent `_ =>` arm, skipping the body entirely. Now lowers
+        // to a Range loop with the step expr evaluated once before
+        // the loop and used as the increment. Pins the sieve / strided
+        // iteration pattern that the LeetCode 3629 kata uses.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut sum = 0i64;
+    for j in (2..=10).step_by(2) {
+        sum = sum + j;
+    }
+    println(sum);
+    let mut count = 0i64;
+    for _ in (0..20).step_by(5) {
+        count = count + 1;
+    }
+    println(count);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "30\n4");
+        }
+    }
+
+    #[test]
+    fn test_e2e_for_range_step_by_with_runtime_step() {
+        // The kata's actual usage: the step expression refers to an
+        // outer variable. The step is evaluated once per loop entry
+        // and captured into the increment block.
+        let out = run_program(
+            r#"
+fn main() {
+    let cap = 12i64;
+    for i in 2..=cap {
+        let mut count = 0i64;
+        for _j in (i..=cap).step_by(i) {
+            count = count + 1;
+        }
+        println(count);
+    }
+}
+"#,
+        );
+        // For each i in 2..=12, count multiples of i up to cap=12:
+        //   i=2 → 2,4,6,8,10,12 → 6
+        //   i=3 → 3,6,9,12 → 4
+        //   i=4 → 4,8,12 → 3
+        //   i=5 → 5,10 → 2
+        //   i=6 → 6,12 → 2
+        //   i=7 → 7 → 1
+        //   i=8 → 8 → 1
+        //   i=9 → 9 → 1
+        //   i=10 → 10 → 1
+        //   i=11 → 11 → 1
+        //   i=12 → 12 → 1
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6\n4\n3\n2\n2\n1\n1\n1\n1\n1\n1");
+        }
+    }
+
+    #[test]
     fn test_e2e_nested_indexed_read_vec_of_vec() {
         // `grid[0][0]` — nested indexed read on `Vec[Vec[i64]]`.
         // Codegen synthesizes a fresh identifier for the inner

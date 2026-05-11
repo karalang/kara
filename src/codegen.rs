@@ -14805,40 +14805,48 @@ impl<'ctx> Codegen<'ctx> {
 
     /// Look up a unit enum variant by identifier name and construct its value.
     fn try_unit_enum_variant(&self, name: &str) -> Option<BasicValueEnum<'ctx>> {
-        let mut found = None;
+        // Symmetric to `try_compile_enum_variant`'s user-declared-vs-
+        // seeded preference: when a variant name (`None` / `Some` /
+        // `Ok` / `Err`) collides between a user-defined enum and the
+        // seeded built-ins, pick the user-declared one. HashMap
+        // iteration order is non-deterministic otherwise, and the
+        // wider seeded `Option` layout would mis-construct a value
+        // for a user-defined `MyOption.None`.
+        let (mut user_pick, mut seed_pick) = (None, None);
         for (enum_name, layout) in &self.enum_layouts {
             if let Some(&tag) = layout.tags.get(name) {
                 if layout.field_counts.get(name).copied().unwrap_or(0) == 0 {
-                    let i64_t = self.context.i64_type();
-
-                    // Shared enum: heap-allocate.
-                    if let Some(info) = self.shared_types.get(enum_name) {
-                        let ptr = self.emit_rc_alloc(info.heap_type);
-                        // Tag at heap index 1.
-                        let tag_ptr = self
-                            .builder
-                            .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
-                            .unwrap();
-                        self.builder
-                            .build_store(tag_ptr, i64_t.const_int(tag, false))
-                            .unwrap();
-                        found = Some(ptr.into());
-                        break;
+                    if enum_name == "Option" || enum_name == "Result" {
+                        seed_pick.get_or_insert((enum_name.clone(), tag, layout));
+                    } else {
+                        user_pick.get_or_insert((enum_name.clone(), tag, layout));
                     }
-
-                    let mut agg = layout.llvm_type.get_undef();
-                    // Only need to set the tag; remaining fields are undef/zeroed.
-                    agg = self
-                        .builder
-                        .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
-                        .unwrap()
-                        .into_struct_value();
-                    found = Some(agg.into());
-                    break;
                 }
             }
         }
-        found
+        let (enum_name, tag, layout) = user_pick.or(seed_pick)?;
+        let i64_t = self.context.i64_type();
+
+        // Shared enum: heap-allocate.
+        if let Some(info) = self.shared_types.get(&enum_name) {
+            let ptr = self.emit_rc_alloc(info.heap_type);
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(info.heap_type, ptr, 1, "sh_tag")
+                .unwrap();
+            self.builder
+                .build_store(tag_ptr, i64_t.const_int(tag, false))
+                .unwrap();
+            return Some(ptr.into());
+        }
+
+        let mut agg = layout.llvm_type.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, i64_t.const_int(tag, false), 0, "tag")
+            .unwrap()
+            .into_struct_value();
+        Some(agg.into())
     }
 
     // ── For loop ─────────────────────────────────────────────────
@@ -14869,6 +14877,33 @@ impl<'ctx> Codegen<'ctx> {
         {
             if args.is_empty() && (method == "iter" || method == "into_iter") {
                 return self.compile_for(label, pattern, object, body);
+            }
+            // `for j in (start..end).step_by(n)` — the only chained
+            // iterator-adaptor codegen surface supported in v1.
+            // Lowers to a Range loop with a custom step (default 1).
+            // The step expression `n` is evaluated once at loop entry
+            // and captured for the increment block. Chained beyond
+            // step_by (e.g. `.step_by(n).map(f)`) falls through to
+            // the silent `_ =>` arm — the broader iterator-adaptor
+            // codegen surface is a separate slice.
+            if args.len() == 1 && method == "step_by" {
+                if let ExprKind::Range {
+                    start,
+                    end,
+                    inclusive,
+                } = &object.kind
+                {
+                    let step_expr = &args[0].value;
+                    return self.compile_for_range_with_step(
+                        label,
+                        pattern,
+                        start,
+                        end,
+                        *inclusive,
+                        Some(step_expr),
+                        body,
+                    );
+                }
             }
         }
         match &iterable.kind {
@@ -14932,6 +14967,25 @@ impl<'ctx> Codegen<'ctx> {
         inclusive: bool,
         body: &Block,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.compile_for_range_with_step(label, pattern, start, end, inclusive, None, body)
+    }
+
+    /// Generic for-range codegen with an optional step expression.
+    /// Step expr `Some(expr)` evaluates `expr` once before the loop
+    /// and uses the result as the increment; `None` defaults to 1.
+    /// Drives both the plain `for i in start..end` shape and the
+    /// `for i in (start..end).step_by(n)` peel-off in `compile_for`.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_for_range_with_step(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+        step: Option<&Expr>,
+        body: &Block,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         let fn_val = self.current_fn.unwrap();
         let i64_t = self.context.i64_type();
 
@@ -14944,6 +14998,13 @@ impl<'ctx> Codegen<'ctx> {
             self.compile_expr(e)?.into_int_value()
         } else {
             return Err("for-range loop requires an end bound".to_string());
+        };
+        // Evaluate the step expression once before the loop and stash
+        // it. Default to 1 when absent.
+        let step_val = if let Some(s) = step {
+            self.compile_expr(s)?.into_int_value()
+        } else {
+            i64_t.const_int(1, false)
         };
 
         // Allocate loop counter
@@ -15002,15 +15063,14 @@ impl<'ctx> Codegen<'ctx> {
             self.builder.build_unconditional_branch(incr_bb).unwrap();
         }
 
-        // Increment
+        // Increment by `step_val`
         self.builder.position_at_end(incr_bb);
         let cur = self
             .builder
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap()
             .into_int_value();
-        let one = i64_t.const_int(1, false);
-        let next = self.builder.build_int_add(cur, one, "incr").unwrap();
+        let next = self.builder.build_int_add(cur, step_val, "incr").unwrap();
         self.builder.build_store(counter, next).unwrap();
         self.builder.build_unconditional_branch(cond_bb).unwrap();
 
