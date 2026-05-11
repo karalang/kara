@@ -1351,13 +1351,15 @@ fn instantiate_signature_with_fresh_vars(
     params: &[Type],
     return_type: &Type,
     next_type_var: &mut u32,
-) -> (
-    Vec<Type>,
-    Type,
-    HashMap<String, TypeVarId>,
-    HashMap<TypeVarId, String>,
-) {
-    fn collect(ty: &Type, names: &mut Vec<String>, seen: &mut HashSet<String>) {
+    next_const_var: &mut u32,
+) -> InstantiatedSignature {
+    fn collect(
+        ty: &Type,
+        names: &mut Vec<String>,
+        seen: &mut HashSet<String>,
+        const_names: &mut Vec<String>,
+        const_seen: &mut HashSet<String>,
+    ) {
         match ty {
             Type::TypeParam(n) if seen.insert(n.clone()) => {
                 names.push(n.clone());
@@ -1365,17 +1367,29 @@ fn instantiate_signature_with_fresh_vars(
             Type::TypeParam(_) => {}
             Type::Tuple(es) => {
                 for e in es {
-                    collect(e, names, seen);
+                    collect(e, names, seen, const_names, const_seen);
                 }
             }
-            Type::Array { element, .. } | Type::Slice { element, .. } => {
-                collect(element, names, seen)
+            Type::Array { element, size } => {
+                collect(element, names, seen, const_names, const_seen);
+                // Const generics slice 3b: descend into the Array size
+                // to gather `ConstArg::ConstParam(n)` names so the
+                // signature instantiation mints a fresh `ConstVarId`
+                // per unique const-param name.
+                if let ConstArg::ConstParam(n) = size {
+                    if const_seen.insert(n.clone()) {
+                        const_names.push(n.clone());
+                    }
+                }
             }
-            Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => collect(i, names, seen),
-            Type::Pointer { inner, .. } => collect(inner, names, seen),
+            Type::Slice { element, .. } => collect(element, names, seen, const_names, const_seen),
+            Type::Ref(i) | Type::MutRef(i) | Type::Weak(i) => {
+                collect(i, names, seen, const_names, const_seen)
+            }
+            Type::Pointer { inner, .. } => collect(inner, names, seen, const_names, const_seen),
             Type::Named { args, .. } => {
                 for a in args {
-                    collect(a, names, seen);
+                    collect(a, names, seen, const_names, const_seen);
                 }
             }
             Type::Function {
@@ -1387,9 +1401,9 @@ fn instantiate_signature_with_fresh_vars(
                 return_type,
             } => {
                 for p in params {
-                    collect(p, names, seen);
+                    collect(p, names, seen, const_names, const_seen);
                 }
-                collect(return_type, names, seen);
+                collect(return_type, names, seen, const_names, const_seen);
             }
             // AssocProjection.param is a String holding the resolved
             // concrete type name; not a TypeParam introduction site.
@@ -1398,10 +1412,18 @@ fn instantiate_signature_with_fresh_vars(
     }
     let mut names: Vec<String> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
+    let mut const_names: Vec<String> = Vec::new();
+    let mut const_seen: HashSet<String> = HashSet::new();
     for p in params {
-        collect(p, &mut names, &mut seen);
+        collect(p, &mut names, &mut seen, &mut const_names, &mut const_seen);
     }
-    collect(return_type, &mut names, &mut seen);
+    collect(
+        return_type,
+        &mut names,
+        &mut seen,
+        &mut const_names,
+        &mut const_seen,
+    );
 
     let mut name_to_id: HashMap<String, TypeVarId> = HashMap::new();
     let mut id_to_name: HashMap<TypeVarId, String> = HashMap::new();
@@ -1412,52 +1434,126 @@ fn instantiate_signature_with_fresh_vars(
         id_to_name.insert(id, name.clone());
     }
 
-    fn substitute(ty: &Type, name_to_id: &HashMap<String, TypeVarId>) -> Type {
+    let mut name_to_const_id: HashMap<String, ConstVarId> = HashMap::new();
+    let mut const_id_to_name: HashMap<ConstVarId, String> = HashMap::new();
+    for name in &const_names {
+        let id = ConstVarId(*next_const_var);
+        *next_const_var += 1;
+        name_to_const_id.insert(name.clone(), id);
+        const_id_to_name.insert(id, name.clone());
+    }
+
+    fn substitute(
+        ty: &Type,
+        name_to_id: &HashMap<String, TypeVarId>,
+        name_to_const_id: &HashMap<String, ConstVarId>,
+    ) -> Type {
         match ty {
             Type::TypeParam(n) => name_to_id
                 .get(n)
                 .map(|&id| Type::TypeVar(id))
                 .unwrap_or_else(|| ty.clone()),
-            Type::Tuple(es) => Type::Tuple(es.iter().map(|e| substitute(e, name_to_id)).collect()),
+            Type::Tuple(es) => Type::Tuple(
+                es.iter()
+                    .map(|e| substitute(e, name_to_id, name_to_const_id))
+                    .collect(),
+            ),
             Type::Array { element, size } => Type::Array {
-                element: Box::new(substitute(element, name_to_id)),
-                size: size.clone(),
+                element: Box::new(substitute(element, name_to_id, name_to_const_id)),
+                size: substitute_const_param_to_var(size, name_to_const_id),
             },
             Type::Slice { element, mutable } => Type::Slice {
-                element: Box::new(substitute(element, name_to_id)),
+                element: Box::new(substitute(element, name_to_id, name_to_const_id)),
                 mutable: *mutable,
             },
-            Type::Ref(inner) => Type::Ref(Box::new(substitute(inner, name_to_id))),
-            Type::MutRef(inner) => Type::MutRef(Box::new(substitute(inner, name_to_id))),
-            Type::Weak(inner) => Type::Weak(Box::new(substitute(inner, name_to_id))),
+            Type::Ref(inner) => {
+                Type::Ref(Box::new(substitute(inner, name_to_id, name_to_const_id)))
+            }
+            Type::MutRef(inner) => {
+                Type::MutRef(Box::new(substitute(inner, name_to_id, name_to_const_id)))
+            }
+            Type::Weak(inner) => {
+                Type::Weak(Box::new(substitute(inner, name_to_id, name_to_const_id)))
+            }
             Type::Pointer { is_mut, inner } => Type::Pointer {
                 is_mut: *is_mut,
-                inner: Box::new(substitute(inner, name_to_id)),
+                inner: Box::new(substitute(inner, name_to_id, name_to_const_id)),
             },
             Type::Named { name, args } => Type::Named {
                 name: name.clone(),
-                args: args.iter().map(|a| substitute(a, name_to_id)).collect(),
+                args: args
+                    .iter()
+                    .map(|a| substitute(a, name_to_id, name_to_const_id))
+                    .collect(),
             },
             Type::Function {
                 params,
                 return_type,
             } => Type::Function {
-                params: params.iter().map(|p| substitute(p, name_to_id)).collect(),
-                return_type: Box::new(substitute(return_type, name_to_id)),
+                params: params
+                    .iter()
+                    .map(|p| substitute(p, name_to_id, name_to_const_id))
+                    .collect(),
+                return_type: Box::new(substitute(return_type, name_to_id, name_to_const_id)),
             },
             Type::OnceFunction {
                 params,
                 return_type,
             } => Type::OnceFunction {
-                params: params.iter().map(|p| substitute(p, name_to_id)).collect(),
-                return_type: Box::new(substitute(return_type, name_to_id)),
+                params: params
+                    .iter()
+                    .map(|p| substitute(p, name_to_id, name_to_const_id))
+                    .collect(),
+                return_type: Box::new(substitute(return_type, name_to_id, name_to_const_id)),
             },
             _ => ty.clone(),
         }
     }
-    let new_params: Vec<Type> = params.iter().map(|p| substitute(p, &name_to_id)).collect();
-    let new_ret = substitute(return_type, &name_to_id);
-    (new_params, new_ret, name_to_id, id_to_name)
+    let new_params: Vec<Type> = params
+        .iter()
+        .map(|p| substitute(p, &name_to_id, &name_to_const_id))
+        .collect();
+    let new_ret = substitute(return_type, &name_to_id, &name_to_const_id);
+    InstantiatedSignature {
+        params: new_params,
+        return_type: new_ret,
+        name_to_id,
+        id_to_name,
+        name_to_const_id,
+        const_id_to_name,
+    }
+}
+
+/// Result of `instantiate_signature_with_fresh_vars`. Kept as a named
+/// struct (slice 3b — fork G1) so the 6-tuple return doesn't accrete
+/// positional noise at the caller. Mirrors the slice-2 typechecker-side
+/// SubstValue layering: type-side maps for `Type::TypeParam` ↔
+/// `Type::TypeVar`, const-side maps for `ConstArg::ConstParam` ↔
+/// `ConstArg::ConstVar`.
+struct InstantiatedSignature {
+    params: Vec<Type>,
+    return_type: Type,
+    name_to_id: HashMap<String, TypeVarId>,
+    id_to_name: HashMap<TypeVarId, String>,
+    #[allow(dead_code)]
+    name_to_const_id: HashMap<String, ConstVarId>,
+    const_id_to_name: HashMap<ConstVarId, String>,
+}
+
+/// Replace `ConstArg::ConstParam(name)` with `ConstArg::ConstVar(id)`
+/// for every name in the substitution map. Used by signature
+/// instantiation at call sites (slice 3b).
+fn substitute_const_param_to_var(
+    arg: &ConstArg,
+    name_to_const_id: &HashMap<String, ConstVarId>,
+) -> ConstArg {
+    match arg {
+        ConstArg::ConstParam(name) => match name_to_const_id.get(name) {
+            Some(&id) => ConstArg::ConstVar(id),
+            None => arg.clone(),
+        },
+        _ => arg.clone(),
+    }
 }
 
 /// Walk `ty` and replace every `Type::TypeVar(id)` with the
@@ -1471,77 +1567,88 @@ fn resolve_type_vars(
     ty: &Type,
     substitutions: &HashMap<TypeVarId, Type>,
     id_to_name: &HashMap<TypeVarId, String>,
+    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+    const_id_to_name: &HashMap<ConstVarId, String>,
 ) -> Type {
+    let recur = |t: &Type| {
+        resolve_type_vars(
+            t,
+            substitutions,
+            id_to_name,
+            const_substitutions,
+            const_id_to_name,
+        )
+    };
     match ty {
         Type::TypeVar(id) => {
             if let Some(resolved) = substitutions.get(id) {
-                resolve_type_vars(resolved, substitutions, id_to_name)
+                recur(resolved)
             } else if let Some(name) = id_to_name.get(id) {
                 Type::TypeParam(name.clone())
             } else {
                 ty.clone()
             }
         }
-        Type::Tuple(es) => Type::Tuple(
-            es.iter()
-                .map(|e| resolve_type_vars(e, substitutions, id_to_name))
-                .collect(),
-        ),
+        Type::Tuple(es) => Type::Tuple(es.iter().map(&recur).collect()),
         Type::Array { element, size } => Type::Array {
-            element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
-            size: size.clone(),
+            element: Box::new(recur(element)),
+            size: resolve_const_arg(size, const_substitutions, const_id_to_name),
         },
         Type::Slice { element, mutable } => Type::Slice {
-            element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
+            element: Box::new(recur(element)),
             mutable: *mutable,
         },
-        Type::Ref(inner) => Type::Ref(Box::new(resolve_type_vars(
-            inner,
-            substitutions,
-            id_to_name,
-        ))),
-        Type::MutRef(inner) => Type::MutRef(Box::new(resolve_type_vars(
-            inner,
-            substitutions,
-            id_to_name,
-        ))),
-        Type::Weak(inner) => Type::Weak(Box::new(resolve_type_vars(
-            inner,
-            substitutions,
-            id_to_name,
-        ))),
+        Type::Ref(inner) => Type::Ref(Box::new(recur(inner))),
+        Type::MutRef(inner) => Type::MutRef(Box::new(recur(inner))),
+        Type::Weak(inner) => Type::Weak(Box::new(recur(inner))),
         Type::Pointer { is_mut, inner } => Type::Pointer {
             is_mut: *is_mut,
-            inner: Box::new(resolve_type_vars(inner, substitutions, id_to_name)),
+            inner: Box::new(recur(inner)),
         },
         Type::Named { name, args } => Type::Named {
             name: name.clone(),
-            args: args
-                .iter()
-                .map(|a| resolve_type_vars(a, substitutions, id_to_name))
-                .collect(),
+            args: args.iter().map(&recur).collect(),
         },
         Type::Function {
             params,
             return_type,
         } => Type::Function {
-            params: params
-                .iter()
-                .map(|p| resolve_type_vars(p, substitutions, id_to_name))
-                .collect(),
-            return_type: Box::new(resolve_type_vars(return_type, substitutions, id_to_name)),
+            params: params.iter().map(&recur).collect(),
+            return_type: Box::new(recur(return_type)),
         },
         Type::OnceFunction {
             params,
             return_type,
         } => Type::OnceFunction {
-            params: params
-                .iter()
-                .map(|p| resolve_type_vars(p, substitutions, id_to_name))
-                .collect(),
-            return_type: Box::new(resolve_type_vars(return_type, substitutions, id_to_name)),
+            params: params.iter().map(&recur).collect(),
+            return_type: Box::new(recur(return_type)),
         },
         _ => ty.clone(),
+    }
+}
+
+/// Const-arg analog of `resolve_type_vars` for the `Type::Array.size`
+/// position. `ConstVar(id)` resolves via `const_substitutions`;
+/// unresolved vars convert back to `ConstParam(name)` via
+/// `const_id_to_name` so `check_unsolved_const_param` (slice 3b
+/// sub-step h) detects them at the consuming context. `Literal` and
+/// `ConstParam` pass through unchanged.
+fn resolve_const_arg(
+    arg: &ConstArg,
+    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+    const_id_to_name: &HashMap<ConstVarId, String>,
+) -> ConstArg {
+    match arg {
+        ConstArg::ConstVar(id) => {
+            if let Some(resolved) = const_substitutions.get(id) {
+                resolve_const_arg(resolved, const_substitutions, const_id_to_name)
+            } else if let Some(name) = const_id_to_name.get(id) {
+                ConstArg::ConstParam(name.clone())
+            } else {
+                arg.clone()
+            }
+        }
+        _ => arg.clone(),
     }
 }
 
@@ -1571,7 +1678,12 @@ fn resolve_type_var_top(ty: &Type, substitutions: &HashMap<TypeVarId, Type>) -> 
 /// if the structural shapes don't match (caller's `check_assignable`
 /// pass surfaces the diagnostic; this function is silent so a single
 /// shape mismatch at depth doesn't poison higher-level recovery).
-fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>) -> bool {
+fn unify_types(
+    a: &Type,
+    b: &Type,
+    substitutions: &mut HashMap<TypeVarId, Type>,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
     let a = resolve_type_var_top(a, substitutions);
     let b = resolve_type_var_top(b, substitutions);
     match (&a, &b) {
@@ -1588,17 +1700,17 @@ fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>)
         (Type::Tuple(as_), Type::Tuple(bs)) if as_.len() == bs.len() => as_
             .iter()
             .zip(bs.iter())
-            .all(|(x, y)| unify_types(x, y, substitutions)),
+            .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions)),
         (Type::Named { name: an, args: aa }, Type::Named { name: bn, args: bb })
             if an == bn && aa.len() == bb.len() =>
         {
             aa.iter()
                 .zip(bb.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions))
+                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
         }
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
-        | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions),
+        | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions, const_substitutions),
         (
             Type::Array {
                 element: xe,
@@ -1608,7 +1720,13 @@ fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>)
                 element: ye,
                 size: ys,
             },
-        ) if xs == ys => unify_types(xe, ye, substitutions),
+        ) => {
+            // Const generics slice 3b: route the size comparison
+            // through `unify_const_args` so `ConstArg::ConstVar` can
+            // bind during call-site inference.
+            unify_const_args(xs, ys, const_substitutions)
+                && unify_types(xe, ye, substitutions, const_substitutions)
+        }
         (
             Type::Slice {
                 element: xe,
@@ -1618,7 +1736,7 @@ fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>)
                 element: ye,
                 mutable: ym,
             },
-        ) if xm == ym => unify_types(xe, ye, substitutions),
+        ) if xm == ym => unify_types(xe, ye, substitutions, const_substitutions),
         (
             Type::Function {
                 params: xp,
@@ -1631,8 +1749,8 @@ fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>)
         ) if xp.len() == yp.len() => {
             xp.iter()
                 .zip(yp.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions))
-                && unify_types(xr, yr, substitutions)
+                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                && unify_types(xr, yr, substitutions, const_substitutions)
         }
         (
             Type::OnceFunction {
@@ -1646,13 +1764,59 @@ fn unify_types(a: &Type, b: &Type, substitutions: &mut HashMap<TypeVarId, Type>)
         ) if xp.len() == yp.len() => {
             xp.iter()
                 .zip(yp.iter())
-                .all(|(x, y)| unify_types(x, y, substitutions))
-                && unify_types(xr, yr, substitutions)
+                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                && unify_types(xr, yr, substitutions, const_substitutions)
         }
         // Terminal / cross-shape cases handled by the existing
         // structural compatibility check (covers integer-coercion,
         // never, slice/vec coercions, etc).
         _ => types_compatible(&a, &b),
+    }
+}
+
+/// Const-arg unification (const generics slice 3b — fork G1). Mirrors
+/// `unify_types` with `(ConstVar, other)` bind-and-succeed semantics.
+/// `Literal`/`Literal` requires equality; `ConstParam`/`ConstParam`
+/// requires name equality (post-instantiation these should be rare —
+/// the inference solver substitutes `ConstParam` → `ConstVar` at
+/// signature minting). Returns false on incompatible shapes; the
+/// caller surfaces the diagnostic.
+fn unify_const_args(
+    a: &ConstArg,
+    b: &ConstArg,
+    const_substitutions: &mut HashMap<ConstVarId, ConstArg>,
+) -> bool {
+    let a = resolve_const_var_top(a, const_substitutions);
+    let b = resolve_const_var_top(b, const_substitutions);
+    match (&a, &b) {
+        (ConstArg::ConstVar(id_a), ConstArg::ConstVar(id_b)) if id_a == id_b => true,
+        (ConstArg::ConstVar(id), _) => {
+            const_substitutions.insert(*id, b.clone());
+            true
+        }
+        (_, ConstArg::ConstVar(id)) => {
+            const_substitutions.insert(*id, a.clone());
+            true
+        }
+        (ConstArg::Literal(x), ConstArg::Literal(y)) => x == y,
+        (ConstArg::ConstParam(name_a), ConstArg::ConstParam(name_b)) => name_a == name_b,
+        _ => false,
+    }
+}
+
+/// One-step resolution of `ConstArg::ConstVar(id)` against the
+/// substitutions map. Mirrors `resolve_type_var_top` for the const-arg
+/// metavariable substrate.
+fn resolve_const_var_top(
+    arg: &ConstArg,
+    const_substitutions: &HashMap<ConstVarId, ConstArg>,
+) -> ConstArg {
+    match arg {
+        ConstArg::ConstVar(id) => match const_substitutions.get(id) {
+            Some(inner) => resolve_const_var_top(inner, const_substitutions),
+            None => arg.clone(),
+        },
+        _ => arg.clone(),
     }
 }
 
@@ -2129,6 +2293,18 @@ pub struct TypeEnv {
     next_type_var: u32,
     #[allow(dead_code)]
     substitutions: HashMap<TypeVarId, Type>,
+    /// Const-arg metavar counter, parallel to `next_type_var`. Bumped
+    /// when `instantiate_signature_with_fresh_vars` mints a fresh
+    /// `ConstVarId` per unique const-param name in a signature (const
+    /// generics slice 3b).
+    #[allow(dead_code)]
+    next_const_var: u32,
+    /// Const-arg metavar substitutions, parallel to `substitutions`.
+    /// Populated by `unify_const_args` at call sites; consumed by
+    /// `resolve_type_vars` (Array arm) to substitute `ConstArg::ConstVar`
+    /// with its bound value.
+    #[allow(dead_code)]
+    const_substitutions: HashMap<ConstVarId, ConstArg>,
 }
 
 impl TypeEnv {
@@ -2149,6 +2325,8 @@ impl TypeEnv {
             compiler_builtins: HashSet::new(),
             next_type_var: 0,
             substitutions: HashMap::new(),
+            next_const_var: 0,
+            const_substitutions: HashMap::new(),
         }
     }
 
@@ -4030,7 +4208,32 @@ impl<'a> TypeChecker<'a> {
                     }
                 },
             },
-            GenericArg::Type(_) => return None,
+            // Parser-side carveout (const generics slice 3b): the
+            // generic-arg parser routes plain `Identifier` to
+            // `GenericArg::Type` (it can't disambiguate a type-param
+            // ref from a const-param ref without scope info). At type
+            // lowering we recover: an Identifier in scope that's
+            // *not* a type-param can be treated as a `ConstParam`
+            // reference for the Array size position. `lower_array_type`
+            // is the only place that needs this disambiguation today
+            // (other `Type::Named.args` consumers stay type-only per
+            // the deferred-F carveout).
+            GenericArg::Type(te) => {
+                if let TypeKind::Path(p) = &te.kind {
+                    if p.segments.len() == 1 && p.generic_args.is_none() {
+                        let name = &p.segments[0];
+                        if generic_scope.contains(name) {
+                            ConstArg::ConstParam(name.clone())
+                        } else {
+                            return None;
+                        }
+                    } else {
+                        return None;
+                    }
+                } else {
+                    return None;
+                }
+            }
         };
         Some(Type::Array {
             element: Box::new(element_ty),
@@ -8232,8 +8435,19 @@ impl<'a> TypeChecker<'a> {
         // closures) against the resolved slot, with check_expr's
         // pushdown seeing concrete (i.e. solved) slot types when
         // available.
-        let (sub_params, sub_ret, name_to_id, id_to_name) =
-            instantiate_signature_with_fresh_vars(params, return_type, &mut self.env.next_type_var);
+        let InstantiatedSignature {
+            params: sub_params,
+            return_type: sub_ret,
+            name_to_id,
+            id_to_name,
+            name_to_const_id: _,
+            const_id_to_name,
+        } = instantiate_signature_with_fresh_vars(
+            params,
+            return_type,
+            &mut self.env.next_type_var,
+            &mut self.env.next_const_var,
+        );
 
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
         for arg in args {
@@ -8250,7 +8464,12 @@ impl<'a> TypeChecker<'a> {
         // structural matches.
         for (sub_param_ty, arg_ty_opt) in sub_params.iter().zip(arg_tys.iter()) {
             if let Some(arg_ty) = arg_ty_opt {
-                unify_types(sub_param_ty, arg_ty, &mut self.env.substitutions);
+                unify_types(
+                    sub_param_ty,
+                    arg_ty,
+                    &mut self.env.substitutions,
+                    &mut self.env.const_substitutions,
+                );
             }
         }
         // Pass 2: check each arg against the resolved slot. For
@@ -8260,7 +8479,13 @@ impl<'a> TypeChecker<'a> {
         for ((arg, sub_param_ty), arg_ty_opt) in
             args.iter().zip(sub_params.iter()).zip(arg_tys.iter())
         {
-            let resolved = resolve_type_vars(sub_param_ty, &self.env.substitutions, &id_to_name);
+            let resolved = resolve_type_vars(
+                sub_param_ty,
+                &self.env.substitutions,
+                &id_to_name,
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
             let resolved = self.resolve_assoc_projections(&resolved);
             match arg_ty_opt {
                 Some(arg_ty) => {
@@ -8286,8 +8511,13 @@ impl<'a> TypeChecker<'a> {
         // see a self-referential `T → T` binding.
         let mut solutions: HashMap<String, Type> = HashMap::new();
         for (name, &id) in &name_to_id {
-            let resolved =
-                resolve_type_vars(&Type::TypeVar(id), &self.env.substitutions, &id_to_name);
+            let resolved = resolve_type_vars(
+                &Type::TypeVar(id),
+                &self.env.substitutions,
+                &id_to_name,
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
             if !matches!(&resolved, Type::TypeParam(n) if n == name) {
                 solutions.insert(name.clone(), resolved);
             }
@@ -8298,7 +8528,13 @@ impl<'a> TypeChecker<'a> {
         // `TypeParam(originating_name)` so the caller's
         // `find_unbound_type_param` (slice 2a) still surfaces the
         // unsolved-T diagnostic.
-        let ret = resolve_type_vars(&sub_ret, &self.env.substitutions, &id_to_name);
+        let ret = resolve_type_vars(
+            &sub_ret,
+            &self.env.substitutions,
+            &id_to_name,
+            &self.env.const_substitutions,
+            &const_id_to_name,
+        );
         self.resolve_assoc_projections(&ret)
     }
 

@@ -10774,3 +10774,51 @@ fn test_const_arg_array_size_distinguishable() {
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+#[test]
+fn test_const_inference_single_position() {
+    // Slice 3b inference solver: `fn f[T, const N: i64](arr: Array[T, N])`
+    // called with `let a: Array[i64, 4] = [1,2,3,4]; f(a);` infers
+    // `T=i64, N=4` and type-checks.
+    typecheck_ok(
+        "fn f[T, const N: i64](arr: Array[T, N]) { }\n\
+         fn main() {\n\
+             let a: Array[i64, 4] = [1, 2, 3, 4];\n\
+             f(a);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_const_inference_multi_position_consistent() {
+    // Slice 3b: two arg positions binding the same const-param to
+    // the same value — the second `unify_const_args` call binds to
+    // the already-bound `ConstVar` and succeeds.
+    typecheck_ok(
+        "fn f[T, const N: i64](a: Array[T, N], b: Array[T, N]) { }\n\
+         fn main() {\n\
+             let x: Array[i64, 3] = [1, 2, 3];\n\
+             let y: Array[i64, 3] = [4, 5, 6];\n\
+             f(x, y);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_const_inference_multi_position_conflict() {
+    // Slice 3b: two arg positions binding the same const-param to
+    // different values — the second `unify_const_args` call fails
+    // because the `ConstVar` is already bound to a different value.
+    let errs = typecheck_errors(
+        "fn f[T, const N: i64](a: Array[T, N], b: Array[T, N]) { }\n\
+         fn main() {\n\
+             let x: Array[i64, 3] = [1, 2, 3];\n\
+             let y: Array[i64, 5] = [4, 5, 6, 7, 8];\n\
+             f(x, y);\n\
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected a type-mismatch diagnostic when const-args don't unify across positions"
+    );
+}
