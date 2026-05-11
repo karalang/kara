@@ -10805,6 +10805,26 @@ fn test_const_inference_multi_position_consistent() {
 }
 
 #[test]
+fn test_const_inference_return_only_unsolved() {
+    // Slice 3b sub-step (h): `fn f[const N: i64]() -> Array[i64, N]`
+    // called as `let x = f();` (no explicit args, no annotation)
+    // surfaces a `cannot infer const parameter 'N'` diagnostic at the
+    // synthesis-mode let-binding site. Mirrors the existing TypeParam
+    // unsolved diagnostic.
+    let errs = typecheck_errors(
+        "fn f[const N: i64]() -> Array[i64, N] { todo() }\n\
+         fn main() { let x = f(); }",
+    );
+    assert!(
+        errs.iter().any(
+            |e| e.message.contains("cannot infer const parameter") && e.message.contains("'N'")
+        ),
+        "expected unsolved-const-param diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_const_inference_multi_position_conflict() {
     // Slice 3b: two arg positions binding the same const-param to
     // different values — the second `unify_const_args` call fails

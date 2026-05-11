@@ -1826,6 +1826,56 @@ fn resolve_const_var_top(
 /// any TypeParam that didn't get pinned by arguments and doesn't
 /// belong to an enclosing function/impl generic is unsolved at this
 /// site.
+/// Walk `ty` for a `ConstArg::ConstParam(name)` whose name isn't in
+/// `in_scope`. Returns the first such name. Mirrors
+/// `find_unbound_type_param` for the const-arg metavariable substrate
+/// (const generics slice 3b — fork G2). Used by
+/// `check_unsolved_const_param` at synthesis-mode let bindings: any
+/// const param that wasn't pinned by arguments and doesn't belong to
+/// an enclosing function/impl generic surfaces as unsolved.
+fn find_unbound_const_param<'a>(ty: &'a Type, in_scope: &HashSet<&str>) -> Option<&'a str> {
+    fn check_arg<'a>(arg: &'a ConstArg, in_scope: &HashSet<&str>) -> Option<&'a str> {
+        match arg {
+            ConstArg::ConstParam(name) => {
+                if in_scope.contains(name.as_str()) {
+                    None
+                } else {
+                    Some(name.as_str())
+                }
+            }
+            _ => None,
+        }
+    }
+    match ty {
+        Type::Array { element, size } => {
+            check_arg(size, in_scope).or_else(|| find_unbound_const_param(element, in_scope))
+        }
+        Type::Tuple(elems) => elems
+            .iter()
+            .find_map(|e| find_unbound_const_param(e, in_scope)),
+        Type::Slice { element, .. } => find_unbound_const_param(element, in_scope),
+        Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
+            find_unbound_const_param(inner, in_scope)
+        }
+        Type::Pointer { inner, .. } => find_unbound_const_param(inner, in_scope),
+        Type::Named { args, .. } => args
+            .iter()
+            .find_map(|a| find_unbound_const_param(a, in_scope)),
+        Type::Function {
+            params,
+            return_type,
+        }
+        | Type::OnceFunction {
+            params,
+            return_type,
+        } => params
+            .iter()
+            .find_map(|p| find_unbound_const_param(p, in_scope))
+            .or_else(|| find_unbound_const_param(return_type, in_scope)),
+        _ => None,
+    }
+}
+
 fn find_unbound_type_param<'a>(ty: &'a Type, in_scope: &HashSet<&str>) -> Option<&'a str> {
     match ty {
         Type::TypeParam(name) => {
@@ -7809,11 +7859,37 @@ impl<'a> TypeChecker<'a> {
         if matches!(inferred, Type::Error) {
             return;
         }
-        let in_scope: HashSet<&str> = self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
-        if let Some(name) = find_unbound_type_param(inferred, &in_scope) {
+        let unbound_type: Option<String> = {
+            let in_scope: HashSet<&str> =
+                self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
+            find_unbound_type_param(inferred, &in_scope).map(|s| s.to_string())
+        };
+        if let Some(name) = unbound_type {
             self.type_error(
                 format!(
                     "cannot infer type parameter '{}'; add a type annotation to this binding",
+                    name
+                ),
+                span.clone(),
+                TypeErrorKind::CannotInferTypeParam,
+            );
+        }
+        // Const generics slice 3b sub-step (h): const-param analog.
+        // Surfaces `cannot infer const parameter 'N'` for return-only
+        // / bounds-only const-params that the call-site solver
+        // couldn't pin from arguments (e.g.
+        // `fn f[const N: i64]() -> Array[i64, N]` called as `let x = f();`
+        // without an annotation).
+        let unbound_const: Option<String> = {
+            let in_scope: HashSet<&str> =
+                self.enclosing_bounds.keys().map(|s| s.as_str()).collect();
+            find_unbound_const_param(inferred, &in_scope).map(|s| s.to_string())
+        };
+        if let Some(name) = unbound_const {
+            self.type_error(
+                format!(
+                    "cannot infer const parameter '{}'; provide explicit generic args \
+                     (e.g. `f[..., 8](...)`) or add a type annotation to this binding",
                     name
                 ),
                 span.clone(),
