@@ -27,6 +27,62 @@ use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency, ParallelGroup
 use crate::ownership::OwnershipCheckResult;
 use crate::token::{FloatSuffix, IntSuffix, Span};
 
+/// Extract a `ConstValue` from a literal `Expr` for slice-1b call-site
+/// const-arg binding. Used by `compile_generic_call` to lift explicit
+/// `GenericArg::Const(Integer(4))` style call-site args into the
+/// `const_subst` map that drives `mangle_mono_name`. Non-literal
+/// const-arg shapes (binary expressions, identifier references) are
+/// not yet supported at the codegen call-site surface — slice 3 wires
+/// the typechecker's evaluator into call-site solving.
+fn const_value_from_literal_expr(expr: &Expr) -> Option<crate::prelude::ConstValue> {
+    use crate::prelude::ConstValue;
+    match &expr.kind {
+        ExprKind::Integer(n, sfx) => match sfx {
+            Some(IntSuffix::I8) => Some(ConstValue::I8(*n as i8)),
+            Some(IntSuffix::I16) => Some(ConstValue::I16(*n as i16)),
+            Some(IntSuffix::I32) => Some(ConstValue::I32(*n as i32)),
+            Some(IntSuffix::I64) => Some(ConstValue::I64(*n)),
+            Some(IntSuffix::U8) => Some(ConstValue::U8(*n as u8)),
+            Some(IntSuffix::U16) => Some(ConstValue::U16(*n as u16)),
+            Some(IntSuffix::U32) => Some(ConstValue::U32(*n as u32)),
+            Some(IntSuffix::U64) => Some(ConstValue::U64(*n as u64)),
+            Some(IntSuffix::I128) | Some(IntSuffix::U128) => None,
+            None => Some(ConstValue::I64(*n)),
+        },
+        ExprKind::Bool(b) => Some(ConstValue::Bool(*b)),
+        ExprKind::CharLit(c) => Some(ConstValue::Char(*c)),
+        _ => None,
+    }
+}
+
+/// Render a `ConstValue` as a name-mangle token. Integers carry their
+/// concrete-width suffix so `make_arr[i64, 4i64]` and `make_arr[i64, 4i32]`
+/// produce distinct symbols; bool renders as `true` / `false`; char as
+/// its numeric codepoint; enum-variant as `EnumName.VariantName`.
+fn const_value_to_mangle_str(cv: &crate::prelude::ConstValue) -> String {
+    use crate::prelude::ConstValue::*;
+    match cv {
+        I8(v) => format!("{}i8", v),
+        I16(v) => format!("{}i16", v),
+        I32(v) => format!("{}i32", v),
+        I64(v) => format!("{}i64", v),
+        U8(v) => format!("{}u8", v),
+        U16(v) => format!("{}u16", v),
+        U32(v) => format!("{}u32", v),
+        U64(v) => format!("{}u64", v),
+        Usize(v) => format!("{}usize", v),
+        F32(v) => format!("{}f32", v),
+        F64(v) => format!("{}f64", v),
+        Bool(b) => b.to_string(),
+        Char(c) => format!("c{}", *c as u32),
+        EnumVariant {
+            enum_name,
+            variant_name,
+            ..
+        } => format!("{}.{}", enum_name, variant_name),
+    }
+}
+
 // ── Public API ─────────────────────────────────────────────────
 
 /// Compile a Kāra program to LLVM IR text (for debugging/testing).
@@ -14629,8 +14685,17 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
-        let name = match &callee.kind {
-            ExprKind::Identifier(n) => n.clone(),
+        // Const generics slice 1b: `make_arr[i64, 4]()` parses callee
+        // as `Path { segments: [name], generic_args: Some(args) }` (a
+        // bare identifier with explicit generic args). Extract the
+        // name + explicit generic args so the generic-call path can
+        // bind the user-supplied const-args into the mango key.
+        let (name, explicit_generic_args): (String, Option<Vec<GenericArg>>) = match &callee.kind {
+            ExprKind::Identifier(n) => (n.clone(), None),
+            ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } if segments.len() == 1 => (segments[0].clone(), Some(ga.clone())),
             _ => return Ok(self.context.i64_type().const_int(0, false).into()),
         };
 
@@ -14645,7 +14710,7 @@ impl<'ctx> Codegen<'ctx> {
 
         // Check if this is a call to a generic function (monomorphize on demand)
         if self.generic_fns.contains_key(&name) {
-            return self.compile_generic_call(&name, args);
+            return self.compile_generic_call(&name, args, explicit_generic_args.as_deref());
         }
 
         // Check if this is an indirect call through a closure variable.
@@ -18573,6 +18638,7 @@ impl<'ctx> Codegen<'ctx> {
         &mut self,
         name: &str,
         args: &[CallArg],
+        explicit_generic_args: Option<&[GenericArg]>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let generic_fn = self.generic_fns[name].clone();
 
@@ -18583,10 +18649,36 @@ impl<'ctx> Codegen<'ctx> {
             .collect::<Result<_, _>>()?;
 
         // Infer type arguments from the argument value types.
-        let subst = self.infer_type_args(&generic_fn, &arg_vals);
+        let mut subst = self.infer_type_args(&generic_fn, &arg_vals);
+
+        // Const generics slice 1b: process explicit generic args. For
+        // each formal param the user supplied an explicit arg for,
+        // override the inferred type subst (for type params) or
+        // populate a parallel const_subst (for const params). The
+        // const_subst flows to `mangle_mono_name` so each distinct
+        // const-arg tuple produces a distinct mono symbol. Slice 4
+        // will collapse this into a single `SubstValue<'ctx>` shape
+        // (fork F2) once codegen body lowering needs const-param
+        // identifier resolution.
+        let mut const_subst: HashMap<String, crate::prelude::ConstValue> = HashMap::new();
+        if let (Some(explicit), Some(gp)) = (explicit_generic_args, &generic_fn.generic_params) {
+            for (param, arg) in gp.params.iter().zip(explicit.iter()) {
+                match arg {
+                    GenericArg::Type(t) => {
+                        let llvm_ty = self.llvm_type_for_type_expr(t);
+                        subst.insert(param.name.clone(), llvm_ty);
+                    }
+                    GenericArg::Const(e) => {
+                        if let Some(cv) = const_value_from_literal_expr(e) {
+                            const_subst.insert(param.name.clone(), cv);
+                        }
+                    }
+                }
+            }
+        }
 
         // Mangle a unique name for this specialization (e.g. `max$i64`).
-        let mangled = self.mangle_mono_name(name, &generic_fn, &subst);
+        let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
 
         // Generate the specialization if we haven't done so yet.
         if !self.generated_monos.contains(&mangled) {
@@ -18787,6 +18879,7 @@ impl<'ctx> Codegen<'ctx> {
         base: &str,
         func: &Function,
         subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+        const_subst: &HashMap<String, crate::prelude::ConstValue>,
     ) -> String {
         let params = match &func.generic_params {
             Some(gp) => &gp.params,
@@ -18795,7 +18888,16 @@ impl<'ctx> Codegen<'ctx> {
 
         let mut mangled = base.to_string();
         for param in params {
-            if let Some(ty) = subst.get(&param.name) {
+            // Const generics slice 1b: const params take priority over
+            // type subst when both maps are populated (the const_subst
+            // is keyed by formal name, the type subst doesn't carry
+            // const params).
+            if param.is_const {
+                if let Some(cv) = const_subst.get(&param.name) {
+                    mangled.push('$');
+                    mangled.push_str(&const_value_to_mangle_str(cv));
+                }
+            } else if let Some(ty) = subst.get(&param.name) {
                 mangled.push('$');
                 mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
             }

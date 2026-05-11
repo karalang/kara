@@ -2682,6 +2682,79 @@ fn test_parser_where_clause_const_predicate() {
     }
 }
 
+#[test]
+fn test_parser_call_site_explicit_generic_args() {
+    // Const generics slice 1b: `make_arr[i64, 4]()` parses as a Call
+    // whose callee is `Path { segments: ["make_arr"], generic_args:
+    // Some([Type(i64), Const(Integer(4))]) }`. The bracket contents
+    // have a `,` separator + the matching `]` is followed by `(`,
+    // tripping the `lookahead_generic_args_call` disambiguation that
+    // routes through Path rather than Index.
+    let prog = parse_ok(
+        "fn make_arr[T, const N: i64]() -> i64 { 42 }\n\
+         fn main() { make_arr[i64, 4](); }",
+    );
+    let Item::Function(main_fn) = &prog.items[1] else {
+        panic!("Expected `main` as the second item");
+    };
+    // The first statement in main is the `make_arr[i64, 4]()` call.
+    let Stmt {
+        kind: StmtKind::Expr(call_expr),
+        ..
+    } = &main_fn.body.stmts[0]
+    else {
+        panic!("Expected an expression statement");
+    };
+    let ExprKind::Call { callee, .. } = &call_expr.kind else {
+        panic!("Expected a Call expression");
+    };
+    let ExprKind::Path {
+        segments,
+        generic_args,
+    } = &callee.kind
+    else {
+        panic!("Expected a Path callee, got {:?}", callee.kind);
+    };
+    assert_eq!(segments, &["make_arr".to_string()]);
+    let ga = generic_args.as_ref().expect("expected generic args");
+    assert_eq!(ga.len(), 2);
+    assert!(matches!(&ga[0], GenericArg::Type(_)));
+    match &ga[1] {
+        GenericArg::Const(e) => match &e.kind {
+            ExprKind::Integer(4, _) => {}
+            other => panic!("Expected Integer(4), got {:?}", other),
+        },
+        other => panic!("Expected Const arg at index 1, got {:?}", other),
+    }
+}
+
+#[test]
+fn test_parser_indexed_call_still_parses_as_index_then_call() {
+    // Regression: the slice-1b generic-args-call disambiguation only
+    // fires when bracket contents contain a top-level `,`. Single-arg
+    // brackets stay as `Index` so `callbacks[0]()` keeps working
+    // (`tests/interpreter.rs` exercises this shape end-to-end).
+    let prog = parse_ok("fn main() { let _ = callbacks[0](); }");
+    let Item::Function(main_fn) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let Stmt {
+        kind: StmtKind::Let { value, .. },
+        ..
+    } = &main_fn.body.stmts[0]
+    else {
+        panic!("Expected let");
+    };
+    let ExprKind::Call { callee, .. } = &value.kind else {
+        panic!("Expected outer Call (the trailing `()`)");
+    };
+    assert!(
+        matches!(&callee.kind, ExprKind::Index { .. }),
+        "Expected the call's callee to be Index, got {:?}",
+        callee.kind
+    );
+}
+
 // ── Distinct Type Declarations ──────────────────────────────────
 
 #[test]
@@ -5559,7 +5632,10 @@ fn concrete_type_ufcs_single_arg_path_with_generic_args() {
     assert_eq!(segments, &["Vec".to_string()]);
     let ga = generic_args.as_ref().expect("expected Some generic_args");
     assert_eq!(ga.len(), 1);
-    assert!(matches!(&ga[0].kind, TypeKind::Path(p) if p.segments == ["i64"]));
+    let GenericArg::Type(te) = &ga[0] else {
+        panic!("expected GenericArg::Type, got {:?}", ga[0]);
+    };
+    assert!(matches!(&te.kind, TypeKind::Path(p) if p.segments == ["i64"]));
 }
 
 #[test]
@@ -5583,8 +5659,14 @@ fn concrete_type_ufcs_multi_arg_path() {
     assert_eq!(segments, &["HashMap".to_string()]);
     let ga = generic_args.as_ref().expect("expected Some generic_args");
     assert_eq!(ga.len(), 2);
-    assert!(matches!(&ga[0].kind, TypeKind::Path(p) if p.segments == ["String"]));
-    assert!(matches!(&ga[1].kind, TypeKind::Path(p) if p.segments == ["i32"]));
+    let GenericArg::Type(te0) = &ga[0] else {
+        panic!("expected GenericArg::Type at index 0");
+    };
+    let GenericArg::Type(te1) = &ga[1] else {
+        panic!("expected GenericArg::Type at index 1");
+    };
+    assert!(matches!(&te0.kind, TypeKind::Path(p) if p.segments == ["String"]));
+    assert!(matches!(&te1.kind, TypeKind::Path(p) if p.segments == ["i32"]));
 }
 
 #[test]
@@ -5608,7 +5690,10 @@ fn concrete_type_ufcs_nested_generics() {
     assert_eq!(segments, &["Vec".to_string()]);
     let ga = generic_args.as_ref().expect("expected Some generic_args");
     assert_eq!(ga.len(), 1);
-    let TypeKind::Path(inner_path) = &ga[0].kind else {
+    let GenericArg::Type(te) = &ga[0] else {
+        panic!("expected GenericArg::Type");
+    };
+    let TypeKind::Path(inner_path) = &te.kind else {
         panic!("expected nested Path type");
     };
     assert_eq!(inner_path.segments, vec!["Map".to_string()]);

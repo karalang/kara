@@ -9481,6 +9481,30 @@ impl<'a> TypeChecker<'a> {
     // ── Function Calls ──────────────────────────────────────────
 
     fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Const generics slice 1b: `make_arr[i64, 4]()` parses callee
+        // as `Path { segments: [name], generic_args: Some(_) }` — a
+        // bare identifier with explicit generic args. Route through
+        // the regular Identifier-style dispatch by synthesizing an
+        // Identifier callee. The codegen reads the original AST
+        // (which preserves `generic_args`) for mango-key
+        // disambiguation; the typechecker just resolves to the same
+        // function as the bare-identifier form. Const-arg type
+        // compatibility validation lives at slice 3 (call-site
+        // solver) — at slice 1b the const-args pass through unchecked.
+        if let ExprKind::Path {
+            segments,
+            generic_args: Some(_),
+        } = &callee.kind
+        {
+            if segments.len() == 1 {
+                let synthetic = Expr {
+                    kind: ExprKind::Identifier(segments[0].clone()),
+                    span: callee.span.clone(),
+                };
+                return self.infer_call(&synthetic, args, span);
+            }
+        }
+
         // Type-parameter associated calls: `T.method(args)` parses as
         // `Call { callee: Path(["T", "method"]), args }`. Intercept this
         // shape before the generic call infrastructure tries to read `T`
@@ -10541,9 +10565,19 @@ impl<'a> TypeChecker<'a> {
         {
             if segments.len() == 1 {
                 let type_name = segments[0].clone();
+                // Concrete-type UFCS at slice 1b widens generic_args to
+                // `Vec<GenericArg>`; the dispatch surface still consumes
+                // type args only — const-arg binding for UFCS calls
+                // lands when slice 3's call-site solver threads the
+                // substitution through. Const-args at this position are
+                // ignored for dispatch but still parsed so the shape
+                // round-trips cleanly.
                 let target_args: Vec<Type> = generic_args
                     .iter()
-                    .map(|t| self.lower_type_expr(t, &[]))
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => Some(self.lower_type_expr(t, &[])),
+                        GenericArg::Const(_) => None,
+                    })
                     .collect();
                 self.method_callee_types.insert(
                     SpanKey::from_span(span),

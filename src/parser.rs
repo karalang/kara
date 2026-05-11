@@ -3447,6 +3447,35 @@ impl Parser {
                     continue;
                 }
                 Token::LeftBracket => {
+                    // Generic-args call disambiguation (const generics
+                    // slice 1b): `Identifier[T1, T2, ...](...)` shapes
+                    // where the bracket contents contain a `,` separator
+                    // and the matching `]` is immediately followed by
+                    // `(` route through `ExprKind::Path` so the call site
+                    // carries explicit type/const generic args. Single-arg
+                    // brackets stay as `Index` to preserve the existing
+                    // `callbacks[0]()` (indexed-function-call) shape;
+                    // single-arg-with-explicit-generic-args is a future
+                    // slice's territory.
+                    if self.lookahead_generic_args_call(&lhs) {
+                        let segments = match &lhs.kind {
+                            ExprKind::Identifier(n) => vec![n.clone()],
+                            ExprKind::Path {
+                                segments,
+                                generic_args: None,
+                            } => segments.clone(),
+                            _ => unreachable!(),
+                        };
+                        let gen_args = self.parse_generic_type_args()?;
+                        lhs = Expr {
+                            span: lhs.span.clone(),
+                            kind: ExprKind::Path {
+                                segments,
+                                generic_args: Some(gen_args),
+                            },
+                        };
+                        continue;
+                    }
                     // Index
                     self.advance();
                     let index = self.parse_expression()?;
@@ -4489,18 +4518,10 @@ impl Parser {
             && self.check(&Token::LeftBracket)
             && self.lookahead_concrete_type_ufcs()
         {
-            self.advance(); // consume [
-            let mut args = Vec::new();
-            loop {
-                if self.check(&Token::RightBracket) {
-                    break;
-                }
-                args.push(self.parse_type()?);
-                if !self.eat(&Token::Comma) {
-                    break;
-                }
-            }
-            self.expect(&Token::RightBracket)?;
+            // Reuse the same routing as `parse_generic_type_args` so the
+            // UFCS path accepts mixed type / const args (const generics
+            // slice 1b — call-site const-arg binding).
+            let args = self.parse_generic_type_args()?;
             return Some(Expr {
                 span: self.span_from(&start),
                 kind: ExprKind::Path {
@@ -4600,6 +4621,46 @@ impl Parser {
     /// On any other shape (collection literal, value-shaped subscript,
     /// trailing `.field` field-access without parens) returns `false` so
     /// the caller falls through to the existing parse paths.
+    /// Generic-args-call lookahead (const generics slice 1b). Triggers
+    /// at a postfix `[` when `lhs` is a bare identifier or path-without-
+    /// generic-args, the bracket contents contain a `,` separator
+    /// (disambiguating from `arr[i]` indexing), and the matching `]` is
+    /// immediately followed by `(`. The bracket contents then parse as
+    /// `Vec<GenericArg>` via the shared `parse_generic_type_args` so the
+    /// call site carries mixed type / const args.
+    fn lookahead_generic_args_call(&self, lhs: &Expr) -> bool {
+        if !matches!(
+            &lhs.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Path {
+                    generic_args: None,
+                    ..
+                }
+        ) {
+            return false;
+        }
+        // Balanced bracket scan from the opening `[` at self.pos.
+        let mut depth: usize = 0;
+        let mut saw_top_comma = false;
+        let mut i = self.pos;
+        while i < self.tokens.len() {
+            match &self.tokens[i].token {
+                Token::LeftBracket => depth += 1,
+                Token::Comma if depth == 1 => saw_top_comma = true,
+                Token::RightBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        let next = self.tokens.get(i + 1).map(|t| &t.token);
+                        return saw_top_comma && matches!(next, Some(Token::LeftParen));
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
     fn lookahead_concrete_type_ufcs(&self) -> bool {
         // Require at least one token inside `[…]` and check it is a
         // type-start; rejects `Vec[1, 2].push(3)` (integer literal start)

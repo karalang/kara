@@ -819,7 +819,12 @@ pub enum ExprKind {
     Identifier(String),
     Path {
         segments: Vec<String>,
-        generic_args: Option<Vec<TypeExpr>>,
+        /// Mixed type / const generic arguments at the expression position.
+        /// Const generics slice 1b (2026-05-11) widened this from
+        /// `Vec<TypeExpr>` to `Vec<GenericArg>` so call-site expressions
+        /// like `make_arr[i64, 4]()` carry the `4` literal through to the
+        /// codegen mango key.
+        generic_args: Option<Vec<GenericArg>>,
     },
     SelfValue,
     SelfType,

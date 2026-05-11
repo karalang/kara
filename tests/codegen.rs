@@ -932,6 +932,45 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_const_generic_mono_key_disambiguation() {
+        // Const generics slice 1b (2026-05-11). Two calls to the same
+        // generic function with the same type-arg but distinct
+        // const-args (`make_arr[i64, 4]()` vs `make_arr[i64, 8]()`)
+        // produce two distinct compiled symbols in the LLVM module:
+        // the mango-key walks const params alongside type params and
+        // appends each const value's mangled token. Without slice 1b,
+        // both calls collapse to a single `make_arr$i64` symbol — the
+        // latent bug `mangle_mono_name` had pre-slice-1b.
+        let ir = ir_for(
+            r#"
+fn make_arr[T, const N: i64]() -> i64 { 42 }
+fn main() {
+    let _ = make_arr[i64, 4]();
+    let _ = make_arr[i64, 8]();
+}
+"#,
+        );
+        assert!(
+            ir.contains("make_arr$i64$4i64"),
+            "expected `make_arr$i64$4i64` specialization in IR, got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("make_arr$i64$8i64"),
+            "expected `make_arr$i64$8i64` specialization in IR, got:\n{}",
+            ir
+        );
+        let define_count = ir
+            .lines()
+            .filter(|l| l.contains("define") && l.contains("make_arr$"))
+            .count();
+        assert_eq!(
+            define_count, 2,
+            "should generate two distinct specializations for N=4 and N=8"
+        );
+    }
+
+    #[test]
     fn test_e2e_generic_identity() {
         let out = run_program(
             r#"
