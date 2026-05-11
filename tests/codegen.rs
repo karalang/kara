@@ -1879,6 +1879,49 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_par_group_serializes_for_iter_with_outer_mutable_write() {
+        // The concurrency analyzer's per-stmt info now collects
+        // nested-block writes (Assign / CompoundAssign) into
+        // `info.defines`. Without this, a `for v in nums.iter()`
+        // expression-stmt that writes to outer `cap` was treated as
+        // "no dependencies" against a subsequent `let f =
+        // dummy(cap)` — the analyzer grouped them and the par-branch
+        // fn's local copy of `cap` never propagated back, so the
+        // function call read the initial value of `cap`.
+        //
+        // Repro:
+        let out = run_program(
+            r#"
+fn dummy(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n { v.push(i); i = i + 1; }
+    v
+}
+fn helper(nums: Slice[i64]) -> i64 {
+    let mut cap = 1i64;
+    for v in nums.iter() {
+        if v > cap { cap = v; }
+    }
+    let f: Vec[i64] = dummy(cap);
+    println(cap);
+    println(f.len());
+    cap
+}
+fn main() {
+    let a: Array[i64, 4] = [1, 2, 4, 6];
+    println(helper(a));
+}
+"#,
+        );
+        if let Some(out) = out {
+            // cap finds max = 6 from [1,2,4,6]; dummy(6) yields a
+            // 6-element Vec; helper returns 6.
+            assert_eq!(out.trim(), "6\n6\n6");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_in_indexed_iter() {
         // `for p in coll[i].iter()` — the iter peel-off in
         // `compile_for` recurses on the receiver, but for an

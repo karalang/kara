@@ -224,6 +224,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 self.collect_expr_effects(value, &mut info);
                 self.collect_block_reads(else_block, &mut info.reads);
                 self.collect_block_effects(else_block, &mut info);
+                self.collect_block_inner_writes(else_block, &mut info.defines);
             }
             StmtKind::Assign { target, value } => {
                 // The target is being written to
@@ -244,10 +245,20 @@ impl<'a> ConcurrencyChecker<'a> {
             StmtKind::Expr(expr) => {
                 self.collect_expr_reads(expr, &mut info.reads);
                 self.collect_expr_effects(expr, &mut info);
+                // Nested Assigns (e.g. inside a `for v in nums.iter() {
+                // if v > cap { cap = v; } }`) write to outer-scope
+                // names — record them in `info.defines` so subsequent
+                // stmts that read those names create a data dependency
+                // and serialize against this stmt. Without this, a
+                // for-loop body's `cap = v` is invisible to
+                // `statements_conflict` and the analyzer groups stmts
+                // that should be sequential.
+                self.collect_expr_inner_writes(expr, &mut info.defines);
             }
             StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
                 self.collect_block_reads(body, &mut info.reads);
                 self.collect_block_effects(body, &mut info);
+                self.collect_block_inner_writes(body, &mut info.defines);
             }
         }
 
@@ -719,6 +730,85 @@ impl<'a> ConcurrencyChecker<'a> {
             | ExprKind::Break { value: None, .. }
             | ExprKind::PipePlaceholder
             | ExprKind::Error => {}
+        }
+    }
+
+    /// Walk an expression's nested blocks and record any outer-scope
+    /// names written via `Assign` / `CompoundAssign` into `writes`.
+    /// Critical for the auto-parallelizer's data-dependency reasoning:
+    /// a `for v in coll { if v > m { m = v; } }` expression-statement
+    /// must record `m` as a write so subsequent stmts that read `m`
+    /// serialize against it. Local variables shadowed inside nested
+    /// blocks (introduced by `let`) are intentionally still recorded
+    /// here — the conflict check at the call site uses
+    /// `Set::intersect` over a flat name set, so non-disjoint local
+    /// shadowing of the same name produces an over-serialization that
+    /// is correct (and conservative) rather than incorrect.
+    fn collect_expr_inner_writes(&self, expr: &Expr, writes: &mut HashSet<String>) {
+        match &expr.kind {
+            ExprKind::Block(block) | ExprKind::Seq(block) => {
+                self.collect_block_inner_writes(block, writes);
+            }
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_block_inner_writes(then_block, writes);
+                if let Some(e) = else_branch {
+                    self.collect_expr_inner_writes(e, writes);
+                }
+            }
+            ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.collect_block_inner_writes(then_block, writes);
+                if let Some(e) = else_branch {
+                    self.collect_expr_inner_writes(e, writes);
+                }
+            }
+            ExprKind::Match { arms, .. } => {
+                for arm in arms {
+                    self.collect_expr_inner_writes(&arm.body, writes);
+                }
+            }
+            ExprKind::While { body, .. } => self.collect_block_inner_writes(body, writes),
+            ExprKind::Loop { body, .. } => self.collect_block_inner_writes(body, writes),
+            ExprKind::For { body, .. } => self.collect_block_inner_writes(body, writes),
+            ExprKind::Unsafe(block) | ExprKind::Par(block) => {
+                self.collect_block_inner_writes(block, writes);
+            }
+            _ => {}
+        }
+    }
+
+    /// Walk a block's statements and record any outer-scope names
+    /// written via `Assign` / `CompoundAssign` (plus inner writes of
+    /// nested expressions). Companion to `collect_expr_inner_writes`.
+    fn collect_block_inner_writes(&self, block: &Block, writes: &mut HashSet<String>) {
+        for stmt in &block.stmts {
+            match &stmt.kind {
+                StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                    self.collect_assign_target_defines(target, writes);
+                }
+                StmtKind::Expr(e) => self.collect_expr_inner_writes(e, writes),
+                StmtKind::Let { value, .. } => self.collect_expr_inner_writes(value, writes),
+                StmtKind::LetElse {
+                    value, else_block, ..
+                } => {
+                    self.collect_expr_inner_writes(value, writes);
+                    self.collect_block_inner_writes(else_block, writes);
+                }
+                StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                    self.collect_block_inner_writes(body, writes);
+                }
+                _ => {}
+            }
+        }
+        if let Some(e) = &block.final_expr {
+            self.collect_expr_inner_writes(e, writes);
         }
     }
 
