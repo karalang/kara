@@ -34,7 +34,14 @@ pub enum Type {
     Tuple(Vec<Type>),
     Array {
         element: Box<Type>,
-        size: usize,
+        /// Const generics slice 3 (fork G4): `size` widened from `usize`
+        /// to `ConstArg` so the Type carries the const-arg shape through
+        /// inference. Literal sizes flow through `ConstArg::Literal(n)`;
+        /// const-param references flow through `ConstArg::ConstParam(name)`;
+        /// the call-site solver mints `ConstArg::ConstVar(id)` and resolves
+        /// to one of the other variants. Codegen and interpreter consumers
+        /// reach for the literal via `ConstArg::as_literal`.
+        size: ConstArg,
     },
     Slice {
         element: Box<Type>,
@@ -133,6 +140,106 @@ pub enum FloatSize {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TypeVarId(pub u32);
+
+/// Const-arg metavariable id (const generics slice 3 — fork G1). Mirrors
+/// `TypeVarId` but for const-arg unification at call sites. Minted by
+/// `instantiate_signature_with_fresh_vars` per unique const-param name.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ConstVarId(pub u32);
+
+/// Const-generic argument carried inside a `Type` (currently `Type::Array.size`;
+/// slice 3 ships this surface for `Type::Array` only — `Type::Named.args`
+/// const-arg representation is the deferred-F carve-out per phase-5).
+///
+/// At type lowering time the parser's `GenericArg::Const(Expr)` payload
+/// becomes either `Literal(i64)` (when the const-arg is a literal /
+/// fold-through-evaluator) or `ConstParam(name)` (when the const-arg
+/// references a const-generic param in scope). The inference solver
+/// substitutes `ConstParam → ConstVar(id)` at signature instantiation;
+/// `resolve_type_vars` walks back through the const_substitutions map
+/// to swap `ConstVar` for its bound value.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConstArg {
+    Literal(i64),
+    ConstParam(String),
+    ConstVar(ConstVarId),
+}
+
+impl ConstArg {
+    /// Extract the integer literal value if this is a `Literal` variant.
+    /// Returns `None` for `ConstParam` / `ConstVar` (which carry
+    /// unresolved or symbolic references). Used by codegen / interpreter
+    /// / typechecker consumers that care about concrete sizes.
+    pub fn as_literal(&self) -> Option<i64> {
+        match self {
+            ConstArg::Literal(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// Extract the integer literal value as a `usize`. Returns `None`
+    /// for negative literals or non-literal variants. Used at places
+    /// where the legacy `Type::Array.size: usize` representation was
+    /// consumed directly (length checks, repeat-literal arity checks).
+    pub fn as_usize(&self) -> Option<usize> {
+        match self {
+            ConstArg::Literal(n) if *n >= 0 => usize::try_from(*n).ok(),
+            _ => None,
+        }
+    }
+}
+
+/// Const generics slice 3 sub-step (g): substitute `ConstArg::ConstParam(name)`
+/// against the typechecker's `SubstValue` map (slice 1 fork F1). When the
+/// map binds `name → Const(cv)`, the result becomes a `Literal` carrying
+/// the resolved value coerced through `i64`. `Literal` and `ConstVar`
+/// pass through unchanged.
+fn substitute_const_arg(arg: &ConstArg, subs: &HashMap<String, SubstValue>) -> ConstArg {
+    match arg {
+        ConstArg::ConstParam(name) => match subs.get(name) {
+            Some(SubstValue::Const(cv)) => match const_value_to_i64(cv) {
+                Some(n) => ConstArg::Literal(n),
+                None => arg.clone(),
+            },
+            _ => arg.clone(),
+        },
+        _ => arg.clone(),
+    }
+}
+
+/// Best-effort coercion of a `ConstValue` to `i64` for the slice 3
+/// `ConstArg::Literal` shape. Integer variants widen / narrow into i64;
+/// bool / char / enum-variant become their underlying numeric (false=0,
+/// true=1, char-codepoint, enum-discriminant); float variants return None.
+fn const_value_to_i64(cv: &crate::prelude::ConstValue) -> Option<i64> {
+    use crate::prelude::ConstValue::*;
+    match cv {
+        I8(v) => Some(*v as i64),
+        I16(v) => Some(*v as i64),
+        I32(v) => Some(*v as i64),
+        I64(v) => Some(*v),
+        U8(v) => Some(*v as i64),
+        U16(v) => Some(*v as i64),
+        U32(v) => Some(*v as i64),
+        U64(v) => i64::try_from(*v).ok(),
+        Usize(v) => i64::try_from(*v).ok(),
+        Bool(b) => Some(*b as i64),
+        Char(c) => Some(*c as i64),
+        EnumVariant { discriminant, .. } => Some(*discriminant),
+        F32(_) | F64(_) => None,
+    }
+}
+
+/// User-facing rendering of a `ConstArg` for diagnostic messages.
+/// `Literal(4)` → `"4"`; `ConstParam(N)` → `"N"`; `ConstVar(id)` →
+/// `"?C{id}"` (parallel to `?M{id}` for type metavars).
+pub fn const_arg_display(arg: &ConstArg) -> String {
+    match arg {
+        ConstArg::Literal(n) => n.to_string(),
+        ConstArg::ConstParam(name) => name.clone(),
+        ConstArg::ConstVar(id) => format!("?C{}", id.0),
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum VariantTypeInfo {
@@ -910,7 +1017,11 @@ pub fn type_display(ty: &Type) -> String {
             let inner: Vec<String> = types.iter().map(type_display).collect();
             format!("({})", inner.join(", "))
         }
-        Type::Array { element, size } => format!("Array[{}, {}]", type_display(element), size),
+        Type::Array { element, size } => format!(
+            "Array[{}, {}]",
+            type_display(element),
+            const_arg_display(size)
+        ),
         Type::Slice { element, mutable } => {
             if *mutable {
                 format!("mut Slice[{}]", type_display(element))
@@ -1163,7 +1274,13 @@ fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValue>) -> Type
         ),
         Type::Array { element, size } => Type::Array {
             element: Box::new(substitute_type_params(element, subs)),
-            size: *size,
+            // Const generics slice 3 sub-step (g): substitute
+            // `ConstArg::ConstParam(name)` against the same
+            // `SubstValue` map used for type params. When the map binds
+            // `name` → `Const(cv)`, rewrite the array's size to a
+            // `Literal` carrying the resolved value. `Literal` and
+            // `ConstVar` arms pass through unchanged.
+            size: substitute_const_arg(size, subs),
         },
         Type::Slice { element, mutable } => Type::Slice {
             element: Box::new(substitute_type_params(element, subs)),
@@ -1304,7 +1421,7 @@ fn instantiate_signature_with_fresh_vars(
             Type::Tuple(es) => Type::Tuple(es.iter().map(|e| substitute(e, name_to_id)).collect()),
             Type::Array { element, size } => Type::Array {
                 element: Box::new(substitute(element, name_to_id)),
-                size: *size,
+                size: size.clone(),
             },
             Type::Slice { element, mutable } => Type::Slice {
                 element: Box::new(substitute(element, name_to_id)),
@@ -1372,7 +1489,7 @@ fn resolve_type_vars(
         ),
         Type::Array { element, size } => Type::Array {
             element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
-            size: *size,
+            size: size.clone(),
         },
         Type::Slice { element, mutable } => Type::Slice {
             element: Box::new(resolve_type_vars(element, substitutions, id_to_name)),
@@ -3722,7 +3839,7 @@ impl<'a> TypeChecker<'a> {
             TypeKind::Array { element, .. } => {
                 Type::Array {
                     element: Box::new(self.lower_type_expr(element, generic_scope)),
-                    size: 0, // const eval deferred
+                    size: ConstArg::Literal(0), // const eval deferred
                 }
             }
             TypeKind::Pointer { is_mut, inner } => Type::Pointer {
@@ -3875,19 +3992,25 @@ impl<'a> TypeChecker<'a> {
             GenericArg::Type(t) => self.lower_type_expr(t, generic_scope),
             GenericArg::Const(_) => return None,
         };
-        let size = match &args[1] {
+        let size: ConstArg = match &args[1] {
             GenericArg::Const(expr) => match &expr.kind {
-                ExprKind::Integer(n, _) if *n >= 0 => *n as usize,
-                // Const generics slice 2: route non-literal const-args
-                // through the const-expression evaluator. A successful
-                // evaluation to a non-negative integer yields the size;
-                // anything else (non-int, negative, eval error) emits a
-                // focused diagnostic and falls back to a size-0 array
-                // (matching the legacy "const eval deferred" placeholder
-                // so downstream codegen / interp don't crash).
+                ExprKind::Integer(n, _) if *n >= 0 => ConstArg::Literal(*n),
+                // Const generics slice 3 (fork G4): an `Identifier` whose
+                // name is a const-generic param in scope flows through
+                // as `ConstArg::ConstParam(name)` — the inference solver
+                // will substitute when the function is monomorphized.
+                ExprKind::Identifier(name) if generic_scope.contains(name) => {
+                    ConstArg::ConstParam(name.clone())
+                }
+                // Other shapes (non-literal, non-const-param) route
+                // through slice 2's const-expression evaluator. A
+                // successful evaluation to a non-negative integer
+                // becomes a `Literal`; eval errors emit a focused
+                // diagnostic and fall back to `Literal(0)` so downstream
+                // consumers don't crash.
                 _ => match self.eval_const_expr(expr, &Type::UInt(UIntSize::Usize)) {
                     Ok(cv) => match const_value_to_array_size(&cv) {
-                        Some(n) => n,
+                        Some(n) => ConstArg::Literal(n as i64),
                         None => {
                             self.type_error(
                                 format!(
@@ -4066,7 +4189,7 @@ impl<'a> TypeChecker<'a> {
             ),
             Type::Array { element, size } => Type::Array {
                 element: Box::new(self.resolve_assoc_projections(element)),
-                size: *size,
+                size: size.clone(),
             },
             Type::Slice { element, mutable } => Type::Slice {
                 element: Box::new(self.resolve_assoc_projections(element)),
@@ -7674,16 +7797,20 @@ impl<'a> TypeChecker<'a> {
         if let (ExprKind::ArrayLiteral(elements), Type::Array { element, size }) =
             (&expr.kind, expected)
         {
-            if elements.len() != *size {
-                self.type_error(
-                    format!(
-                        "array literal has {} element(s), expected {}",
-                        elements.len(),
-                        size
-                    ),
-                    expr.span.clone(),
-                    TypeErrorKind::TypeMismatch,
-                );
+            // Length-mismatch check skipped for non-literal sizes (slice 3
+            // `ConstParam` / `ConstVar` resolve at mono-emission time).
+            if let Some(n) = size.as_usize() {
+                if elements.len() != n {
+                    self.type_error(
+                        format!(
+                            "array literal has {} element(s), expected {}",
+                            elements.len(),
+                            n
+                        ),
+                        expr.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
             }
             for elem in elements {
                 self.check_expr(elem, element);
@@ -7703,15 +7830,20 @@ impl<'a> TypeChecker<'a> {
         ) = (&expr.kind, expected)
         {
             if let ExprKind::Integer(n, _) = &count.kind {
-                if *n < 0 || *n as usize != *size {
-                    self.type_error(
-                        format!(
-                            "repeat-literal count {} does not match expected array length {}",
-                            n, size
-                        ),
-                        count.span.clone(),
-                        TypeErrorKind::TypeMismatch,
-                    );
+                // Length-mismatch check skipped for non-literal sizes
+                // (slice 3 `ConstParam` / `ConstVar` resolve at mono-
+                // emission time).
+                if let Some(expected_size) = size.as_usize() {
+                    if *n < 0 || *n as usize != expected_size {
+                        self.type_error(
+                            format!(
+                                "repeat-literal count {} does not match expected array length {}",
+                                n, expected_size
+                            ),
+                            count.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
                 }
             } else {
                 self.type_error(
@@ -8905,7 +9037,7 @@ impl<'a> TypeChecker<'a> {
                     return match type_name.as_str() {
                         "Array" => Type::Array {
                             element: Box::new(Type::Error),
-                            size: 0,
+                            size: ConstArg::Literal(0),
                         },
                         _ => Type::Named {
                             name: type_name.clone(),
@@ -8922,7 +9054,7 @@ impl<'a> TypeChecker<'a> {
                         }
                         Type::Array {
                             element: Box::new(first_ty),
-                            size: items.len(),
+                            size: ConstArg::Literal(items.len() as i64),
                         }
                     }
                     "Vec" => {
@@ -9002,7 +9134,7 @@ impl<'a> TypeChecker<'a> {
                         };
                         Type::Array {
                             element: Box::new(elem_ty),
-                            size,
+                            size: ConstArg::Literal(size as i64),
                         }
                     }
                     None | Some("Vec") => {
@@ -13661,7 +13793,7 @@ impl<'a> TypeChecker<'a> {
                 kind: TypeKind::Array {
                     element: Box::new(Self::type_to_type_expr(element)),
                     size: Box::new(Expr {
-                        kind: ExprKind::Integer(*size as i64, None),
+                        kind: ExprKind::Integer(size.as_literal().unwrap_or(0), None),
                         span: span.clone(),
                     }),
                 },

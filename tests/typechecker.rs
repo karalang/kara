@@ -10744,3 +10744,33 @@ fn test_const_eval_default_param_tuple_literal_still_ok() {
     // shapes rather than rejecting them as `NonConstShape`).
     typecheck_ok("fn f(x: (i64, i64) = (1, 2)) { }");
 }
+
+// ── Const generics slice 3 (partial) — Type::Array.size: ConstArg ──
+//
+// Slice 3 sub-step (b): `Type::Array.size` widened from `usize` to
+// `ConstArg`. The pre-slice-3 representation lowered every
+// `Array[T, N]` to `Type::Array { size: 0 }` (a literal placeholder),
+// which silently collapsed `Array[i64, 4]` and `Array[i64, 8]` to the
+// same Type — they unified at every call-site / assignment / pattern
+// position. The refactor preserves the literal size in the Type so
+// distinct-size arrays are now distinct Types.
+
+#[test]
+fn test_const_arg_array_size_distinguishable() {
+    // Regression-pin for the pre-slice-3 unification bug. Calling
+    // `f(b)` where `f` expects `Array[i64, 4]` but `b` is annotated
+    // `Array[i64, 8]` must now surface a type-mismatch diagnostic.
+    let errs = typecheck_errors(
+        "fn f(a: Array[i64, 4]) { }\n\
+         fn main() {\n\
+             let b: Array[i64, 8] = [1, 2, 3, 4, 5, 6, 7, 8];\n\
+             f(b);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("Array[i64, 4]") || e.message.contains("Array[i64, 8]")),
+        "expected a size-mismatch diagnostic mentioning the distinct array sizes, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
