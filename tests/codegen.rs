@@ -1879,6 +1879,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_function_returning_vec_of_vec_no_double_free() {
+        // Move-aware scope-exit cleanup: when a function returns a
+        // tracked Vec / String binding via the tail expression, the
+        // let-site's `track_vec_var` cleanup is suppressed (by
+        // zeroing the source's `cap` field) so the caller's
+        // `f.data` isn't pointing at a freed buffer. Without this,
+        // `Vec[Vec[i64]]` returns SIGSEGV at the first inner indexed
+        // access (the inner Vec's data pointer GEPs through a freed
+        // outer slot).
+        let out = run_program(
+            r#"
+fn make_grid(n: i64) -> Vec[Vec[i64]] {
+    let mut g: Vec[Vec[i64]] = Vec.filled(n, Vec.new());
+    g[0].push(99);
+    g[0].push(11);
+    g[2].push(42);
+    g
+}
+fn main() {
+    let f: Vec[Vec[i64]] = make_grid(3);
+    println(f.len());
+    println(f[0].len());
+    println(f[0][0]);
+    println(f[0][1]);
+    println(f[2][0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n2\n99\n11\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_function_returning_vec_i64_no_double_free() {
+        // Sibling: `Vec[i64]` return — same fix applies. The
+        // primitive case happened to work pre-fix due to
+        // use-after-free reading stable data, but is now correct
+        // by construction (cleanup skipped at the move site, caller
+        // owns the buffer cleanly).
+        let out = run_program(
+            r#"
+fn make_vec(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        v.push(i * 10);
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let f: Vec[i64] = make_vec(4);
+    println(f.len());
+    println(f[3]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4\n30");
+        }
+    }
+
+    #[test]
     fn test_e2e_for_range_step_by_codegen() {
         // `for j in (start..=end).step_by(n)` — the iterator-adaptor
         // chain previously fell through `compile_for`'s match to the

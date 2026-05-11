@@ -4660,6 +4660,26 @@ impl<'ctx> Codegen<'ctx> {
             .get_terminator()
             .is_none()
         {
+            // Move-aware scope-exit cleanup for tail-expression
+            // returns. When the function's final expression is an
+            // Identifier that names a tracked Vec / String binding,
+            // the binding's data is being moved into the caller's
+            // return value — but `track_vec_var` unconditionally
+            // queued a `FreeVecBuffer` cleanup at the let-site, and
+            // `emit_scope_cleanup` below would free the buffer the
+            // caller now owns. Zero the source's `cap` field before
+            // cleanup so `FreeVecBuffer`'s `cap > 0` check skips the
+            // free; the returned struct (already loaded into
+            // `result`) retains the original cap so the caller's
+            // own scope cleanup runs against a valid buffer. Same
+            // shape as `suppress_source_vec_cleanup_for_arg` used
+            // when a tracked Vec is passed as a call argument.
+            //
+            // Early `return v` statements bypass `emit_scope_cleanup`
+            // entirely (the terminator-already-set guard above), so
+            // they don't need this — the move-aware suppression only
+            // matters when scope cleanup is about to run.
+            self.suppress_cleanup_for_tail_return(&func.body);
             self.emit_scope_cleanup();
             if func.name == "main" {
                 let zero = self.context.i32_type().const_int(0, false);
@@ -14646,6 +14666,33 @@ impl<'ctx> Codegen<'ctx> {
     /// also opts not to register a parent-side cleanup when the slot
     /// value is moved into a downstream consumer — the consumer
     /// becomes the unique cleanup owner.
+    /// Move-aware scope-exit cleanup suppression for the function's
+    /// tail-expression return. When the body's final expression is
+    /// an `Identifier` naming a tracked Vec / String binding, the
+    /// returned struct value carries the binding's data pointer out
+    /// — but the let-site's `track_vec_var` queued a scope-exit
+    /// `FreeVecBuffer` that would `free` that buffer before the
+    /// caller can use it. Zero the source's `cap` field so the
+    /// cleanup's `cap > 0` guard skips the free; the loaded return
+    /// struct retains the original cap, and the caller's own
+    /// scope-exit cleanup frees the buffer exactly once.
+    fn suppress_cleanup_for_tail_return(&self, body: &Block) {
+        // Walk the tail of the body: if the final expression of the
+        // block (or the value of the last `return expr;` statement)
+        // is a bare Identifier for a tracked Vec / String, suppress.
+        let from_final: Option<&Expr> = body.final_expr.as_deref();
+        let from_last_stmt: Option<&Expr> = body.stmts.last().and_then(|s| match &s.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(boxed)) => Some(boxed.as_ref()),
+                _ => Some(e),
+            },
+            _ => None,
+        });
+        if let Some(expr) = from_final.or(from_last_stmt) {
+            self.suppress_source_vec_cleanup_for_arg(expr);
+        }
+    }
+
     fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {
         let var_name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.as_str(),
