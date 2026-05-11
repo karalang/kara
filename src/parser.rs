@@ -2184,6 +2184,7 @@ impl Parser {
                 break;
             }
             let cstart = self.current_span();
+            let saved = self.pos;
             let type_name = match self.expect_identifier() {
                 Some(name) => name,
                 None => break,
@@ -2214,8 +2215,16 @@ impl Parser {
                     span: self.span_from(&cstart),
                 });
             } else {
-                self.error("Expected ':' or '.' in where clause bound");
-                break;
+                // Const-predicate fall-through: backtrack to the saved
+                // position and parse the constraint as a const expression
+                // (e.g. `where N >= 0`, `where M < 4096`). Slice 1 parses;
+                // slice 2's evaluator + slice 3's discharge engine consume.
+                self.pos = saved;
+                let expr = self.parse_expression()?;
+                constraints.push(WhereConstraint::ConstPredicate {
+                    expr,
+                    span: self.span_from(&cstart),
+                });
             }
 
             if !self.eat(&Token::Comma) {
@@ -2337,19 +2346,43 @@ impl Parser {
             if self.check(&Token::RightBracket) {
                 break;
             }
-            // Const expression args: integer literals, negative integers, bool literals
-            match self.peek_token() {
-                Token::Integer(_, _) | Token::True | Token::False => {
-                    let expr = self.parse_expression()?;
-                    args.push(GenericArg::Const(expr));
+            // Const expression args: integer literals, negative integers, bool literals,
+            // and `Identifier OP ...` shapes (e.g. `Array[T, N + 1]`) where the
+            // operator following the identifier disambiguates a const-arg
+            // expression from a type-arg. Plain `Identifier` (no trailing op)
+            // continues to parse as a type — `Vec[Map[K, V]]` and similar
+            // type-position shapes are preserved.
+            let is_const_arg_expr = match self.peek_token() {
+                Token::Integer(_, _) | Token::True | Token::False | Token::Minus => true,
+                Token::Identifier { .. } => {
+                    let next = self.tokens.get(self.pos + 1).map(|t| &t.token);
+                    matches!(
+                        next,
+                        Some(
+                            Token::Plus
+                                | Token::Minus
+                                | Token::Star
+                                | Token::Slash
+                                | Token::Percent
+                                | Token::Caret
+                                | Token::Amp
+                                | Token::Pipe
+                                | Token::LessLess
+                                | Token::GreaterGreater
+                                | Token::EqualEqual
+                                | Token::BangEqual
+                                | Token::LessThanOrEqual
+                                | Token::GreaterThanOrEqual
+                        )
+                    )
                 }
-                Token::Minus => {
-                    let expr = self.parse_expression()?;
-                    args.push(GenericArg::Const(expr));
-                }
-                _ => {
-                    args.push(GenericArg::Type(self.parse_type()?));
-                }
+                _ => false,
+            };
+            if is_const_arg_expr {
+                let expr = self.parse_expression()?;
+                args.push(GenericArg::Const(expr));
+            } else {
+                args.push(GenericArg::Type(self.parse_type()?));
             }
             if !self.eat(&Token::Comma) {
                 break;

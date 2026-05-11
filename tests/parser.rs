@@ -1750,6 +1750,36 @@ fn test_const_generic_arg_in_type_annotation() {
 }
 
 #[test]
+fn test_parser_const_arg_non_literal_expression() {
+    // `Array[T, N + 1]` — the `N + 1` const-arg slot must carry a
+    // `GenericArg::Const` of a `Binary` expression, not a `Type` arg.
+    // Disambiguates by spotting `Identifier <binary op>` lookahead in
+    // `parse_generic_type_args` (const generics slice 1, sub-step b).
+    let prog = parse_ok("fn f[T, const N: i64](xs: Array[T, N + 1]) -> i64 { 0 }");
+    if let Item::Function(f) = &prog.items[0] {
+        let param_ty = &f.params[0].ty;
+        // The `Array[T, N + 1]` annotation is a path with two generic args.
+        let TypeKind::Path(ref path) = param_ty.kind else {
+            panic!("Expected Array[...] to parse as TypeKind::Path");
+        };
+        let args = path.generic_args.as_ref().expect("expected generic args");
+        assert_eq!(args.len(), 2);
+        assert!(matches!(&args[0], GenericArg::Type(_)));
+        match &args[1] {
+            GenericArg::Const(expr) => match &expr.kind {
+                ExprKind::Binary { op, .. } => {
+                    assert!(matches!(op, BinOp::Add));
+                }
+                other => panic!("Expected GenericArg::Const(Binary), got Const({:?})", other),
+            },
+            other => panic!("Expected GenericArg::Const, got {:?}", other),
+        }
+    } else {
+        panic!("Expected Function");
+    }
+}
+
+#[test]
 fn test_const_decl() {
     let prog = parse_ok("const MAX: u64 = 100;");
     if let Item::ConstDecl(c) = &prog.items[0] {
@@ -2619,6 +2649,34 @@ fn test_where_clause_multiple_bounds_on_same_param() {
         assert_eq!(b[0].path, vec!["Ord"]);
         assert_eq!(b[1].path, vec!["Clone"]);
         assert_eq!(b[2].path, vec!["Display"]);
+    } else {
+        panic!("Expected function");
+    }
+}
+
+#[test]
+fn test_parser_where_clause_const_predicate() {
+    // `where N >= 0` — const-expression predicate over a const-generic
+    // param. Falls through `parse_optional_where_clause`'s `.`/`:` branches
+    // to the const-predicate backtrack (const generics slice 1, sub-step b).
+    // Slice 2's evaluator + slice 3's discharge engine consume; slice 1
+    // only parses + resolves.
+    let prog = parse_ok("fn f[const N: i64](x: i64) -> i64 where N >= 0 { x + N }");
+    if let Item::Function(f) = &prog.items[0] {
+        let wc = f.where_clause.as_ref().expect("expected where clause");
+        assert_eq!(wc.constraints.len(), 1);
+        match &wc.constraints[0] {
+            WhereConstraint::ConstPredicate { expr, .. } => match &expr.kind {
+                ExprKind::Binary { op, .. } => {
+                    assert!(matches!(op, BinOp::GtEq));
+                }
+                other => panic!(
+                    "Expected ConstPredicate to wrap a Binary expression, got {:?}",
+                    other
+                ),
+            },
+            other => panic!("Expected WhereConstraint::ConstPredicate, got {:?}", other),
+        }
     } else {
         panic!("Expected function");
     }

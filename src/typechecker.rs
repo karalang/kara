@@ -134,6 +134,31 @@ pub enum VariantTypeInfo {
     Struct(Vec<(String, Type)>),
 }
 
+/// Generic-substitution payload (F1 — Const generics slice 1). A single
+/// `HashMap<String, SubstValue>` carries both type and const substitutions
+/// so the typechecker's structural substitution and the call-site solver
+/// can flow type-args and literal const-args through the same context.
+/// Slice 2's const-expression evaluator and slice 4's codegen consume the
+/// `Const` variant; slice 1 binds only literal const-args via step (e).
+#[derive(Debug, Clone)]
+pub enum SubstValue {
+    Type(Type),
+    Const(crate::prelude::ConstValue),
+}
+
+impl SubstValue {
+    /// Extract the inner `Type` if this is a `Type` substitution; `None`
+    /// for `Const`. Used by structural type substitution paths that should
+    /// ignore const-arg bindings (e.g. `substitute_type_params` walking a
+    /// `Type::TypeParam(name)`).
+    pub fn as_type(&self) -> Option<&Type> {
+        match self {
+            SubstValue::Type(t) => Some(t),
+            SubstValue::Const(_) => None,
+        }
+    }
+}
+
 // ── Attribute Helpers ───────────────────────────────────────────
 
 /// Extract trait names from `#[derive(Eq, Hash, ...)]` attributes.
@@ -592,17 +617,26 @@ fn contains_type_param(ty: &Type) -> bool {
 }
 
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
-/// from `subs`. Surviving callers (`element_type_of`,
-/// `dispatch_trait_assoc_fn`, `check_pattern_against`) all build `subs`
-/// externally from concrete types and use this purely as a tree-walk
-/// utility — they do *not* perform type inference. Inference at call
-/// sites uses the metavar substrate (`instantiate_signature_with_fresh_vars`
-/// + `unify_types` + `resolve_type_vars`, item 131 sub-step 2b) instead.
+/// from `subs`. Callers build `subs` externally from concrete types and
+/// use this purely as a tree-walk utility — they do *not* perform type
+/// inference. Inference at call sites uses the metavar substrate
+/// (`instantiate_signature_with_fresh_vars` + `unify_types` +
+/// `resolve_type_vars`, item 131 sub-step 2b) instead.
+///
+/// Post-F1 (const generics slice 1) the substitution map carries
+/// `SubstValue::Type | Const` so a single context flows both type-args
+/// and const-args. `Type::TypeParam(name)` lookups extract the `Type`
+/// payload via `SubstValue::as_type`; `Const` entries are inert here
+/// (consumed by slice 2's evaluator + slice 4's codegen).
 ///
 /// Unsolved params pass through unchanged.
-fn substitute_type_params(ty: &Type, subs: &HashMap<String, Type>) -> Type {
+fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValue>) -> Type {
     match ty {
-        Type::TypeParam(name) => subs.get(name).cloned().unwrap_or_else(|| ty.clone()),
+        Type::TypeParam(name) => subs
+            .get(name)
+            .and_then(SubstValue::as_type)
+            .cloned()
+            .unwrap_or_else(|| ty.clone()),
         Type::Tuple(elems) => Type::Tuple(
             elems
                 .iter()
@@ -655,7 +689,7 @@ fn substitute_type_params(ty: &Type, subs: &HashMap<String, Type>) -> Type {
         // (requires impl table lookup), keep as AssocProjection so the
         // caller can post-resolve via `resolve_assoc_projections`.
         Type::AssocProjection { param, assoc } => {
-            if let Some(concrete) = subs.get(param) {
+            if let Some(concrete) = subs.get(param).and_then(SubstValue::as_type) {
                 Type::AssocProjection {
                     param: type_display(concrete),
                     assoc: assoc.clone(),
@@ -3455,10 +3489,10 @@ impl<'a> TypeChecker<'a> {
                     .get(name)
                     .map(|s| s.generic_params.as_slice())
                     .unwrap_or(&[]);
-                let subs: HashMap<String, Type> = generic_params
+                let subs: HashMap<String, SubstValue> = generic_params
                     .iter()
                     .zip(args.iter())
-                    .map(|(p, a)| (p.clone(), a.clone()))
+                    .map(|(p, a)| (p.clone(), SubstValue::Type(a.clone())))
                     .collect();
                 substitute_type_params(item_ty, &subs)
             }
@@ -5441,6 +5475,62 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Verify each `const N: T` generic parameter's declared type `T` is in
+    /// the spec-allowed set (see `design.md § Type Inference > Const generic
+    /// parameters`): integers `i8`/`i16`/`i32`/`i64`, `bool`, `char`, or a
+    /// fieldless enum. Rejected: `usize` and other unsigned widths, float
+    /// widths, `String`, fielded enums, refinement types, distinct types.
+    fn validate_const_param_types(
+        &mut self,
+        generics: &Option<GenericParams>,
+        generic_scope: &[String],
+    ) {
+        let Some(ref gp) = generics else { return };
+        let params: Vec<_> = gp.params.clone();
+        for param in &params {
+            if !param.is_const {
+                continue;
+            }
+            let Some(ref ty_expr) = param.const_type else {
+                continue;
+            };
+            let lowered = self.lower_type_expr(ty_expr, generic_scope);
+            if !self.is_permitted_const_param_type(&lowered) {
+                self.type_error(
+                    format!(
+                        "type '{}' is not permitted as a const generic parameter type; \
+                         allowed types are i8, i16, i32, i64, bool, char, and fieldless enums \
+                         (see design.md § Type Inference > Const generic parameters)",
+                        type_display(&lowered)
+                    ),
+                    ty_expr.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+    }
+
+    fn is_permitted_const_param_type(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_) => true,
+            Type::Bool => true,
+            Type::Char => true,
+            Type::Named { name, args } if args.is_empty() => {
+                // Fieldless enum: every variant is `Unit`.
+                self.env
+                    .enums
+                    .get(name)
+                    .map(|info| {
+                        info.variants
+                            .iter()
+                            .all(|(_, kind)| matches!(kind, VariantTypeInfo::Unit))
+                    })
+                    .unwrap_or(false)
+            }
+            _ => false,
+        }
+    }
+
     fn validate_where_clause(&mut self, where_clause: &WhereClause, generic_scope: &[String]) {
         for constraint in &where_clause.constraints {
             match constraint {
@@ -5494,6 +5584,11 @@ impl<'a> TypeChecker<'a> {
                     // Resolve the associated type expression
                     self.lower_type_expr(ty, generic_scope);
                 }
+                WhereConstraint::ConstPredicate { .. } => {
+                    // Const-predicate validation lands with slice 2's evaluator;
+                    // slice 1 parses + resolves but does not type-check the
+                    // predicate body. Discharge engine lands at slice 3.
+                }
             }
         }
     }
@@ -5508,6 +5603,7 @@ impl<'a> TypeChecker<'a> {
         generic_scope: &[String],
     ) {
         self.validate_inline_generic_bounds(generics);
+        self.validate_const_param_types(generics, generic_scope);
         if let Some(ref wc) = where_clause {
             self.validate_where_clause(wc, generic_scope);
         }
@@ -9429,8 +9525,11 @@ impl<'a> TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
-        let mut subs: HashMap<String, Type> = HashMap::new();
-        subs.insert("Self".to_string(), Type::TypeParam(target.to_string()));
+        let mut subs: HashMap<String, SubstValue> = HashMap::new();
+        subs.insert(
+            "Self".to_string(),
+            SubstValue::Type(Type::TypeParam(target.to_string())),
+        );
 
         let mut scope = vec!["Self".to_string()];
         if let Some(ref gp) = method.generic_params {
@@ -9688,14 +9787,14 @@ impl<'a> TypeChecker<'a> {
                                 .trait_name
                                 .clone()
                                 .unwrap_or_else(|| imp.target_type.clone());
-                            let subs: HashMap<String, Type> = imp
+                            let subs: HashMap<String, SubstValue> = imp
                                 .generic_params
                                 .as_ref()
                                 .map(|gp| {
                                     gp.params
                                         .iter()
                                         .zip(target_args.iter())
-                                        .map(|(p, t)| (p.name.clone(), t.clone()))
+                                        .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
                                         .collect()
                                 })
                                 .unwrap_or_default();
@@ -9730,14 +9829,14 @@ impl<'a> TypeChecker<'a> {
                     return Type::Error;
                 }
                 if let Some((imp, sig)) = candidates.first() {
-                    let subs: HashMap<String, Type> = imp
+                    let subs: HashMap<String, SubstValue> = imp
                         .generic_params
                         .as_ref()
                         .map(|gp| {
                             gp.params
                                 .iter()
                                 .zip(target_args.iter())
-                                .map(|(p, t)| (p.name.clone(), t.clone()))
+                                .map(|(p, t)| (p.name.clone(), SubstValue::Type(t.clone())))
                                 .collect()
                         })
                         .unwrap_or_default();
@@ -12541,11 +12640,11 @@ impl<'a> TypeChecker<'a> {
                             // sub-patterns see the resolved payload type
                             // (e.g. `Err(e)` against `Result[i64, MyError]`
                             // sees `e: MyError`, not `e: TypeParam("E")`).
-                            let subs: HashMap<String, Type> = enum_info
+                            let subs: HashMap<String, SubstValue> = enum_info
                                 .generic_params
                                 .iter()
                                 .cloned()
-                                .zip(args.iter().cloned())
+                                .zip(args.iter().cloned().map(SubstValue::Type))
                                 .collect();
                             for (pat, ty) in patterns.iter().zip(field_types.iter()) {
                                 let resolved = if subs.is_empty() {
@@ -13131,7 +13230,7 @@ mod once_function_carrier_tests {
             return_type: Box::new(Type::TypeParam("T".to_string())),
         };
         let mut subs = HashMap::new();
-        subs.insert("T".to_string(), Type::Bool);
+        subs.insert("T".to_string(), SubstValue::Type(Type::Bool));
         let resolved = substitute_type_params(&t_to_t, &subs);
         assert_eq!(
             resolved,

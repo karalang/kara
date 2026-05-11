@@ -10517,3 +10517,82 @@ fn test_primitive_const_unknown_silent_fall_through() {
     // primitive" diagnostic is a separate follow-up.
     typecheck_ok("fn main() { let x = i64.NONEXISTENT; }");
 }
+
+// ── Const generics — declaration-site permitted-type rejection ──
+//
+// Slice 1 (2026-05-10) — `validate_const_param_types` checks each
+// `const N: T` parameter's declared type against the spec's allowed
+// set: i8 / i16 / i32 / i64, bool, char, and fieldless enums.
+// Everything else is rejected with a focused diagnostic citing the
+// design.md section.
+
+#[test]
+fn test_typechecker_const_param_permitted_types_accepted() {
+    // Each allowed const-param type type-checks at the declaration site.
+    typecheck_ok("fn f[const N: i8](x: i64) -> i64 { x }");
+    typecheck_ok("fn f[const N: i16](x: i64) -> i64 { x }");
+    typecheck_ok("fn f[const N: i32](x: i64) -> i64 { x }");
+    typecheck_ok("fn f[const N: i64](x: i64) -> i64 { x }");
+    typecheck_ok("fn f[const B: bool](x: i64) -> i64 { x }");
+    typecheck_ok("fn f[const C: char](x: i64) -> i64 { x }");
+    // Fieldless enum as a const-param type.
+    typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         fn f[const K: Color](x: i64) -> i64 { x }",
+    );
+}
+
+#[test]
+fn test_typechecker_const_param_rejects_usize() {
+    let errs = typecheck_errors("fn f[const N: usize](x: i64) -> i64 { x }");
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("not permitted as a const generic parameter type")
+            && e.message.contains("usize")),
+        "expected focused permitted-type diagnostic mentioning 'usize', got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_typechecker_const_param_rejects_float() {
+    let errs_f32 = typecheck_errors("fn f[const N: f32](x: i64) -> i64 { x }");
+    assert!(errs_f32.iter().any(|e| e
+        .message
+        .contains("not permitted as a const generic parameter type")
+        && e.message.contains("f32")));
+    let errs_f64 = typecheck_errors("fn f[const N: f64](x: i64) -> i64 { x }");
+    assert!(errs_f64.iter().any(|e| e
+        .message
+        .contains("not permitted as a const generic parameter type")
+        && e.message.contains("f64")));
+}
+
+#[test]
+fn test_typechecker_const_param_rejects_string() {
+    let errs = typecheck_errors("fn f[const N: String](x: i64) -> i64 { x }");
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("not permitted as a const generic parameter type")),
+        "expected permitted-type diagnostic for String, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_typechecker_const_param_rejects_fieldful_enum() {
+    let errs = typecheck_errors(
+        "enum Shape { Circle(i64), Square(i64) }\n\
+         fn f[const K: Shape](x: i64) -> i64 { x }",
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("not permitted as a const generic parameter type")
+            && e.message.contains("Shape")),
+        "expected permitted-type diagnostic for fielded enum Shape, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

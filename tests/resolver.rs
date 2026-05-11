@@ -1579,6 +1579,39 @@ fn test_trait_bound_path_resolution_recorded() {
 }
 
 #[test]
+fn test_resolver_const_param_kind() {
+    // `fn f[const N: i64]` defines `N` as a `SymbolKind::ConstParam`, not
+    // `SymbolKind::TypeParam` (const generics slice 1, sub-step c). The
+    // declaration-site permitted-type check in the typechecker branches on
+    // this distinction.
+    let result = resolve_ok("fn f[const N: i64](x: i64) -> i64 { x }");
+    let n_kind = result
+        .symbol_table
+        .all_symbols()
+        .iter()
+        .find(|s| s.name == "N")
+        .map(|s| &s.kind)
+        .expect("expected a symbol named 'N'");
+    assert!(
+        matches!(n_kind, SymbolKind::ConstParam),
+        "expected SymbolKind::ConstParam for 'N', got {:?}",
+        n_kind
+    );
+}
+
+#[test]
+fn test_resolver_const_type_name_collision() {
+    // `fn f[T, const T: i64]` — type-param and const-param share the name
+    // `T`. The resolver's existing duplicate-name detection fires; no
+    // kind-aware special-casing required.
+    let errs = resolve_errors("fn f[T, const T: i64](x: i64) -> i64 { x }");
+    assert!(
+        !errs.is_empty(),
+        "expected a duplicate-name diagnostic for type/const param collision"
+    );
+}
+
+#[test]
 fn test_impl_block_generic_bound_recorded() {
     let result = resolve_ok(
         "struct Wrapper[T] { value: T }\n\

@@ -397,6 +397,9 @@ impl Formatter {
                     self.write_str(" = ");
                     self.format_type_expr(ty);
                 }
+                WhereConstraint::ConstPredicate { expr, .. } => {
+                    self.format_expr(expr);
+                }
             }
         }
     }

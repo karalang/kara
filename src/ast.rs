@@ -725,6 +725,10 @@ pub enum WhereConstraint {
         ty: TypeExpr,
         span: Span,
     },
+    /// `N >= 0`, `M < 4096`, etc. — const-expression predicate over
+    /// const-generic params. Parsed at slice 1; evaluated by slice 2's
+    /// const-expression evaluator and discharged at call sites by slice 3.
+    ConstPredicate { expr: Expr, span: Span },
 }
 
 // ── Types ────────────────────────────────────────────────────────

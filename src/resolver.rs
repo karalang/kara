@@ -70,6 +70,12 @@ pub enum SymbolKind {
     TraitAlias,
     Constant,
     TypeParam,
+    /// `const N: Type` const-generic parameter. Distinguished from
+    /// `TypeParam` so the typechecker's declaration-site permitted-type
+    /// check (spec at `design.md § Type Inference > Const generic
+    /// parameters`) can branch on the symbol kind. The associated type
+    /// expression is read from the source AST during typechecking.
+    ConstParam,
     EffectResource,
     EffectGroup,
     EffectVerb,
@@ -356,6 +362,14 @@ impl SymbolTable {
             .get(&param_id)
             .map(|v| v.as_slice())
             .unwrap_or(&[])
+    }
+
+    /// Iterate every registered symbol. Used by tests that need to assert
+    /// on symbols defined in nested scopes (e.g. generic params inside a
+    /// function body) that aren't reachable via `lookup_in_scope` against
+    /// the global scope.
+    pub fn all_symbols(&self) -> &[Symbol] {
+        &self.symbols
     }
 
     pub fn lookup_method(&self, type_name: &str, method_name: &str) -> Option<&Symbol> {
@@ -2643,12 +2657,15 @@ impl<'a> Resolver<'a> {
     fn define_generic_params(&mut self, generics: &GenericParams) -> HashMap<String, SymbolId> {
         let mut by_name = HashMap::new();
         for param in &generics.params {
-            match self.table.define(
-                param.name.clone(),
-                SymbolKind::TypeParam,
-                param.span.clone(),
-                false,
-            ) {
+            let kind = if param.is_const {
+                SymbolKind::ConstParam
+            } else {
+                SymbolKind::TypeParam
+            };
+            match self
+                .table
+                .define(param.name.clone(), kind, param.span.clone(), false)
+            {
                 Ok(id) => {
                     self.table.record_generic_bounds(id, &param.bounds);
                     by_name.insert(param.name.clone(), id);
@@ -2657,6 +2674,12 @@ impl<'a> Resolver<'a> {
             }
             for bound in &param.bounds {
                 self.resolve_trait_bound(bound);
+            }
+            // Const params reference their declared type via the source AST;
+            // resolve the type expression so its references appear in the
+            // resolution map alongside other resolved type expressions.
+            if let Some(ty) = &param.const_type {
+                self.resolve_type_expr(ty);
             }
         }
         by_name
@@ -2687,6 +2710,9 @@ impl<'a> Resolver<'a> {
                 }
                 WhereConstraint::AssocTypeEq { ty, .. } => {
                     self.resolve_type_expr(ty);
+                }
+                WhereConstraint::ConstPredicate { expr, .. } => {
+                    self.resolve_expr(expr);
                 }
             }
         }
