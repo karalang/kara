@@ -1229,7 +1229,16 @@ fn contains_type_param(ty: &Type) -> bool {
     match ty {
         Type::TypeParam(_) | Type::AssocProjection { .. } => true,
         Type::Tuple(elems) => elems.iter().any(contains_type_param),
-        Type::Array { element, .. } | Type::Slice { element, .. } => contains_type_param(element),
+        // Const generics slice 3b: a `ConstArg::ConstParam` in
+        // `Type::Array.size` is also a "generic dependency" — the
+        // call-site inference solver needs to fire so the const-param
+        // gets resolved. Pre-3b this returned false for
+        // `Array[i64, ConstParam(N)]` and the generic-call path was
+        // skipped entirely; post-3b we check the size too.
+        Type::Array { element, size } => {
+            contains_type_param(element) || matches!(size, ConstArg::ConstParam(_))
+        }
+        Type::Slice { element, .. } => contains_type_param(element),
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => contains_type_param(inner),
         Type::Pointer { inner, .. } => contains_type_param(inner),
         Type::Named { args, .. } => args.iter().any(contains_type_param),
@@ -1538,6 +1547,18 @@ struct InstantiatedSignature {
     #[allow(dead_code)]
     name_to_const_id: HashMap<String, ConstVarId>,
     const_id_to_name: HashMap<ConstVarId, String>,
+}
+
+/// Extract a literal integer / bool / char value from an `Expr` and
+/// coerce to `i64` for the `ConstArg::Literal` shape. Used by the
+/// slice-1c explicit-generic-args pre-binding at call sites.
+fn const_value_from_literal(expr: &Expr) -> Option<i64> {
+    match &expr.kind {
+        ExprKind::Integer(n, _) => Some(*n),
+        ExprKind::Bool(b) => Some(*b as i64),
+        ExprKind::CharLit(c) => Some(*c as i64),
+        _ => None,
+    }
 }
 
 /// Replace `ConstArg::ConstParam(name)` with `ConstArg::ConstVar(id)`
@@ -8489,6 +8510,34 @@ impl<'a> TypeChecker<'a> {
         record_subs_for_span: &Span,
         apply_call_site_marker: bool,
     ) -> Type {
+        self.check_call_args_with_substitution_full(
+            args,
+            params,
+            return_type,
+            record_subs_for_span,
+            apply_call_site_marker,
+            None,
+            None,
+        )
+    }
+
+    /// Extended variant of `check_call_args_with_substitution` that
+    /// accepts explicit call-site generic args + the function's
+    /// declaration-order generic-param names (const generics slice 1c).
+    /// When both are supplied, each (formal_name, explicit_arg) pair
+    /// pre-binds the corresponding metavar so subsequent arg-position
+    /// unification flows from the explicit binding.
+    #[allow(clippy::too_many_arguments)]
+    fn check_call_args_with_substitution_full(
+        &mut self,
+        args: &[CallArg],
+        params: &[Type],
+        return_type: &Type,
+        record_subs_for_span: &Span,
+        apply_call_site_marker: bool,
+        explicit_generic_args: Option<&[GenericArg]>,
+        formal_generic_params: Option<&[String]>,
+    ) -> Type {
         let has_generic =
             params.iter().any(contains_type_param) || contains_type_param(return_type);
         if !has_generic {
@@ -8516,7 +8565,7 @@ impl<'a> TypeChecker<'a> {
             return_type: sub_ret,
             name_to_id,
             id_to_name,
-            name_to_const_id: _,
+            name_to_const_id,
             const_id_to_name,
         } = instantiate_signature_with_fresh_vars(
             params,
@@ -8524,6 +8573,34 @@ impl<'a> TypeChecker<'a> {
             &mut self.env.next_type_var,
             &mut self.env.next_const_var,
         );
+
+        // Const generics slice 1c: pre-bind metavars from explicit
+        // call-site generic args. Walk the formal-param names and the
+        // user-supplied args in lockstep; each `GenericArg::Const`
+        // literal binds the corresponding `ConstVar`, each
+        // `GenericArg::Type` binds the corresponding `TypeVar`. The
+        // subsequent arg-position unification flow runs against these
+        // pre-bindings (so a mismatch between explicit and inferred
+        // const-args surfaces at the per-position unify call).
+        if let (Some(explicit), Some(formal_names)) = (explicit_generic_args, formal_generic_params)
+        {
+            for (formal_name, explicit_arg) in formal_names.iter().zip(explicit.iter()) {
+                if let Some(&const_id) = name_to_const_id.get(formal_name) {
+                    if let GenericArg::Const(expr) = explicit_arg {
+                        if let Some(cv) = const_value_from_literal(expr) {
+                            self.env
+                                .const_substitutions
+                                .insert(const_id, ConstArg::Literal(cv));
+                        }
+                    }
+                } else if let Some(&type_id) = name_to_id.get(formal_name) {
+                    if let GenericArg::Type(te) = explicit_arg {
+                        let ty = self.lower_type_expr(te, &[]);
+                        self.env.substitutions.insert(type_id, ty);
+                    }
+                }
+            }
+        }
 
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
         for arg in args {
@@ -9924,29 +10001,107 @@ impl<'a> TypeChecker<'a> {
 
     // ── Function Calls ──────────────────────────────────────────
 
-    fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
-        // Const generics slice 1b: `make_arr[i64, 4]()` parses callee
-        // as `Path { segments: [name], generic_args: Some(_) }` — a
-        // bare identifier with explicit generic args. Route through
-        // the regular Identifier-style dispatch by synthesizing an
-        // Identifier callee. The codegen reads the original AST
-        // (which preserves `generic_args`) for mango-key
-        // disambiguation; the typechecker just resolves to the same
-        // function as the bare-identifier form. Const-arg type
-        // compatibility validation lives at slice 3 (call-site
-        // solver) — at slice 1b the const-args pass through unchecked.
-        if let ExprKind::Path {
-            segments,
-            generic_args: Some(_),
-        } = &callee.kind
-        {
-            if segments.len() == 1 {
-                let synthetic = Expr {
-                    kind: ExprKind::Identifier(segments[0].clone()),
-                    span: callee.span.clone(),
-                };
-                return self.infer_call(&synthetic, args, span);
+    /// Const generics slice 1c shared path: dispatch a generic free
+    /// function call that carries an explicit generic-args list.
+    /// Looks up the function's `FunctionSig`, threads
+    /// `(explicit_args, formal_generic_params)` into the call-args
+    /// substitution flow so the inference solver pre-binds each
+    /// ConstVar / TypeVar to its user-supplied value before
+    /// arg-position unification.
+    fn infer_explicit_generic_args_call(
+        &mut self,
+        name: &str,
+        explicit_args: &[GenericArg],
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let Some(sig) = self.env.functions.get(name).cloned() else {
+            // No matching function — fall through to the bare-identifier
+            // dispatch via a synthetic Identifier callee so existing
+            // error reporting fires.
+            let synthetic = Expr {
+                kind: ExprKind::Identifier(name.to_string()),
+                span: span.clone(),
+            };
+            return self.infer_call(&synthetic, args, span);
+        };
+        if args.len() != sig.params.len() {
+            self.type_error(
+                format!(
+                    "expected {} argument(s), found {}",
+                    sig.params.len(),
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
             }
+            return sig.return_type;
+        }
+        let formal_generic_params = sig.generic_params.clone();
+        self.check_call_args_with_substitution_full(
+            args,
+            &sig.params,
+            &sig.return_type,
+            span,
+            true,
+            Some(explicit_args),
+            Some(&formal_generic_params),
+        )
+    }
+
+    fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Const generics slice 1b + 1c: explicit-generic-args call
+        // shapes. Two forms reach here:
+        //
+        //   1. `Path { segments: [name], generic_args: Some(args) }` —
+        //      multi-arg shape `name[T, 4](args)` recognized by the
+        //      parser's `lookahead_generic_args_call` (requires a
+        //      top-level `,` inside the brackets).
+        //   2. `Index { object: Identifier(name), index: literal }` —
+        //      single-arg shape `name[8](args)` that the parser
+        //      can't disambiguate from `callbacks[0]()`. The Vec-of-
+        //      functions case at interpreter:1985 must keep working,
+        //      so we only treat as a generic-args call when `name`
+        //      resolves to a generic free function in `env.functions`.
+        //
+        // Both shapes route through `infer_explicit_generic_args_call`,
+        // which threads the formal-param names + explicit args into
+        // `check_call_args_with_substitution_full` so the inference
+        // solver pre-binds each ConstVar / TypeVar to its
+        // user-supplied value before arg-position unification.
+        if let Some((name, explicit_args)) = match &callee.kind {
+            ExprKind::Path {
+                segments,
+                generic_args: Some(ga),
+            } if segments.len() == 1 => Some((segments[0].clone(), ga.clone())),
+            ExprKind::Index { object, index }
+                if matches!(
+                    &index.kind,
+                    ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_)
+                ) =>
+            {
+                if let ExprKind::Identifier(name) = &object.kind {
+                    if self
+                        .env
+                        .functions
+                        .get(name)
+                        .map(|sig| !sig.generic_params.is_empty())
+                        .unwrap_or(false)
+                    {
+                        Some((name.clone(), vec![GenericArg::Const((**index).clone())]))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        } {
+            return self.infer_explicit_generic_args_call(&name, &explicit_args, args, span);
         }
 
         // Type-parameter associated calls: `T.method(args)` parses as

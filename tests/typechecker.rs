@@ -10805,6 +10805,62 @@ fn test_const_inference_multi_position_consistent() {
 }
 
 #[test]
+fn test_const_inference_explicit_arg_list_single() {
+    // Const generics slice 1c: `f[8]()` syntactic shape — single
+    // literal const-arg at a free-function call site. The parser
+    // produces `Call { callee: Index { object: Identifier("f"),
+    // index: Integer(8) }, args: [] }` (it can't disambiguate from
+    // `arr[0]()`); the typechecker recovers by checking if the
+    // indexed object is a generic free function and rewriting the
+    // callee to a synthetic Path-with-generic-args. Test exercises
+    // the return-position const-param case: without the rewrite the
+    // call would fail to resolve.
+    typecheck_ok(
+        "fn f[const N: i64]() -> Array[i64, N] { todo() }\n\
+         fn main() {\n\
+             let _x: Array[i64, 8] = f[8]();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_const_inference_explicit_arg_list_via_array_param() {
+    // Slice 1c regression: the single-literal generic-args call
+    // shape also works when the const-param is also constrained from
+    // arg types (here `f[5](arr)` pins N from `arr`'s `Array[i64, 5]`
+    // type AND from the explicit `5`; consistent so the call
+    // succeeds).
+    typecheck_ok(
+        "fn f[const N: i64](arr: Array[i64, N]) { }\n\
+         fn main() {\n\
+             let arr: Array[i64, 5] = [1, 2, 3, 4, 5];\n\
+             f[5](arr);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_const_inference_indexed_callbacks_regression() {
+    // Regression-pin for the slice-1c disambiguation: `callbacks[0]()`
+    // (calling an indexed function in a Vec) must continue to parse
+    // and type-check as Index-then-Call. The typechecker rewrite
+    // only fires when the indexed object resolves to a generic free
+    // function — `callbacks` is a local variable, not in
+    // `env.functions`, so the rewrite skips it and the original
+    // Vec-of-functions dispatch path runs.
+    typecheck_ok(
+        "fn main() {\n\
+             let n = 5;\n\
+             let f = ref || n + 1;\n\
+             let g = ref || n + 2;\n\
+             let callbacks = Vec[f, g];\n\
+             println(callbacks[0]());\n\
+             println(callbacks[1]());\n\
+         }",
+    );
+}
+
+#[test]
 fn test_const_inference_return_only_unsolved() {
     // Slice 3b sub-step (h): `fn f[const N: i64]() -> Array[i64, N]`
     // called as `let x = f();` (no explicit args, no annotation)

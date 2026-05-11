@@ -14668,6 +14668,27 @@ impl<'ctx> Codegen<'ctx> {
             return self.compile_with_provider(&resource, provider_expr, closure_expr);
         }
 
+        // Const generics slice 1c: `f[8]()` parses as
+        // `Call { callee: Index { object: Identifier(name), index: literal }, args }`.
+        // The typechecker disambiguation routes through a synthetic
+        // Path-with-generic-args callee at type-check time, but the
+        // codegen sees the original AST. Apply the same rewrite here
+        // when the indexed object resolves to a generic free function
+        // in `generic_fns`. (`callbacks[0]()` keeps its Index-then-Call
+        // shape because `callbacks` isn't in `generic_fns`.)
+        if let ExprKind::Index { object, index } = &callee.kind {
+            if let ExprKind::Identifier(name) = &object.kind {
+                let is_literal_index = matches!(
+                    &index.kind,
+                    ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_)
+                );
+                if is_literal_index && self.generic_fns.contains_key(name) {
+                    let explicit_args = vec![GenericArg::Const((**index).clone())];
+                    return self.compile_generic_call(name, args, Some(&explicit_args));
+                }
+            }
+        }
+
         // Associated function calls: Vec::new(), etc. Theme 6 sub-step 4
         // intercepts `R.method(args)` where R is an `effect resource R: T`
         // before assoc-call dispatch: those go through the runtime stack
