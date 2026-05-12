@@ -5208,6 +5208,7 @@ fn test_process_user_can_declare_sends_process_table_effect() {
     assert_eq!(output, "err\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_process_spawn_real_command_and_wait_for_zero_exit() {
     // End-to-end intrinsic check: spawn a real OS process, wait for
@@ -5215,7 +5216,8 @@ fn test_process_spawn_real_command_and_wait_for_zero_exit() {
     // `/usr/bin/true` (POSIX-ubiquitous, exits 0 silently) keeps the
     // test runner's terminal clean — `/bin/echo` would inherit-print
     // to runner stdout, which is cosmetically noisy. The Kāra child
-    // handle's wait status is what we actually verify.
+    // handle's wait status is what we actually verify. Gated on
+    // `unix` because the hard-coded path doesn't resolve on Windows.
     let output = run(r#"fn main() {
          let cmd = Command.new("/usr/bin/true");
          match cmd.spawn() {
@@ -5234,13 +5236,15 @@ fn test_process_spawn_real_command_and_wait_for_zero_exit() {
     assert_eq!(output, "0\ntrue\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_process_try_wait_returns_none_for_still_running_child() {
     // Spawn a child that sleeps long enough that try_wait sees it
     // still running. /bin/sleep is POSIX-ubiquitous. 0.5s is short
     // enough to keep the test fast but long enough that try_wait
     // fires before exit (interpreter wall-clock has zero scheduling
-    // jitter compared to the OS spawn latency).
+    // jitter compared to the OS spawn latency). Gated on `unix`
+    // because the hard-coded path doesn't resolve on Windows.
     let output = run(r#"fn main() {
          let cmd = Command.new("/bin/sleep").arg("0.5");
          match cmd.spawn() {
@@ -5261,6 +5265,7 @@ fn test_process_try_wait_returns_none_for_still_running_child() {
     assert_eq!(output, "still_running\nwaited\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_process_kill_terminates_child_and_wait_reports_failure() {
     // Spawn /bin/sleep 60 (way longer than test runtime), kill it,
@@ -5268,6 +5273,8 @@ fn test_process_kill_terminates_child_and_wait_reports_failure() {
     // success=false (terminated by signal). The child is reaped by
     // the wait call after the kill (`kill` itself leaves the table
     // entry in place per the spec — the caller still needs wait()).
+    // Gated on `unix` because the hard-coded path doesn't resolve
+    // on Windows.
     let output = run(r#"fn main() {
          let cmd = Command.new("/bin/sleep").arg("60");
          match cmd.spawn() {
@@ -5287,6 +5294,7 @@ fn test_process_kill_terminates_child_and_wait_reports_failure() {
     assert_eq!(output, "killed\nfalse\n");
 }
 
+#[cfg(unix)]
 #[test]
 fn test_process_env_vars_propagate_to_child() {
     // The .env() builder method propagates to the spawned process.
@@ -5294,7 +5302,8 @@ fn test_process_env_vars_propagate_to_child() {
     // Kāra's `captured_output` — instead, verify env var propagation
     // by having the child's shell `test` the var against the expected
     // value and exit 0 / 1 accordingly. The wait-status's `success`
-    // field is the signal.
+    // field is the signal. Gated on `unix` because `/bin/sh` doesn't
+    // resolve on Windows.
     let output = run(r#"fn main() {
          let cmd = Command.new("/bin/sh")
              .arg("-c")
