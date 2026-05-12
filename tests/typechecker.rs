@@ -10861,6 +10861,74 @@ fn test_const_inference_indexed_callbacks_regression() {
 }
 
 #[test]
+fn test_where_predicate_passes() {
+    // Slice 3c: `where N >= 0` at a function-level where clause is
+    // discharged at the call site against the resolved const-arg.
+    // `f[5]()` binds N=5; the predicate `5 >= 0` evaluates to true
+    // and the call type-checks.
+    typecheck_ok(
+        "fn f[const N: i64]() where N >= 0 { }\n\
+         fn main() { f[5](); }",
+    );
+}
+
+#[test]
+fn test_where_predicate_fails() {
+    // Slice 3c: same fn called with N=-1 fails the predicate; the
+    // discharge engine emits a focused `const constraint violated`
+    // diagnostic mentioning the violated binding.
+    let errs = typecheck_errors(
+        "fn f[const N: i64]() where N >= 0 { }\n\
+         fn main() { f[-1](); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("const constraint violated") && e.message.contains("N=-1")),
+        "expected `const constraint violated` diagnostic with N=-1, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_where_predicate_multiple_const_args() {
+    // Slice 3c: where clause referencing both const params. Predicate
+    // shape uses a literal on the RHS to avoid the `N { ... }` parser
+    // ambiguity (an identifier immediately followed by `{` triggers
+    // struct-literal parsing). `M >= 100` against M=5 fails.
+    let errs = typecheck_errors(
+        "fn f[const M: i64, const N: i64]() where M >= 100 { }\n\
+         fn main() { f[5, 3](); }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("const constraint violated")),
+        "expected `const constraint violated` diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_where_predicate_via_inferred_const_arg() {
+    // Slice 3c: predicate fires even when the const-arg is inferred
+    // from an argument's type rather than supplied explicitly. Here
+    // N is inferred from `arr`'s `Array[i64, 4]` shape; the
+    // predicate `N >= 8` evaluates to false against N=4.
+    let errs = typecheck_errors(
+        "fn f[const N: i64](arr: Array[i64, N]) where N >= 8 { }\n\
+         fn main() {\n\
+             let arr: Array[i64, 4] = [1, 2, 3, 4];\n\
+             f(arr);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("const constraint violated") && e.message.contains("N=4")),
+        "expected `const constraint violated` diagnostic with N=4, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn test_const_inference_return_only_unsolved() {
     // Slice 3b sub-step (h): `fn f[const N: i64]() -> Array[i64, N]`
     // called as `let x = f();` (no explicit args, no annotation)

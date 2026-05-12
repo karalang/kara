@@ -1549,14 +1549,84 @@ struct InstantiatedSignature {
     const_id_to_name: HashMap<ConstVarId, String>,
 }
 
+/// Const generics slice 3c: walk `expr` and substitute any
+/// `ExprKind::Identifier(name)` whose `name` is in `subst` with an
+/// `Integer(value)` literal. Used by the where-clause discharge
+/// engine to inline resolved const-args into the predicate Expr
+/// before evaluation. Composite shapes (Tuple / ArrayLiteral) recurse
+/// element-wise; non-substitutable shapes (calls, closures, etc.)
+/// pass through unchanged — slice 2's `eval_const_expr` rejects them
+/// downstream as `NonConstShape`.
+fn substitute_const_idents_in_expr(expr: &Expr, subst: &HashMap<String, i64>) -> Expr {
+    let new_kind = match &expr.kind {
+        ExprKind::Identifier(name) => match subst.get(name) {
+            Some(&value) => ExprKind::Integer(value, None),
+            None => expr.kind.clone(),
+        },
+        ExprKind::Unary { op, operand } => ExprKind::Unary {
+            op: op.clone(),
+            operand: Box::new(substitute_const_idents_in_expr(operand, subst)),
+        },
+        ExprKind::Binary { op, left, right } => ExprKind::Binary {
+            op: op.clone(),
+            left: Box::new(substitute_const_idents_in_expr(left, subst)),
+            right: Box::new(substitute_const_idents_in_expr(right, subst)),
+        },
+        ExprKind::Tuple(elems) => ExprKind::Tuple(
+            elems
+                .iter()
+                .map(|e| substitute_const_idents_in_expr(e, subst))
+                .collect(),
+        ),
+        ExprKind::ArrayLiteral(elems) => ExprKind::ArrayLiteral(
+            elems
+                .iter()
+                .map(|e| substitute_const_idents_in_expr(e, subst))
+                .collect(),
+        ),
+        _ => expr.kind.clone(),
+    };
+    Expr {
+        kind: new_kind,
+        span: expr.span.clone(),
+    }
+}
+
+/// Slice 1c / 3c: recognize a literal const-arg expression shape at a
+/// call-site bracket position. Integer / bool / char literals plus
+/// `Unary { Neg, Integer }` (negative-integer literals) qualify.
+fn is_literal_const_arg_expr(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_) => true,
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => matches!(operand.kind, ExprKind::Integer(_, _)),
+        _ => false,
+    }
+}
+
 /// Extract a literal integer / bool / char value from an `Expr` and
 /// coerce to `i64` for the `ConstArg::Literal` shape. Used by the
 /// slice-1c explicit-generic-args pre-binding at call sites.
+/// Negative-integer literals (`-1`) parse as `Unary { Neg,
+/// Integer(1) }`; recover the literal value here for the
+/// `f[-1]()` call shape.
 fn const_value_from_literal(expr: &Expr) -> Option<i64> {
     match &expr.kind {
         ExprKind::Integer(n, _) => Some(*n),
         ExprKind::Bool(b) => Some(*b as i64),
         ExprKind::CharLit(c) => Some(*c as i64),
+        ExprKind::Unary {
+            op: UnaryOp::Neg,
+            operand,
+        } => {
+            if let ExprKind::Integer(n, _) = &operand.kind {
+                Some(-*n)
+            } else {
+                None
+            }
+        }
         _ => None,
     }
 }
@@ -2280,6 +2350,12 @@ pub struct FunctionSig {
     pub param_names: Vec<Option<String>>,
     pub params: Vec<Type>,
     pub return_type: Type,
+    /// Where-clause constraints carried alongside the signature
+    /// (const generics slice 3c). `None` when the function declares
+    /// no where clause. The call-site discharge engine walks
+    /// `WhereConstraint::ConstPredicate(_)` entries here and
+    /// evaluates each predicate against the bound const-args.
+    pub where_clause: Option<WhereClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -4869,6 +4945,7 @@ impl<'a> TypeChecker<'a> {
             param_names: vec![],
             params: vec![],
             return_type: vec_string,
+            where_clause: None,
         };
         self.env.functions.insert("env.args".to_string(), args_sig);
 
@@ -4887,6 +4964,7 @@ impl<'a> TypeChecker<'a> {
             param_names: vec![Some("name".to_string())],
             params: vec![Type::Str],
             return_type: result_str_var,
+            where_clause: None,
         };
         self.env.functions.insert("env.var".to_string(), var_sig);
 
@@ -4900,6 +4978,7 @@ impl<'a> TypeChecker<'a> {
             param_names: vec![Some("name".to_string()), Some("value".to_string())],
             params: vec![Type::Str, Type::Str],
             return_type: Type::Unit,
+            where_clause: None,
         };
         self.env.functions.insert("env.set".to_string(), set_sig);
 
@@ -4911,6 +4990,7 @@ impl<'a> TypeChecker<'a> {
                 param_names: vec![Some("code".to_string())],
                 params: vec![Type::Int(IntSize::I32)],
                 return_type: Type::Never,
+                where_clause: None,
             },
         );
 
@@ -4961,18 +5041,21 @@ impl<'a> TypeChecker<'a> {
             param_names: vec![Some("self".into()), Some("rhs".into())],
             params: vec![ty.clone(), ty.clone()],
             return_type: ty.clone(),
+            where_clause: None,
         };
         let unop = |ty: &Type| FunctionSig {
             generic_params: vec![],
             param_names: vec![Some("self".into())],
             params: vec![ty.clone()],
             return_type: ty.clone(),
+            where_clause: None,
         };
         let eq_sig = |ty: &Type| FunctionSig {
             generic_params: vec![],
             param_names: vec![Some("self".into()), Some("other".into())],
             params: vec![ty.clone(), ty.clone()],
             return_type: Type::Bool,
+            where_clause: None,
         };
         let ord_sig = |ty: &Type| FunctionSig {
             generic_params: vec![],
@@ -4982,6 +5065,7 @@ impl<'a> TypeChecker<'a> {
                 name: "Ordering".into(),
                 args: vec![],
             },
+            where_clause: None,
         };
 
         let signed_ints: &[(&str, Type)] = &[
@@ -5117,6 +5201,7 @@ impl<'a> TypeChecker<'a> {
             param_names: vec![Some("value".into())],
             params: vec![source.clone()],
             return_type: target.clone(),
+            where_clause: None,
         };
         let widening_pairs: &[(&str, Type, &str, Type)] = &[
             // signed → signed
@@ -5731,6 +5816,7 @@ impl<'a> TypeChecker<'a> {
                 param_names,
                 params,
                 return_type,
+                where_clause: f.where_clause.clone(),
             },
         );
         if f.attributes.iter().any(|a| a.name == "compiler_builtin") {
@@ -5819,6 +5905,7 @@ impl<'a> TypeChecker<'a> {
                     param_names,
                     params,
                     return_type,
+                    where_clause: method.where_clause.clone(),
                 },
             );
         }
@@ -6016,6 +6103,7 @@ impl<'a> TypeChecker<'a> {
                 param_names,
                 params,
                 return_type,
+                where_clause: None,
             },
         );
     }
@@ -8518,15 +8606,23 @@ impl<'a> TypeChecker<'a> {
             apply_call_site_marker,
             None,
             None,
+            None,
+            record_subs_for_span,
         )
     }
 
     /// Extended variant of `check_call_args_with_substitution` that
     /// accepts explicit call-site generic args + the function's
-    /// declaration-order generic-param names (const generics slice 1c).
-    /// When both are supplied, each (formal_name, explicit_arg) pair
-    /// pre-binds the corresponding metavar so subsequent arg-position
-    /// unification flows from the explicit binding.
+    /// declaration-order generic-param names (const generics slice 1c)
+    /// and the callee's where-clause for bound discharge (slice 3c).
+    /// When `explicit_generic_args` and `formal_generic_params` are
+    /// both supplied, each (formal_name, explicit_arg) pair pre-binds
+    /// the corresponding metavar so subsequent arg-position
+    /// unification flows from the explicit binding. After the
+    /// inference solver runs, each `WhereConstraint::ConstPredicate`
+    /// in `where_clause` is evaluated against the resolved const-args;
+    /// `Bool(false)` triggers a `"const constraint violated"`
+    /// diagnostic at `discharge_span`.
     #[allow(clippy::too_many_arguments)]
     fn check_call_args_with_substitution_full(
         &mut self,
@@ -8537,9 +8633,26 @@ impl<'a> TypeChecker<'a> {
         apply_call_site_marker: bool,
         explicit_generic_args: Option<&[GenericArg]>,
         formal_generic_params: Option<&[String]>,
+        where_clause: Option<&WhereClause>,
+        discharge_span: &Span,
     ) -> Type {
-        let has_generic =
-            params.iter().any(contains_type_param) || contains_type_param(return_type);
+        // Const generics slice 3c: when the callee declares a
+        // where-clause with `ConstPredicate`s, force the full
+        // instantiate+unify+resolve+discharge path even if neither
+        // params nor return reference a generic — the predicate may
+        // reference const-params that don't appear in the signature's
+        // types (`fn f[const N: i64]() where N >= 0`). Without this
+        // override the early-return below skips discharge entirely.
+        let has_where_const_predicate = where_clause
+            .map(|wc| {
+                wc.constraints
+                    .iter()
+                    .any(|c| matches!(c, WhereConstraint::ConstPredicate { .. }))
+            })
+            .unwrap_or(false);
+        let has_generic = params.iter().any(contains_type_param)
+            || contains_type_param(return_type)
+            || has_where_const_predicate;
         if !has_generic {
             for (arg, param_ty) in args.iter().zip(params.iter()) {
                 let arg_ty = self.check_expr(&arg.value, param_ty);
@@ -8688,7 +8801,98 @@ impl<'a> TypeChecker<'a> {
             &self.env.const_substitutions,
             &const_id_to_name,
         );
-        self.resolve_assoc_projections(&ret)
+        let ret = self.resolve_assoc_projections(&ret);
+
+        // Const generics slice 3c: discharge `WhereConstraint::ConstPredicate`
+        // entries against the resolved const-args. The substitution
+        // map is built from two sources: inferred const-args (via
+        // `name_to_const_id` + `env.const_substitutions` resolved
+        // through `resolve_const_arg`), and explicit call-site args
+        // (when supplied — formal-param names paired with
+        // `explicit_generic_args` positions). Explicit args win on
+        // collision (the user-supplied value pins the predicate
+        // discharge directly without needing the inference solver to
+        // have minted a ConstVar for the param). Slice 2's
+        // `eval_const_expr` consumes the substituted predicate.
+        if let Some(wc) = where_clause {
+            let mut const_arg_subst: HashMap<String, i64> = HashMap::new();
+            for (name, &id) in &name_to_const_id {
+                let resolved = resolve_const_arg(
+                    &ConstArg::ConstVar(id),
+                    &self.env.const_substitutions,
+                    &const_id_to_name,
+                );
+                if let ConstArg::Literal(n) = resolved {
+                    const_arg_subst.insert(name.clone(), n);
+                }
+            }
+            if let (Some(explicit), Some(formal_names)) =
+                (explicit_generic_args, formal_generic_params)
+            {
+                for (formal_name, explicit_arg) in formal_names.iter().zip(explicit.iter()) {
+                    if let GenericArg::Const(e) = explicit_arg {
+                        if let Some(v) = const_value_from_literal(e) {
+                            const_arg_subst.insert(formal_name.clone(), v);
+                        }
+                    }
+                }
+            }
+            self.discharge_const_predicates(wc, &const_arg_subst, discharge_span);
+        }
+
+        ret
+    }
+
+    /// Walk a where-clause and discharge each `ConstPredicate(expr)`
+    /// against the resolved const-args (const generics slice 3c).
+    /// Substitutes `Identifier(name)` references in the predicate with
+    /// `Integer(value)` literals from `const_arg_subst`, then evaluates
+    /// via `eval_const_expr` against `Type::Bool`. Emits a focused
+    /// `"const constraint violated"` diagnostic on `Bool(false)`; other
+    /// eval errors propagate via the existing `emit_const_eval_error`.
+    fn discharge_const_predicates(
+        &mut self,
+        where_clause: &WhereClause,
+        const_arg_subst: &HashMap<String, i64>,
+        discharge_span: &Span,
+    ) {
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::ConstPredicate { expr, .. } = constraint else {
+                continue;
+            };
+            let substituted = substitute_const_idents_in_expr(expr, const_arg_subst);
+            match self.eval_const_expr(&substituted, &Type::Bool) {
+                Ok(crate::prelude::ConstValue::Bool(true)) => {}
+                Ok(crate::prelude::ConstValue::Bool(false)) => {
+                    let bindings_summary: Vec<String> = const_arg_subst
+                        .iter()
+                        .map(|(n, v)| format!("{}={}", n, v))
+                        .collect();
+                    let bindings_str = if bindings_summary.is_empty() {
+                        String::new()
+                    } else {
+                        format!(" with {}", bindings_summary.join(", "))
+                    };
+                    self.type_error(
+                        format!(
+                            "const constraint violated: predicate is false{}",
+                            bindings_str
+                        ),
+                        discharge_span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                Ok(_) => {
+                    // Non-Bool result — the predicate expression isn't a
+                    // boolean test. Slice 2's evaluator routes type
+                    // mismatches through ConstEvalError, but the
+                    // surface here is "predicate must return bool" —
+                    // skip silently (slice 2's per-operator checks
+                    // already surfaced any type errors).
+                }
+                Err(e) => self.emit_const_eval_error(e),
+            }
+        }
     }
 
     /// Validate `args` against a concrete `FunctionSig`. Used by the
@@ -10041,6 +10245,7 @@ impl<'a> TypeChecker<'a> {
             return sig.return_type;
         }
         let formal_generic_params = sig.generic_params.clone();
+        let where_clause = sig.where_clause.clone();
         self.check_call_args_with_substitution_full(
             args,
             &sig.params,
@@ -10049,6 +10254,8 @@ impl<'a> TypeChecker<'a> {
             true,
             Some(explicit_args),
             Some(&formal_generic_params),
+            where_clause.as_ref(),
+            span,
         )
     }
 
@@ -10077,18 +10284,13 @@ impl<'a> TypeChecker<'a> {
                 segments,
                 generic_args: Some(ga),
             } if segments.len() == 1 => Some((segments[0].clone(), ga.clone())),
-            ExprKind::Index { object, index }
-                if matches!(
-                    &index.kind,
-                    ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_)
-                ) =>
-            {
+            ExprKind::Index { object, index } if is_literal_const_arg_expr(index) => {
                 if let ExprKind::Identifier(name) = &object.kind {
                     if self
                         .env
                         .functions
                         .get(name)
-                        .map(|sig| !sig.generic_params.is_empty())
+                        .map(|s| !s.generic_params.is_empty())
                         .unwrap_or(false)
                     {
                         Some((name.clone(), vec![GenericArg::Const((**index).clone())]))
@@ -10238,6 +10440,28 @@ impl<'a> TypeChecker<'a> {
             self.validate_labels(args, names, span);
         }
 
+        // Const generics slice 3c: look up the callee's where-clause
+        // so the regular generic-call dispatch can discharge
+        // `ConstPredicate`s against inferred const-args. The
+        // explicit-generic-args path (`infer_explicit_generic_args_call`)
+        // already threads the where-clause; this branch covers the
+        // type-inferred case (`f(arr)` where N is inferred from
+        // `arr`'s type).
+        let callee_where_clause: Option<WhereClause> = match &callee.kind {
+            ExprKind::Identifier(name) => self
+                .env
+                .functions
+                .get(name)
+                .and_then(|sig| sig.where_clause.clone()),
+            ExprKind::Path { segments, .. } => segments.last().and_then(|name| {
+                self.env
+                    .functions
+                    .get(name)
+                    .and_then(|sig| sig.where_clause.clone())
+            }),
+            _ => None,
+        };
+
         let callee_ty = self.infer_expr(callee);
 
         match &callee_ty {
@@ -10267,12 +10491,16 @@ impl<'a> TypeChecker<'a> {
                 }
                 let params = params.clone();
                 let return_type = *return_type.clone();
-                self.check_call_args_with_substitution(
+                self.check_call_args_with_substitution_full(
                     args,
                     &params,
                     &return_type,
                     span,
                     /* apply_call_site_marker = */ true,
+                    None,
+                    None,
+                    callee_where_clause.as_ref(),
+                    span,
                 )
             }
             Type::Error => {
