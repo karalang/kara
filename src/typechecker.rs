@@ -4213,10 +4213,21 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
-    fn lower_generic_args(
+    /// Const generics slice 3d: deferred-F regression-pin diagnostic.
+    /// `Type::Named.args` is `Vec<Type>` — there's no representation
+    /// for a const-arg on a user-defined struct / enum. When a
+    /// `GenericArg::Const` payload arrives at a `Type::Named` lowering
+    /// site, emit a focused "const-args on user-defined types are not
+    /// yet supported" diagnostic and drop the const-arg. The
+    /// surrounding type name (when known) flows into the message so
+    /// users see which call site triggered the rejection. `Array[T, N]`
+    /// const-args don't reach here — they're special-cased in
+    /// `lower_array_type` before `lower_generic_args` is invoked.
+    fn lower_generic_args_named(
         &mut self,
         generic_args: &Option<Vec<GenericArg>>,
         generic_scope: &[String],
+        type_name: Option<&str>,
     ) -> Vec<Type> {
         generic_args
             .as_ref()
@@ -4224,7 +4235,20 @@ impl<'a> TypeChecker<'a> {
                 ga.iter()
                     .filter_map(|arg| match arg {
                         GenericArg::Type(t) => Some(self.lower_type_expr(t, generic_scope)),
-                        GenericArg::Const(_) => None, // const args don't produce types
+                        GenericArg::Const(expr) => {
+                            let target = type_name.unwrap_or("this type");
+                            self.type_error(
+                                format!(
+                                    "const generic argument on user-defined type '{}' is \
+                                     not yet supported in this slice; only the built-in \
+                                     `Array[T, N]` accepts const-args at v1",
+                                    target
+                                ),
+                                expr.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                            None
+                        }
                     })
                     .collect()
             })
@@ -4262,7 +4286,7 @@ impl<'a> TypeChecker<'a> {
                 return self.resolve_alias_deep(name.clone(), &mut visited);
             }
             // Named type (struct/enum/import)
-            let args = self.lower_generic_args(&path.generic_args, generic_scope);
+            let args = self.lower_generic_args_named(&path.generic_args, generic_scope, Some(name));
             // Intercept stdlib Rc[T] / Arc[T] wrappers — sub-item 2 of the
             // Type::Shared/Rc/Arc representation work. Single-arg form
             // only; zero/multi-arg keeps flowing through Type::Named so
@@ -4297,7 +4321,8 @@ impl<'a> TypeChecker<'a> {
             }
             // Multi-segment module path — use last segment as type name
             let name = path.segments.last().unwrap().clone();
-            let args = self.lower_generic_args(&path.generic_args, generic_scope);
+            let args =
+                self.lower_generic_args_named(&path.generic_args, generic_scope, Some(&name));
             Type::Named { name, args }
         }
     }

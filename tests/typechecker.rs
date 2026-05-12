@@ -10929,6 +10929,40 @@ fn test_where_predicate_via_inferred_const_arg() {
 }
 
 #[test]
+fn test_const_arg_user_defined_struct_rejected() {
+    // Const generics slice 3d (deferred-F regression-pin). Users can
+    // declare `struct Buffer[T, const N: i64]` (slice 1 accepts the
+    // const-param in the generic-param list), but `Type::Named.args`
+    // is `Vec<Type>` and can't carry a const-arg. Writing
+    // `Buffer[i64, 4]` at a type position used to silently drop the
+    // `4`; slice 3d emits a focused regression-pin diagnostic so
+    // users know the limitation. The pin flips to a success test
+    // when a future slice extends `Type::Named.args` to carry mixed
+    // type / const arguments.
+    let errs = typecheck_errors(
+        "struct Buffer[T, const N: i64] { x: T }\n\
+         fn f(b: Buffer[i64, 4]) { }",
+    );
+    assert!(
+        errs.iter().any(|e| e
+            .message
+            .contains("const generic argument on user-defined type")
+            && e.message.contains("Buffer")),
+        "expected regression-pin diagnostic for `Buffer[i64, 4]`, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_const_arg_array_unchanged_after_user_defined_diagnostic() {
+    // Regression: the slice-3d diagnostic at `lower_generic_args_named`
+    // only fires for non-Array types. `Array[i64, 4]` is special-cased
+    // upstream in `lower_array_type` before `lower_generic_args` is
+    // called, so the Array surface continues to work unchanged.
+    typecheck_ok("fn f(a: Array[i64, 4]) { }");
+}
+
+#[test]
 fn test_const_inference_return_only_unsolved() {
     // Slice 3b sub-step (h): `fn f[const N: i64]() -> Array[i64, N]`
     // called as `let x = f();` (no explicit args, no annotation)

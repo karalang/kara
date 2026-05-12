@@ -150,7 +150,13 @@
 
      **Parser ambiguity carveout.** `where M < N { body }` triggers the parser's struct-literal heuristic (`N {` looks like a struct construction). The `test_where_predicate_multiple_const_args` test sidesteps this by using a literal RHS (`M >= 100`). Predicates of shape `... < Identifier` or `... > Identifier` immediately followed by the body brace will currently fail to parse — recovery is a separate parser slice (struct-literal disambiguation in non-statement positions).
 
-     **Slice 3d (deferred 2026-05-11).** Deferred-F regression-pin diagnostic: `Type::Named.args` const-arg representation stays type-only for user-defined structs; the call-site solver emits a focused "const-arg inference for user-defined types is not yet supported" diagnostic so future work knows when to lift the carve-out. **Estimated time:** ~30 min once slice 3b's inference solver is in.
+     **Slice 3d.** ✓ Landed 2026-05-11. Deferred-F regression-pin diagnostic: `Type::Named.args` is `Vec<Type>` and can't carry a const-arg, so user-defined struct const-generic args silently dropped pre-3d. Slice 3d emits a focused diagnostic at the type-position lowering site. What landed:
+     - **`lower_generic_args_named`** replaces `lower_generic_args` (the old method is removed). The named variant takes an optional `type_name: Option<&str>` argument; when a `GenericArg::Const(expr)` arrives, it emits `"const generic argument on user-defined type '{}' is not yet supported in this slice; only the built-in \`Array[T, N]\` accepts const-args at v1"` at the expr's span. Both `lower_path_type` call sites pass the type name through.
+     - The Array case is unaffected: `lower_array_type` is special-cased upstream in `lower_path_type` (single-segment Path, name == "Array") before `lower_generic_args_named` is invoked, so `Array[T, 4]` continues to work unchanged.
+
+     Test surface (2 new): `test_const_arg_user_defined_struct_rejected` (`struct Buffer[T, const N: i64]` + `fn f(b: Buffer[i64, 4])` surfaces the regression-pin diagnostic mentioning `Buffer`); `test_const_arg_array_unchanged_after_user_defined_diagnostic` (regression-pin that the Array surface still type-checks unchanged).
+
+     **Pull-trigger** for lifting the carve-out: a kata or stdlib type that needs const-arg inference on a `Type::Named` shape. The future slice extends `Type::Named.args` to `Vec<TypeArg>` where `TypeArg = Type(Type) | Const(ConstArg)`, plumbs through the inference solver, and flips the regression-pin test to a success case.
 
      Original slice 3 plan retained below for reference; the slice-3a/b/c/d split reflects execution scope, not design changes.
 
