@@ -2,13 +2,21 @@
 
 Pre-flight audit of every load-bearing symbol declared in `runtime/src/`,
 produced for the Phase 1 binary-size optimization slice (`strip -x` post-link
-+ `panic = "abort"`). Re-run this audit before enabling Phase 2 cross-archive
-LTO + `-Wl,-dead_strip` / `-Wl,--gc-sections` — DCE without an explicit
-keep-list will silently strip symbols the codegen-emitted Kāra programs
-indirect into via the `karac_*` C ABI.
++ `panic = "abort"`) and re-run for Phase 2 (cross-archive LTO +
+`-Wl,-dead_strip` on macOS / `-Wl,--gc-sections` on Linux, both landed
+2026-05-12).
 
 The audit covers the attribute set: `#[used]`, `#[link_section(…)]`,
 `#[ctor]`, `#[dtor]`, `#[no_mangle]`, and `extern "C"` declarations.
+
+**Phase 2 outcome.** The runtime declares zero `#[used]` /
+`#[link_section]` / `#[ctor]` / `#[dtor]` attributes, so every reachable
+runtime symbol is anchored through a direct call from codegen-emitted IR.
+DCE preserves them through entry-point reachability with no explicit
+keep-list directive needed at the linker level. Validated on macOS
+2026-05-12: `cargo test --features llvm` clean (215 codegen tests,
+848 typechecker tests, 28 walker tests, etc.); LeetCode #1665 bench
+binary 2.5 MB → 375 KB without correctness regression.
 
 ## Audit method
 
@@ -24,18 +32,18 @@ Re-run on every runtime change; this file should grow only when a new
 ### Attributes NOT present in the runtime
 
 These attribute kinds were searched and produced **zero** matches as of
-2026-05-07:
+2026-05-12 (re-confirmed from the original 2026-05-07 sweep):
 
 - `#[used]`
 - `#[link_section(…)]`
 - `#[ctor]`
 - `#[dtor]`
 
-Implication for Phase 2 LTO/DCE: no static-init / static-fini / forced-keep
-machinery exists in the runtime today. A future `#[ctor]` or `#[link_section]`
-addition (e.g., a panic-handler section, a static registration table) would
-need an explicit keep-list entry here *before* it lands, paired with whatever
-linker flag preserves the section across DCE on each target.
+Implication: no static-init / static-fini / forced-keep machinery exists in
+the runtime. A future `#[ctor]` or `#[link_section]` addition (e.g., a panic-
+handler section, a static registration table) would need an explicit
+keep-list entry here *before* it lands, paired with whatever linker flag
+preserves the section across DCE on each target.
 
 ### `#[no_mangle] extern "C"` exports — runtime entry points
 
@@ -61,6 +69,14 @@ verify none gets stripped.
 | `karac_par_run` | `unsafe extern "C" fn(branches: *const KaracBranch, count: usize)` | `par {}` block executor — fixed-size thread pool, fail-fast cancellation. |
 | `karac_error_trace_push` | `unsafe extern "C" fn(file_ptr: *const u8, file_len: usize, line: u32, col: u32)` | Push a frame onto the global `?` error-return trace at every `?` failure site. |
 | `karac_error_trace_clear` | `extern "C" fn()` | Reset the global `?` error-return trace at every `?` success site. |
+| `karac_provider_push` / `karac_provider_pop` / `karac_provider_lookup` / `karac_provider_set_stack_head` / `karac_provider_get_stack_head` | Provider-stack ops | Per-thread `with` block provider injection. Codegen emits push/pop bracketing every `with` scope; `lookup` resolves resource accesses; the get/set head pair lets `par {}` workers inherit the parent thread's provider stack. |
+| `karac_runtime_get_current_frame` / `karac_runtime_for_each_active_frame` | Frame walkers | Read the active-frame chain for debug metadata + spawn-site introspection. |
+| `karac_runtime_has_debug_metadata` | `extern "C" fn() -> bool` | True iff codegen emitted a non-default `KARAC_SPAWN_SITES` table; queries the linked-in static. |
+| `karac_runtime_list_par_blocks_into` | `unsafe extern "C" fn(out: *mut KaracVec)` | Read the spawn-site table into a `Vec<KaracSpawnSiteEntry>` for tooling. |
+| `karac_runtime_json_parse` / `karac_runtime_json_stringify` / `karac_runtime_json_free_value` / `karac_runtime_json_free_string` | JSON FFI | Slice F's `std.json` backing impl. Drag the `serde_json` subgraph into the link only if a Kāra program imports `std.json` — Phase 2 DCE strips them otherwise. |
+| `karac_runtime_http_response_set_body` / `_set_status` / `karac_runtime_http_request_path` / `_request_method` | HTTP FFI getters/setters | Slice B's `std.http` request/response accessors. |
+| `karac_runtime_serve_http` / `karac_runtime_serve_http_static` | HTTP FFI server | Slice B's `Server.serve` / `Server.serve_static`. Roots the tokio + hyper + h2 subgraph; Phase 2 DCE strips the entire subgraph when no Kāra program imports `std.http`. |
+| `karac_vec_sort_by` | `unsafe extern "C" fn(data: *mut u8, len: i64, elem_size: i64, cmp: extern "C" fn(*mut u8, *const u8, *const u8) -> i64, ctx: *mut u8)` | `Vec.sort_by` backing impl. 8-byte and 16-byte element fast paths inline-monomorphize via `slice::sort_by`; fallback path is index-sort + permute. |
 
 Plus one `extern "C"` block importing libc:
 
@@ -126,19 +142,26 @@ an explicit keep-list at the codegen end.
 
 ## Summary
 
-- **Total `#[no_mangle]` exports:** 19 (`karac_par_run`, `karac_error_trace_push`, `karac_error_trace_clear`, `karac_string_clone`, plus 15 `karac_map_*`).
+- **Total `#[no_mangle]` exports (2026-05-12 audit):** 37.
+  - 4 carried over from 2026-05-07: `karac_par_run`, `karac_error_trace_push`, `karac_error_trace_clear`, `karac_string_clone`.
+  - 15 `karac_map_*` (unchanged from 2026-05-07).
+  - 18 added since: 5 `karac_provider_*`, `karac_runtime_get_current_frame`, `karac_runtime_for_each_active_frame`, `karac_runtime_has_debug_metadata`, `karac_runtime_list_par_blocks_into`, 4 `karac_runtime_http_*` getters/setters, 2 `karac_runtime_serve_http*`, 4 `karac_runtime_json_*`, `karac_vec_sort_by`.
 - **Total libc `extern "C"` imports:** 1 (`atexit`).
 - **Total private `extern "C"` callbacks:** 1 (`print_trace_at_exit`, registered with `atexit`).
 - **`#[used]` / `#[link_section(…)]` / `#[ctor]` / `#[dtor]`:** none.
 
-Phase 1 (`strip -x` + `panic = "abort"`) is safe against this surface: `strip
--x` preserves all 19 global exports by construction, and `panic = "abort"`
-removes the unwind tables that the runtime never depends on at runtime
-(the lone `catch_unwind` site in `karac_par_run` becomes effectively
-dead-code under abort semantics — fail-fast cancellation still works because
-the abort happens before the `cancel.store` would have run, which matches
-"some other branch exited the process" anyway).
+Phase 1 (`strip -x` + `panic = "abort"`) preserves every global export
+because `-x` strips local non-globals only; `#[no_mangle] extern "C"`
+exports are external-linkage globals and survive by definition.
 
-Phase 2 (LTO + `-Wl,-dead_strip` / `-Wl,--gc-sections`) requires this same
-list as a per-symbol keep-list directive, plus a re-run of this audit before
-the slice lands.
+Phase 2 (`-Wl,-dead_strip` on Mach-O / `-Wl,--gc-sections` on ELF + thin
+LTO across the workspace release profile) does **not** treat the
+`#[no_mangle]` set as automatic keep-list roots — it computes reachability
+from the entry point. Every symbol above is anchored through a direct call
+from codegen-emitted IR when the program actually uses that subsystem:
+e.g., `karac_runtime_serve_http` is unreached on a program that never
+imports `std.http`, and the linker correctly drops the entire tokio +
+hyper + h2 transitive subgraph. Programs that *do* import `std.http` pull
+in only that arm. Validated on the LeetCode #1665 sort-heavy bench
+(`kara-katas/leetcode/1601-1700/1665-.../bench/`) — binary dropped from
+2.5 MB → 375 KB without correctness regression.

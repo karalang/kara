@@ -237,6 +237,29 @@ fn link_executable_impl(
         "-lpthread",
         "-ldl",
     ]);
+    // Binary-size phase 2: cross-archive DCE. The runtime exports HTTP /
+    // JSON / par / map / etc. entry points unconditionally as `#[no_mangle]`,
+    // and any program statically links the full archive even if it never
+    // calls those subsystems. `-Wl,-dead_strip` (Mach-O) / `-Wl,--gc-sections`
+    // (ELF) makes the linker compute reachability from the entry point and
+    // drop unreached objects across the cc-line archive boundary. Combined
+    // with `lto = "thin"` on the runtime crate (workspace `Cargo.toml`'s
+    // `[profile.release.package.karac-runtime]`), the unused tokio / hyper /
+    // serde_json subgraph collapses to zero bytes when the program imports
+    // none of those stdlib modules. Skipped under sanitizer builds: ASAN's
+    // interceptor table is reached via `__asan_*` symbols that aren't always
+    // referenced from main, and dead-stripping the table breaks
+    // instrumentation. See `runtime/SYMBOL_KEEP_LIST.md` for the keep-list
+    // audit; the runtime declares no `#[used]` / `#[link_section]` /
+    // `#[ctor]` / `#[dtor]` attributes, so every reachable runtime symbol
+    // is anchored through a direct call from codegen-emitted IR.
+    if !is_sanitizer_link(extra_cc_args) {
+        if cfg!(target_os = "macos") {
+            cmd.args(["-Wl,-dead_strip"]);
+        } else if cfg!(target_os = "linux") {
+            cmd.args(["-Wl,--gc-sections"]);
+        }
+    }
     let output = cmd
         .output()
         .map_err(|e| format!("Failed to invoke linker: {}", e))?;
