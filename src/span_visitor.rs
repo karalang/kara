@@ -499,6 +499,15 @@ fn visit_pattern(p: &Pattern, visit: &mut impl FnMut(&Span)) {
                 visit_pattern(inner, visit);
             }
         }
+        PatternKind::Slice {
+            prefix,
+            rest: _,
+            suffix,
+        } => {
+            for inner in prefix.iter().chain(suffix.iter()) {
+                visit_pattern(inner, visit);
+            }
+        }
     }
 }
 

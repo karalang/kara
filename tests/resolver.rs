@@ -1950,3 +1950,51 @@ fn test_compiler_builtin_per_method_origin_bypasses_gate_on_impl_method() {
         rejections.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
+
+#[test]
+fn test_slice_pattern_binds_prefix_suffix_and_rest_names() {
+    // The resolver should define `a`, `b`, `mid`, `c` from the slice pattern
+    // so that the arm body can reference them without "undefined name" errors.
+    // (The typechecker stub still rejects the program semantically — covered
+    // in tests/typechecker.rs — but resolver scope binding is independent.)
+    let parsed = parse(
+        "fn f(xs: Vec[i64]) -> i64 { \
+         match xs { \
+         [a, b, ..mid, c] => a + b + c, \
+         _ => 0, \
+         } \
+         }",
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    let result = resolve(&parsed.program);
+    assert!(
+        result.errors.is_empty(),
+        "expected no resolve errors, got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_unbound_rest_does_not_introduce_name() {
+    // `..` (ignored rest) does not introduce a binding — referencing `rest`
+    // in the body should produce an unresolved-name error.
+    let errs = resolve_errors(
+        "fn f(xs: Vec[i64]) -> i64 { \
+         match xs { \
+         [.., last] => rest + last, \
+         _ => 0, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("rest")),
+        "expected unresolved 'rest' diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

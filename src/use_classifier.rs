@@ -38,7 +38,8 @@
 //!   block of the call site, mirroring the closure-body lowering.
 
 use crate::ast::{
-    Block, Expr, ExprKind, Item, Pattern, PatternKind, Program, SelfParam, Stmt, StmtKind,
+    Block, Expr, ExprKind, Item, Pattern, PatternKind, Program, RestPattern, SelfParam, Stmt,
+    StmtKind,
 };
 use crate::cfg::{Classification, ConsumeOrigin, UseKind};
 use crate::ownership::{
@@ -632,6 +633,17 @@ impl<'a> UseClassifier<'a> {
                 None => true,
             }),
             PatternKind::Or(alts) => alts.iter().any(|p| self.pattern_binds_anything(p)),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                matches!(rest, Some(RestPattern::Bound(_)))
+                    || prefix
+                        .iter()
+                        .chain(suffix.iter())
+                        .any(|p| self.pattern_binds_anything(p))
+            }
         }
     }
 }

@@ -506,6 +506,18 @@ impl<'a> ConcurrencyChecker<'a> {
                     self.collect_pattern_bindings(p, defines);
                 }
             }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix.iter().chain(suffix.iter()) {
+                    self.collect_pattern_bindings(p, defines);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    defines.insert(name.clone());
+                }
+            }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
         }
     }

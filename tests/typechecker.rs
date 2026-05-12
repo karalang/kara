@@ -11111,3 +11111,225 @@ fn test_const_inference_multi_position_conflict() {
         "expected a type-mismatch diagnostic when const-args don't unify across positions"
     );
 }
+
+// ── Slice / array patterns — sub-item 2 (typechecker + exhaustiveness + refutability) ─
+
+#[test]
+fn test_slice_pattern_match_vec_with_wildcard_typechecks() {
+    typecheck_ok(
+        "fn f(xs: Vec[i64]) -> i64 { \
+         match xs { \
+         [a, b] => a + b, \
+         _ => 0, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_match_vec_without_wildcard_non_exhaustive() {
+    let errs = typecheck_errors(
+        "fn f(xs: Vec[i64]) -> i64 { \
+         match xs { \
+         [a, b] => a + b, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::NonExhaustiveMatch),
+        "expected NonExhaustiveMatch for Vec without wildcard, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_exact_arity_array_is_exhaustive() {
+    typecheck_ok(
+        "fn f(arr: Array[i64, 3]) -> i64 { \
+         match arr { \
+         [a, b, c] => a + b + c, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_array_under_coverage_rejected() {
+    let errs = typecheck_errors(
+        "fn f(arr: Array[i64, 3]) -> i64 { \
+         match arr { \
+         [a, b] => a + b, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("covers 2 of 3 positions")),
+        "expected under-coverage diagnostic for Array, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_array_over_arity_rejected() {
+    let errs = typecheck_errors(
+        "fn f(arr: Array[i64, 2]) -> i64 { \
+         match arr { \
+         [a, b, c] => a + b + c, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("but `Array[_, 2]` has length 2")),
+        "expected arity-overflow diagnostic for Array, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_array_rest_with_arithmetic_remainder() {
+    // `..rest` over Array[i64, 5] with 2 prefix + 1 suffix → rest is
+    // Array[i64, 2]. The rest binding is used in the arm body; if its type
+    // were wrong, the arithmetic call wouldn't typecheck. We assert a
+    // typing rule indirectly: the arm body compiles iff rest has the
+    // expected Array[_, 2] type.
+    typecheck_ok(
+        "fn f(arr: Array[i64, 5]) -> Array[i64, 2] { \
+         match arr { \
+         [_, _, ..rest, _] => rest, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_vec_rest_typed_as_slice() {
+    // `..rest` over Vec[i64] binds `rest: Slice[i64]`. The arm body returns
+    // it; the return-type annotation pins the typing rule.
+    typecheck_ok(
+        "fn f(xs: Vec[i64]) -> Slice[i64] { \
+         match xs { \
+         [_, ..rest] => rest, \
+         _ => xs.as_slice(), \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_mut_slice_rest_preserves_mut() {
+    // mutability propagation: `mut Slice[i64]` scrutinee → rest binds
+    // `mut Slice[i64]`, not `Slice[i64]`.
+    typecheck_ok(
+        "fn f(xs: mut Slice[i64]) -> mut Slice[i64] { \
+         match xs { \
+         [_, ..rest] => rest, \
+         _ => xs, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_string_rejected_with_bytes_chars_hint() {
+    let errs = typecheck_errors(
+        "fn f(s: String) -> i64 { \
+         match s { \
+         [_, ..] => 1, \
+         _ => 0, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains(".bytes()") && e.message.contains(".chars()")),
+        "expected String-rejection diagnostic with bytes/chars hint, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_irrefutable_array_let_works() {
+    // `let [a, b, c] = arr` against Array[i64, 3] is irrefutable
+    // (every value of Array[i64, 3] has exactly 3 elements; bindings are
+    // wildcards on each).
+    typecheck_ok(
+        "fn f(arr: Array[i64, 3]) -> i64 { \
+         let [a, b, c] = arr; \
+         a + b + c \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_refutable_vec_let_rejected() {
+    let errs = typecheck_errors(
+        "fn f(xs: Vec[i64]) -> i64 { \
+         let [a, b] = xs; \
+         a + b \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::RefutablePattern),
+        "expected RefutablePattern for Vec[T] slice pattern in let, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_slice_pattern_array_rest_irrefutable_in_let() {
+    // `let [a, ..rest] = arr` against Array[i64, 4] is irrefutable
+    // (rest covers 3 trailing positions; all sub-patterns are bindings).
+    typecheck_ok(
+        "fn f(arr: Array[i64, 4]) -> i64 { \
+         let [a, ..rest] = arr; \
+         a \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_array_rest_covers_to_exhaustiveness() {
+    // `[_, ..]` covers Array[i64, 5] exhaustively without a wildcard arm.
+    typecheck_ok(
+        "fn f(arr: Array[i64, 5]) -> i64 { \
+         match arr { \
+         [first, ..] => first, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_nested_with_independent_rest_markers() {
+    // Nested slice pattern with each level's own rest. Outer arr is
+    // Array[Array[i64, 4], 3]; inner Array[i64, 4] gets its own `..`.
+    typecheck_ok(
+        "fn f(matrix: Array[Array[i64, 4], 3]) -> i64 { \
+         match matrix { \
+         [[a, ..], [b, ..], [c, ..]] => a + b + c, \
+         } \
+         }",
+    );
+}
+
+#[test]
+fn test_slice_pattern_on_int_rejected() {
+    let errs = typecheck_errors(
+        "fn f(n: i64) -> i64 { \
+         match n { \
+         [_, ..] => 1, \
+         _ => 0, \
+         } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("slice patterns apply to") && e.message.contains("i64")),
+        "expected scrutinee-mismatch diagnostic for non-collection type, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

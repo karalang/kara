@@ -3171,6 +3171,65 @@ impl Parser {
                     span: self.span_from(&start),
                 })
             }
+            Token::LeftBracket => {
+                // Slice/array pattern: `[p1, p2, ..rest, p_n-1, p_n]`.
+                // Sub-item 1 of the slice/array-patterns entry (phase 5.2):
+                // parser produces the variant; typechecker emits a stub
+                // diagnostic until sub-item 2 lands.
+                self.advance();
+                let mut prefix: Vec<Pattern> = Vec::new();
+                let mut suffix: Vec<Pattern> = Vec::new();
+                let mut rest: Option<RestPattern> = None;
+                while !self.check(&Token::RightBracket) && !self.is_at_end() {
+                    if self.check(&Token::DotDot) {
+                        let rest_span = self.current_span();
+                        self.advance();
+                        let new_rest = if let Token::Identifier { .. } = self.peek_token() {
+                            let name = self.expect_identifier()?;
+                            self.check_ident_class(
+                                &name,
+                                IdentClass::Value,
+                                "binding",
+                                rest_span.clone(),
+                            );
+                            RestPattern::Bound(name)
+                        } else {
+                            RestPattern::Ignored
+                        };
+                        if rest.is_some() {
+                            // Recovery: keep the first rest marker; later
+                            // elements continue collecting into `suffix`.
+                            self.errors.push(ParseError {
+                                message:
+                                    "slice pattern may have at most one `..` marker; remove the extras"
+                                        .to_string(),
+                                span: rest_span,
+                            });
+                        } else {
+                            rest = Some(new_rest);
+                        }
+                    } else {
+                        let pat = self.parse_pattern()?;
+                        if rest.is_none() {
+                            prefix.push(pat);
+                        } else {
+                            suffix.push(pat);
+                        }
+                    }
+                    if !self.eat(&Token::Comma) {
+                        break;
+                    }
+                }
+                self.expect(&Token::RightBracket)?;
+                Some(Pattern {
+                    kind: PatternKind::Slice {
+                        prefix,
+                        rest,
+                        suffix,
+                    },
+                    span: self.span_from(&start),
+                })
+            }
             Token::Identifier { .. } => {
                 let name = self.expect_identifier()?;
 

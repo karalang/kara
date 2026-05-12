@@ -1666,6 +1666,42 @@ impl Formatter {
                     self.format_pattern(p);
                 }
             }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                self.write_str("[");
+                let mut first = true;
+                for p in prefix {
+                    if !first {
+                        self.write_str(", ");
+                    }
+                    self.format_pattern(p);
+                    first = false;
+                }
+                if let Some(r) = rest {
+                    if !first {
+                        self.write_str(", ");
+                    }
+                    match r {
+                        RestPattern::Ignored => self.write_str(".."),
+                        RestPattern::Bound(name) => {
+                            self.write_str("..");
+                            self.write_ident(name);
+                        }
+                    }
+                    first = false;
+                }
+                for p in suffix {
+                    if !first {
+                        self.write_str(", ");
+                    }
+                    self.format_pattern(p);
+                    first = false;
+                }
+                self.write_str("]");
+            }
         }
     }
 

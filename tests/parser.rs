@@ -5806,3 +5806,197 @@ fn standalone_ufcs_path_without_method_call_is_not_promoted() {
         panic!("expected Function");
     }
 }
+
+// ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
+//
+// Parser-side coverage for the new `PatternKind::Slice` variant. Sub-item 1
+// lands AST + parser + resolver; the typechecker stub diagnostic is asserted
+// separately in tests/typechecker.rs.
+
+fn first_match_arm_pattern(prog: &Program) -> &Pattern {
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected function"),
+    };
+    let expr = f.body.final_expr.as_ref().expect("expected final expr");
+    let arms = match &expr.kind {
+        ExprKind::Match { arms, .. } => arms,
+        _ => panic!("expected match expression"),
+    };
+    &arms[0].pattern
+}
+
+#[test]
+fn test_slice_pattern_empty() {
+    let prog = parse_ok("fn main() { match xs { [] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert!(prefix.is_empty());
+            assert!(rest.is_none());
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_single() {
+    let prog = parse_ok("fn main() { match xs { [a] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 1);
+            assert!(matches!(&prefix[0].kind, PatternKind::Binding(n) if n == "a"));
+            assert!(rest.is_none());
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_fixed_arity() {
+    let prog = parse_ok("fn main() { match xs { [a, b, c] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 3);
+            assert!(rest.is_none());
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_head_only() {
+    let prog = parse_ok("fn main() { match xs { [a, ..] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 1);
+            assert!(matches!(rest, Some(RestPattern::Ignored)));
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_tail_only() {
+    let prog = parse_ok("fn main() { match xs { [.., a] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert!(prefix.is_empty());
+            assert!(matches!(rest, Some(RestPattern::Ignored)));
+            assert_eq!(suffix.len(), 1);
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_both_ends_ignored_rest() {
+    let prog = parse_ok("fn main() { match xs { [a, .., b] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 1);
+            assert!(matches!(rest, Some(RestPattern::Ignored)));
+            assert_eq!(suffix.len(), 1);
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_single_bound_rest() {
+    let prog = parse_ok("fn main() { match xs { [..rest] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert!(prefix.is_empty());
+            assert!(matches!(rest, Some(RestPattern::Bound(n)) if n == "rest"));
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_two_bound_rest() {
+    let prog = parse_ok("fn main() { match xs { [head, ..tail] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 1);
+            assert!(matches!(&prefix[0].kind, PatternKind::Binding(n) if n == "head"));
+            assert!(matches!(rest, Some(RestPattern::Bound(n)) if n == "tail"));
+            assert!(suffix.is_empty());
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_multi_prefix_and_suffix() {
+    let prog = parse_ok("fn main() { match xs { [a, b, .., c, d] => 0, _ => 1 } }");
+    match &first_match_arm_pattern(&prog).kind {
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            assert_eq!(prefix.len(), 2);
+            assert!(matches!(rest, Some(RestPattern::Ignored)));
+            assert_eq!(suffix.len(), 2);
+        }
+        other => panic!("expected Slice, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_slice_pattern_in_let() {
+    // Let-pattern context also accepts slice syntax; the typechecker stub
+    // will still reject semantically, but parsing should succeed.
+    parse_ok("fn main() { let [a, b] = arr; }");
+}
+
+#[test]
+fn test_slice_pattern_multiple_rest_rejected() {
+    let (_prog, errors) =
+        parse_with_errors("fn main() { match xs { [a, .., b, .., c] => 0, _ => 1 } }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("at most one `..` marker")),
+        "expected multiple-`..` diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

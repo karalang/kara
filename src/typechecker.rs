@@ -14487,6 +14487,118 @@ impl<'a> TypeChecker<'a> {
         result_ty
     }
 
+    /// Validate a slice/array pattern against the scrutinee type and
+    /// return `(element_type, rest_binding_type)` — the per-element type
+    /// used to recurse into prefix/suffix sub-patterns, and the type the
+    /// `..name` rest binding should receive. Emits per-case diagnostics
+    /// (arity overflow, under-coverage without `..`, non-literal `Array`
+    /// size, `String` redirect, unsupported scrutinee shape). Returns
+    /// `(Type::Error, Type::Error)` on rejection so callers can still
+    /// recurse cleanly without crashing. Sub-item 2 of the slice/array-
+    /// patterns entry (phase 5.2).
+    fn slice_pattern_types(
+        &mut self,
+        prefix: &[Pattern],
+        rest: &Option<RestPattern>,
+        suffix: &[Pattern],
+        scrutinee_type: &Type,
+        span: &Span,
+    ) -> (Type, Type) {
+        let head = prefix.len();
+        let tail = suffix.len();
+        let used = head + tail;
+        match scrutinee_type {
+            Type::Error => (Type::Error, Type::Error),
+            Type::Array { element, size } => match size.as_usize() {
+                Some(n) => {
+                    if used > n {
+                        self.type_error(
+                            format!(
+                                "slice pattern has {used} element{} but \
+                                 `Array[_, {n}]` has length {n}; remove \
+                                 element patterns or add a `..` marker",
+                                if used == 1 { "" } else { "s" },
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return (Type::Error, Type::Error);
+                    }
+                    if rest.is_none() && used != n {
+                        self.type_error(
+                            format!(
+                                "slice pattern covers {used} of {n} \
+                                 positions on `Array[_, {n}]`; add a `..` \
+                                 marker if the remaining positions should \
+                                 match anything"
+                            ),
+                            span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                        return ((**element).clone(), Type::Error);
+                    }
+                    let remainder = (n - used) as i64;
+                    let rest_ty = Type::Array {
+                        element: element.clone(),
+                        size: ConstArg::Literal(remainder),
+                    };
+                    ((**element).clone(), rest_ty)
+                }
+                None => {
+                    self.type_error(
+                        "slice patterns on `Array[T, N]` require `N` to be \
+                         a compile-time literal; const-parameter array \
+                         sizes are not yet supported in pattern position"
+                            .to_string(),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    ((**element).clone(), Type::Error)
+                }
+            },
+            Type::Slice { element, mutable } => {
+                let rest_ty = Type::Slice {
+                    element: element.clone(),
+                    mutable: *mutable,
+                };
+                ((**element).clone(), rest_ty)
+            }
+            Type::Named { name, args } if name == "Vec" => {
+                let element = args.first().cloned().unwrap_or(Type::Error);
+                let rest_ty = Type::Slice {
+                    element: Box::new(element.clone()),
+                    mutable: false,
+                };
+                (element, rest_ty)
+            }
+            Type::Str => {
+                self.type_error(
+                    "slice patterns do not apply to `String` — UTF-8 is \
+                     variable-width per code point, so byte-level positional \
+                     patterns would produce invalid boundaries. To match on \
+                     string content, convert to `Slice[u8]` with `.bytes()` \
+                     or `Iterator[char]` with `.chars()` first"
+                        .to_string(),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                (Type::Error, Type::Error)
+            }
+            _ => {
+                self.type_error(
+                    format!(
+                        "slice patterns apply to `Array[T, N]`, `Vec[T]`, \
+                         and `Slice[T]`; cannot match a value of type `{}`",
+                        type_display(scrutinee_type)
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                (Type::Error, Type::Error)
+            }
+        }
+    }
+
     fn check_pattern_against(&mut self, pattern: &Pattern, expected: &Type) {
         match &pattern.kind {
             PatternKind::Wildcard => {}
@@ -14628,6 +14740,20 @@ impl<'a> TypeChecker<'a> {
             PatternKind::Or(alternatives) => {
                 for alt in alternatives {
                     self.check_pattern_against(alt, expected);
+                }
+            }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let (element_ty, rest_ty) =
+                    self.slice_pattern_types(prefix, rest, suffix, expected, &pattern.span);
+                for pat in prefix.iter().chain(suffix.iter()) {
+                    self.check_pattern_against(pat, &element_ty);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    self.local_scope.insert(name.clone(), rest_ty);
                 }
             }
         }
@@ -14963,6 +15089,20 @@ impl<'a> TypeChecker<'a> {
                     self.bind_pattern_types(first, ty);
                 }
             }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let (element_ty, rest_ty) =
+                    self.slice_pattern_types(prefix, rest, suffix, ty, &pattern.span);
+                for pat in prefix.iter().chain(suffix.iter()) {
+                    self.bind_pattern_types(pat, &element_ty);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    self.local_scope.insert(name.clone(), rest_ty);
+                }
+            }
         }
     }
 
@@ -15025,6 +15165,11 @@ impl<'a> TypeChecker<'a> {
             | PatternKind::RangePattern { .. }
             | PatternKind::TupleVariant { .. }
             | PatternKind::Or(_) => false,
+            // Slice patterns are refutable in general — `[]` does not cover
+            // `Vec[T]`, and any non-`..` prefix/suffix narrows the matched
+            // length class. Sub-item 2 will refine this to `irrefutable iff
+            // every nested pattern is irrefutable` for `Array[T, N]` only.
+            PatternKind::Slice { .. } => false,
         }
     }
 

@@ -1163,6 +1163,32 @@ fn deep_clone_value(v: &Value) -> Value {
     }
 }
 
+/// Uniform view of a slice-pattern scrutinee — `(storage, offset, len,
+/// source_mutable)`. `Value::Array` exposes its entire backing at offset
+/// 0 (immutable for the rest-binding mode flag); `Value::Slice`
+/// re-exposes its existing window with the inherited mutability flag.
+type SlicePatternView = (Arc<RwLock<Vec<Value>>>, usize, usize, bool);
+
+/// View a slice-pattern scrutinee as a `SlicePatternView`. The
+/// rest binding's mutability mirrors the source. Returns `None` for
+/// any other Value variant (the typechecker rejects non-sequence
+/// scrutinees, so this is a defensive never-match fallback if reached).
+fn slice_pattern_view(value: &Value) -> Option<SlicePatternView> {
+    match value {
+        Value::Array(rc) => {
+            let len = rc.read().unwrap().len();
+            Some((rc.clone(), 0, len, false))
+        }
+        Value::Slice {
+            storage,
+            start,
+            len,
+            mutable,
+        } => Some((storage.clone(), *start, *len, *mutable)),
+        _ => None,
+    }
+}
+
 /// Wrap a `Some(Value)` / `None` Rust option in the corresponding
 /// Kāra `Option[T]` enum variant. Used by `pop_back` / `pop_front` —
 /// any method whose return type is `Option[T]` and whose Rust impl
@@ -8492,6 +8518,36 @@ impl<'a> Interpreter<'a> {
                 inclusive,
             } => Self::value_in_range_pattern(value, start.as_ref(), end.as_ref(), *inclusive),
             PatternKind::AtBinding { pattern, .. } => self.try_match_pattern(pattern, value),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let Some((storage, offset, total_len, _)) = slice_pattern_view(value) else {
+                    return false;
+                };
+                let min_len = prefix.len() + suffix.len();
+                if rest.is_none() {
+                    if total_len != min_len {
+                        return false;
+                    }
+                } else if total_len < min_len {
+                    return false;
+                }
+                let storage_read = storage.read().unwrap();
+                for (i, sub) in prefix.iter().enumerate() {
+                    if !self.try_match_pattern(sub, &storage_read[offset + i]) {
+                        return false;
+                    }
+                }
+                for (i, sub) in suffix.iter().enumerate() {
+                    let idx = offset + total_len - suffix.len() + i;
+                    if !self.try_match_pattern(sub, &storage_read[idx]) {
+                        return false;
+                    }
+                }
+                true
+            }
         }
     }
 
@@ -8562,6 +8618,44 @@ impl<'a> Interpreter<'a> {
                 self.bind_pattern(pattern, value);
             }
             PatternKind::RangePattern { .. } => {}
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                let Some((storage, offset, total_len, source_mutable)) = slice_pattern_view(&value)
+                else {
+                    return;
+                };
+                let prefix_vals: Vec<Value>;
+                let suffix_vals: Vec<Value>;
+                {
+                    let storage_read = storage.read().unwrap();
+                    prefix_vals = (0..prefix.len())
+                        .map(|i| storage_read[offset + i].clone())
+                        .collect();
+                    suffix_vals = (0..suffix.len())
+                        .map(|i| storage_read[offset + total_len - suffix.len() + i].clone())
+                        .collect();
+                }
+                for (sub, val) in prefix.iter().zip(prefix_vals) {
+                    self.bind_pattern(sub, val);
+                }
+                for (sub, val) in suffix.iter().zip(suffix_vals) {
+                    self.bind_pattern(sub, val);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    let rest_start = offset + prefix.len();
+                    let rest_len = total_len - prefix.len() - suffix.len();
+                    let rest_value = Value::Slice {
+                        storage,
+                        start: rest_start,
+                        len: rest_len,
+                        mutable: source_mutable,
+                    };
+                    self.env.define(name.clone(), rest_value);
+                }
+            }
         }
     }
 

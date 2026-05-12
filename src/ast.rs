@@ -1212,6 +1212,21 @@ impl Pattern {
                 out.push(name.clone());
                 pattern.collect_bindings(out);
             }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix {
+                    p.collect_bindings(out);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    out.push(name.clone());
+                }
+                for p in suffix {
+                    p.collect_bindings(out);
+                }
+            }
             PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
         }
     }
@@ -1245,6 +1260,25 @@ pub enum PatternKind {
     },
     Tuple(Vec<Pattern>),
     Or(Vec<Pattern>),
+    /// `[p1, p2, ..rest, p_n-1, p_n]` — `prefix`/`suffix` are leading/trailing
+    /// element patterns, `rest` is the optional `..` or `..name` marker. At
+    /// most one `..` is permitted per slice pattern (enforced at parse time).
+    /// Sub-item 1 of the slice/array patterns entry (phase 5.2): AST shape
+    /// lands now; typechecker rejects with a focused stub diagnostic until
+    /// sub-item 2 lands.
+    Slice {
+        prefix: Vec<Pattern>,
+        rest: Option<RestPattern>,
+        suffix: Vec<Pattern>,
+    },
+}
+
+/// Rest marker inside a slice pattern. `..` is `Ignored`; `..name` is
+/// `Bound(name)` and introduces a fresh binding into the arm scope.
+#[derive(Debug, Clone)]
+pub enum RestPattern {
+    Ignored,
+    Bound(String),
 }
 
 #[derive(Debug, Clone)]

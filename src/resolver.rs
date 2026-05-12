@@ -2793,6 +2793,26 @@ impl<'a> Resolver<'a> {
                 );
                 self.resolve_pattern(pattern);
             }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix {
+                    self.resolve_pattern(p);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    let _ = self.table.define(
+                        name.clone(),
+                        SymbolKind::Variable { is_mut: false },
+                        pattern.span.clone(),
+                        false,
+                    );
+                }
+                for p in suffix {
+                    self.resolve_pattern(p);
+                }
+            }
         }
     }
 
@@ -2867,6 +2887,28 @@ impl<'a> Resolver<'a> {
                     self.errors.push(e);
                 }
                 self.define_pattern_bindings(pattern, is_mut);
+            }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix {
+                    self.define_pattern_bindings(p, is_mut);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    if let Err(e) = self.table.define(
+                        name.clone(),
+                        SymbolKind::Variable { is_mut },
+                        pattern.span.clone(),
+                        false,
+                    ) {
+                        self.errors.push(e);
+                    }
+                }
+                for p in suffix {
+                    self.define_pattern_bindings(p, is_mut);
+                }
             }
         }
     }

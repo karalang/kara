@@ -8792,3 +8792,294 @@ fn main() {
     );
     assert_eq!(output, "0\n");
 }
+
+// ── Slice / array patterns (phase-5 § Slice and array patterns — sub-item 3)
+
+#[test]
+fn test_slice_pattern_empty_matches_empty_vec() {
+    // `[]` arm matches an empty Vec; non-empty falls through.
+    let output = run_no_errors(
+        r#"
+fn label(v: Vec[i64]) -> String {
+    match v {
+        [] => "empty",
+        _ => "non-empty",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(7);
+    println(label(a));
+    println(label(b));
+}
+"#,
+    );
+    assert_eq!(output, "empty\nnon-empty\n");
+}
+
+#[test]
+fn test_slice_pattern_single_element_fixed_arity_array() {
+    // `let [x] = arr` on Array[i64, 1] binds the single element.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let a: Array[i64, 1] = [42];
+    let [x] = a;
+    println(x);
+}
+"#,
+    );
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_slice_pattern_fixed_arity_let_binds_all_elements() {
+    // `let [a, b, c] = arr` on Array[i64, 3] is irrefutable; binds positionally.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let arr: Array[i64, 3] = [10, 20, 30];
+    let [a, b, c] = arr;
+    println(a);
+    println(b);
+    println(c);
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n30\n");
+}
+
+#[test]
+fn test_slice_pattern_head_only_ignored_rest_on_vec() {
+    // `[first, ..]` against a Vec binds head, ignores the tail.
+    let output = run_no_errors(
+        r#"
+fn head_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [first, ..] => first,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    let empty: Vec[i64] = Vec.new();
+    println(head_or(v, -1));
+    println(head_or(empty, -1));
+}
+"#,
+    );
+    assert_eq!(output, "10\n-1\n");
+}
+
+#[test]
+fn test_slice_pattern_tail_only_ignored_rest_on_vec() {
+    // `[.., last]` against a Vec binds the last element.
+    let output = run_no_errors(
+        r#"
+fn last_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [.., last] => last,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(last_or(v, -1));
+}
+"#,
+    );
+    assert_eq!(output, "30\n");
+}
+
+#[test]
+fn test_slice_pattern_both_ends_ignored_rest_on_vec() {
+    // `[first, .., last]` against a Vec of length >= 2 binds both endpoints.
+    let output = run_no_errors(
+        r#"
+fn ends(v: Vec[i64]) -> i64 {
+    match v {
+        [first, .., last] => first + last,
+        [only] => only,
+        [] => -1,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    println(ends(v));
+}
+"#,
+    );
+    assert_eq!(output, "6\n");
+}
+
+#[test]
+fn test_slice_pattern_single_bound_rest_at_tail_array() {
+    // `let [first, ..rest] = arr` on Array[i64, 5] binds first and rest;
+    // rest has length 4.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let arr: Array[i64, 5] = [10, 20, 30, 40, 50];
+    let [first, ..rest] = arr;
+    println(first);
+    println(rest.len());
+}
+"#,
+    );
+    assert_eq!(output, "10\n4\n");
+}
+
+#[test]
+fn test_slice_pattern_single_bound_rest_at_head_array() {
+    // `let [..rest, last] = arr` on Array[i64, 4] binds rest and last;
+    // rest has length 3.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let arr: Array[i64, 4] = [10, 20, 30, 40];
+    let [..rest, last] = arr;
+    println(rest.len());
+    println(last);
+}
+"#,
+    );
+    assert_eq!(output, "3\n40\n");
+}
+
+#[test]
+fn test_slice_pattern_two_bound_middle_rest_array() {
+    // `let [first, ..mid, last] = arr` on Array[i64, 5] binds endpoints
+    // and the bound middle rest; mid has length 3.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let arr: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let [first, ..mid, last] = arr;
+    println(first);
+    println(mid.len());
+    println(last);
+}
+"#,
+    );
+    assert_eq!(output, "1\n3\n5\n");
+}
+
+#[test]
+fn test_slice_pattern_multi_element_prefix_and_suffix_array() {
+    // Multi-element prefix and suffix around an ignored rest:
+    // `let [a, b, .., y, z] = arr` on Array[i64, 6].
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let arr: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let [a, b, .., y, z] = arr;
+    println(a);
+    println(b);
+    println(y);
+    println(z);
+}
+"#,
+    );
+    assert_eq!(output, "10\n20\n50\n60\n");
+}
+
+#[test]
+fn test_slice_pattern_vec_bound_rest_sum_via_iter() {
+    // Bound rest on a Vec scrutinee is a Slice[T] over the source storage;
+    // iteration over it yields the middle elements in order.
+    let output = run_no_errors(
+        r#"
+fn middle_sum(v: Vec[i64]) -> i64 {
+    match v {
+        [_, ..mid, _] => {
+            let mut acc = 0;
+            for x in mid { acc = acc + x; }
+            acc
+        },
+        _ => 0,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(200);
+    println(middle_sum(v));
+}
+"#,
+    );
+    assert_eq!(output, "9\n");
+}
+
+#[test]
+fn test_slice_pattern_match_dispatches_on_length_for_vec() {
+    // Different arms select on length classes; vectors of varying length
+    // each route to the right arm.
+    let output = run_no_errors(
+        r#"
+fn classify(v: Vec[i64]) -> String {
+    match v {
+        [] => "0",
+        [_] => "1",
+        [_, _] => "2",
+        [_, .., _] => "3+",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1); c.push(2);
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1); d.push(2); d.push(3); d.push(4);
+    println(classify(a));
+    println(classify(b));
+    println(classify(c));
+    println(classify(d));
+}
+"#,
+    );
+    assert_eq!(output, "0\n1\n2\n3+\n");
+}
+
+#[test]
+fn test_slice_pattern_rest_binding_preserves_element_values_on_vec() {
+    // Bound rest on a Vec scrutinee exposes the middle elements in order
+    // and indexes correctly.
+    let output = run_no_errors(
+        r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(8);
+    v.push(9);
+    v.push(10);
+    match v {
+        [_, ..rest] => {
+            println(rest.len());
+            println(rest[0]);
+            println(rest[1]);
+            println(rest[2]);
+        },
+        [] => println(-1),
+    }
+}
+"#,
+    );
+    assert_eq!(output, "3\n8\n9\n10\n");
+}

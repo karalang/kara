@@ -1674,6 +1674,18 @@ fn collect_pattern_bindings(
                 collect_pattern_bindings(&first.kind, out);
             }
         }
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => {
+            for p in prefix.iter().chain(suffix.iter()) {
+                collect_pattern_bindings(&p.kind, out);
+            }
+            if let Some(crate::ast::RestPattern::Bound(name)) = rest {
+                out.insert(name.clone());
+            }
+        }
         // Leaves: no bindings.
         PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::RangePattern { .. } => {}
     }

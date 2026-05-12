@@ -2759,6 +2759,17 @@ impl<'a> OwnershipChecker<'a> {
                 None => true,
             }),
             PatternKind::Or(alts) => alts.iter().any(|p| self.pattern_binds_anything(p)),
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                matches!(rest, Some(RestPattern::Bound(_)))
+                    || prefix
+                        .iter()
+                        .chain(suffix.iter())
+                        .any(|p| self.pattern_binds_anything(p))
+            }
         }
     }
 
@@ -3720,6 +3731,18 @@ impl<'a> OwnershipChecker<'a> {
             PatternKind::Or(alternatives) => {
                 if let Some(first) = alternatives.first() {
                     self.define_pattern_states(first, states);
+                }
+            }
+            PatternKind::Slice {
+                prefix,
+                rest,
+                suffix,
+            } => {
+                for p in prefix.iter().chain(suffix.iter()) {
+                    self.define_pattern_states(p, states);
+                }
+                if let Some(RestPattern::Bound(name)) = rest {
+                    states.insert(name.clone(), ValueState::Live);
                 }
             }
         }

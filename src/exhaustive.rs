@@ -40,7 +40,7 @@
 //! patterns still lower to `Pat::Wildcard` (slice 6 gap analysis; floats
 //! wait on Eq/Hash modeling).
 
-use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind};
+use crate::ast::{LiteralPattern, MatchArm, Pattern, PatternKind, RestPattern};
 use crate::typechecker::{Type, TypeEnv, VariantTypeInfo};
 
 #[derive(Debug, Clone)]
@@ -57,6 +57,26 @@ enum PatCtor {
     Lit(PatLit),
     Tuple,
     Struct(String),
+    /// Fixed-arity array slice pattern — `Array[T, N]` specializes exactly
+    /// like a length-`N` tuple. `args.len() == N`. Single constructor per
+    /// concrete `Array[T, N]` scrutinee; reachability follows from the
+    /// args. Per design.md § Pattern Exhaustiveness > `Array[T, N]`.
+    Array(usize),
+    /// Vec/Slice slice pattern — a coarse length-class constructor used so
+    /// the matrix can distinguish non-wildcard slice patterns from a true
+    /// wildcard. `Vec[T]` / `Slice[T]` are open-domain collection types per
+    /// design.md § *Vec / Map / String* — they require an explicit wildcard
+    /// arm for exhaustiveness regardless of which slice patterns appear.
+    /// `fixed` is `prefix.len() + suffix.len()`; `has_rest` discriminates
+    /// `[a, b]` (fixed=2, has_rest=false) from `[a, b, ..]` (fixed=2,
+    /// has_rest=true). Precise overlap analysis between length classes
+    /// (e.g. `[a, ..]` covers `[a, b]`) is deferred — this representation
+    /// gives sound exhaustiveness (always requires wildcard) but imprecise
+    /// reachability across distinct length classes.
+    SliceLen {
+        fixed: usize,
+        has_rest: bool,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -315,7 +335,101 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
                 .map(|a| lower_pattern(a, scrut_type, env))
                 .collect(),
         ),
+        PatternKind::Slice {
+            prefix,
+            rest,
+            suffix,
+        } => lower_slice_pattern(prefix, rest, suffix, scrut_type, env),
     }
+}
+
+/// Lower a slice pattern according to the scrutinee shape. `Array[T, N]`
+/// (literal `N`) specializes like a length-`N` tuple — prefix args at the
+/// head, wildcards in the rest range, suffix args at the tail. Open-domain
+/// collections (`Vec[T]`, `Slice[T]`, `VecDeque[T]`) lower to a coarse
+/// `PatCtor::SliceLen` so the matrix can tell them apart from a true
+/// wildcard; `enumerate_ctors` returns `None` for these types so any
+/// non-wildcard row demands an explicit wildcard arm for exhaustiveness.
+/// Non-literal `Array[T, N]` sizes and other type shapes (the typechecker
+/// rejects these) collapse to `Pat::Wildcard` so the matrix recursion
+/// doesn't spuriously declare under-coverage on a broken arm.
+fn lower_slice_pattern(
+    prefix: &[Pattern],
+    rest: &Option<RestPattern>,
+    suffix: &[Pattern],
+    scrut_type: &Type,
+    env: &TypeEnv,
+) -> Pat {
+    let underlying = match scrut_type {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        other => other,
+    };
+    match underlying {
+        Type::Array { element, size } => {
+            let Some(n) = size.as_usize() else {
+                return Pat::Wildcard;
+            };
+            let head = prefix.len();
+            let tail = suffix.len();
+            if head + tail > n {
+                return Pat::Wildcard;
+            }
+            if rest.is_none() && head + tail != n {
+                return Pat::Wildcard;
+            }
+            let mut args: Vec<Pat> = Vec::with_capacity(n);
+            for p in prefix {
+                args.push(lower_pattern(p, element, env));
+            }
+            for _ in 0..(n - head - tail) {
+                args.push(Pat::Wildcard);
+            }
+            for p in suffix {
+                args.push(lower_pattern(p, element, env));
+            }
+            Pat::Ctor {
+                ctor: PatCtor::Array(n),
+                args,
+            }
+        }
+        Type::Slice { element, .. } => lower_open_slice(prefix, rest, suffix, element, env),
+        Type::Named { name, args: targs } if is_open_collection(name) => {
+            let element = targs.first().cloned().unwrap_or(Type::Unit);
+            lower_open_slice(prefix, rest, suffix, &element, env)
+        }
+        // Other scrutinee shapes are typechecker-rejected; fall back to
+        // wildcard so the matrix doesn't see a malformed row.
+        _ => Pat::Wildcard,
+    }
+}
+
+fn lower_open_slice(
+    prefix: &[Pattern],
+    rest: &Option<RestPattern>,
+    suffix: &[Pattern],
+    element: &Type,
+    env: &TypeEnv,
+) -> Pat {
+    let mut args: Vec<Pat> = Vec::with_capacity(prefix.len() + suffix.len());
+    for p in prefix.iter().chain(suffix.iter()) {
+        args.push(lower_pattern(p, element, env));
+    }
+    Pat::Ctor {
+        ctor: PatCtor::SliceLen {
+            fixed: prefix.len() + suffix.len(),
+            has_rest: rest.is_some(),
+        },
+        args,
+    }
+}
+
+/// Built-in collection types that participate in slice patterns and that
+/// the exhaustiveness engine treats as open-domain (no finite constructor
+/// set). Per design.md § *Slice and array patterns*, slice patterns apply
+/// to `Vec[T]` (positional, contiguous); `VecDeque[T]` is excluded because
+/// its ring-buffer storage doesn't admit positional patterns.
+fn is_open_collection(name: &str) -> bool {
+    matches!(name, "Vec")
 }
 
 fn lower_struct_fields(
@@ -519,6 +633,11 @@ fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
         // Never has no inhabitants — empty constructor list. Any match
         // (including the empty match) is vacuously exhaustive.
         Type::Never => Some(Vec::new()),
+        // Array[T, N] (literal N) has a single fixed-arity constructor —
+        // specializes exactly like a length-N tuple per design.md § Pattern
+        // Exhaustiveness > Array[T, N]. Non-literal N is rejected upstream
+        // (typechecker) and routes through the default-matrix path.
+        Type::Array { size, .. } => size.as_usize().map(|n| vec![PatCtor::Array(n)]),
         Type::Named { name, .. } => {
             if let Some(info) = env.enums.get(name) {
                 Some(
@@ -527,15 +646,20 @@ fn enumerate_ctors(ty: &Type, env: &TypeEnv) -> Option<Vec<PatCtor>> {
                         .map(|(v, _)| PatCtor::Variant(v.clone()))
                         .collect(),
                 )
+            } else if is_open_collection(name) {
+                // Vec / VecDeque are open-domain — no finite constructor
+                // set. Match exhaustiveness requires an explicit wildcard
+                // arm; routing through the default-matrix path enforces it.
+                None
             } else if env.structs.contains_key(name) {
                 Some(vec![PatCtor::Struct(name.clone())])
             } else {
                 None
             }
         }
-        // Integer / float / char / str / slice / array — open domains that
-        // require a wildcard arm. Returning None routes the wildcard branch
-        // of `is_useful` through the default matrix.
+        // Integer / float / char / str / slice — open domains that require
+        // a wildcard arm. Returning None routes the wildcard branch of
+        // `is_useful` through the default matrix.
         _ => None,
     }
 }
@@ -575,6 +699,29 @@ fn ctor_field_types(ctor: &PatCtor, parent_ty: &Type, env: &TypeEnv) -> Vec<Type
             .get(name)
             .map(|info| info.fields.iter().map(|(_, t, _)| t.clone()).collect())
             .unwrap_or_default(),
+        PatCtor::Array(n) => {
+            let element = array_or_collection_element(parent_ty);
+            vec![element; *n]
+        }
+        PatCtor::SliceLen { fixed, .. } => {
+            let element = array_or_collection_element(parent_ty);
+            vec![element; *fixed]
+        }
+    }
+}
+
+/// Element type for `Array[T, N]`, `Slice[T]`, `Vec[T]`, etc. Used by
+/// `PatCtor::Array` / `PatCtor::SliceLen` to thread the right per-column
+/// type into Maranget recursion.
+fn array_or_collection_element(ty: &Type) -> Type {
+    let underlying = match ty {
+        Type::Ref(inner) | Type::MutRef(inner) => inner.as_ref(),
+        other => other,
+    };
+    match underlying {
+        Type::Array { element, .. } | Type::Slice { element, .. } => (**element).clone(),
+        Type::Named { args, .. } => args.first().cloned().unwrap_or(Type::Unit),
+        _ => Type::Unit,
     }
 }
 
@@ -600,6 +747,25 @@ fn render_ctor(ctor: &PatCtor, args: &[Pat], ty: &Type, env: &TypeEnv) -> String
         PatCtor::Variant(name) => render_variant(name, args, ty, env),
         PatCtor::Tuple => render_tuple(args, ty, env),
         PatCtor::Struct(name) => render_struct(name, args, env),
+        PatCtor::Array(_) => render_slice_witness(args, ty, env, false),
+        PatCtor::SliceLen { has_rest, .. } => render_slice_witness(args, ty, env, *has_rest),
+    }
+}
+
+fn render_slice_witness(args: &[Pat], ty: &Type, env: &TypeEnv, has_rest: bool) -> String {
+    let element = array_or_collection_element(ty);
+    let parts: Vec<String> = args
+        .iter()
+        .map(|a| render_witness(a, &element, env))
+        .collect();
+    if has_rest {
+        if parts.is_empty() {
+            "[..]".to_string()
+        } else {
+            format!("[{}, ..]", parts.join(", "))
+        }
+    } else {
+        format!("[{}]", parts.join(", "))
     }
 }
 

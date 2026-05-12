@@ -9782,4 +9782,271 @@ fn main() {
             err
         );
     }
+
+    // ── Slice / array patterns (phase-5 § Slice and array patterns — sub-item 4)
+
+    #[test]
+    fn test_e2e_slice_pattern_empty_matches_empty_vec() {
+        let out = run_program(
+            r#"
+fn label(v: Vec[i64]) -> String {
+    match v {
+        [] => "empty",
+        _ => "non-empty",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(7);
+    println(label(a));
+    println(label(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "empty\nnon-empty\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_single_element_fixed_arity_array() {
+        let out = run_program(
+            r#"
+fn main() {
+    let a: Array[i64, 1] = [42];
+    let [x] = a;
+    println(x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_fixed_arity_let_binds_all_elements() {
+        let out = run_program(
+            r#"
+fn main() {
+    let arr: Array[i64, 3] = [10, 20, 30];
+    let [a, b, c] = arr;
+    println(a);
+    println(b);
+    println(c);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n20\n30\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_head_only_ignored_rest_on_vec() {
+        let out = run_program(
+            r#"
+fn head_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [first, ..] => first,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    let empty: Vec[i64] = Vec.new();
+    println(head_or(v, -1));
+    println(head_or(empty, -1));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n-1\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_tail_only_ignored_rest_on_vec() {
+        let out = run_program(
+            r#"
+fn last_or(v: Vec[i64], default: i64) -> i64 {
+    match v {
+        [.., last] => last,
+        [] => default,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(last_or(v, -1));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "30\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_both_ends_ignored_rest_on_vec() {
+        let out = run_program(
+            r#"
+fn ends(v: Vec[i64]) -> i64 {
+    match v {
+        [first, .., last] => first + last,
+        [only] => only,
+        [] => -1,
+    }
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    println(ends(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "6\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_single_bound_rest_at_tail_array() {
+        let out = run_program(
+            r#"
+fn main() {
+    let arr: Array[i64, 5] = [10, 20, 30, 40, 50];
+    let [first, ..rest] = arr;
+    println(first);
+    println(rest.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n4\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_single_bound_rest_at_head_array() {
+        let out = run_program(
+            r#"
+fn main() {
+    let arr: Array[i64, 4] = [10, 20, 30, 40];
+    let [..rest, last] = arr;
+    println(rest.len());
+    println(last);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "3\n40\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_two_bound_middle_rest_array() {
+        let out = run_program(
+            r#"
+fn main() {
+    let arr: Array[i64, 5] = [1, 2, 3, 4, 5];
+    let [first, ..mid, last] = arr;
+    println(first);
+    println(mid.len());
+    println(last);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "1\n3\n5\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_multi_element_prefix_and_suffix_array() {
+        let out = run_program(
+            r#"
+fn main() {
+    let arr: Array[i64, 6] = [10, 20, 30, 40, 50, 60];
+    let [a, b, .., y, z] = arr;
+    println(a);
+    println(b);
+    println(y);
+    println(z);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "10\n20\n50\n60\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_match_dispatches_on_length_for_vec() {
+        let out = run_program(
+            r#"
+fn classify(v: Vec[i64]) -> String {
+    match v {
+        [] => "0",
+        [_] => "1",
+        [_, _] => "2",
+        [_, .., _] => "3+",
+    }
+}
+fn main() {
+    let a: Vec[i64] = Vec.new();
+    let mut b: Vec[i64] = Vec.new();
+    b.push(1);
+    let mut c: Vec[i64] = Vec.new();
+    c.push(1); c.push(2);
+    let mut d: Vec[i64] = Vec.new();
+    d.push(1); d.push(2); d.push(3); d.push(4);
+    println(classify(a));
+    println(classify(b));
+    println(classify(c));
+    println(classify(d));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "0\n1\n2\n3+\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_slice_pattern_rest_binding_indexing_on_vec() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7);
+    v.push(8);
+    v.push(9);
+    v.push(10);
+    match v {
+        [_, ..rest] => {
+            println(rest.len());
+            println(rest[0]);
+            println(rest[1]);
+            println(rest[2]);
+        },
+        [] => println(-1),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "3\n8\n9\n10\n");
+        }
+    }
 }
