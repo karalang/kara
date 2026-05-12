@@ -2865,7 +2865,14 @@ fn test_clean_global_targets_kara_cache() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "stdout: {stdout}");
-    assert!(stdout.contains(".kara/cache"));
+    // `Path::display()` uses the platform-native separator (`\` on Windows,
+    // `/` on Unix); build the expected fragment from `MAIN_SEPARATOR` so the
+    // assertion matches both surfaces.
+    let expected = format!(".kara{}cache", std::path::MAIN_SEPARATOR);
+    assert!(
+        stdout.contains(&expected),
+        "expected stdout to contain `{expected}`, got: {stdout}"
+    );
     assert!(stdout.contains("global cache"));
     let _ = std::fs::remove_dir_all(&fake_home);
 }
