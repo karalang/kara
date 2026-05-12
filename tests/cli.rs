@@ -922,6 +922,64 @@ fn test_build_project_codegen_cross_module_collision_diagnostic() {
 
 #[cfg(feature = "llvm")]
 #[test]
+fn test_build_project_late_phase_diagnostic_includes_file_context() {
+    // 2026-05-12 close-out for the wip-staging carry-forward
+    // "Per-module diagnostics for late-phase failures in
+    // `cmd_build_project`". The super-program approach concatenates
+    // all module items, so post-typecheck phases lose the file-of-
+    // origin context that the per-module typecheck path retains.
+    // The `ModuleSpanTable` built at concat time in
+    // `run_multi_file_codegen` (src/span_visitor.rs) restores that
+    // context: each error's span is looked up against the table
+    // and, when it resolves to exactly one module, the diagnostic
+    // line is prefixed with `file:line:col`. This test triggers an
+    // ownership use-after-move in a helper module and asserts the
+    // build diagnostic surfaces `src/helper.kara` in the error
+    // output. Use-after-move fires only in the ownership pass,
+    // which runs over the super-program — typecheck-per-module
+    // upstream lets the program through.
+    let tmp = scratch_project("late-phase-file-context");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"late_phase_demo\"\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "import helper.bad;\n\
+         fn main() { let _ = bad(); }\n",
+    );
+    write(
+        &tmp.join("src/helper.kara"),
+        "struct Data { value: i64 }\n\
+         fn consume(d: Data) -> i64 { d.value }\n\
+         pub fn bad() -> i64 {\n\
+             let d = Data { value: 7 };\n\
+             let a = consume(d);\n\
+             let b = consume(d);\n\
+             a + b\n\
+         }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "build should fail on use-after-move in helper.kara",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("src/helper.kara") || stderr.contains("helper.kara"),
+        "expected helper.kara file context in stderr; stderr={stderr}",
+    );
+    // Sanity: also confirm the diagnostic phase name is included.
+    assert!(
+        stderr.contains("ownership") || stderr.contains("moved"),
+        "expected an ownership-shaped diagnostic; stderr={stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
 fn test_build_project_codegen_providers_as_module_name() {
     // Theme 4 follow-up (2026-05-10): the lexer no longer reserves
     // `providers` as a global keyword. The bareword now lexes as a

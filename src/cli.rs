@@ -2885,14 +2885,18 @@ impl BuildCodegenStatus {
 /// passed; this function returns a structured status the caller renders
 /// per output mode.
 ///
-/// **Multi-module diagnostics caveat.** Per-file diagnostics for the
-/// post-typecheck phases (effect / ownership / concurrency) are not
-/// emitted by this path — those phases run on the merged super-program
-/// where item spans no longer carry a file-of-origin. Per-file
+/// **Multi-module diagnostics.** Late-phase diagnostics (effect /
+/// ownership / concurrency / codegen / link) for the merged super-
+/// program recover file-of-origin context via a `SpanLookupKey →
+/// module_index` table built at concat time and consulted by
+/// `format_pipeline_errors`. When a span resolves to exactly one
+/// module the diagnostic is prefixed with `file:line:col`; when the
+/// span is absent (e.g., synthesized post-concat) or ambiguous
+/// (collision across modules — rare in practice but possible when
+/// two distinct files have identical leading bytes), the formatter
+/// falls back to the file-less `line:col` form. Per-file
 /// diagnostics for parse / cycles / resolve / typecheck still fire
-/// upstream of this call. v2 follow-up: thread the per-module file-path
-/// map through the super-program so late-phase diagnostics can recover
-/// file context.
+/// upstream of this call.
 #[cfg(feature = "llvm")]
 fn run_multi_file_codegen(
     tree: &ProgramTree,
@@ -2906,16 +2910,24 @@ fn run_multi_file_codegen(
     // resolved upstream by per-module resolve) and skip synthetic
     // modules. Items keep their original spans, which downstream
     // diagnostics use for line:col reporting.
+    //
+    // While concatenating, build a `ModuleSpanTable`: for each non-
+    // synthetic module we register its file path once, then walk every
+    // appended item's spans so late-phase diagnostics can recover the
+    // file-of-origin via `format_pipeline_errors`.
     let mut super_items: Vec<Item> = Vec::new();
+    let mut span_table = crate::span_visitor::ModuleSpanTable::new();
     for &id in &order {
         let m = &tree.modules[id];
         if m.is_synthetic {
             continue;
         }
+        let module_idx = span_table.register_module(m.file.clone());
         for item in &m.items {
             if matches!(item, Item::Import(_)) {
                 continue;
             }
+            span_table.record_item(module_idx, item);
             super_items.push(item.clone());
         }
     }
@@ -2947,7 +2959,7 @@ fn run_multi_file_codegen(
     if pipeline.has_resolve_errors() {
         return BuildCodegenStatus::Failed {
             phase: "resolve".to_string(),
-            message: format_pipeline_errors(&pipeline, "resolve"),
+            message: format_pipeline_errors(&pipeline, "resolve", Some(&span_table)),
         };
     }
     pipeline.typecheck();
@@ -2958,7 +2970,7 @@ fn run_multi_file_codegen(
     {
         return BuildCodegenStatus::Failed {
             phase: "typecheck".to_string(),
-            message: format_pipeline_errors(&pipeline, "typecheck"),
+            message: format_pipeline_errors(&pipeline, "typecheck", Some(&span_table)),
         };
     }
     pipeline.lower();
@@ -2970,7 +2982,7 @@ fn run_multi_file_codegen(
     {
         return BuildCodegenStatus::Failed {
             phase: "effect".to_string(),
-            message: format_pipeline_errors(&pipeline, "effect"),
+            message: format_pipeline_errors(&pipeline, "effect", Some(&span_table)),
         };
     }
     pipeline.ownershipcheck();
@@ -2981,14 +2993,14 @@ fn run_multi_file_codegen(
     {
         return BuildCodegenStatus::Failed {
             phase: "ownership".to_string(),
-            message: format_pipeline_errors(&pipeline, "ownership"),
+            message: format_pipeline_errors(&pipeline, "ownership", Some(&span_table)),
         };
     }
     pipeline.concurrencycheck();
     if pipeline.has_fatal_errors() {
         return BuildCodegenStatus::Failed {
             phase: "checks".to_string(),
-            message: "late-phase analysis failed".to_string(),
+            message: format_pipeline_errors(&pipeline, "checks", Some(&span_table)),
         };
     }
 
@@ -3040,18 +3052,41 @@ fn run_multi_file_codegen(
     BuildCodegenStatus::NoLlvmFeature
 }
 
+/// Render a structured error list across the post-typecheck pipeline
+/// phases for the multi-file project-mode build path. `table` is the
+/// per-module span lookup built at concat time in
+/// `run_multi_file_codegen` — when present and the span resolves to
+/// exactly one module, the diagnostic line is prefixed with
+/// `file:line:col`; otherwise it falls back to bare `line:col` so
+/// callers without a table (or with a span absent from the table /
+/// shared across modules) still get a useful location.
 #[cfg(feature = "llvm")]
-fn format_pipeline_errors(pipeline: &Pipeline, phase: &str) -> String {
+fn format_pipeline_errors(
+    pipeline: &Pipeline,
+    phase: &str,
+    table: Option<&crate::span_visitor::ModuleSpanTable>,
+) -> String {
     use std::fmt::Write;
     let mut out = format!("multi-file {phase} failed:");
+    let prefix = |span: &crate::token::Span| -> String {
+        if let Some(t) = table {
+            if let Some(p) = t.lookup(span) {
+                return format!("{}:", p.display());
+            }
+        }
+        String::new()
+    };
     match phase {
         "resolve" => {
             if let Some(r) = &pipeline.resolved {
                 for e in &r.errors {
                     let _ = write!(
                         &mut out,
-                        "\n  {}:{}: {}",
-                        e.span.line, e.span.column, e.message,
+                        "\n  {}{}:{}: {}",
+                        prefix(&e.span),
+                        e.span.line,
+                        e.span.column,
+                        e.message,
                     );
                 }
             }
@@ -3061,8 +3096,11 @@ fn format_pipeline_errors(pipeline: &Pipeline, phase: &str) -> String {
                 for e in &t.errors {
                     let _ = write!(
                         &mut out,
-                        "\n  {}:{}: {}",
-                        e.span.line, e.span.column, e.message,
+                        "\n  {}{}:{}: {}",
+                        prefix(&e.span),
+                        e.span.line,
+                        e.span.column,
+                        e.message,
                     );
                 }
             }
@@ -3072,8 +3110,11 @@ fn format_pipeline_errors(pipeline: &Pipeline, phase: &str) -> String {
                 for err in &e.errors {
                     let _ = write!(
                         &mut out,
-                        "\n  {}:{}: {}",
-                        err.span.line, err.span.column, err.message,
+                        "\n  {}{}:{}: {}",
+                        prefix(&err.span),
+                        err.span.line,
+                        err.span.column,
+                        err.message,
                     );
                 }
             }
@@ -3083,8 +3124,68 @@ fn format_pipeline_errors(pipeline: &Pipeline, phase: &str) -> String {
                 for err in &o.errors {
                     let _ = write!(
                         &mut out,
-                        "\n  {}:{}: {}",
-                        err.span.line, err.span.column, err.message,
+                        "\n  {}{}:{}: {}",
+                        prefix(&err.span),
+                        err.span.line,
+                        err.span.column,
+                        err.message,
+                    );
+                }
+            }
+        }
+        // The "checks" branch is reached when `has_fatal_errors`
+        // returns true after a late-phase pass; today that flag is
+        // driven by parse + resolve errors only (concurrency analysis
+        // emits structured decisions, not errors), but we surface
+        // every accumulated error here so the user gets file-context
+        // wherever a span is available rather than the generic
+        // "late-phase analysis failed" stub.
+        "checks" => {
+            if let Some(r) = &pipeline.resolved {
+                for e in &r.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}{}:{}: {}",
+                        prefix(&e.span),
+                        e.span.line,
+                        e.span.column,
+                        e.message,
+                    );
+                }
+            }
+            if let Some(t) = &pipeline.typed {
+                for e in &t.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}{}:{}: {}",
+                        prefix(&e.span),
+                        e.span.line,
+                        e.span.column,
+                        e.message,
+                    );
+                }
+            }
+            if let Some(e) = &pipeline.effects {
+                for err in &e.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}{}:{}: {}",
+                        prefix(&err.span),
+                        err.span.line,
+                        err.span.column,
+                        err.message,
+                    );
+                }
+            }
+            if let Some(o) = &pipeline.ownership {
+                for err in &o.errors {
+                    let _ = write!(
+                        &mut out,
+                        "\n  {}{}:{}: {}",
+                        prefix(&err.span),
+                        err.span.line,
+                        err.span.column,
+                        err.message,
                     );
                 }
             }

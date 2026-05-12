@@ -27,6 +27,7 @@ pub mod rc_predicate;
 pub mod repl;
 pub mod resolver;
 pub mod scaffold;
+pub mod span_visitor;
 pub mod token;
 pub mod typechecker;
 pub mod unsafe_lint;
