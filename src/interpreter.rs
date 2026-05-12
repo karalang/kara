@@ -7820,6 +7820,56 @@ impl<'a> Interpreter<'a> {
             _ => {}
         }
 
+        // Primitive value-receiver dispatch for the builtin Eq/Ord methods.
+        // The typechecker registers `eq`/`ne`/`lt`/`le`/`gt`/`ge`/`cmp` for
+        // every integer width, bool, char, String, and the F32/F64 total-
+        // order wrappers (`register_builtin_impl("Ord", ...)` in
+        // src/typechecker.rs) — but those registrations live in the
+        // typechecker's env, not the interpreter's, so a call like
+        // `b.cmp(a)` with a primitive receiver would otherwise fall through
+        // to the impl-block lookup below and panic. The type-name receiver
+        // form `i64.cmp(a, b)` already routes through `dispatch_lowered_op`;
+        // this mirrors that path for the value-receiver form (one arg
+        // instead of two) so `xs.sort_by(|a, b| b.cmp(a))` works.
+        if matches!(
+            &obj,
+            Value::Int(_)
+                | Value::Char(_)
+                | Value::Bool(_)
+                | Value::String(_)
+                | Value::TotalFloat32(_)
+                | Value::TotalFloat64(_)
+        ) {
+            if method == "cmp" && args.len() == 1 {
+                let other = self.eval_expr_inner(&args[0].value);
+                let ord = value_compare(&obj, &other);
+                return Value::EnumVariant {
+                    enum_name: "Ordering".to_string(),
+                    variant: match ord {
+                        std::cmp::Ordering::Less => "Less".to_string(),
+                        std::cmp::Ordering::Equal => "Equal".to_string(),
+                        std::cmp::Ordering::Greater => "Greater".to_string(),
+                    },
+                    data: EnumData::Unit,
+                };
+            }
+            let bin_op = match method {
+                "eq" => Some(BinOp::Eq),
+                "ne" => Some(BinOp::NotEq),
+                "lt" => Some(BinOp::Lt),
+                "le" => Some(BinOp::LtEq),
+                "gt" => Some(BinOp::Gt),
+                "ge" => Some(BinOp::GtEq),
+                _ => None,
+            };
+            if let Some(op) = bin_op {
+                if args.len() == 1 {
+                    let rhs = self.eval_expr_inner(&args[0].value);
+                    return self.eval_binary(&op, obj.clone(), rhs, span);
+                }
+            }
+        }
+
         // Try to find method via impl block
         let type_name = self.value_type_name(&obj);
         let method_key = format!("{}.{}", type_name, method);
@@ -9304,15 +9354,34 @@ impl<'a> Interpreter<'a> {
                 Value::Bool(!a.total_cmp(&b).is_eq())
             }
 
-            // Comparison (String)
+            // Comparison (String) — lexicographic via Rust's `Ord for String`.
+            // Matches the typechecker's builtin Ord registration for `String`
+            // (see `register_builtin_impl("Ord", "String", ...)`).
             (BinOp::Eq, Value::String(a), Value::String(b)) => Value::Bool(a == b),
             (BinOp::NotEq, Value::String(a), Value::String(b)) => Value::Bool(a != b),
+            (BinOp::Lt, Value::String(a), Value::String(b)) => Value::Bool(a < b),
+            (BinOp::LtEq, Value::String(a), Value::String(b)) => Value::Bool(a <= b),
+            (BinOp::Gt, Value::String(a), Value::String(b)) => Value::Bool(a > b),
+            (BinOp::GtEq, Value::String(a), Value::String(b)) => Value::Bool(a >= b),
+
+            // Comparison (Char) — codepoint order via Rust's `Ord for char`.
+            // Matches the typechecker's builtin Ord registration for `char`.
+            (BinOp::Eq, Value::Char(a), Value::Char(b)) => Value::Bool(a == b),
+            (BinOp::NotEq, Value::Char(a), Value::Char(b)) => Value::Bool(a != b),
+            (BinOp::Lt, Value::Char(a), Value::Char(b)) => Value::Bool(a < b),
+            (BinOp::LtEq, Value::Char(a), Value::Char(b)) => Value::Bool(a <= b),
+            (BinOp::Gt, Value::Char(a), Value::Char(b)) => Value::Bool(a > b),
+            (BinOp::GtEq, Value::Char(a), Value::Char(b)) => Value::Bool(a >= b),
 
             // Logical (Bool)
             (BinOp::And, Value::Bool(a), Value::Bool(b)) => Value::Bool(a && b),
             (BinOp::Or, Value::Bool(a), Value::Bool(b)) => Value::Bool(a || b),
             (BinOp::Eq, Value::Bool(a), Value::Bool(b)) => Value::Bool(a == b),
             (BinOp::NotEq, Value::Bool(a), Value::Bool(b)) => Value::Bool(a != b),
+            (BinOp::Lt, Value::Bool(a), Value::Bool(b)) => Value::Bool(!a & b),
+            (BinOp::LtEq, Value::Bool(a), Value::Bool(b)) => Value::Bool(a <= b),
+            (BinOp::Gt, Value::Bool(a), Value::Bool(b)) => Value::Bool(a & !b),
+            (BinOp::GtEq, Value::Bool(a), Value::Bool(b)) => Value::Bool(a >= b),
 
             // Bitwise (Int)
             (BinOp::BitAnd, Value::Int(a), Value::Int(b)) => Value::Int(a & b),
