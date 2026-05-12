@@ -153,7 +153,6 @@ fn accept_single_source_borrow_return() {
 /// the moment the typechecker grows return-position field-projection
 /// auto-borrowing.
 #[test]
-#[ignore = "design.md Feature 4 Part 3 spec; impl gap — field projection in borrow-return position not auto-borrowed yet"]
 fn spec_field_projection_in_borrow_return() {
     assert_static_accept(
         "struct User { name: String }\n\
@@ -199,7 +198,6 @@ fn accept_multi_source_borrow_return() {
 /// `String` doesn't extend to `Vec` yet. Marked as a spec test so it
 /// surfaces when generic-type call-site coercion lands.
 #[test]
-#[ignore = "design.md Feature 4 Part 3 spec; impl gap — owned-to-ref coercion at call site not extended to generic Vec yet"]
 fn spec_option_ref_t_return() {
     assert_static_accept(
         "fn first(v: ref Vec[i64]) -> Option[ref i64] {\n\
@@ -249,7 +247,6 @@ fn accept_borrowed_struct_construction() {
 /// re-borrow into the declared return type. Spec-faithful test, ignored
 /// pending the borrowed-struct return-coercion landing.
 #[test]
-#[ignore = "design.md Feature 4 Part 3 spec; impl gap — owned struct construction not coerced to ref Struct return"]
 fn spec_return_borrowed_struct() {
     assert_static_accept(
         "struct Parser {\n\
@@ -275,7 +272,6 @@ fn spec_return_borrowed_struct() {
 /// Same impl gap as `spec_field_projection_in_borrow_return` — `self.name`
 /// in return position doesn't auto-borrow today. Spec test.
 #[test]
-#[ignore = "design.md Feature 4 Part 3 spec; impl gap — field projection in borrow-return position not auto-borrowed yet"]
 fn spec_ref_self_returning_field_borrow() {
     assert_static_accept(
         "struct User { name: String, age: i64 }\n\

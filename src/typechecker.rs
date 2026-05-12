@@ -2118,6 +2118,17 @@ fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
                 && is_subtype(sr, br)
         }
         (Type::Ref(s), Type::Ref(b)) | (Type::MutRef(s), Type::MutRef(b)) => is_subtype(s, b),
+        // Owned-to-ref coercion: a `ref T` slot accepts an owned `T` value.
+        // design.md Feature 4 Part 3 § Explicit ref for Borrow Returns — the
+        // borrow source is inferred from context (function-return tail, call
+        // arg, field init, let RHS) and the ownership checker handles the
+        // borrow-not-consume semantics via the slot's declared mode. The
+        // reverse (`ref T` → owned `T`) requires explicit deref and is not
+        // accepted here; the `MutRef` sub-case is also excluded so owned-to-
+        // mut-ref still needs the explicit `mut` call-site marker.
+        (Type::Ref(inner), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
+            is_subtype(inner, sub)
+        }
         _ => types_compatible(super_ty, sub_ty),
     }
 }
