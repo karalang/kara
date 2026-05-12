@@ -2670,6 +2670,27 @@ A compiler-internal pass that pattern-matches common safe-indexing idioms (`for 
 
 ---
 
+### `Vec.sort_by` FFI-Boundary Comparator Inlining
+
+A codegen change that closes the inlining gap between Karac's `Vec.sort_by` and Rust's `slice::sort_by`. Today the comparator crosses from the precompiled runtime helper (`runtime/src/lib.rs::karac_vec_sort_by`) into the per-call-site bridge thunk via an `extern "C" fn` pointer load — opaque to LLVM, so the comparator stays out-of-line even though `src/codegen.rs::emit_sort_by_inline_thunk` emits a body that is fully inlinable on the codegen side. Rust's `slice::sort_by` monomorphizes the entire sort with the closure body inlined; that shape isn't reachable from the precompiled runtime crate today. Generalises beyond `Vec.sort_by` — any runtime-helper-backed call with a user closure (future `Iterator.fold`, `Vec.sort_by_key`, `Vec.partition`, etc.) hits the same boundary.
+
+**Why deferred:** Empirical motivation is concentrated in a single sort-saturated workload — the LeetCode #1665 bench (`kata-katas/leetcode/1601-1700/1665-.../bench/`, 2026-05-12) shows ~1.4× vs hand-tuned Rust with the remaining gap at the FFI hop. Outside sort-dominated code, the gap hasn't been measured. The fix involves real path choices and the cheapest option is contingent on an empirical LLVM behavior (LTO devirtualizing the comparator pointer through link). Building before broader workload data risks designing for a single bench.
+
+**Promotion gate:** Promote to P1 (or P0 v1.x) when post-v1 user data shows ≥2 distinct non-synthetic workload classes where Karac's `Vec.sort_by` (or any runtime-helper-with-closure call) leaves a >1.3× perf gap that the cheap LTO experiment doesn't close. The trigger is *frequency in real code*, not theoretical coverage. Cheap pre-promotion experiment: enable `-C lto=fat` for the runtime + consumer binary, check disassembly for an inlined comparator; if LLVM devirtualizes through the link step, the rest is plumbing and may not need a deferred-feature promotion at all (just a build-flag change).
+
+**Why non-breaking:** Pure internal optimization. No API, ABI, or semantic change. `Vec.sort_by` signature is unchanged; consumers see the same call surface. The change is which side of the FFI boundary the comparator lives on for inlining purposes.
+
+**Design shape (sketch — finalize at promotion):**
+
+- **Path A — cross-language LTO + `#[inline]`.** Mark `karac_vec_sort_by` (and peer helpers) `#[inline]`; turn on `-C lto=fat` for the runtime build and consumer linkage. Bet that LLVM devirtualizes the `extern "C" fn` pointer load through the link step and inlines the comparator body. Cheapest if it works; zero codegen changes. Try first.
+- **Path B — monomorphized runtime helpers emitted per-call-site by codegen.** Codegen emits `__karac_vec_sort_by_<elem_mangle>` shape with the comparator inlined statically. Sort algorithm body still comes from the runtime crate (don't fork pdqsort / TimSort) but is duplicated per element type. Larger codegen scope; matches Rust's `slice::sort_by` shape.
+- Path C — emit the sort algorithm itself in LLVM IR at the call site. **Rejected at filing**: pdqsort / TimSort are stdlib-quality algorithms we shouldn't fork.
+- Generalises to other runtime-helper-with-closure shapes; pick a path that scales.
+
+**Cross-reference:** `runtime/src/lib.rs::karac_vec_sort_by`; `src/codegen.rs::emit_sort_by_inline_thunk`; `kata-katas/leetcode/1601-1700/1665-.../bench/` (workload that surfaced the gap, 2026-05-12).
+
+---
+
 ### Full-Hybrid State-Machine Transform (Arbitrary `suspends` Functions)
 
 State-machine codegen for *every* `suspends` function, not just network-boundary functions. Kāra v1 ships state-machine transform scoped to functions whose effect set includes `sends(Network)` / `receives(Network)`; this entry covers the broader form where any `suspends` function — disk I/O, channel receives, custom suspending primitives — gets the same lowering. Conceptually equivalent to Tokio / async-Rust applied to arbitrary control flow rather than network-bounded code. Graduated from brainstorm v64 (2026-05-09).
