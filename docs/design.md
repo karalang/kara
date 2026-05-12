@@ -139,6 +139,8 @@ Kāra v1's lead persona is **backend-first**: the language ships at v1 with the 
 
 This positioning was decided in [brainstorm archive v64](../brainstorming/archive/v64_backend_first_v1_concurrency.md) (2026-05-09) and lives in [the corresponding implementation tracking](implementation_checklist/phase-6-runtime.md) and the [Phase 8 Backend Platform sub-section](roadmap.md#phase-8-standard-library--floor) of the roadmap. The promotion of Phase 6.3 (network event loop) from v1.1 to v1 is a direct consequence; the lift of `std.http` / TLS / WebSocket from Phase 11 to Phase 8 is the corresponding stdlib reorganization.
 
+**v66 graduation (2026-05-11) — general-purpose foundation + data quiet bonus.** Backend-first remains the lead persona; the pitch reads "general-purpose AOT systems language with flagship-grade concurrency." Data support (Tensor, Column, DataFrame, Arrow IPC, `std.linalg`, `std.fft`, `std.einsum`, `std.embeddings`, `std.autograd` reverse-mode, lazy `LazyDataFrame`, statistical methods) ships at v1 as a *quiet bonus* — present and usable, not promoted as a positioning axis. Additional v1 P1 promotions: GPU codegen pulled forward from Phase 10 (multi-vendor via wgpu + CUDA opt-in); `kara-lsp` + VS Code from Future; `std.cli` argparse; `kara-postgres` as project-owned package (dogfooding infrastructure); `docs/book/src/data.md` + `examples/data/`. `std.nn` / `std.optim` decision deferred to engineering-start. Frontend UI framework promoted from P3 to P2 (post-v1, will ship). Full graduation detail: [`../brainstorming/archive/v66_general_purpose_with_data_bonus.md`](../brainstorming/archive/v66_general_purpose_with_data_bonus.md).
+
 ---
 
 ## Specification Layers
@@ -9530,6 +9532,8 @@ Targets have profile constraints — code that respects a target's constraints c
 Layout groups map naturally to GPU buffers. Auto-concurrency degrades gracefully per target.
 
 ### GPU Subset Constraints
+
+> **v66 graduation note (2026-05-11):** GPU codegen pulled forward from Phase 10 to v1 P1 ship-readiness — see `deferred.md § Additional Compilation Targets (Phase 10)` and `roadmap.md § Phase 10 > GPU compute shaders`. Multi-vendor coverage at v1 (CUDA + Metal at minimum) is satisfied by the existing wgpu-primary codegen path (auto-selects Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser; CUDA opt-in via `--target cuda`). The `#[gpu]` constraint, `GpuSafe` trait, and `gpu.dispatch` semantics below are vendor-neutral by construction — the design does not change with the v1 pull-forward.
 
 GPU code is not a separate language — it is a restricted subset of Kāra. The `#[gpu]` annotation is a **constraint declaration**: "this function uses only GPU-compatible features." It does not route the function to the GPU. Dispatch is always explicit via `gpu.dispatch`.
 

@@ -521,6 +521,9 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 ### `std.hash`
 - [ ] `Hash` trait, `Hasher` interface, default hasher; `#[derive(Hash)]` codegen path (interpreter form already shipped).
 
+### `std.cli` (v66 graduation, 2026-05-11 — P1 v1)
+- [ ] **Argument parser, builder-style API.** `Parser::new(name)`, `.arg(name, Arg)`, `.flag(name)`, `.subcommand(name, sub_parser)`, `.parse() -> Result[Args, CliError]`. Automatic `--help` / `--version`. Effect: `reads(Env)` on `.parse()`. API inspired by clap's builder pattern; the point at v1 is canonicality in stdlib so the ecosystem standardizes from day one. See `deferred.md § std.cli`.
+
 ### Compiler Queries Channel (P0 architectural commit)
 - [ ] **P0 architectural commit — stable item identity, per-phase queries field, `karac query queries` CLI surface, stability classification.** Ships the channel infrastructure even with zero query catalogue entries; subsequent P1 entries are non-breaking additions. Stable item identity (path-based DefId + structural-hash sub-item slots) is load-bearing — without it, every later query addition becomes a breaking change for tools storing resolved answers. Spec at [`design.md § Specification Layers > Compiler Queries`](design.md#compiler-queries) (graduated from brainstorm v63, 2026-05-08); tracker at [`phase-8-stdlib-floor.md`](implementation_checklist/phase-8-stdlib-floor.md).
 - [ ] **P1.1 RC fallback query** — first catalogue entry; reuses existing `RcFallbackNote` decision site. Resolution: existing `#[no_rc]` + new `#[prefer_rc]`.
@@ -547,6 +550,7 @@ Note: Core stdlib types (`Option`, `Result`, `Vec`, `String`, `Array[T, N]`) are
 - [ ] **Application-layer backpressure primitives (P1).** `Semaphore` (with `acquire(timeout)` / `release`), `BoundedChannel[T]` (size limit + send-blocks-when-full / send-fails-fast configurable), `RateLimiter` (token bucket — "max N requests/sec per key"). Complementary to the deployment-layer providers story (which handles per-provider concurrency caps); user code routinely needs application-layer backpressure too.
 - [ ] **`karac new <name>` default project template (P0).** Defaults to a backend HTTP server skeleton: `std.http` + `std.tracing` + a `/health` endpoint + a `/ws` WebSocket route. `--lib` for libraries, `--cli` for CLI tools, `--data` for data-pipeline scaffolding (Kafka consumer + processor + sink shape). Default-being-backend reinforces positioning at the friction-zero entry point.
 - [ ] **Demo 3: data-engineering pipeline (Kafka → S3 → DuckDB-shape) (P1).** Verification artifact for the v64 second-order-positive claim that backend-first investment compounds into the data-engineering persona. Same v1 runtime, same `Pool[T]`, same TLS, same `std.tracing` — proves the personas share the floor rather than competing for it. Cheap incremental engineering, multiplies the v1 launch story.
+- [ ] **`kara-postgres` — canonical Postgres driver, project-owned package (P1, v66 graduation 2026-05-11).** Lives at `gowthamswe/kara-postgres` (or under `kara-lang` org); published to the package registry; installed via `karac add kara-postgres`. **Firm P1, not soft P1** — doubles as internal infrastructure for the user to stress-test Kāra against real backend workloads during v1 development (effect system, `Pool[T]`, auto-concurrency, `with_provider`, structured errors). Dogfooding-grade, not minimum-viable: written to exercise the language's distinctive capabilities. Scope: TCP connection, prepared statements, simple-query protocol, basic type mapping (i64/String/f64/bool/bytes/NULL/timestamp/uuid), transactions, prepared-statement param binding, `Pool[T]` integration. No LISTEN/NOTIFY, COPY, async streaming at v1. Stdlib position (no `std.sql`) is unchanged — see `deferred.md § Stdlib Scope for Non-Primitive Resources`. Handover-to-community policy **explicitly deferred** to engineering-start. See `deferred.md § Canonical Postgres Driver (kara-postgres)` and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 2.3 and Q3`.
 
 ### Standard Library Layers (`core` / `alloc` / `std`)
 - [ ] `core` layer: primitives, `Option`, `Result`, `Array[T, N]`, traits, effect system, math — no OS or allocator dependency
@@ -578,7 +582,7 @@ Parallax-lite is a stripped-down precursor to Demo 1 (Parallax — Auto-Concurre
 
 **Why v1, not v1.1.** Profile knobs (kernel / embedded / deterministic) are a differentiator pillar (`demo_ideas.md` § Demo planning, pillar 4) — they need a real config surface. `kara-version` MSRV is a credibility table-stake. Reproducible-builds CI backs the `design.md` reproducibility pitch. Path / git deps are needed for self-hosting (Phase 12). None of this can ship as "parsed-but-ignored" without the half-ship being the broken signal. Resolver / registry / cache *implementation infrastructure* could have deferred to v1.1; pulled into v1-P1 on 2026-05-08 to avoid the cliff between "model exists" and "model works at adoption scale."
 
-**Sequencing.** Runs as a parallel track that does not block Phase 9 / 10 / 11 progression. Items here are addressed once their gating demo work clears or in dedicated pre-ship windows. Discovery items (Track 3) are added as they surface during Phase 8–11 work — see Track 3 prose for filing protocol.
+**Sequencing.** Runs as a parallel track that does not block Phase 9 / 10 / 11 progression. Items here are addressed once their gating demo work clears or in dedicated pre-ship windows. Discovery items (Track 4) are added as they surface during Phase 8–11 work — see Track 4 prose for filing protocol.
 
 ### Track 1: Interactive Development — REPL + Browser Playground (P0) + Jupyter Kernel (P1 delivery)
 
@@ -661,7 +665,45 @@ Parallax-lite is a stripped-down precursor to Demo 1 (Parallax — Auto-Concurre
 
 ---
 
-### Track 3: Discovery — items added as found during demo build
+### Track 3: Language Server (`kara-lsp`) + IDE Integration
+
+**Goal:** Editor integration as v1 ship-readiness — `kara-lsp` binary + VS Code extension working day-one. Neovim and JetBrains land at v1.x. Promoted from `roadmap.md § Future: Language Server` (post-self-hosting) to v1-P1 on 2026-05-11 under the v66 general-purpose-foundation graduation. See `deferred.md § Language Server (kara-lsp) — v1 Editor Surface` for full rationale.
+
+**Why v1, not Future.** Editor friction kills momentum. Every successful general-purpose language post-2015 shipped editor integration at or before v1. The cohort that tries Kāra in week 1 leaves and does not come back if VS Code support is missing. The analysis is reused — `karac query` and structured-diagnostic JSON already exist; the LSP binary is plumbing over the existing analysis surface plus IDE-side glue, not new compiler design.
+
+**v1 floor (must ship):**
+- [ ] `kara-lsp` binary — long-lived process wrapping `karac` analysis surface; LSP protocol over stdin/stdout.
+- [ ] Syntax highlighting (TextMate grammar; book infrastructure mostly exists).
+- [ ] Diagnostics streaming via `textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON.
+- [ ] Go-to-definition (resolver symbol table).
+- [ ] Hover — type + effect signature (typechecker + effectchecker already produce this).
+- [ ] Find references (resolver symbol table).
+- [ ] Document symbols / outline (parser AST).
+- [ ] **Type-aware completion** — `.`-completion of methods/fields on the receiver type. Requires partial-parse + typecheck-of-incomplete-source (~4-6 weeks engineering). The line below which the LSP feels half-broken.
+- [ ] Formatting via LSP (wraps `karac fmt`).
+- [ ] Signature help (parameter-info popup).
+- [ ] VS Code extension wrapping `kara-lsp` — language identifier, file-watch, marketplace listing.
+
+**v1 stretch (ship if engineering time allows, else v1.1):**
+- [ ] Rename symbol (`textDocument/rename`).
+- [ ] Code actions — apply structured fix-diffs from `karac` diagnostics.
+- [ ] Semantic tokens (full semantic highlighting beyond TextMate).
+- [ ] Workspace symbols / global search.
+
+**v1.x explicitly (post-launch):**
+- [ ] **Effect-aware completion** — `.`-completions filtered by effect compatibility with the surrounding `with`-clause. Kāra-specific differentiator; ~2-3 weeks on top of type-aware. Ship post-launch as a "Kāra LSP now does X" announcement when the v1 floor is solid.
+- [ ] Inline-explain / type lens — surface `karac explain` reasoning in-editor.
+- [ ] Refactoring (extract function, inline variable).
+- [ ] Neovim built-in LSP client config.
+- [ ] JetBrains plugin.
+
+**Future direction (kept at `## Future: Language Server and Reactive Query-Based Compilation` below):** the reactive Salsa-style subscribe/notify LSP — sub-100ms live-edit re-computation, function-local incremental analysis — is post-self-hosting. The v1 LSP runs a batch query model over the existing `karac query` surface — sufficient for editor integration at launch; the reactive layer becomes necessary at scale.
+
+**Done when (v1):** A first-run user opening a `.kara` file in VS Code gets working syntax highlighting, diagnostics on save, hover-for-type-and-effects, go-to-definition, and `.`-completion within their first session. No "extension marketplace tells me I need to install three things first" friction.
+
+---
+
+### Track 4: Discovery — items added as found during demo build
 
 This subsection is intentionally empty at Phase 8.5's creation (2026-05-08). It accumulates items that surface during Phase 8 / 9 / 10 / 11 demo work and that are *v1 ship-blocking but not demo-blocking* — the kind of "we can't ship v1 without this, but it doesn't gate the demo" item that is hard to predict in advance.
 
@@ -671,7 +713,7 @@ This subsection is intentionally empty at Phase 8.5's creation (2026-05-08). It 
 
 ---
 
-**Phase 8.5 done when:** v1 ships. The combined Track 1 v1 surface + Track 2 v1-P1 surface + reproducible-builds CI + any Track 3 items that accumulated during Phase 8–11 demo build are landed. Track 1's v1.1 follow-ups (Jupyter kernel) ship in their own window after v1.
+**Phase 8.5 done when:** v1 ships. The combined Track 1 v1 surface + Track 2 v1-P1 surface + Track 3 v1 floor (`kara-lsp` + VS Code) + reproducible-builds CI + any Track 4 items that accumulated during Phase 8–11 demo build are landed. Track 1's v1.1 follow-ups (Jupyter kernel) and Track 3's v1.x follow-ups (Neovim, JetBrains, effect-aware completion, inline-explain) ship in their own windows after v1.
 
 ---
 
@@ -711,8 +753,10 @@ This subsection is intentionally empty at Phase 8.5's creation (2026-05-08). It 
 
 **Goal:** Same language compiles to multiple targets.
 
+> **v66 graduation update (2026-05-11):** **GPU compute shaders pulled forward to v1 ship-readiness** as a P1 gate, no longer Phase 10. The implementation tasks below stay in Phase 10's tracker for sequencing (codegen work proceeds during the Phase 8–11 window) but the gate is v1 ship, not "post-v1 target completion." Multi-vendor coverage already satisfied by the existing wgpu-primary design (Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser; CUDA opt-in via `--target cuda`). See `deferred.md § Additional Compilation Targets (Phase 10)` for the v1 pull-forward note, and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.2` for the decision rationale. WebAssembly and embedded targets stay at Phase 10 post-v1.
+
 - [ ] **WebAssembly:** LLVM WASM backend. Concurrency lowering: sequential cooperative scheduling on the main thread by default; `--features wasm-threads` opts into Web Workers + SharedArrayBuffer + atomics (user deploys with COOP/COEP headers). Compiler-managed transparent threading (ownership-proven partitioning without opt-in) is deferred post-v1 — see `docs/deferred.md § Compiler-Managed Transparent Threading on WASM`. Source-level `go`/channel/`par` semantics are target-agnostic — see `design.md § Concurrency Across Targets`.
-- [ ] **GPU compute shaders.** Compile `#[gpu]`-annotated functions to GPU kernels and wire `gpu.dispatch` to invoke them. Full design of the `#[gpu]` constraint, `GpuSafe` type bound, and `gpu.dispatch` effect semantics is already in `design.md § GPU Subset Constraints`.
+- [ ] **GPU compute shaders — v1 ship gate (P1).** Compile `#[gpu]`-annotated functions to GPU kernels and wire `gpu.dispatch` to invoke them. Full design of the `#[gpu]` constraint, `GpuSafe` type bound, and `gpu.dispatch` effect semantics is already in `design.md § GPU Subset Constraints`. Pulled forward from Phase 10 to v1 on 2026-05-11 (v66 graduation). Multi-vendor coverage via the wgpu-primary path (below) satisfies the dogfooding requirement (project leader develops on macOS — Metal coverage at v1 is non-negotiable) and the systems-language-target-completeness requirement.
 
   **Compilation strategy — two paths:**
 
@@ -784,6 +828,16 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 - [ ] `Tensor` is dense-only; nullability is a `Column` concern.
 - [ ] `DataFrame` — schema-bearing table of named columns.
 - [ ] Arrow IPC, Parquet, CSV readers/writers with effect annotations.
+- [ ] **`LazyDataFrame` — minimum-viable query optimizer (v66 graduation, 2026-05-11; lifted from v1.5).** `df.lazy()` returns `LazyDataFrame`; expression API (`col("name")`, `col("a") + col("b")`, `col("x").mean()`, `when().then().otherwise()`); operations (`filter`, `select`, `group_by(...).agg(...)`, `join`, `sort`, `limit`); `.collect() -> DataFrame` materializes; `.explain() -> String` prints optimized plan. Optimizer passes at v1: predicate pushdown, projection pushdown, constant folding, CSE. Target ~2-3K LOC. See `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope`. Full optimizer (join reordering, push-through-joins, etc.) at P2 — see `deferred.md § Lazy DataFrame Query Optimizer Expansion`.
+- [ ] **Statistical methods on `Column` / `DataFrame` (v66 graduation, 2026-05-11).** `Column[T: Numeric]`: `mean`, `std`, `var`, `median`, `quantile(q)`, `min`, `max`, `sum`. `Column[f64]`: above + `corr(other)`. `DataFrame.describe() -> DataFrame` (count/mean/std/min/25%/50%/75%/max per numeric column). Trait-dispatched the same way as `std.stats` so future `GpuColumn` / `GpuTensor` implements the same surface. See `deferred.md § Statistical Methods on Column / DataFrame`.
+
+**ML and AI-adjacent stdlib (v66 graduation, 2026-05-11).**
+- [ ] **`std.embeddings` — cosine similarity, top-k, l2-normalize, batched dot (P1).** Five-function surface over `Tensor[f32, ...]` for RAG, semantic-search, recommendation workloads. See `deferred.md § std.embeddings`.
+- [ ] **`std.autograd` — reverse-mode automatic differentiation (P1).** `shared struct Tape` with `writes(GradTape)` effect; separate `Var[T, S]` wrapper over `Tensor[T, S]` (locked design — Q8); operator overloads on `Var`; activations (relu, sigmoid, tanh, softmax, gelu, silu); losses (mse, cross_entropy, bce); `grad(fn, args)` / `value_and_grad(fn, args)`; GPU-aware tape recording (records kernel launches via v1 GPU codegen). Reverse-mode only at v1; forward-mode and higher-order grads stay post-v1. See `deferred.md § std.autograd`. `std.nn` (layers) and `std.optim` (optimizers) — decision deferred to engineering-start (Q7); see `deferred.md § Neural Network Framework`.
+
+**Data documentation (v66 graduation, 2026-05-11; lands in Phase 8.5 docs window).**
+- [ ] **`docs/book/src/data.md` — dedicated data chapter.** Tensor / Column / DataFrame / lazy querying / Arrow IPC / Parquet / CSV. One end-to-end example (~50 lines). Pointers to `std.linalg`, `std.fft`, `std.einsum`, `std.embeddings`, `std.random.distributions`, `std.autograd`. Discoverability for the "quiet data bonus" positioning — depth that ships at v1 but is not promoted as the headline pitch. See `deferred.md § Data Documentation and Examples`.
+- [ ] **`examples/data/` — worked programs.** `csv-to-parquet.kara` (basic ETL), `embeddings-rag.kara` (load corpus → embed via HTTP → top-k semantic search), `stats-summary.kara` (group-by + describe), `lazy-query.kara` (Polars-class analytical query). Double as integration tests against the data stdlib.
 
 ### Scripting-critical stdlib (data-science narrow surface)
 
@@ -822,7 +876,7 @@ Semantics in `design.md § Numerical Types`, `§ Numeric Semantics > Literal-inv
 
 ### Deferred from v1 (P1, ships post-v1)
 - [ ] **v1.5 — Axis-indexed reductions.** `sum[AXIS]()`, `mean[AXIS]()`, `min[AXIS]()`, `max[AXIS]()`, `argmin[AXIS]()`, `argmax[AXIS]()` with fully typed return shapes (`remove_dim(Shape, AXIS)`). Held for v1.5 because shipping with `Tensor[T, [?]]` return types would be a breaking change when shape arithmetic tightens them. See `design.md § Axis-Indexed Reductions`.
-- [ ] **v1.5 — Lazy evaluation / pipeline fusion.** `.lazy()` → `LazyColumn` / `LazyTensor` / `Iterator` specializations; fused filter/map/reduce with effect composition. Revisit alongside GPU call-site design — lazy is load-bearing for kernel fusion.
+- [x] ~~**v1.5 — Lazy evaluation / pipeline fusion.**~~ Lazy `LazyDataFrame` (Option A scope — predicate pushdown + projection pushdown + constant folding + CSE) pulled forward from v1.5 to v1 P1 on 2026-05-11 (v66 graduation). See `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope` and `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.2 and Q1`. Full optimizer expansion (join reordering, push-through-joins, scan-time filters) stays post-v1 as P2 — see `deferred.md § Lazy DataFrame Query Optimizer Expansion`. `LazyColumn` / `LazyTensor` / `Iterator` specializations + kernel-fusion lazy stay v1.5+; this lift is `LazyDataFrame` only.
 - [ ] **Phase 11+ (P1) — `std.einsum`.** String-notation Einstein summation. See `deferred.md § std.einsum`.
 - [ ] **Phase 11+ (P1) — `std.linalg`.** SVD, eigendecomposition, QR, Cholesky, `lstsq`, norm, inverse, determinant, rank. See `deferred.md § std.linalg`.
 - [ ] **Phase 11+ (P1) — `std.fft`.** 1D/N-D FFT, IFFT, `rfft`, `fftfreq`. See `deferred.md § std.fft`.
@@ -951,11 +1005,11 @@ fn transfer(from: Account, to: Account, amount: Money)
 
 ---
 
-## Future: Language Server and Reactive Query-Based Compilation
+## Future: Language Server (Reactive Query-Based Layer)
 
-**Goal:** rust-analyzer-class tooling for Kāra — broad query surface, subscribe model, incremental re-computation driven by file watchers.
+**Goal:** rust-analyzer-class reactive tooling for Kāra — broad query surface, subscribe model, incremental re-computation driven by file watchers. **The batch v1 LSP (`kara-lsp` + VS Code at v1, Neovim / JetBrains at v1.x) was pulled forward to Phase 8.5 Track 3 on 2026-05-11** under the v66 graduation; see `## Phase 8.5: V1 Ship Readiness > Track 3: Language Server`. This `Future` section now tracks only the *reactive* layer — the Salsa-style subscribe/notify model that runs on top of the v1 batch LSP.
 
-**Not currently scheduled — v2+ direction, post-self-hosting.** Phase 5 ships a narrow batch query surface (`karac query effects|ownership|concurrency`) that answers one question per invocation. For AI clients iterating rapidly on a single file, the batch model is sufficient when paired with `--output=jsonl` streaming. The reactive model becomes necessary only at scale — large codebases where re-running even a function-local pipeline on every edit is too slow, or IDE integrations where sub-100ms query latency matters.
+**Not currently scheduled — post-self-hosting.** Phase 5 ships a narrow batch query surface (`karac query effects|ownership|concurrency`) that answers one question per invocation. The v1 LSP (Phase 8.5 Track 3) speaks LSP protocol over that batch surface — sufficient for editor integration at launch. The reactive model becomes necessary only at scale — large codebases where re-running even a function-local pipeline on every edit is too slow, or IDE integrations where sub-100ms query latency matters.
 
 The Compilation Model principles (function-local analysis, SCC as cache unit, named inter-phase dependencies) are the substrate that makes this layer feasible later. Building it now would double compiler complexity for a prototype that does not yet need it.
 

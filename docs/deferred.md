@@ -145,11 +145,13 @@ Build-level override:
 
 ### Additional Compilation Targets (Phase 10)
 
-**Decision:** Extend codegen beyond the initial LLVM target — WASM, GPU (SPIR-V/WGSL), and embedded targets.
+**Decision:** Extend codegen beyond the initial LLVM target — WASM, GPU (SPIR-V/WGSL via wgpu, plus opt-in CUDA via NVPTX), and embedded targets.
 
 **Why deferred:** Each target has unique constraints (no heap for embedded, no recursion for GPU, etc.) that are better addressed after the core compiler pipeline is stable.
 
 **Why non-breaking:** Purely additive backend targets.
+
+**v66 graduation update (2026-05-11):** **GPU codegen pulled forward to v1** as a P1 ship-readiness gate, not Phase 10. Reasons: (a) the user develops on macOS and cannot dogfood GPU codegen without Metal coverage at v1 — same dogfooding-as-validation pattern as `kara-postgres`; (b) "AOT systems language with no GPU at launch" reads as half-finished against the language's compile-target story. The existing Phase 10 design is already multi-vendor via wgpu (Metal on macOS, Vulkan on Linux, DX12 on Windows, WebGPU in browser) with CUDA as an opt-in secondary path — vendor-neutrality concern from the v66 graduation Q6 is already satisfied by the wgpu-primary spec. WASM and embedded targets stay in Phase 10. See `roadmap.md § Phase 10 > GPU compute shaders` for the codegen spec; `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.2` for the v1 pull-forward decision.
 
 ---
 
@@ -966,6 +968,61 @@ The string parser validates index consistency (each index appears at most twice 
 
 ---
 
+### `std.embeddings` — Cosine Similarity and Top-K Primitives
+
+**Decision:** Ship `std.embeddings` at v1 (P1, Phase 11). Promoted from "not committed" to v1 in the v66 graduation. Minimum surface: cosine similarity (scalar + batched), L2 normalize (in-place + non-mutating), batched dot product, top-k indices+scores. Five functions over existing `Tensor[f32, ...]` primitives.
+
+**Why ship at v1.** RAG, semantic search, and recommendation workloads are mainstream backend patterns. Without `std.embeddings`, every adopter doing AI-adjacent work hand-rolls the same `cosine_similarity` against `Tensor` primitives — wasteful for a 5-function surface. Vector indices (HNSW, IVF, scalar quantization) stay community territory.
+
+**Why non-breaking:** New stdlib module.
+
+**Design shape:**
+
+```kara
+use std.embeddings;
+
+let sim: f32 = embeddings.cosine_similarity(query, target);                    // Tensor[f32, [D]] × Tensor[f32, [D]]
+let sims: Tensor[f32, [N]] = embeddings.cosine_similarity_batched(query, corpus);  // [D] × [N, D]
+let normed: Tensor[f32, S] = embeddings.l2_normalize_to(t);
+embeddings.l2_normalize(mut ref t);                                              // in-place
+let dots: Tensor[f32, [N, M]] = embeddings.dot_batched(a, b);                  // [N, D] × [M, D]
+let top: Tensor[(i64, f32), [k]] = embeddings.top_k(scores, k: 10);            // indices + scores
+```
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.1`.
+
+---
+
+### `std.cli` — Argument Parsing
+
+**Decision:** Ship `std.cli` at v1 (P1, Phase 8 floor). Promoted from "not committed" to v1 in the v66 graduation. Minimum surface: builder-style `Parser`, named args + flags + positional, subcommands, automatic `--help`/`--version`, structured error type.
+
+**Why ship at v1.** Every scripting/CLI workload — and a meaningful fraction of v1 user code will be CLI tools — needs argument parsing beyond raw `env.args()`. Without a canonical stdlib argparse, every user writes the same boilerplate or pulls a third-party crate before their first feature. For general-purpose v1, "argparse is third-party" is the wrong default.
+
+**Why non-breaking:** New stdlib module.
+
+**Design shape:**
+
+```kara
+use std.cli;
+
+let parser = cli.Parser.new("greet")
+    .about("Greets a name")
+    .arg("--name", cli.Arg.string().required().help("name to greet"))
+    .flag("--verbose", short: 'v', help: "verbose output")
+    .subcommand("upper", cli.Parser.new("upper").about("uppercase the greeting"));
+
+let args = parser.parse()?;                  // Result[Args, CliError]
+let name = args.get_string("--name")?;
+let verbose = args.get_flag("--verbose");
+```
+
+Effect: `reads(Env)` on `.parse()` (consumes `env.args()`). API surface inspired by clap's builder pattern; v1 perfection not required, canonicality is.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 2.2`.
+
+---
+
 ### `std.linalg` — Linear Algebra Suite
 
 **Decision:** Defer `std.linalg` to Phase 11+. Minimum surface: SVD, eigendecomposition, QR factorization, Cholesky, least-squares (`lstsq`), matrix norm, inverse, determinant, and rank. Dispatch through LAPACK (linked at build time) or a pure-Kāra Cooley-Tukey fallback.
@@ -1041,6 +1098,172 @@ let e = rng.sample(distributions.Exponential(rate: 1.5));
 
 let arr: Tensor[f64, [100, 100]] = Tensor.from_fn(|_, _| rng.sample(distributions.Normal(0.0, 1.0)));
 ```
+
+---
+
+### `std.autograd` — Automatic Differentiation (reverse-mode)
+
+**Decision:** Ship `std.autograd` at v1 (P1, Phase 11). Promoted from P3 "Autograd / Neural Network Framework" in the v66 graduation. **Reverse-mode only at v1.** Wrapper type: separate `Var[T, S]` (not `Tensor.requires_grad: bool`); design rationale below.
+
+**Why ship at v1.** Autograd is the dividing line between "Kāra has tensors" (commodity) and "Kāra can train models" (a category most general-purpose languages don't occupy at launch). Combined with GPU codegen at v1, this puts Kāra in a credible position for ML-curious adopters without leading the pitch with ML.
+
+**Why non-breaking:** New stdlib module.
+
+**`Var[T, S]` over `requires_grad: bool` — locked design choice.** Kāra's type system (shape types + effect types + ownership) is the differentiator; autograd leverages it rather than bypassing it with runtime flags. Only `Var` operators carry `writes(GradTape)` — coarse `writes(GradTape)` on every Tensor op (the PyTorch shape forced by Python's type system) is avoided. PyTorch chose `requires_grad: bool` because Python couldn't express the alternative; Kāra doesn't inherit that workaround.
+
+**Minimum viable v1 surface:**
+- `shared struct Tape` — single-use, append-only operation log. Effect: `writes(GradTape)`.
+- `Var[T, S]` wrapper over `Tensor[T, S]`. Conversions: `Var.track(tensor)` / `var.detach() -> Tensor`.
+- Operator overloads on `Var` for `+`, `-`, `*`, `/`, matmul, broadcasting, reductions (`sum`, `mean`), reshape, transpose, indexing.
+- Activations with hand-coded backwards: `relu`, `sigmoid`, `tanh`, `softmax`, `gelu`, `silu`.
+- Losses with backwards: `mse_loss`, `cross_entropy`, `binary_cross_entropy`.
+- `grad(fn, args) -> Args::Grads` and `value_and_grad(fn, args) -> (Output, Args::Grads)`.
+- GPU-aware: autograd ops on GPU `Var` record on the same tape; backward pass dispatches kernel launches via the v1 GPU codegen.
+
+**Out of v1 `std.autograd` scope:**
+- Forward-mode AD.
+- Higher-order gradients (`grad(grad(f))`).
+- Custom backward definitions (`@custom_vjp` decorator equivalent). Stdlib-blessed ops only.
+- Checkpointing / activation rematerialization.
+- JIT-traced graphs (eager only at v1).
+- Distributed AD / multi-GPU gradient sync.
+
+**Effect-system advantage.** Public functions performing gradient-tracked operations declare `with writes(GradTape)`. Inference and preprocessing functions carry no `GradTape` effect — the compiler statically enforces the separation. Accidentally calling a tracked op inside an inference-only function is a compile error, not a silent correctness bug. This is the load-bearing reason for `Var[T, S]` over `requires_grad: bool` — bool-flagged tensors over-approximate `writes(GradTape)` to all Tensor ops, useless for inference.
+
+**Open at engineering-start (not blocking v1 commitment):** `Var`↔`Tensor` conversion ergonomics, `Differentiable` trait shape for operator overloading once-on-trait vs twice-on-types, exact `grad`/`value_and_grad` signature with shape preservation.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.1`; Q8 for `Var[T, S]` lock-in.
+
+---
+
+### Lazy DataFrame Query Planner — Option A v1 Scope
+
+**Decision:** Ship `LazyDataFrame` at v1 (P1, Phase 11). Promoted from "v1.5 — Lazy evaluation / pipeline fusion" (`roadmap.md § Phase 11`) to v1 in the v66 graduation. **Option A scope** — minimum-viable optimizer: predicate pushdown, projection pushdown, constant folding, common-subexpression elimination. Target ~2-3K LOC, ~6-8 weeks focused engineering. Written fresh.
+
+**Why ship at v1.** Eager DataFrame ops are fine for small data, but the analytical workload that makes Polars beat pandas (and makes DuckDB feel cheap) is the lazy planner. Without it, "Kāra has DataFrame" reads as "Kāra has a slow pandas." With Option A, "Kāra has DataFrame" reads as "Kāra has a moderately-capable analytical engine; reach for DuckDB on multi-join warehouse queries."
+
+**Why Option A and not the full expansion.** A 5-7K LOC fresh optimizer is the right *target* but the wrong v1 *commitment* — it's exactly the kind of scope that slips by months and pulls v1 with it. Option A's gap vs Polars is in complex multi-join analytics; users already reach for DuckDB there. Honest docs framing: "Polars-comparable on simple-to-moderate queries, weaker on complex multi-join analytics — reach for DuckDB for warehouse queries." See P2 entry "Lazy DataFrame Query Optimizer Expansion" for the post-v1 path.
+
+**Why non-breaking:** Additive — `df.lazy()` returns a new `LazyDataFrame`; existing eager `DataFrame` API unchanged.
+
+**Design shape:**
+
+```kara
+let lazy = df.lazy();                                            // -> LazyDataFrame
+let result = lazy
+    .filter(col("age") > 21)
+    .select([col("name"), col("city")])
+    .group_by([col("city")])
+    .agg([col("name").count().alias("cnt")])
+    .sort([col("cnt")])
+    .collect();                                                  // -> DataFrame
+let plan: String = lazy.explain();                               // optimized plan as text
+```
+
+Optimizer passes at v1: predicate pushdown (move filters before scans/joins), projection pushdown (only read columns that contribute), constant folding (evaluate constants at plan time), CSE (deduplicate identical sub-expressions). Out of v1: join reordering, filter combining, push-aggregations-through-joins, scan-time filters, projection-aware Parquet reads — see P2 entry.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.2`; Q1 for Option A lock-in vs Options B and C.
+
+---
+
+### Statistical Methods on `Column` / `DataFrame`
+
+**Decision:** Ship statistical methods on `Column` and `DataFrame` at v1 (P1, Phase 11). Promoted from "not explicitly committed" to v1 in the v66 graduation. Trait-dispatched the same way as `std.stats` so future `GpuColumn` / `GpuTensor` implements the same surface.
+
+**Why ship at v1.** General-purpose data work routinely calls `.mean()`, `.std()`, `.median()`, `.quantile()`, `.describe()`. Each individual method is trivial; the absence of them as canonical stdlib surface is the kind of "Kāra doesn't have basic stats?" objection that's cheap to prevent.
+
+**Why non-breaking:** Additive method surface on existing `Column[T]` and `DataFrame` types.
+
+**Design shape:**
+
+```kara
+let col: Column[f64] = df.column("score");
+let mean: f64 = col.mean();
+let std: f64 = col.std();
+let med: f64 = col.median();
+let p99: f64 = col.quantile(0.99);
+let corr_xy: f64 = df.column("x").corr(df.column("y"));
+
+let summary: DataFrame = df.describe();   // count / mean / std / min / 25% / 50% / 75% / max per numeric column
+```
+
+Surface: on `Column[T: Numeric]` — `mean`, `std`, `var`, `median`, `quantile(q)`, `min`, `max`, `sum`. On `Column[f64]` additionally: `corr(other)`. On `DataFrame`: `describe()`.
+
+NaN handling delegates to the existing `std.stats` discipline (NaN-propagating vs NaN-skipping variants); see `deferred.md § NaN and Inf Handling`.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.4`.
+
+---
+
+### Data Documentation and Examples (Discoverability Surface)
+
+**Decision:** Ship a dedicated data chapter and worked examples at v1 (P1, Phase 8.5 / docs). Promoted from "doesn't exist" to v1 in the v66 graduation. The "quiet data bonus" positioning (data ships at v1 but is not the headline pitch) makes discoverability a real concern — depth that doesn't surface in launch-day docs is depth users will not find.
+
+**Why ship at v1.** Without this, the data stdlib breadth (Tensor, Column, DataFrame, Arrow IPC, `std.linalg`, `std.fft`, `std.einsum`, `std.embeddings`, `std.autograd`, lazy DataFrame planner) is reachable only by reading the API reference. The chapter and examples make it discoverable from the book's table of contents and `examples/` directory.
+
+**Why non-breaking:** Doc-only.
+
+**Surface:**
+
+- **`docs/book/src/data.md`** — single book chapter. Covers Tensor (rank, shape types, indexing, broadcasting, common ops), Column (nullable 1D, null semantics, NaN handling, Arrow layout), DataFrame (schema, read_csv / read_parquet, lazy querying, group-by, joins). One end-to-end example (~50 lines): load CSV → filter → group by → compute → write Parquet. Pointers to `std.linalg`, `std.fft`, `std.einsum`, `std.embeddings`, `std.random.distributions`, `std.autograd` with one-line each.
+- **`examples/data/`** — 3-4 programs of 30-80 lines each: `csv-to-parquet.kara` (basic ETL), `embeddings-rag.kara` (load corpus → embed via external HTTP embedder → top-k semantic search), `stats-summary.kara` (group-by + describe over a CSV), `lazy-query.kara` (Polars-class analytical query against Parquet via the lazy planner). Doubles as integration tests against the data stdlib.
+
+Not a promotional document — a structural reference. The pitch still reads "general-purpose AOT systems language"; the chapter exists so users who arrive and discover the data depth can navigate it.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 4`.
+
+---
+
+### Canonical Postgres Driver (`kara-postgres`) — Project-Owned Package
+
+**Decision:** Ship `kara-postgres` at v1 (P1, project-owned package, not stdlib). Promoted from "no driver at v1" / community territory to firm v1 commitment in the v66 graduation. Lives at `gowthamswe/kara-postgres` or under a `kara-lang` org; published to the package registry; installed via `karac add kara-postgres`. **Handover-to-community policy explicitly deferred** to engineering-start time — not designing handover triggers now.
+
+**Why ship at v1 — dogfooding-as-validation.** The user develops Kāra on a Mac and needs `kara-postgres` to stress-test Kāra against real backend workloads during v1 development. The driver is *internal infrastructure* for validating the effect system, `Pool[T]`, auto-concurrency runtime, `std.http` composition, structured errors, and `with_provider` against the workloads the language is positioned to serve. A capability the project leader cannot exercise locally is not a v1-ready capability — same pattern as the dogfooding argument for GPU codegen at v1. This is stronger than the launch-credibility argument: it's not "users at launch need a Postgres driver to take Kāra seriously" but "the project itself cannot validate its claims about backend workloads without exercising them against a real backend stack including database access."
+
+**Why a project-owned package, not stdlib.** Stdlib-omission position for `database/sql`-class drivers is correct as long-term principle (see `deferred.md § Stdlib Scope for Non-Primitive Resources`). The driver lives outside `std.*`; the project owns the package as a launch artifact while the ecosystem matures. The driver should be **written to exercise the language's distinctive capabilities** — use `Pool[T]`, user-defined `Database` effect resources, `with_provider`, auto-concurrency, structured errors. Not minimum-viable Postgres driver; dogfooding-grade Postgres driver.
+
+**Minimum viable scope:** TCP connection, prepared statements, simple-query protocol, basic type mapping (i64 / String / f64 / bool / bytes / NULL / timestamp / uuid), transactions, prepared-statement parameter binding, `Pool[T]` integration. No advanced features (LISTEN/NOTIFY, COPY, async streaming) at v1.
+
+**Cost estimate:** moderate — 4-6 weeks for the minimum, slightly more for dogfooding-grade. Binary protocol type-mapping surface is wide.
+
+**Handover policy — explicitly deferred.** Re-open the handover question once the driver's actual maintenance shape is visible. For v1 development and launch, project owns it without timeline pressure to hand off. Dogfooding and handover pull in opposite directions; cannot hand off a tool used to find bugs in the language itself.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 2.3` and Q3.
+
+---
+
+### Language Server (`kara-lsp`) — v1 Editor Surface
+
+**Decision:** Ship `kara-lsp` binary + VS Code extension at v1 (P1, Phase 8.5). Promoted from `roadmap.md § Future: Language Server and Reactive Query-Based Compilation` (post-self-hosting) to v1 in the v66 graduation. Neovim and JetBrains integrations land at v1.x.
+
+**Why ship at v1.** Editor friction is a momentum-killer. A general-purpose language v1 launched without working VS Code / Neovim / JetBrains support out of the box does not get past the "I tried it but my editor was useless" early-adopter filter. Every successful general-purpose language post-2015 (Rust, Go, Swift, Kotlin, Zig late, Gleam) shipped editor integration at or before v1. The cohort that tries Kāra in week 1 leaves and does not come back if VS Code support is missing.
+
+**Why non-breaking:** New binary + extension; no compiler API changes beyond exposing the existing query surface over LSP protocol.
+
+**Engineering surface — the analysis is reused.** `karac query` and structured-diagnostic JSON infrastructure already exist (Phase 5). The LSP binary is a long-lived process wrapping the existing analysis surface and translating to LSP wire protocol. Work is plumbing + IDE-side glue, not new compiler design.
+
+**v1 floor (must ship):**
+- Syntax highlighting (TextMate grammar — book infrastructure mostly exists).
+- Diagnostics streaming (`textDocument/publishDiagnostics` over existing `karac` structured-diagnostic JSON).
+- Go-to-definition (resolver symbol table).
+- Hover (type + effect signature; typechecker + effectchecker already produce this).
+- Find references (resolver symbol table).
+- Document symbols / outline (parser AST).
+- **Type-aware completion** (`.`-completion of methods/fields on the receiver type — requires partial-parse + typecheck-of-incomplete-source; ~4-6 weeks engineering; the line below which the LSP feels half-broken).
+- Formatting via LSP (wraps `karac fmt`).
+- Signature help (parameter-info popup).
+
+**v1 stretch (ship if engineering time allows, else v1.1):**
+- Rename symbol; code actions (apply structured fix-diffs from `karac` diagnostics); semantic tokens (beyond TextMate); workspace symbols / global search.
+
+**v1.x explicitly (post-launch):**
+- **Effect-aware completion** — `.`-completions filtered by effect compatibility with the surrounding `with`-clause. Kāra-specific differentiator, ~2-3 weeks on top of type-aware. Ship post-launch as a "Kāra LSP now does X" announcement.
+- Inline-explain / type lens (surface `karac explain` reasoning in-editor).
+- Refactoring (extract function, inline variable).
+
+**Future direction (kept at `roadmap.md § Future`):** the reactive query-based LSP (Salsa-style subscribe/notify model, sub-100ms live-edit re-computation) is post-self-hosting. The v1 LSP runs a batch query model over the existing `karac query` surface — sufficient for AI clients and editor integration at launch; reactive layer becomes necessary at scale.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 2.1` and Q2 for the floor/stretch/v1.x split.
 
 ---
 
@@ -1490,6 +1713,68 @@ impl[T] CircularBuffer[T] {
 ## P2 — Important Post-v1 Language Features
 
 Important features deferred from v1; the language author or the community will build them post-v1. Each entry has a committed design or design shape; for items where the mechanism is genuinely uncertain, the entry names the conditions under which the design would solidify (the *promotion gates*) so the entry doesn't become indefinitely deferred. Distinct from P3, where the may-or-may-not question is open.
+
+### Lazy DataFrame Query Optimizer Expansion
+
+**Decision:** Post-v1 expansion of the v1 `LazyDataFrame` optimizer (Option A — see `deferred.md § Lazy DataFrame Query Planner — Option A v1 Scope`). Adds: join reordering, filter combining, push aggregations through joins, scan-time filter pushdown, projection-aware Parquet reads. Target ~5-7K LOC additional, ~3-4 months focused. Lands as v1.1 or v1.2 follow-on. Non-breaking — optimizer extension only; user-facing `LazyDataFrame` API unchanged.
+
+**Why post-v1, not v1.** The full optimizer is the right *target* but the wrong v1 *commitment*. Polars in Rust ships ~10K LOC of query optimizer; even a half-sized fresh implementation is a 3-4 month line item that would push v1 by months. Option A's gap vs Polars is in complex multi-join analytics, which is exactly the workload where users reach for DuckDB. v1 ships Option A with honest docs framing; this expansion lands when v1 user feedback identifies multi-join analytical workloads as a recurring friction point.
+
+**Why non-breaking:** Optimizer-internal — the `LazyDataFrame` surface (filter/select/group_by/agg/join/sort/limit/collect/explain) does not change. Plans that previously executed produce identical (or strictly better) results with the expanded optimizer.
+
+**Re-evaluation trigger (any one of):**
+1. v1 user feedback showing multi-join analytical workloads as a recurring friction point.
+2. A flagship-data-engineering demo where the v1 optimizer's join handling is the visible weakness.
+3. Engineering bandwidth available post-v1 with no higher-priority data-stack work pending.
+
+**Alternative considered (Option C — DataFusion integration, designs-not-taken).** Considered at v1: wire `LazyDataFrame` → DataFusion `LogicalPlan` → run DataFusion's optimizer → lower back to Kāra physical execution. Rejected at v1 because (a) plan-IR bridge work in both directions is non-trivial and underestimated by the "4-6 weeks integration" framing — DataFusion assumes Arrow throughout, which aligns with Kāra Column layout, but plan-translation in both directions is real work; (b) external optimizer dependency conflicts with the language's "owns the stack" posture; (c) Kāra Column nullability and NaN semantics would have to bend to DataFusion's Arrow assumptions or accept a semantic-mismatch layer. Documented as the alternative considered so future contributors don't re-litigate. If the Option B expansion proves harder than expected post-v1, Option C revives as a fallback — but with full awareness of these trade-offs.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § Q1 (Option B)`.
+
+---
+
+### Frontend UI Framework
+
+A React / SwiftUI / Vue / Solid-class framework for building user interfaces, covering the full toolkit a web application needs on top of the `std.web` effect substrate and `host fn` bindings. **Promoted from P3 to P2 in the v66 graduation (2026-05-11).** Frontend is not optional — a general-purpose language with no browser story is, in 2026+, a language with a hole where most consumer-facing software lives. Kāra needs an answer; the answer doesn't have to be at v1.
+
+Scope (any one of these is a substantial library in itself; the full framework bundles all of them):
+
+- **Component model** — how UI components are declared, composed, and given lifecycle (mount / update / unmount). Expected shape: functions that take props and return a declarative view tree; lifecycle hooks modeled as channel subscriptions or provider injection rather than magic names.
+- **Reactive primitives** — signals, observables, derived state, or whatever primitive the ecosystem converges on. The effect system + channels are the runtime substrate; the framework decides the user-facing reactivity model.
+- **JSX / template syntax for HTML** — declarative view construction. Expected path: an `html!(...)`-style macro once macros ship, not a language feature. f-strings cover the simple interpolation case today.
+- **Routing** — URL-to-view mapping, history integration, nested routes. Standard web-framework fare.
+- **Styling** — CSS-in-Kara, utility-class generation, or a CSS-module-style convention. Library choice, not language concern.
+- **Hydration protocol** — the contract between SSR-rendered HTML and client-side event binding. Depends on the framework's component model; see `design.md § Cross-target Compilation` for the provider-injection pattern that makes the same component run on both targets.
+
+**What it rests on:**
+- `design.md § Web / Host Effect Vocabulary` (the `Display` / `Input` / `Timer` / `Storage` / `Console` resources the framework calls into).
+- `design.md § Host Functions` (the `host fn` primitives the stdlib exposes for DOM / events / storage).
+- `design.md § Cross-target Compilation` (the SSR-shared-component + per-target-provider pattern the framework enforces on user code).
+- `design.md § Async Host APIs on WASM` (channel-over-Promise pattern for host API integration).
+- A macro system — not yet spec'd. Needed for ergonomic view syntax; without macros the framework works but the DX is `View.div(View.text("hello"))`-style.
+
+**Why P2 (not P1, not P3):**
+1. **Why not P1.** Under the v66 graduation positioning (general-purpose foundation, backend natural-fit, data quiet bonus), the v1 launch story does not require frontend. Pulling it into v1 trades 6-12 months of frontend design+impl against a launch that already has enough surface to defend. Better to ship v1 and then commit serious effort to a frontend story than to delay v1 for it.
+2. **Why not P3.** P3 framing ("library on top, may or may not ship") understates importance. The project will ship a frontend story; the only question is which post-v1 release it lands in.
+3. **Substrate dependencies.** Every viable shape (React hooks, Solid signals, SwiftUI declarative, Vue composition API) has active ecosystem evolution. Macro system must ship first. Phase 10 (WASM codegen) must land first.
+
+**Pre-design work that should start during v1 development (not blocking, not P1):**
+- Sketch DOM/JS-interop type-system bridge. How does an effect-typed language interact with JS callbacks? What's the equivalent of `wasm-bindgen`?
+- Survey the design space (Yew, Leptos, Sycamore, Dioxus from Rust; Solid/React from JS). What does Kāra's effect system change about the reactivity model?
+- Identify whether the framework is a separate-team-effort post-v1 or a project-owned reference (parallel to the `kara-postgres` decision).
+
+**Pre-design timing — explicitly deferred (v66 Q5).** Not committing to "start during Phase 8/9" or "defer until v1 ships" now. Re-open the question once v1 implementation is underway and there's concrete signal about (a) available bandwidth, (b) whether early adopters are asking for a browser story, (c) whether the user himself wants to start exploring frontend during v1.
+
+**Pre-build checklist (all must be done before building this):**
+- [ ] Phase 10 WASM codegen shipped and stable
+- [ ] Macro system spec'd and landed (for `html!(...)` ergonomics — framework is buildable without but users will hit the view-syntax wall fast)
+- [ ] `std.web` stdlib layer for `Display` / `Storage` / `Console` / `Timer` / `Input` host-fn bindings shipped
+
+This entry is the canonical tracker for a Kāra frontend UI framework.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 5.4 and Q5`.
+
+---
 
 ### Layout-Capability Bound (Type-System-Enforced Layout Requirements)
 
@@ -2461,73 +2746,23 @@ Items that are **not language features** and will not be added to `design.md` �
 
 These are distinct from the P1/P2 deferrals above, which track language / compiler features the project itself would add to the spec. P3 items never go into `design.md`; if any ship, they ship as independent packages.
 
-### Autograd / Neural Network Framework
+### Neural Network Framework (`std.nn` / `std.optim`) — Decision Deferred
 
-An automatic differentiation library and neural network layer collection — the foundation for a PyTorch / JAX / Flax equivalent built in pure Kāra.
+**Status:** Autograd (the gradient-engine primitive) **promoted out of P3** in the v66 graduation (2026-05-11) — now ships at v1 as `std.autograd` (P1). See `deferred.md § std.autograd — Automatic Differentiation`. This entry now covers only the neural-network framework layer on top of autograd: `std.nn` (layers — Linear, Conv2d, BatchNorm, LayerNorm, MultiheadAttention, `Sequential` composition) and `std.optim` (optimizers — SGD, Adam, AdamW, lr schedulers).
 
-**What it rests on (all must ship first):**
-- Phase 8 user-defined operator overloading (`impl Add for TrackedTensor`) — the critical enabler; without it, a `TrackedTensor` wrapper cannot intercept arithmetic transparently
-- Phase 11 `Tensor[T, Shape]` stdlib
-- `f16`/`bf16` numeric types — mixed-precision training
-- `shared struct` with RC — mutable computation graph (tape) state shared across operations
-- Custom effect resources — `resource GradTape` lets the effect system surface gradient tracking in public function signatures
+**Decision deferred to engineering-start (v66 Q7).** Whether `std.nn` and `std.optim` ship at v1 alongside `std.autograd` or live as post-v1 / community territory is **not committed**. Decide at engineering-start when there's signal on (a) how clean the manual-layer-composition story feels with autograd-only, (b) whether early v1 users / dogfooding workloads are asking for layer abstractions in stdlib, (c) whether positioning-tension (NN framework pulls Kāra harder toward "ML framework" framing) has cashed out in practice. Default until then: stays out of v1 scope; promoteable to P1 if signal warrants.
 
-**Architecture sketch:**
+**What it rests on (when built):**
+- `std.autograd` — gradient engine; shipping at v1 P1 per v66 graduation. (Was a prerequisite; now landed.)
+- Phase 11 `Tensor[T, Shape]` stdlib + `Var[T, S]` autograd wrapper.
+- `f16`/`bf16` numeric types — mixed-precision training.
+- GPU codegen — shipping at v1 P1 per v66 graduation.
 
-```kara
-resource GradTape;
+**Minimum viable scope (when built):** `nn` module with `Linear`, `Conv2d`, `LayerNorm`, `BatchNorm`, `Embedding`, `Dropout`, `MultiheadAttention`, `Sequential` for composition; optimizers (SGD, Adam, AdamW) with lr schedulers; loss functions (`cross_entropy`, `mse`, `huber`, `binary_cross_entropy`). All built on top of `std.autograd` `Var[T, S]`.
 
-shared struct TrackedTensor[T: Float, ...S] {
-    data: Tensor[T, S],
-    grad: Option[Tensor[T, S]],
-    // tape node reference (internal)
-}
+**JAX-style `grad(f)` as a language primitive** — speculative (P2). A pure function transform `grad(f)` where the compiler verifies `f` carries no effects could be offered natively. Deferred until comptime is stable and `std.autograd`'s tape-based library has revealed what such an API actually needs.
 
-// Operator overloading intercepts arithmetic and records the operation on the tape
-impl Add for TrackedTensor[T, S] with writes(GradTape) { ... }
-impl Mul for TrackedTensor[T, S] with writes(GradTape) { ... }
-// ... all Tensor ops mirrored
-
-fn backward(loss: TrackedTensor[f32, []]) with writes(GradTape) { ... }
-```
-
-**Effect system advantage over PyTorch.** Functions performing gradient-tracked operations declare `with writes(GradTape)`. Inference or preprocessing functions carry no `GradTape` effect — the compiler statically enforces the separation. Accidentally calling a tracked op inside an inference-only function is a compile error, not a silent correctness bug.
-
-**Minimum viable library scope:** `TrackedTensor`, `backward`, optimizers (SGD, Adam, AdamW), `nn` module with `Linear`, `Conv2d`, `LayerNorm`, `Embedding`, `Dropout`, loss functions (`cross_entropy`, `mse`, `huber`). GPU training blocked on Phase 10 GPU backend.
-
-**JAX-style `grad(f)` as a language primitive** — speculative (P2). A pure function transform `grad(f)` where the compiler verifies `f` carries no effects could be offered natively. Deferred until comptime is stable and a tape-based library has revealed what such an API actually needs.
-
----
-
-### Frontend UI Framework
-
-A React / SwiftUI / Vue / Solid-class framework for building user interfaces, covering the full toolkit a web application needs on top of the `std.web` effect substrate and `host fn` bindings. Scope (any one of these is a substantial library in itself; the full framework bundles all of them):
-
-- **Component model** — how UI components are declared, composed, and given lifecycle (mount / update / unmount). Expected shape: functions that take props and return a declarative view tree; lifecycle hooks modeled as channel subscriptions or provider injection rather than magic names.
-- **Reactive primitives** — signals, observables, derived state, or whatever primitive the ecosystem converges on. The effect system + channels are the runtime substrate; the framework decides the user-facing reactivity model.
-- **JSX / template syntax for HTML** — declarative view construction. Expected path: an `html!(...)`-style macro once macros ship, not a language feature. f-strings cover the simple interpolation case today.
-- **Routing** — URL-to-view mapping, history integration, nested routes. Standard web-framework fare.
-- **Styling** — CSS-in-Kara, utility-class generation, or a CSS-module-style convention. Library choice, not language concern.
-- **Hydration protocol** — the contract between SSR-rendered HTML and client-side event binding. Depends on the framework's component model; see `design.md § Cross-target Compilation` for the provider-injection pattern that makes the same component run on both targets.
-
-**What it rests on:**
-- `design.md § Web / Host Effect Vocabulary` (the `Display` / `Input` / `Timer` / `Storage` / `Console` resources the framework calls into).
-- `design.md § Host Functions` (the `host fn` primitives the stdlib exposes for DOM / events / storage).
-- `design.md § Cross-target Compilation` (the SSR-shared-component + per-target-provider pattern the framework enforces on user code).
-- `design.md § Async Host APIs on WASM` (channel-over-Promise pattern for host API integration).
-- A macro system — not yet spec'd. Needed for ergonomic view syntax; without macros the framework works but the DX is `View.div(View.text("hello"))`-style.
-
-**Why post-v1, not a stdlib ship:**
-1. Every viable shape (React hooks, Solid signals, SwiftUI declarative, Vue composition API) has active ecosystem evolution. Committing Kāra's stdlib to one of them in v1 is an assumption bet the project cannot afford before the language has users.
-2. The framework needs a macro system to be ergonomic. Macros are deferred.
-3. Phase 10 (WASM codegen) must land first. Without a working WASM backend, a UI framework has nothing to run on.
-
-**Pre-build checklist (all must be done before building this):**
-- [ ] Phase 10 WASM codegen shipped and stable
-- [ ] Macro system spec'd and landed (for `html!(...)` ergonomics — framework is buildable without but users will hit the view-syntax wall fast)
-- [ ] `std.web` stdlib layer for `Display` / `Storage` / `Console` / `Timer` / `Input` host-fn bindings shipped
-
-This entry is the canonical tracker for a Kāra frontend UI framework.
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § Q7` for the decision-deferred reasoning.
 
 ---
 
