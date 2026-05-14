@@ -11,8 +11,22 @@
 //! Only when BOTH analyses find no dependency can statements be parallelized.
 
 use crate::ast::*;
-use crate::effectchecker::{DeclaredEffects, EffectCheckResult};
+use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectSet};
 use std::collections::{HashMap, HashSet};
+
+/// True when an `EffectSet` contains any verb that implies side effects
+/// beyond a pure read — used by `method_effects_imply_receiver_mutation`
+/// to decide whether a method call should mark its receiver as written
+/// for data-dependency reasoning.
+fn effect_set_has_nonpure_verb(set: &EffectSet) -> bool {
+    use EffectVerbKind::*;
+    set.effects.iter().any(|te| {
+        matches!(
+            te.effect.verb,
+            Writes | Allocates | Sends | Receives | Panics | UserDefined(_)
+        )
+    })
+}
 
 /// `true` iff this statement contains a `return`, `break`, or
 /// `continue` that escapes a directly-nested expression's control flow
@@ -905,8 +919,60 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Unsafe(block) | ExprKind::Par(block) => {
                 self.collect_block_inner_writes(block, writes);
             }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                // A method whose declared/inferred effects include any
+                // non-pure verb (`Writes`, `Allocates`, `Sends`, `Receives`,
+                // `Panics`) is treated as mutating its receiver — record the
+                // receiver's root identifier as a write so the
+                // data-dependency check serializes it against sibling
+                // reads of the same name. Without this, two `a.push(...)`
+                // / `a.push(...)` calls are seen as read-only on `a` and
+                // the auto-parallelizer races them on shared Vec state.
+                if self.method_effects_imply_receiver_mutation(method) {
+                    self.collect_assign_target_defines(object, writes);
+                }
+                self.collect_expr_inner_writes(object, writes);
+                for arg in args {
+                    self.collect_expr_inner_writes(&arg.value, writes);
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Returns `true` if any callee key matching `<Type>.<method>` (or the
+    /// bare `<method>`) carries an effect verb that implies mutation of
+    /// the receiver state. Conservative: any non-pure verb counts, since
+    /// the auto-parallelizer's job is to be sound, not maximally
+    /// permissive. Lookup mirrors `collect_expr_effects`'s MethodCall arm.
+    fn method_effects_imply_receiver_mutation(&self, method: &str) -> bool {
+        let suffix = format!(".{}", method);
+        for (key, set) in &self.effects.inferred_effects {
+            if (key == method || key.ends_with(&suffix)) && effect_set_has_nonpure_verb(set) {
+                return true;
+            }
+        }
+        for (key, decl) in &self.effects.declared_effects {
+            if key != method && !key.ends_with(&suffix) {
+                continue;
+            }
+            match decl {
+                DeclaredEffects::Explicit(set) | DeclaredEffects::PolymorphicWithFixed(set) => {
+                    if effect_set_has_nonpure_verb(set) {
+                        return true;
+                    }
+                }
+                // Unknown effects → assume mutating.
+                DeclaredEffects::Polymorphic => return true,
+                DeclaredEffects::None => {}
+            }
+        }
+        false
     }
 
     /// Walk a block's statements and record any outer-scope names
@@ -987,13 +1053,24 @@ impl<'a> ConcurrencyChecker<'a> {
                 args,
                 ..
             } => {
-                // Try all matching method names (same strategy as effectchecker)
-                for key in self.method_bodies.keys() {
-                    if key.ends_with(&format!(".{}", method)) {
+                // Walk every effect key ending in `.<method>`. Builtin methods
+                // (`Vec.push`, `Map.insert`, ...) live only in
+                // `effects.inferred_effects`; user-defined impl methods live
+                // in both `method_bodies` and `effects.inferred_effects`, so
+                // iterating the latter covers both. Matches the renderer in
+                // `concurrency_report::render_stmt_effects`.
+                let suffix = format!(".{}", method);
+                for key in self.effects.inferred_effects.keys() {
+                    if key.ends_with(&suffix) {
                         self.add_function_effects(key, info);
                     }
                 }
-                // Also try bare method name
+                for key in self.effects.declared_effects.keys() {
+                    if key.ends_with(&suffix) {
+                        self.add_function_effects(key, info);
+                    }
+                }
+                // Also try bare method name (matches free-function shape).
                 self.add_function_effects(method, info);
                 self.collect_expr_effects(object, info);
                 for arg in args {

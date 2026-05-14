@@ -928,6 +928,12 @@ struct Codegen<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// Set by `compile_match` when the scrutinee is a borrow-returning
+    /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
+    /// to suppress `track_vec_var` for the bound name, since the payload
+    /// aliases the container's storage and the container's own cleanup
+    /// already covers the buffer.
+    pattern_binding_is_borrow: bool,
     /// Phase 7.2 Slice DP — per-enum drop function cache (enum name →
     /// `__karac_drop_<EnumName>` `FunctionValue`). Lazily populated by
     /// `emit_enum_drop_switch` on first registration of a value-type
@@ -1713,6 +1719,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_ref: HashMap::new(),
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
+            pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
@@ -2961,251 +2968,278 @@ impl<'ctx> Codegen<'ctx> {
 
         for frame in self.scope_cleanup_actions.iter().rev() {
             for action in frame {
-                match action {
-                    CleanupAction::RcDec {
-                        name,
-                        ptr,
-                        heap_type,
-                    } => {
-                        let current_ptr = if let Some(slot) = self.variables.get(name) {
-                            self.builder
-                                .build_load(ptr_ty, slot.ptr, &format!("{}_rc_cleanup", name))
-                                .unwrap()
-                                .into_pointer_value()
-                        } else {
-                            *ptr
-                        };
-                        self.emit_refcount_dec(name, *heap_type, current_ptr);
-                    }
-                    CleanupAction::FreeVecBuffer {
-                        vec_alloca,
-                        elem_ty,
-                    } => {
-                        let cap_ptr = self
+                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+    }
+
+    /// Drain the topmost `scope_cleanup_actions` frame: emit cleanup IR for
+    /// every action it holds (in push order), then pop the frame. Used by
+    /// `compile_match` to fire match-arm-scoped cleanups (let-bindings inside
+    /// the arm body, plus the match-arm pattern binding itself) at end-of-arm
+    /// instead of end-of-function — without this the alloca reuse across
+    /// match-arm iterations leaks all but the last bound value.
+    ///
+    /// Caller is responsible for ensuring the basic-block insertion point is
+    /// somewhere meaningful (i.e. the arm-body's end before the merge branch).
+    /// No-op if the cleanup stack is empty.
+    fn drain_top_frame_with_emit(&mut self) {
+        let Some(frame) = self.scope_cleanup_actions.pop() else {
+            return;
+        };
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+        for action in &frame {
+            self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+        }
+    }
+
+    /// Per-action cleanup IR emitter. Extracted from `emit_scope_cleanup` so
+    /// the same code path serves both whole-stack drain (function-end /
+    /// early-return cleanup) and top-frame drain (per-match-arm cleanup at
+    /// `drain_top_frame_with_emit`). Signature takes pre-computed type
+    /// handles so the caller hoists them out of inner loops.
+    fn emit_cleanup_action(
+        &self,
+        action: &CleanupAction<'ctx>,
+        fn_val: FunctionValue<'ctx>,
+        vec_ty: StructType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        i64_t: inkwell::types::IntType<'ctx>,
+    ) {
+        match action {
+            CleanupAction::RcDec {
+                name,
+                ptr,
+                heap_type,
+            } => {
+                let current_ptr = if let Some(slot) = self.variables.get(name) {
+                    self.builder
+                        .build_load(ptr_ty, slot.ptr, &format!("{}_rc_cleanup", name))
+                        .unwrap()
+                        .into_pointer_value()
+                } else {
+                    *ptr
+                };
+                self.emit_refcount_dec(name, *heap_type, current_ptr);
+            }
+            CleanupAction::FreeVecBuffer {
+                vec_alloca,
+                elem_ty,
+            } => {
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, *vec_alloca, 2, "cleanup.cap.ptr")
+                    .unwrap();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "cleanup.cap")
+                    .unwrap()
+                    .into_int_value();
+                let zero = i64_t.const_int(0, false);
+                let is_heap = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, cap, zero, "is_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "cleanup.free");
+                let skip_bb = self.context.append_basic_block(fn_val, "cleanup.skip");
+                self.builder
+                    .build_conditional_branch(is_heap, free_bb, skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, *vec_alloca, 0, "cleanup.data.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "cleanup.data")
+                    .unwrap()
+                    .into_pointer_value();
+
+                // Recursive-drop fast path: when the element type is
+                // itself a Vec/String struct, each live element owns
+                // a separate data buffer. Iterate `len` elements and
+                // free each one's `data` pointer before releasing
+                // the outer buffer; otherwise those inner buffers
+                // leak. Closes the 2026-05-13 cumulative-retention
+                // bug measured on LeetCode #3629 bfs_sieve, where
+                // `Vec[Vec[i64]]` leaked ~32 MB per `min_jumps`
+                // call. One-level recursion handles the bench
+                // workloads and the documented common case
+                // (`Vec[Vec[T]]`, `Vec[String]`); deeper nesting
+                // (`Vec[Vec[Vec[T]]]`) still leaks the innermost
+                // buffers — tracked as a follow-up in `deferred.md`
+                // § *Recursive Drop for Heap-Owned Collection
+                // Elements > deeper-nesting limitation*.
+                if let Some(et) = elem_ty {
+                    if self.llvm_ty_is_vec_struct(*et) {
+                        let len_ptr = self
                             .builder
-                            .build_struct_gep(vec_ty, *vec_alloca, 2, "cleanup.cap.ptr")
+                            .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.len.ptr")
                             .unwrap();
-                        let cap = self
+                        let len = self
                             .builder
-                            .build_load(i64_t, cap_ptr, "cleanup.cap")
+                            .build_load(i64_t, len_ptr, "cleanup.len")
                             .unwrap()
                             .into_int_value();
-                        let zero = i64_t.const_int(0, false);
-                        let is_heap = self
-                            .builder
-                            .build_int_compare(IntPredicate::UGT, cap, zero, "is_heap")
-                            .unwrap();
-                        let free_bb = self.context.append_basic_block(fn_val, "cleanup.free");
-                        let skip_bb = self.context.append_basic_block(fn_val, "cleanup.skip");
+                        let counter =
+                            self.create_entry_alloca(fn_val, "cleanup.drop.i", i64_t.into());
+                        self.builder.build_store(counter, zero).unwrap();
+                        let drop_cond_bb =
+                            self.context.append_basic_block(fn_val, "cleanup.drop.cond");
+                        let drop_body_bb =
+                            self.context.append_basic_block(fn_val, "cleanup.drop.body");
+                        let drop_after_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.drop.after");
                         self.builder
-                            .build_conditional_branch(is_heap, free_bb, skip_bb)
+                            .build_unconditional_branch(drop_cond_bb)
                             .unwrap();
-                        self.builder.position_at_end(free_bb);
-                        let data_ptr_ptr = self
+
+                        self.builder.position_at_end(drop_cond_bb);
+                        let cur = self
                             .builder
-                            .build_struct_gep(vec_ty, *vec_alloca, 0, "cleanup.data.ptr")
-                            .unwrap();
-                        let data = self
-                            .builder
-                            .build_load(ptr_ty, data_ptr_ptr, "cleanup.data")
+                            .build_load(i64_t, counter, "cleanup.drop.cur")
                             .unwrap()
-                            .into_pointer_value();
-
-                        // Recursive-drop fast path: when the element type is
-                        // itself a Vec/String struct, each live element owns
-                        // a separate data buffer. Iterate `len` elements and
-                        // free each one's `data` pointer before releasing
-                        // the outer buffer; otherwise those inner buffers
-                        // leak. Closes the 2026-05-13 cumulative-retention
-                        // bug measured on LeetCode #3629 bfs_sieve, where
-                        // `Vec[Vec[i64]]` leaked ~32 MB per `min_jumps`
-                        // call. One-level recursion handles the bench
-                        // workloads and the documented common case
-                        // (`Vec[Vec[T]]`, `Vec[String]`); deeper nesting
-                        // (`Vec[Vec[Vec[T]]]`) still leaks the innermost
-                        // buffers — tracked as a follow-up in `deferred.md`
-                        // § *Recursive Drop for Heap-Owned Collection
-                        // Elements > deeper-nesting limitation*.
-                        if let Some(et) = elem_ty {
-                            if self.llvm_ty_is_vec_struct(*et) {
-                                let len_ptr = self
-                                    .builder
-                                    .build_struct_gep(vec_ty, *vec_alloca, 1, "cleanup.len.ptr")
-                                    .unwrap();
-                                let len = self
-                                    .builder
-                                    .build_load(i64_t, len_ptr, "cleanup.len")
-                                    .unwrap()
-                                    .into_int_value();
-                                let counter = self.create_entry_alloca(
-                                    fn_val,
-                                    "cleanup.drop.i",
-                                    i64_t.into(),
-                                );
-                                self.builder.build_store(counter, zero).unwrap();
-                                let drop_cond_bb =
-                                    self.context.append_basic_block(fn_val, "cleanup.drop.cond");
-                                let drop_body_bb =
-                                    self.context.append_basic_block(fn_val, "cleanup.drop.body");
-                                let drop_after_bb = self
-                                    .context
-                                    .append_basic_block(fn_val, "cleanup.drop.after");
-                                self.builder
-                                    .build_unconditional_branch(drop_cond_bb)
-                                    .unwrap();
-
-                                self.builder.position_at_end(drop_cond_bb);
-                                let cur = self
-                                    .builder
-                                    .build_load(i64_t, counter, "cleanup.drop.cur")
-                                    .unwrap()
-                                    .into_int_value();
-                                let lt = self
-                                    .builder
-                                    .build_int_compare(
-                                        IntPredicate::ULT,
-                                        cur,
-                                        len,
-                                        "cleanup.drop.lt",
-                                    )
-                                    .unwrap();
-                                self.builder
-                                    .build_conditional_branch(lt, drop_body_bb, drop_after_bb)
-                                    .unwrap();
-
-                                self.builder.position_at_end(drop_body_bb);
-                                // Each element is a Vec struct `{ptr, len,
-                                // cap}` at `data + i * sizeof(VecStruct)`.
-                                // Check inner cap > 0, then free inner ptr.
-                                let inner_struct_ptr = unsafe {
-                                    self.builder
-                                        .build_gep(
-                                            self.vec_struct_type(),
-                                            data,
-                                            &[cur],
-                                            "cleanup.drop.elem",
-                                        )
-                                        .unwrap()
-                                };
-                                let inner_cap_ptr = self
-                                    .builder
-                                    .build_struct_gep(
-                                        self.vec_struct_type(),
-                                        inner_struct_ptr,
-                                        2,
-                                        "cleanup.drop.inner.cap.ptr",
-                                    )
-                                    .unwrap();
-                                let inner_cap = self
-                                    .builder
-                                    .build_load(i64_t, inner_cap_ptr, "cleanup.drop.inner.cap")
-                                    .unwrap()
-                                    .into_int_value();
-                                let inner_is_heap = self
-                                    .builder
-                                    .build_int_compare(
-                                        IntPredicate::UGT,
-                                        inner_cap,
-                                        zero,
-                                        "cleanup.drop.inner.is_heap",
-                                    )
-                                    .unwrap();
-                                let inner_free_bb = self
-                                    .context
-                                    .append_basic_block(fn_val, "cleanup.drop.inner.free");
-                                let inner_skip_bb = self
-                                    .context
-                                    .append_basic_block(fn_val, "cleanup.drop.inner.skip");
-                                self.builder
-                                    .build_conditional_branch(
-                                        inner_is_heap,
-                                        inner_free_bb,
-                                        inner_skip_bb,
-                                    )
-                                    .unwrap();
-
-                                self.builder.position_at_end(inner_free_bb);
-                                let inner_data_ptr = self
-                                    .builder
-                                    .build_struct_gep(
-                                        self.vec_struct_type(),
-                                        inner_struct_ptr,
-                                        0,
-                                        "cleanup.drop.inner.data.ptr",
-                                    )
-                                    .unwrap();
-                                let inner_data = self
-                                    .builder
-                                    .build_load(ptr_ty, inner_data_ptr, "cleanup.drop.inner.data")
-                                    .unwrap()
-                                    .into_pointer_value();
-                                self.builder
-                                    .build_call(self.free_fn, &[inner_data.into()], "")
-                                    .unwrap();
-                                self.builder
-                                    .build_unconditional_branch(inner_skip_bb)
-                                    .unwrap();
-
-                                self.builder.position_at_end(inner_skip_bb);
-                                let one = i64_t.const_int(1, false);
-                                let next = self
-                                    .builder
-                                    .build_int_add(cur, one, "cleanup.drop.next")
-                                    .unwrap();
-                                self.builder.build_store(counter, next).unwrap();
-                                self.builder
-                                    .build_unconditional_branch(drop_cond_bb)
-                                    .unwrap();
-
-                                self.builder.position_at_end(drop_after_bb);
-                            }
-                        }
-
+                            .into_int_value();
+                        let lt = self
+                            .builder
+                            .build_int_compare(IntPredicate::ULT, cur, len, "cleanup.drop.lt")
+                            .unwrap();
                         self.builder
-                            .build_call(self.free_fn, &[data.into()], "")
+                            .build_conditional_branch(lt, drop_body_bb, drop_after_bb)
                             .unwrap();
-                        self.builder.build_unconditional_branch(skip_bb).unwrap();
-                        self.builder.position_at_end(skip_bb);
-                    }
-                    CleanupAction::FreeMapHandle {
-                        map_alloca,
-                        val_is_vec,
-                    } => {
-                        let handle = self
-                            .builder
-                            .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
-                            .unwrap()
-                            .into_pointer_value();
-                        // When V is a Vec/String struct, route through the
-                        // recursive-drop runtime helper so each live entry's
-                        // value buffer is freed before the bucket array is
-                        // deallocated. Plain `karac_map_free` is correct
-                        // only when V owns no heap. Closes the 2026-05-13
-                        // bucket leak measured on LeetCode #3629 bfs_sieve
-                        // where `Map[i64, Vec[i64]]` retained one inner
-                        // buffer per prime per `min_jumps` call.
-                        let free_fn = if *val_is_vec {
-                            self.karac_map_free_with_val_drop_vec_fn
-                        } else {
-                            self.karac_map_free_fn
+
+                        self.builder.position_at_end(drop_body_bb);
+                        // Each element is a Vec struct `{ptr, len,
+                        // cap}` at `data + i * sizeof(VecStruct)`.
+                        // Check inner cap > 0, then free inner ptr.
+                        let inner_struct_ptr = unsafe {
+                            self.builder
+                                .build_gep(
+                                    self.vec_struct_type(),
+                                    data,
+                                    &[cur],
+                                    "cleanup.drop.elem",
+                                )
+                                .unwrap()
                         };
-                        self.builder
-                            .build_call(free_fn, &[handle.into()], "")
+                        let inner_cap_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                self.vec_struct_type(),
+                                inner_struct_ptr,
+                                2,
+                                "cleanup.drop.inner.cap.ptr",
+                            )
                             .unwrap();
-                    }
-                    // Phase 7.2 Slice DP — invoke the per-enum drop
-                    // function on the alloca. The drop fn takes a
-                    // pointer to the enum struct and walks the tag-
-                    // switch / per-variant cleanup BBs internally.
-                    CleanupAction::EnumDrop {
-                        enum_alloca,
-                        drop_fn,
-                    } => {
-                        self.builder
-                            .build_call(*drop_fn, &[(*enum_alloca).into()], "")
+                        let inner_cap = self
+                            .builder
+                            .build_load(i64_t, inner_cap_ptr, "cleanup.drop.inner.cap")
+                            .unwrap()
+                            .into_int_value();
+                        let inner_is_heap = self
+                            .builder
+                            .build_int_compare(
+                                IntPredicate::UGT,
+                                inner_cap,
+                                zero,
+                                "cleanup.drop.inner.is_heap",
+                            )
                             .unwrap();
+                        let inner_free_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.drop.inner.free");
+                        let inner_skip_bb = self
+                            .context
+                            .append_basic_block(fn_val, "cleanup.drop.inner.skip");
+                        self.builder
+                            .build_conditional_branch(inner_is_heap, inner_free_bb, inner_skip_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(inner_free_bb);
+                        let inner_data_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                self.vec_struct_type(),
+                                inner_struct_ptr,
+                                0,
+                                "cleanup.drop.inner.data.ptr",
+                            )
+                            .unwrap();
+                        let inner_data = self
+                            .builder
+                            .build_load(ptr_ty, inner_data_ptr, "cleanup.drop.inner.data")
+                            .unwrap()
+                            .into_pointer_value();
+                        self.builder
+                            .build_call(self.free_fn, &[inner_data.into()], "")
+                            .unwrap();
+                        self.builder
+                            .build_unconditional_branch(inner_skip_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(inner_skip_bb);
+                        let one = i64_t.const_int(1, false);
+                        let next = self
+                            .builder
+                            .build_int_add(cur, one, "cleanup.drop.next")
+                            .unwrap();
+                        self.builder.build_store(counter, next).unwrap();
+                        self.builder
+                            .build_unconditional_branch(drop_cond_bb)
+                            .unwrap();
+
+                        self.builder.position_at_end(drop_after_bb);
                     }
                 }
+
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
+            CleanupAction::FreeMapHandle {
+                map_alloca,
+                val_is_vec,
+            } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                // When V is a Vec/String struct, route through the
+                // recursive-drop runtime helper so each live entry's
+                // value buffer is freed before the bucket array is
+                // deallocated. Plain `karac_map_free` is correct
+                // only when V owns no heap. Closes the 2026-05-13
+                // bucket leak measured on LeetCode #3629 bfs_sieve
+                // where `Map[i64, Vec[i64]]` retained one inner
+                // buffer per prime per `min_jumps` call.
+                let free_fn = if *val_is_vec {
+                    self.karac_map_free_with_val_drop_vec_fn
+                } else {
+                    self.karac_map_free_fn
+                };
+                self.builder
+                    .build_call(free_fn, &[handle.into()], "")
+                    .unwrap();
+            }
+            // Phase 7.2 Slice DP — invoke the per-enum drop
+            // function on the alloca. The drop fn takes a
+            // pointer to the enum struct and walks the tag-
+            // switch / per-variant cleanup BBs internally.
+            CleanupAction::EnumDrop {
+                enum_alloca,
+                drop_fn,
+            } => {
+                self.builder
+                    .build_call(*drop_fn, &[(*enum_alloca).into()], "")
+                    .unwrap();
             }
         }
     }
@@ -9005,6 +9039,16 @@ impl<'ctx> Codegen<'ctx> {
                     return Err("Vec.push requires an argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Move semantics: when the argument is a tracked Vec /
+                // String binding, push bit-copies its `{ptr, len, cap}`
+                // into the container's data buffer. Both source and
+                // container now alias the same heap pointer; the source's
+                // scope-exit `FreeVecBuffer` and the container's
+                // recursive-drop pass would both free it (double-free
+                // → macOS `mfm_free.cold.4` spin / abort). Zero the
+                // source's `cap` so its cleanup's `cap > 0` guard skips
+                // — the container becomes the unique owner.
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
 
                 // Load current vec fields.
                 let data_ptr_ptr = self
@@ -12060,6 +12104,9 @@ impl<'ctx> Codegen<'ctx> {
                 .into_pointer_value();
             let k_val = self.compile_expr(k_expr)?;
             let v_val = self.compile_expr(v_expr)?;
+            // Move semantics for tracked Vec/String values — see
+            // `Map.insert` arm below for the rationale.
+            self.suppress_source_vec_cleanup_for_arg(v_expr);
             self.builder.build_store(key_slot, k_val).unwrap();
             self.builder.build_store(val_slot, v_val).unwrap();
             self.builder
@@ -12479,6 +12526,14 @@ impl<'ctx> Codegen<'ctx> {
                 }
                 let key_val = self.compile_expr(&args[0].value)?;
                 let val_val = self.compile_expr(&args[1].value)?;
+                // Move semantics — same shape as `Vec.push`. When the
+                // value argument is a tracked Vec/String binding, the
+                // bucket bit-copies its `{ptr, len, cap}` and the
+                // `karac_map_free_with_val_drop_vec` cleanup would
+                // double-free the buffer against the source binding's
+                // own scope-exit `FreeVecBuffer`. Suppress the source's
+                // cleanup so the Map becomes the unique owner.
+                self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
                 let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
@@ -18121,6 +18176,14 @@ impl<'ctx> Codegen<'ctx> {
         arms: &[MatchArm],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let scrut = self.compile_expr(scrutinee)?;
+        // Detect borrow-returning scrutinees so pattern bindings don't
+        // register a `FreeVecBuffer` against a buffer the container still
+        // owns. `Map.get` is the canonical case (the returned `Option[V]`
+        // aliases the bucket entry's value words); a duplicate cleanup
+        // would double-free against the `karac_map_free_with_val_drop_vec`
+        // path at function exit.
+        let saved_borrow_flag = self.pattern_binding_is_borrow;
+        self.pattern_binding_is_borrow = Self::scrutinee_is_borrow_call(scrutinee);
         let fn_val = self.current_fn.unwrap();
         let merge_bb = self.context.append_basic_block(fn_val, "match.merge");
 
@@ -18176,6 +18239,20 @@ impl<'ctx> Codegen<'ctx> {
 
             self.builder.position_at_end(body_bb);
 
+            // Per-arm scope frame: cleanups registered during this arm's
+            // pattern binding + body compilation fire at end-of-arm rather
+            // than end-of-function. Closes the 2026-05-13 alloca-reuse leak
+            // for loop-driven match arms (e.g. `while ... { match bucket
+            // .remove(k) { Some(indices) => ... } }` — `indices`'s alloca
+            // is hoisted to entry and reused N times, but only the last
+            // value's cleanup fired at fn-end; the other N-1 leaked).
+            // Frame is popped either by `drain_top_frame_with_emit` (the
+            // fall-through-to-merge path below) or `scope_cleanup_actions
+            // .pop()` (the early-return path, where the return's own
+            // `emit_scope_cleanup` already walked the full stack including
+            // this frame and emitted cleanup for its actions).
+            self.scope_cleanup_actions.push(Vec::new());
+
             // Bind pattern variables
             if let PatternKind::Slice {
                 prefix,
@@ -18193,10 +18270,37 @@ impl<'ctx> Codegen<'ctx> {
             }
 
             let arm_val = self.compile_expr(&arm.body)?;
-            let arm_end = self.builder.get_insert_block().unwrap();
-            if arm_end.get_terminator().is_none() {
-                arm_results.push((arm_val, arm_end));
+            let arm_body_end = self.builder.get_insert_block().unwrap();
+            if arm_body_end.get_terminator().is_none() {
+                // Move-aware: if the arm's tail expression is an
+                // Identifier for a tracked Vec / String, the value is
+                // being moved into the match's result (caller now owns
+                // the buffer). Zero the source's `cap` so the per-arm
+                // cleanup's `cap > 0` guard skips, preventing double-free
+                // (analogous to `suppress_cleanup_for_tail_return` for
+                // function-level Vec returns). Identifier match-arm
+                // tail-return is the canonical Option-unwrap shape
+                // `match opt { Some(v) => v, None => default() }`.
+                self.suppress_source_vec_cleanup_for_arg(&arm.body);
+                self.drain_top_frame_with_emit();
+                // Re-read the current bb AFTER drain — the cleanup IR
+                // may have appended new basic blocks (e.g. `cleanup.free`
+                // / `cleanup.skip` for FreeVecBuffer's `cap > 0` guard),
+                // so the merge-predecessor is the drain's exit bb, NOT
+                // `arm_body_end`. The PHI at `merge_bb` must list the
+                // ACTUAL predecessor bb where the unconditional branch
+                // to merge originates from, or LLVM module verification
+                // fails with "PHI node entries do not match predecessors".
+                let merge_pred = self.builder.get_insert_block().unwrap();
+                arm_results.push((arm_val, merge_pred));
                 self.builder.build_unconditional_branch(merge_bb).unwrap();
+            } else {
+                // Early-return / terminator inside arm body: the return
+                // path's own `emit_scope_cleanup` walked the entire stack
+                // including this per-arm frame and emitted cleanup for
+                // its actions before the return. Pop the now-spent frame
+                // so it doesn't shadow subsequent arms' bindings.
+                self.scope_cleanup_actions.pop();
             }
         }
 
@@ -18208,6 +18312,7 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         self.builder.position_at_end(merge_bb);
+        self.pattern_binding_is_borrow = saved_borrow_flag;
 
         // Build phi if all arms produce a value of the same type
         if !arm_results.is_empty() {
@@ -18222,6 +18327,28 @@ impl<'ctx> Codegen<'ctx> {
         }
 
         Ok(self.context.i64_type().const_int(0, false).into())
+    }
+
+    /// True when a match scrutinee expression's value aliases a container
+    /// the surrounding scope still owns — and so the cleanup actions
+    /// attached to that container will free any heap-bearing payload words
+    /// embedded in the scrutinee's value. In those cases, a pattern
+    /// binding extracted from the scrutinee must NOT itself register a
+    /// cleanup, or the buffer will be freed twice.
+    ///
+    /// Current closed list (returns by value, container retains
+    /// ownership): `Map.get`. Other shape candidates (`Vec.first`,
+    /// `Vec.last`, `Slice.get`, ...) are followups — they return one-word
+    /// scalar payloads in the v1 stdlib, not heap-bearing Vec/String, so
+    /// their match-arm bindings don't trigger the duplicate cleanup yet.
+    /// `Map.remove` truly transfers ownership (the entry is deleted) and
+    /// is intentionally NOT on this list — its `Some(v)` bindings still
+    /// own the Vec they receive.
+    fn scrutinee_is_borrow_call(scrutinee: &Expr) -> bool {
+        if let ExprKind::MethodCall { method, .. } = &scrutinee.kind {
+            return method == "get";
+        }
+        false
     }
 
     /// Returns an i1 (bool) value: 1 if the scrutinee matches the pattern.
@@ -18788,6 +18915,7 @@ impl<'ctx> Codegen<'ctx> {
                 // looked up by name in `compile_method_call` via this
                 // table; user struct types use it for `.field` access.
                 let key = (pattern.span.offset, pattern.span.length);
+                let mut bound_vec_elem: Option<BasicTypeEnum<'ctx>> = None;
                 if let Some(type_name) = self.pattern_binding_types.get(&key).cloned() {
                     // PB sibling slice (2026-05-09): when the binding's
                     // surface type is `Vec[T]` / `Slice[T]`, look up the
@@ -18807,6 +18935,7 @@ impl<'ctx> Codegen<'ctx> {
                         match type_name.as_str() {
                             "Vec" => {
                                 self.vec_elem_types.insert(name.clone(), elem_llvm);
+                                bound_vec_elem = Some(elem_llvm);
                             }
                             "Slice" => {
                                 self.slice_elem_types.insert(name.clone(), elem_llvm);
@@ -18814,7 +18943,48 @@ impl<'ctx> Codegen<'ctx> {
                             _ => {}
                         }
                     }
+                    // String binding via enum payload — the layout matches
+                    // `Vec[u8]` (`{ptr, len, cap}` shape) so the same
+                    // buffer-free cleanup applies. Element type is `u8`.
+                    if type_name == "String" {
+                        let u8_ty: BasicTypeEnum<'ctx> = self.context.i8_type().into();
+                        self.vec_elem_types.insert(name.clone(), u8_ty);
+                        bound_vec_elem = Some(u8_ty);
+                    }
                     self.var_type_names.insert(name.clone(), type_name);
+                }
+                // Register scope-exit cleanup for the heap-owning binding.
+                // The cleanup fires at end-of-match-arm via the per-arm
+                // scope frame pushed by `compile_match` — so a Vec
+                // extracted from a Map / Option / Result via `match` is
+                // freed when the arm body completes, not at function-end.
+                // Without the per-arm frame, alloca reuse across loop
+                // iterations defeated the cleanup (only the last bound
+                // value's data buffer got freed; the other N-1
+                // generations leaked). The move-aware suppression in
+                // `compile_match` zeros the cap before drain when the
+                // arm's tail expression returns the bound value via
+                // identity (e.g. `match opt { Some(v) => v }`), so
+                // double-free is prevented for the canonical
+                // Option-unwrap shape. Closes the 2026-05-13 bfs_sieve
+                // residual leak — match-arm pattern-bound Vec/String
+                // values were registered for method dispatch but never
+                // for cleanup.
+                // `pattern_binding_is_borrow` is set by `compile_match` when
+                // the match scrutinee is a borrow-returning call (`Map.get`,
+                // `Vec.first`, ...). In that case the Vec/String payload in
+                // the Option/Result aliases the container's storage; the
+                // container's own cleanup will free that buffer at scope
+                // exit. Tracking the pattern-bound name as a tracked Vec
+                // would queue a second `FreeVecBuffer` against the same
+                // pointer → macOS `mfm_free.cold.4` spin on the resulting
+                // double-free. Suppress the track in that case; the leak
+                // mode the original tracking guarded against doesn't apply
+                // since the container retains ownership.
+                if let Some(elem_ty) = bound_vec_elem {
+                    if !self.pattern_binding_is_borrow {
+                        self.track_vec_var(alloca, Some(elem_ty));
+                    }
                 }
                 Ok(())
             }
