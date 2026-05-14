@@ -14319,9 +14319,25 @@ impl<'ctx> Codegen<'ctx> {
         // owned and `ref Vec[T]` forms work. The downstream slot.ty branch
         // can't handle ref Vecs — for them slot.ty is `ptr`, not the Vec
         // struct type, so the StructType arm below would never fire.
+        //
+        // Bypass the Vec routing when the slot's LLVM type is `ArrayType` —
+        // i.e. the `let a = [1, 2, 3]` shape where the typechecker recorded
+        // "Vec" for the binding (synthesis-mode default) but
+        // `compile_array_literal` produced an `[N x T]` aggregate that
+        // bind_pattern alloca'd as ArrayType. Vec dispatch on an Array
+        // alloca lays the `{ptr, i64, i64}` view over `[N x T]` bytes and
+        // GEPs produce wild pointers (first i64 loaded as data ptr,
+        // second i64 as len → out-of-bounds garbage writes / hangs at
+        // runtime). Fall through to the Array path below in that case.
         if let ExprKind::Identifier(name) = &object.kind {
             if self.vec_elem_types.contains_key(name.as_str()) {
-                return self.compile_vec_index(name, index);
+                let slot_is_array = self
+                    .variables
+                    .get(name.as_str())
+                    .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                if !slot_is_array {
+                    return self.compile_vec_index(name, index);
+                }
             }
         }
 
@@ -14651,9 +14667,20 @@ impl<'ctx> Codegen<'ctx> {
 
         // Vec[T] element store: bounds-check against `len` (not `cap`) and
         // GEP `data[i]`. Mirrors the read-path in `compile_vec_index`.
+        //
+        // Same ArrayType-slot guard as compile_index: when the typechecker
+        // registered "Vec" for a binding (synthesis-mode bare ArrayLiteral)
+        // but the alloca is sized as `[N x T]`, the Vec dispatch produces
+        // wild GEPs. Fall through to the Array path below.
         if let ExprKind::Identifier(name) = &object.kind {
             if self.vec_elem_types.contains_key(name.as_str()) {
-                return self.compile_vec_index_store(name, index, val);
+                let slot_is_array = self
+                    .variables
+                    .get(name.as_str())
+                    .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                if !slot_is_array {
+                    return self.compile_vec_index_store(name, index, val);
+                }
             }
         }
 
