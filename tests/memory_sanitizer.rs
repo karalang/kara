@@ -1018,4 +1018,166 @@ fn main() {
             "compound_tuple_payload_string_int",
         );
     }
+
+    // ── Match-arm Vec/String cleanup (2026-05-13) ─────────────────
+    // Per-arm scope frame + `track_vec_var` registration at
+    // `bind_pattern_values` together close the leak where a Vec/String
+    // extracted from an enum payload (`match opt { Some(v) => ... }`)
+    // wasn't tracked for scope-exit cleanup. ASAN catches the leak
+    // (Vec data buffer never freed) on the bound-then-discarded path
+    // and double-free on the move-out path (`Some(v) => v` returns the
+    // buffer; the per-arm move-aware suppression must zero the source's
+    // cap so the caller's cleanup is the unique owner).
+    //
+    // Canonical bfs_sieve-style pattern: `bucket.remove(k)` extracts a
+    // `Vec[i64]` from a Map, the match-arm binding receives it, the
+    // arm body iterates it via `into_iter` (which doesn't drop in
+    // karac today — see `compile_for` Vec/Slice arm), and the per-arm
+    // drain frees the data buffer at end of arm.
+
+    #[test]
+    fn asan_match_arm_vec_binding_freed_on_arm_exit() {
+        assert_clean_asan_run(
+            r#"
+fn inner() -> i64 {
+    let mut bucket: Map[i64, Vec[i64]] = Map.new();
+    let mut i = 0i64;
+    while i < 50 {
+        bucket.entry(i).or_insert(Vec.new()).push(i);
+        i = i + 1;
+    }
+    let mut k = 0i64;
+    while k < 50 {
+        match bucket.remove(k) {
+            Some(indices) => {
+                let _len = indices.len();
+            },
+            None => {},
+        }
+        k = k + 1;
+    }
+    0i64
+}
+fn main() {
+    let mut s = 0i64;
+    let mut iter = 0i64;
+    while iter < 10 {
+        s = s + inner();
+        iter = iter + 1;
+    }
+    println(s);
+}
+"#,
+            &["0"],
+            "match_arm_vec_binding_freed_on_arm_exit",
+        );
+    }
+
+    #[test]
+    fn asan_match_arm_vec_move_out_no_double_free() {
+        // Canonical `Option<Vec>::unwrap_or_default` shape: the arm binding
+        // is the arm's tail expression, so the value is moved into the
+        // match's result. The per-arm move-aware suppression must zero
+        // the source's `cap` before the per-arm drain so the caller's
+        // own scope cleanup is the unique owner. ASAN catches the
+        // double-free that the naive "always track" change introduced
+        // and required the suppress mechanism to prevent.
+        assert_clean_asan_run(
+            r#"
+fn make() -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    v
+}
+fn unwrap_or_default(opt: Option[Vec[i64]]) -> Vec[i64] {
+    match opt {
+        Some(v) => v,
+        None => Vec.new(),
+    }
+}
+fn main() {
+    let v = unwrap_or_default(Some(make()));
+    println(v[0]);
+    let w = unwrap_or_default(None);
+    println(w.len());
+}
+"#,
+            &["1", "0"],
+            "match_arm_vec_move_out_no_double_free",
+        );
+    }
+
+    // ── Early-return cleanup (2026-05-13) ─────────────────────────
+    // `ExprKind::Return` historically built the LLVM return instruction
+    // directly without draining `scope_cleanup_actions`, so early returns
+    // (`if cond { return v; }` inside a function with tracked heap
+    // locals) leaked every tracked binding's heap content. Fixed by
+    // calling `emit_scope_cleanup()` before `build_return` and applying
+    // the same `suppress_source_vec_cleanup_for_arg` move-aware
+    // suppression on the return value that the function-end tail-return
+    // path already applies. ASAN catches both halves: leak (no free
+    // emitted on return path) and double-free (cleanup fires on the
+    // moved-out buffer the caller now owns).
+
+    #[test]
+    fn asan_early_return_cleans_up_tracked_locals() {
+        // The function has a tracked `Vec[i64]` local and exits via
+        // `return 0` inside a conditional. Without the cleanup-on-return
+        // fix, `v`'s data buffer would leak; ASAN reports it on exit.
+        assert_clean_asan_run(
+            r#"
+fn process(short_circuit: bool) -> i64 {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1i64);
+    v.push(2i64);
+    v.push(3i64);
+    if short_circuit {
+        return 0;
+    }
+    v.len()
+}
+fn main() {
+    let mut s = 0i64;
+    let mut i = 0i64;
+    while i < 5 {
+        s = s + process(true);
+        i = i + 1;
+    }
+    println(s);
+}
+"#,
+            &["0"],
+            "early_return_cleans_up_tracked_locals",
+        );
+    }
+
+    #[test]
+    fn asan_early_return_move_out_no_double_free() {
+        // `return v` where `v` is a tracked Vec — the cleanup-on-return
+        // path must apply move-aware suppression (zero the source's cap)
+        // before draining so the caller's scope cleanup is the unique
+        // owner of the buffer. Mirrors the function-end tail-return
+        // suppress mechanism but for explicit `return expr`.
+        assert_clean_asan_run(
+            r#"
+fn maybe_take(flag: bool) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(42i64);
+    if flag {
+        return v;
+    }
+    v
+}
+fn main() {
+    let v1 = maybe_take(true);
+    let v2 = maybe_take(false);
+    println(v1[0]);
+    println(v2[0]);
+}
+"#,
+            &["42", "42"],
+            "early_return_move_out_no_double_free",
+        );
+    }
 }

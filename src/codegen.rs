@@ -6392,10 +6392,29 @@ impl<'ctx> Codegen<'ctx> {
             ExprKind::Continue { label } => self.compile_continue(label.as_deref()),
             ExprKind::Closure { params, body, .. } => self.compile_closure(params, body),
             ExprKind::Return(val) => {
+                // Early-return cleanup parity with the function-end path
+                // at `compile_function`: walk the full `scope_cleanup_actions`
+                // stack and emit cleanup IR for every tracked binding before
+                // building the return. Without this, heap-owning locals
+                // (Vec data buffers, Map handles, RC-fallback heap boxes)
+                // leak per-call whenever control exits via `return expr`
+                // instead of falling through to the function body's tail.
+                // Move-aware suppression mirrors the tail-return path: when
+                // the return value is an Identifier naming a tracked
+                // Vec / String, the caller now owns that buffer, so zeroing
+                // the source's `cap` before cleanup skips the free for the
+                // moved-out binding while still freeing every other tracked
+                // local. Closes the 2026-05-13 bfs_sieve residual leak —
+                // `return d` from inside a loop's match-arm body was
+                // bypassing cleanup for `factors` / `bucket` / `visited` /
+                // `queue`, leaking the entire per-call working set.
                 if let Some(e) = val {
+                    self.suppress_source_vec_cleanup_for_arg(e);
                     let v = self.compile_expr(e)?;
+                    self.emit_scope_cleanup();
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
+                    self.emit_scope_cleanup();
                     self.builder.build_return(None).unwrap();
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
