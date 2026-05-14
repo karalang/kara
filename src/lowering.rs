@@ -66,6 +66,18 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward per-leaf-binding borrow modes so codegen's
+    // `bind_pattern_values` can wrap each ref/mut-ref leaf in a ref-shim
+    // alloca (alloca-of-pointer-to-value-alloca, registered in
+    // `ref_params`). Without this plumb, well-typed `match val { Foo
+    // { name } => use_str(name) }` under `val: ref Foo` compiled the
+    // arm-bound `name` as a value but then passed it where a pointer
+    // (`ref String`) was expected — ABI miscompile fixed by the shim.
+    program.pattern_binding_borrow_modes = tc
+        .pattern_binding_borrow_modes
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), *v))
+        .collect();
 }
 
 struct Lowerer<'a> {

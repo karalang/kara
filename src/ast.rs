@@ -93,6 +93,29 @@ pub type PatternBindingTypesTable = std::collections::HashMap<(usize, usize), St
 /// (2026-05-09).
 pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Borrow form for a pattern binding under a `ref` / `mut ref` scrutinee.
+/// `Ref` corresponds to a `ref T` scrutinee mode; `MutRef` to `mut ref T`.
+/// Owned bindings have no entry in `PatternBindingBorrowModesTable` —
+/// presence-as-signal lets the codegen short-circuit in the common case.
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum PatternBindingBorrow {
+    Ref,
+    MutRef,
+}
+
+/// Per-pattern-binding borrow mode populated by the typechecker's
+/// `check_pattern_against` walk and forwarded by the lowering pass for
+/// codegen to consult. Codegen consumes this at every leaf binding site
+/// (plain `Binding`, struct shorthand fields, slice rest bindings,
+/// `@`-bindings) to wrap the binding in a "ref shim" — an extra alloca
+/// holding a pointer to the value alloca, registered in `ref_params` —
+/// so call sites that take a `ref T` / `mut ref T` parameter receive
+/// the right ABI shape rather than the raw value. Mirrors the
+/// typechecker's `ScrutineeMode::wrap_binding_ty` rule for the codegen
+/// surface — design.md § Match Arm Binding Modes.
+pub type PatternBindingBorrowModesTable =
+    std::collections::HashMap<(usize, usize), PatternBindingBorrow>;
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -111,6 +134,11 @@ pub struct Program {
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.
     /// PB sibling slice (2026-05-09).
     pub pattern_binding_inner_types: PatternBindingInnerTypesTable,
+    /// Set by the lowering pass from
+    /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
+    /// to apply the ref-binding shim at match-arm leaf bindings under a
+    /// `ref` / `mut ref` scrutinee. Empty entries mean owned bindings.
+    pub pattern_binding_borrow_modes: PatternBindingBorrowModesTable,
 }
 
 // ── Top-level Items ──────────────────────────────────────────────

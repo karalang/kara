@@ -1026,6 +1026,14 @@ struct Codegen<'ctx> {
     /// routes through the right element-typed path. PB sibling slice
     /// (2026-05-09).
     pattern_binding_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Per-leaf-binding borrow mode populated from
+    /// `Program.pattern_binding_borrow_modes`. Consumed by
+    /// `bind_pattern_values` (Binding arm) to wrap a value-typed leaf
+    /// binding in a ref-shim — an extra `ptr` alloca holding the value
+    /// alloca's address, registered in `ref_params` — so call sites
+    /// expecting `ref T` / `mut ref T` receive the right ABI shape.
+    /// Empty for owned bindings. Slice 3a, 2026-05-14.
+    pattern_binding_borrow_modes: HashMap<(usize, usize), crate::ast::PatternBindingBorrow>,
     /// Top-level `const NAME: T = value` declarations, populated by
     /// `compile_program` from `Item::ConstDecl` items before any function
     /// body is compiled. Key: const name. Value: the const's value
@@ -1781,6 +1789,7 @@ impl<'ctx> Codegen<'ctx> {
             method_callee_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
+            pattern_binding_borrow_modes: HashMap::new(),
             consts: HashMap::new(),
             source_filename: None,
             source_filename_global: None,
@@ -4231,6 +4240,15 @@ impl<'ctx> Codegen<'ctx> {
         // binding (`xs.len()`, `xs[0]`, `xs.push(...)`) routes through
         // the right element-typed path. PB sibling slice (2026-05-09).
         self.pattern_binding_inner_types = program.pattern_binding_inner_types.clone();
+
+        // Side-table set by `lowering::lower_program`: each pattern-
+        // binding's span maps to its borrow form (`Ref` / `MutRef`) when
+        // the enclosing match scrutinee is `ref T` / `mut ref T`. Owned
+        // bindings are absent. Read by `bind_pattern_values` (Binding
+        // arm) to wrap the value-typed leaf alloca in a ref-shim so call
+        // sites that take a `ref T` / `mut ref T` parameter receive the
+        // right ABI shape — slice 3a, 2026-05-14.
+        self.pattern_binding_borrow_modes = program.pattern_binding_borrow_modes.clone();
 
         // Top-level `const NAME: T = value` collection. References from
         // function bodies (parsed as `ExprKind::Identifier(name)` for bare
@@ -19420,6 +19438,51 @@ impl<'ctx> Codegen<'ctx> {
                         self.track_vec_var(alloca, Some(elem_ty));
                     }
                 }
+                // Slice 3a (ref-scrutinee leaf binding ABI parity):
+                // when the typechecker tagged this binding with a borrow
+                // mode (i.e., the enclosing match scrutinee is `ref T` /
+                // `mut ref T`), wrap the value alloca in a ref-shim — an
+                // extra `ptr` alloca holding the value alloca's address,
+                // registered in `ref_params`. Subsequent identifier
+                // lookups go through `load_variable`'s auto-deref path,
+                // and call sites that pass the binding to a `ref T` /
+                // `mut ref T` parameter receive the shim alloca's
+                // contents (a pointer) rather than the raw value —
+                // closes the latent miscompile where well-typed
+                // `match val { Foo { name } => use_str(name) }` under
+                // `val: ref Foo` produced `name` as a struct value but
+                // passed it where a pointer was expected.
+                //
+                // Mutation-propagation caveat: the shim aliases a
+                // _copy_ of the scrutinee data, not the scrutinee
+                // itself. A mutation through `mut ref` on a leaf
+                // binding does not flow back to the original — same
+                // limitation the interpreter sub-item documents
+                // (phase-5-diagnostics.md slice 3 sub-item 2). The
+                // pull-signal trigger for true GEP-based aliasing
+                // remains a real user program that depends on
+                // write-through under `mut ref` scrutinees.
+                if self
+                    .pattern_binding_borrow_modes
+                    .contains_key(&(pattern.span.offset, pattern.span.length))
+                {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let shim_alloca = self.create_entry_alloca(
+                        fn_val,
+                        &format!("{}.refshim", name),
+                        ptr_ty.into(),
+                    );
+                    self.builder.build_store(shim_alloca, alloca).unwrap();
+                    let inner_ty = scrut.get_type();
+                    self.variables.insert(
+                        name.clone(),
+                        VarSlot {
+                            ptr: shim_alloca,
+                            ty: ptr_ty.into(),
+                        },
+                    );
+                    self.ref_params.insert(name.clone(), inner_ty);
+                }
                 Ok(())
             }
             PatternKind::TupleVariant { path, patterns } => {
@@ -19542,6 +19605,43 @@ impl<'ctx> Codegen<'ctx> {
                             .build_extract_value(sv, idx as u32, "tup.elem")
                             .unwrap();
                         self.bind_pattern_values(pat, elem)?;
+                    }
+                }
+                Ok(())
+            }
+            // Plain struct destructure in a match arm: `match p { Foo
+            // { x, y } => … }`. Mirrors the let-binding `bind_pattern`
+            // Struct arm but resolves field index by name (the user can
+            // omit / reorder fields) instead of positionally. Shorthand
+            // fields synthesize a fresh `PatternKind::Binding` so the
+            // ordinary leaf-binding path runs (alloca + variable
+            // registration + the typechecker's `pattern_binding_types`
+            // surface-name plumbing). Without this arm, struct match
+            // destructure errored at body compile with
+            // `Undefined variable 'x'` — the bind path was missing
+            // entirely, the `_ => Ok(())` fall-through silently no-op'd.
+            PatternKind::Struct { path, fields } => {
+                let struct_name = path.last().cloned().unwrap_or_default();
+                let field_names = self.struct_field_names.get(&struct_name).cloned();
+                if let (BasicValueEnum::StructValue(sv), Some(field_names)) = (scrut, field_names) {
+                    for field_pat in fields {
+                        let Some(idx) = field_names.iter().position(|n| n == &field_pat.name)
+                        else {
+                            continue;
+                        };
+                        let field_val = self
+                            .builder
+                            .build_extract_value(sv, idx as u32, "field")
+                            .unwrap();
+                        if let Some(sub_pat) = &field_pat.pattern {
+                            self.bind_pattern_values(sub_pat, field_val)?;
+                        } else {
+                            let synthetic = Pattern {
+                                kind: PatternKind::Binding(field_pat.name.clone()),
+                                span: field_pat.span.clone(),
+                            };
+                            self.bind_pattern_values(&synthetic, field_val)?;
+                        }
                     }
                 }
                 Ok(())

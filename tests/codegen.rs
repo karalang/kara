@@ -10084,4 +10084,144 @@ fn main() {
             assert_eq!(out, "3\n8\n9\n10\n");
         }
     }
+
+    // Match-arm struct destructure for an OWNED scrutinee. Predecessor
+    // for the ref-scrutinee shape below — `bind_pattern_values` had no
+    // `PatternKind::Struct` arm at all before slice 3a, so well-typed
+    // `match p { Point { x, y } => x + y }` errored at codegen with
+    // `Undefined variable 'x'`.
+    #[test]
+    fn test_e2e_match_owned_struct_destructure_smoke() {
+        let out = run_program(
+            r#"
+struct Point { x: i64, y: i64 }
+fn show(p: Point) -> i64 {
+    match p {
+        Point { x, y } => x + y * 100,
+    }
+}
+fn main() {
+    let p = Point { x: 3, y: 5 };
+    println(show(p));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "503\n");
+        }
+    }
+
+    // ── Ref-scrutinee match-arm leaf-binding ABI parity (slice 3a) ──
+    //
+    // Each test below typechecked correctly post-slice-1 (the ref
+    // scrutinee binding-form propagation landed 2026-05-12) but
+    // miscompiled at codegen until slice 3a — the leaf binding was
+    // emitted as a value-typed alloca, then passed to a `ref T` /
+    // `mut ref T` parameter as a value rather than a pointer (ABI
+    // mismatch). Slice 3a wraps each leaf in a ref-shim alloca so the
+    // call-site ABI matches the typechecker's view.
+
+    #[test]
+    fn test_e2e_match_ref_struct_field_passes_to_ref_param() {
+        // `Foo { age }` under a `ref Foo` scrutinee binds `age` as
+        // `ref i64`; passing it to `read_int(n: ref i64)` rounds the
+        // pointer back to the value via the runtime's println path.
+        let out = run_program(
+            r#"
+struct Foo { age: i64 }
+fn read_int(n: ref i64) -> i64 { n + 1 }
+fn show(f: ref Foo) -> i64 {
+    match f {
+        Foo { age } => read_int(age),
+    }
+}
+fn main() {
+    let f = Foo { age: 41 };
+    println(show(f));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_ref_option_payload_passes_to_ref_param() {
+        // Tuple-variant payload binding: `Option.Some(n)` under a
+        // `ref Option[i64]` scrutinee binds `n` as `ref i64`.
+        let out = run_program(
+            r#"
+fn read_int(n: ref i64) -> i64 { n * 2 }
+fn show(opt: ref Option[i64]) -> i64 {
+    match opt {
+        Option.Some(n) => read_int(n),
+        Option.None => -1,
+    }
+}
+fn main() {
+    let some = Option.Some(7);
+    let none: Option[i64] = Option.None;
+    println(show(some));
+    println(show(none));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "14\n-1\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_owned_struct_field_owned_call_unaffected() {
+        // Sanity: under an OWNED scrutinee, the leaf binding stays
+        // value-typed; passing it to a value-taking function works
+        // exactly as before slice 3a (the borrow_modes table is empty
+        // for owned scrutinees, so the shim never fires).
+        let out = run_program(
+            r#"
+struct Foo { age: i64 }
+fn read_int(n: i64) -> i64 { n + 100 }
+fn show(f: Foo) -> i64 {
+    match f {
+        Foo { age } => read_int(age),
+    }
+}
+fn main() {
+    let f = Foo { age: 1 };
+    println(show(f));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "101\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_mut_ref_struct_field_passes_to_mut_ref_param() {
+        // `mut ref Foo` scrutinee → leaf binding is `mut ref i64`;
+        // passes ABI-shape parity check at the call site. Mutation
+        // propagation is NOT exercised here — slice 3a's shim aliases
+        // a copy, not the scrutinee storage; that's the deferred GEP
+        // sub-slice (see phase-5 entry).
+        let out = run_program(
+            r#"
+struct Bag { n: i64 }
+fn bump(n: mut ref i64) -> i64 { n + 1 }
+fn show(b: mut ref Bag) -> i64 {
+    match b {
+        Bag { n } => bump(n),
+    }
+}
+fn main() {
+    let mut b = Bag { n: 10 };
+    println(show(b));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "11\n");
+        }
+    }
 }

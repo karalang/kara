@@ -3268,6 +3268,13 @@ pub struct TypeCheckResult {
     /// for non-collection bindings (the existing String-name table is
     /// sufficient for those). PB sibling slice (2026-05-09).
     pub pattern_binding_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// Per-leaf-binding borrow mode under a `ref` / `mut ref` scrutinee.
+    /// Keyed by the leaf binding pattern's span (or, for struct shorthand
+    /// fields without a sub-pattern, the field's span). Owned bindings are
+    /// absent. Forwarded to `Program.pattern_binding_borrow_modes` by the
+    /// lowering pass and consumed by codegen at `bind_pattern_values` to
+    /// emit the ref-binding shim — see `ast::PatternBindingBorrow`.
+    pub pattern_binding_borrow_modes: HashMap<SpanKey, crate::ast::PatternBindingBorrow>,
     /// Names of functions declared with `#[compiler_builtin]` (CR-202
     /// slice 2). The signature lives in `env.functions`; the entry here
     /// flags the function as having its body replaced by Rust dispatch.
@@ -3388,6 +3395,10 @@ pub struct TypeChecker<'a> {
     /// bindings. Sibling to `pattern_binding_types`. See the public copy on
     /// `TypeCheckResult` for the full rationale (PB sibling slice 2026-05-09).
     pattern_binding_inner_types: HashMap<SpanKey, TypeExpr>,
+    /// Internal mirror of the public table; written by `check_pattern_against`
+    /// at every leaf-binding site (and at struct shorthand fields) when
+    /// the scrutinee mode is non-Owned. Surfaced in `check()`.
+    pattern_binding_borrow_modes: HashMap<SpanKey, crate::ast::PatternBindingBorrow>,
     /// Parallel to `pattern_binding_inner_types`, storing the raw `Type`
     /// (which may contain unresolved `Type::TypeVar`) captured at the
     /// recording site. After body inference completes, `finalize_pattern_
@@ -3466,6 +3477,7 @@ impl<'a> TypeChecker<'a> {
             call_type_subs: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
+            pattern_binding_borrow_modes: HashMap::new(),
             pattern_binding_inner_unresolved: HashMap::new(),
             enclosing_bounds: HashMap::new(),
             enclosing_trait: None,
@@ -3521,6 +3533,7 @@ impl<'a> TypeChecker<'a> {
             call_type_subs: self.call_type_subs,
             pattern_binding_types: self.pattern_binding_types,
             pattern_binding_inner_types: self.pattern_binding_inner_types,
+            pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,
             compiler_builtins,
         }
     }
@@ -14871,6 +14884,7 @@ impl<'a> TypeChecker<'a> {
                 }
                 let binding_ty = mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
+                self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
                 // Mirror bind_pattern_types's side-table write so codegen
                 // can reconstitute struct payloads for match-arm bindings.
                 // `Type::Str` registers `"String"` parallel to how
@@ -14982,8 +14996,14 @@ impl<'a> TypeChecker<'a> {
                             // `ref`/`mut ref` scrutinee, the binding type is
                             // wrapped per the match-arm binding-mode rule
                             // (design.md § Match Arm Binding Modes).
-                            let binding_ty = mode.wrap_binding_ty(field_ty);
+                            let binding_ty = mode.wrap_binding_ty(field_ty.clone());
                             self.local_scope.insert(field.name.clone(), binding_ty);
+                            // Record borrow mode keyed by the field's span
+                            // so codegen can apply the ref-binding shim at
+                            // the synthesized leaf binding site (codegen
+                            // synthesizes `Pattern { Binding(field.name),
+                            // span: field.span }` for shorthand).
+                            self.record_pattern_binding_borrow_mode(&field.span, mode, &field_ty);
                         }
                     }
                 }
@@ -14998,10 +15018,17 @@ impl<'a> TypeChecker<'a> {
             PatternKind::RangePattern { .. } => {
                 // Nothing to bind for range patterns
             }
-            PatternKind::AtBinding { name, pattern } => {
+            PatternKind::AtBinding {
+                name,
+                pattern: inner,
+            } => {
                 let binding_ty = mode.wrap_binding_ty(expected.clone());
                 self.local_scope.insert(name.clone(), binding_ty);
-                self.check_pattern_against(pattern, expected, mode);
+                // The `name @` outer alias is recorded against the outer
+                // pattern's span; the inner sub-pattern records its own
+                // bindings via the recursive call.
+                self.record_pattern_binding_borrow_mode(&pattern.span, mode, expected);
+                self.check_pattern_against(inner, expected, mode);
             }
             PatternKind::Or(alternatives) => {
                 for alt in alternatives {
@@ -15194,6 +15221,40 @@ impl<'a> TypeChecker<'a> {
     /// element-type registry to populate. `Vec` already gets a String-name
     /// entry from the existing `Type::Named` write. PB sibling slice
     /// (2026-05-09).
+    /// Stamp the pattern-binding span with the borrow form derived from
+    /// the enclosing `ScrutineeMode`. Owned mode produces no entry. The
+    /// `dispatch_ty` is the unwrapped binding type (i.e., the type
+    /// _before_ `wrap_binding_ty` re-wraps it) — used to skip recording
+    /// when the field's own type is already a borrow shape, mirroring
+    /// `wrap_binding_ty`'s pass-through rule (a `ref FieldT` field
+    /// through a `ref Container` scrutinee stays `ref FieldT`, not
+    /// `ref ref FieldT`, so the codegen shim must not wrap it again).
+    fn record_pattern_binding_borrow_mode(
+        &mut self,
+        span: &Span,
+        mode: ScrutineeMode,
+        dispatch_ty: &Type,
+    ) {
+        let borrow = match mode {
+            ScrutineeMode::Owned => return,
+            ScrutineeMode::Ref => crate::ast::PatternBindingBorrow::Ref,
+            ScrutineeMode::MutRef => crate::ast::PatternBindingBorrow::MutRef,
+        };
+        // Skip already-borrow leaf shapes (parity with
+        // `ScrutineeMode::wrap_binding_ty`'s identity arm). A struct
+        // field declared `ref T` / `mut ref T` / `Slice[T]` keeps its
+        // own borrow form — codegen would already lower it as a
+        // pointer / slice header, so the ref-shim would double-wrap.
+        if matches!(
+            dispatch_ty,
+            Type::Ref(_) | Type::MutRef(_) | Type::Slice { .. }
+        ) {
+            return;
+        }
+        self.pattern_binding_borrow_modes
+            .insert(SpanKey::from_span(span), borrow);
+    }
+
     fn record_pattern_inner_type(&mut self, pattern: &Pattern, ty: &Type) {
         // Tuple bindings (e.g. `Some(node)` where `node: (i64, i64)`):
         // record the whole tuple `TypeExpr` so codegen can reconstruct
