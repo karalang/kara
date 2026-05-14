@@ -258,44 +258,70 @@ pub unsafe extern "C" fn karac_map_free(map: *mut c_void) {
     // Box drop frees the KaracMap allocation itself.
 }
 
-/// `karac_map_free` variant for `Map[K, V]` where `V` is a Vec/String —
-/// i.e. the value payload follows the `{ptr, i64, i64}` runtime layout
-/// (`{data, len, cap}`). Walks the bucket array and, for each live entry
-/// whose value has `cap > 0`, calls libc `free` on the value's data
-/// pointer before deallocating the bucket storage. Without this the
-/// inner buffers leak, because plain `karac_map_free` only releases the
-/// bucket-and-kv-blob arrays — not the per-entry heap content the
-/// codegen-emitted value-clone produced. Closes the 2026-05-13
-/// `Map[i64, Vec[i64]]` leak measured on LeetCode #3629 bfs_sieve.
+/// `karac_map_free` variant that recursively drops per-entry Vec / String
+/// content before deallocating the bucket storage. Selected when *either*
+/// the key type or the value type follows the `{ptr, i64, i64}` runtime
+/// layout (`Vec[T]`, `String`, `Set[Vec[T]]`, `Set[String]`,
+/// `Map[String, V]`, `Map[K, Vec[T]]`, `Map[String, Vec[T]]`, etc.).
 ///
-/// **Layout contract.** Value at each live slot is exactly the karac
-/// runtime Vec/String struct (offset 0: 8-byte data pointer; offset 8:
-/// 8-byte len; offset 16: 8-byte cap). The caller (codegen
-/// `FreeMapHandle` cleanup arm) is responsible for invoking this variant
-/// only when `val_size == 24` and the value type is Vec/String — it
-/// does so by gating on `llvm_ty_is_vec_struct` against the registered
-/// value LLVM type.
+/// `drop_key != 0` → for each live entry, free the key's `data` pointer
+/// when its `cap > 0`. `drop_val != 0` → same for the value. Both flags
+/// may be set simultaneously (e.g. `Map[String, Vec[T]]`). When both
+/// are zero the caller should route through plain `karac_map_free`
+/// instead — this function still works in that case but loops with no
+/// side-effect.
+///
+/// **Layout contract.** When `drop_key != 0`, key_size MUST be 24 and
+/// the key value at each live slot is exactly the karac runtime
+/// Vec/String struct (offset 0: 8-byte data pointer; offset 8: 8-byte
+/// len; offset 16: 8-byte cap). Same for `drop_val != 0` and val_size.
+/// The codegen-side `FreeMapHandle` cleanup arm guards both flags via
+/// `llvm_ty_is_vec_struct` against the registered key / value LLVM
+/// types.
+///
+/// **Set[T] handling.** Set lowers to `Map[T, ()]` with `val_size = 0`.
+/// For `Set[Vec[T]]` / `Set[String]`, codegen passes `drop_key = 1,
+/// drop_val = 0`. The val-side loop is gated by `drop_val != 0` so it
+/// never reads the (non-existent) value blob.
+///
+/// Closes the 2026-05-13 / 2026-05-14 leak class where heap-owning keys
+/// or non-Vec heap-owning values in Maps / Sets were never released.
+/// Replaces the narrower `karac_map_free_with_val_drop_vec` (val-only)
+/// helper.
 #[no_mangle]
-pub unsafe extern "C" fn karac_map_free_with_val_drop_vec(map: *mut c_void) {
+pub unsafe extern "C" fn karac_map_free_with_drop_vec(
+    map: *mut c_void,
+    drop_key: i32,
+    drop_val: i32,
+) {
     if map.is_null() {
         return;
     }
     let mut m = Box::from_raw(map as *mut KaracMap);
-    // Walk live buckets and free each value's inner buffer if cap > 0.
-    // Assumes val_size == 24; codegen guarantees this through the
-    // `val_is_vec` gate at the FreeMapHandle registration site.
-    let entry_stride = m.key_size + m.val_size;
-    for slot in 0..m.capacity {
-        if *m.status.add(slot) != BUCKET_OCCUPIED {
-            continue;
-        }
-        // Value lives at kv + slot*stride + key_size.
-        let val_base = m.kv.add(slot * entry_stride + m.key_size);
-        // val_base[0..8] = data ptr; val_base[16..24] = cap.
-        let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
-        let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
-        if cap > 0 && !data_ptr.is_null() {
-            free(data_ptr as *mut c_void);
+    if drop_key != 0 || drop_val != 0 {
+        let entry_stride = m.key_size + m.val_size;
+        for slot in 0..m.capacity {
+            if *m.status.add(slot) != BUCKET_OCCUPIED {
+                continue;
+            }
+            if drop_key != 0 {
+                // Key lives at kv + slot*stride.
+                let key_base = m.kv.add(slot * entry_stride);
+                let data_ptr = ptr::read_unaligned(key_base as *const *mut u8);
+                let cap = ptr::read_unaligned(key_base.add(16) as *const i64);
+                if cap > 0 && !data_ptr.is_null() {
+                    free(data_ptr as *mut c_void);
+                }
+            }
+            if drop_val != 0 {
+                // Value lives at kv + slot*stride + key_size.
+                let val_base = m.kv.add(slot * entry_stride + m.key_size);
+                let data_ptr = ptr::read_unaligned(val_base as *const *mut u8);
+                let cap = ptr::read_unaligned(val_base.add(16) as *const i64);
+                if cap > 0 && !data_ptr.is_null() {
+                    free(data_ptr as *mut c_void);
+                }
+            }
         }
     }
     m.free_storage();

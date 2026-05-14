@@ -1180,4 +1180,115 @@ fn main() {
             "early_return_move_out_no_double_free",
         );
     }
+
+    // ── Map/Set heap-owning key + value drops (2026-05-14) ────────
+    // Slice α + β of the recursive-drop work: `karac_map_free_with_drop_vec
+    // (handle, drop_key, drop_val)` walks live buckets and frees per-entry
+    // Vec/String content on both sides per the flags. Closes leaks for
+    // `Set[String]` / `Set[Vec[T]]` (key only), `Map[String, V]` /
+    // `Map[Vec[T], V]` (key only), and `Map[String, Vec[U]]` / similar
+    // (both sides). Pre-fix these shapes leaked silently because the
+    // narrower val-only helper missed every key-side allocation and the
+    // primitive-only `karac_map_free` was used as a fallback.
+
+    #[test]
+    fn asan_set_string_keys_no_leak() {
+        // `Set[String]` — the canonical pervasive shape. Each inserted
+        // String is the bucket's KEY; on scope exit the runtime helper
+        // must free each live key's data buffer. ASAN catches the leak
+        // pre-fix (every inserted string's buffer leaked); post-fix the
+        // set drops clean.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[String] = Set.new();
+    let mut a = String.new();
+    a.push_str("apple");
+    s.insert(a);
+    let mut b = String.new();
+    b.push_str("banana");
+    s.insert(b);
+    let mut c = String.new();
+    c.push_str("cherry");
+    s.insert(c);
+    println(s.len());
+}
+"#,
+            &["3"],
+            "set_string_keys_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_set_vec_keys_no_leak() {
+        // `Set[Vec[i64]]` — Set of vecs. Each inserted Vec is the bucket's
+        // KEY; the recursive-drop runtime helper frees each key's data
+        // buffer before deallocating the bucket storage.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut s: Set[Vec[i64]] = Set.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1i64);
+    a.push(2i64);
+    s.insert(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3i64);
+    s.insert(b);
+    println(s.len());
+}
+"#,
+            &["2"],
+            "set_vec_keys_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_string_keys_no_leak() {
+        // `Map[String, i64]` — the canonical `key_is_vec, !val_is_vec`
+        // shape. Pre-fix the key buffers leaked because the val-only
+        // helper never touched them and primitive-only `karac_map_free`
+        // was used by default.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, i64] = Map.new();
+    let mut k1 = String.new();
+    k1.push_str("alpha");
+    m.insert(k1, 1i64);
+    let mut k2 = String.new();
+    k2.push_str("beta");
+    m.insert(k2, 2i64);
+    println(m.len());
+}
+"#,
+            &["2"],
+            "map_string_keys_no_leak",
+        );
+    }
+
+    #[test]
+    fn asan_map_string_keys_vec_values_no_leak() {
+        // `Map[String, Vec[i64]]` — both flags set. The runtime helper
+        // must walk live buckets and free BOTH the key's String buffer
+        // and the value's Vec buffer before deallocating bucket storage.
+        // Catches the case where one side's drop fires correctly but
+        // the other is silently skipped.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut m: Map[String, Vec[i64]] = Map.new();
+    let mut k = String.new();
+    k.push_str("key");
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7i64);
+    v.push(8i64);
+    m.insert(k, v);
+    println(m.len());
+}
+"#,
+            &["1"],
+            "map_string_keys_vec_values_no_leak",
+        );
+    }
 }

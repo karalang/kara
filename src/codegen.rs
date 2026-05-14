@@ -656,18 +656,29 @@ enum CleanupAction<'ctx> {
         /// *Recursive Drop for Heap-Owned Collection Elements*.
         elem_ty: Option<BasicTypeEnum<'ctx>>,
     },
-    /// Free an owned `Map[K,V]` handle via `karac_map_free` (or
-    /// `karac_map_free_with_val_drop_vec` when V is itself a heap-owning
-    /// Vec/String). `val_is_vec` captures whether the per-value cleanup
-    /// path is needed; key drop is currently not recurseable (v1 Map keys
-    /// are restricted to comparable types that don't own heap — i64,
-    /// String-by-value, etc.; String key drop is a follow-up slice).
+    /// Free an owned `Map[K,V]` / `Set[T]` handle. Routes to
+    /// `karac_map_free_with_drop_vec(handle, key_is_vec, val_is_vec)` when
+    /// either flag is set (i.e. the key or value type follows the
+    /// `{ptr, len, cap}` Vec/String layout), otherwise plain
+    /// `karac_map_free`. The drop-vec helper walks live buckets and
+    /// frees each side's data buffer per the flags before deallocating
+    /// the bucket storage.
+    ///
+    /// `Set[T]` lowers to `Map[T, ()]` with `val_size = 0`; for
+    /// `Set[Vec[T]]` / `Set[String]` codegen sets `key_is_vec = true,
+    /// val_is_vec = false`. For `Map[String, Vec[U]]` both flags are
+    /// set. Primitive-only maps stay on plain `karac_map_free`.
     FreeMapHandle {
         /// Alloca that holds the opaque map ptr.
         map_alloca: PointerValue<'ctx>,
-        /// Whether the value type is itself a Vec/String that needs per-
-        /// entry buffer cleanup before the bucket array is deallocated.
-        /// `false` routes to plain `karac_map_free` (the pre-fix shape).
+        /// Whether the KEY type follows the Vec/String layout
+        /// (`{ptr, len, cap}`). `true` triggers per-entry key-buffer
+        /// free in `karac_map_free_with_drop_vec`. `Map[i64, V]` /
+        /// `Map[bool, V]` etc. → `false`.
+        key_is_vec: bool,
+        /// Whether the VALUE type follows the Vec/String layout. `true`
+        /// triggers per-entry value-buffer free. `Map[K, i64]` /
+        /// `Set[T]` (val_size = 0) → `false`.
         val_is_vec: bool,
     },
     /// Run a per-enum drop function on a value-type (non-shared) enum
@@ -1202,15 +1213,22 @@ struct Codegen<'ctx> {
     http_shim_cache: HashMap<String, FunctionValue<'ctx>>,
     karac_map_new_fn: FunctionValue<'ctx>,
     karac_map_free_fn: FunctionValue<'ctx>,
-    /// `karac_map_free_with_val_drop_vec(map: ptr)` — same shape as
-    /// `karac_map_free`, but iterates each live entry and frees the
-    /// per-entry `Vec[T]` value's data buffer before deallocating the
-    /// bucket storage. Used when the Map's value type is itself a
-    /// `Vec[T]` / `String` (`{ptr, len, cap}` layout) — plain
-    /// `karac_map_free` would leak those inner buffers. Selected by the
-    /// `FreeMapHandle { val_is_vec: true }` cleanup arm. Added
-    /// 2026-05-13 to close the LeetCode #3629 `Map[i64, Vec[i64]]` leak.
-    karac_map_free_with_val_drop_vec_fn: FunctionValue<'ctx>,
+    /// `karac_map_free_with_drop_vec(map: ptr, drop_key: i32, drop_val: i32)`
+    /// — `karac_map_free` variant that recursively drops per-entry
+    /// Vec/String content before deallocating the bucket storage.
+    /// `drop_key != 0` releases each live entry's key data buffer when
+    /// the key follows the `{ptr, len, cap}` layout; `drop_val != 0`
+    /// does the same for the value. Selected by the `FreeMapHandle`
+    /// cleanup arm whenever either flag is set. Replaces the narrower
+    /// `karac_map_free_with_val_drop_vec` (val-only) helper that
+    /// shipped 2026-05-13.
+    ///
+    /// Closes leaks for `Set[Vec[T]]` / `Set[String]` (key drop only),
+    /// `Map[String, V]` / `Map[Vec[T], V]` (key drop only),
+    /// `Map[String, Vec[U]]` / `Map[Vec[T], Vec[U]]` (both flags). The
+    /// primitive-only `Map[i64, i64]` case stays on plain
+    /// `karac_map_free` for zero overhead.
+    karac_map_free_with_drop_vec_fn: FunctionValue<'ctx>,
     karac_map_insert_old_fn: FunctionValue<'ctx>,
     karac_map_get_fn: FunctionValue<'ctx>,
     karac_map_remove_old_fn: FunctionValue<'ctx>,
@@ -1552,14 +1570,20 @@ impl<'ctx> Codegen<'ctx> {
         let karac_map_free_fn =
             module.add_function("karac_map_free", map_free_ty, Some(Linkage::External));
 
-        // karac_map_free_with_val_drop_vec(map: ptr) -> void — variant of
-        // karac_map_free that iterates the bucket array and frees each live
-        // entry's `Vec[T]` value's data pointer (3-word `{ptr, i64, i64}`
-        // value layout, free when cap > 0) before deallocating the bucket
-        // storage. Selected when the Map's value type is itself Vec/String.
-        let karac_map_free_with_val_drop_vec_fn = module.add_function(
-            "karac_map_free_with_val_drop_vec",
-            map_free_ty,
+        // karac_map_free_with_drop_vec(map: ptr, drop_key: i32, drop_val: i32) -> void —
+        // generalized variant: walks live buckets and frees per-entry key
+        // and/or value data pointers (when the respective flag is set
+        // and the field's `cap > 0`) before deallocating the bucket
+        // storage. Selected when either side of `Map[K, V]` / `Set[T]`
+        // follows the Vec/String `{ptr, len, cap}` layout. The i32 flags
+        // are codegen-set: nonzero means "drop this side".
+        let i32_ty: BasicMetadataTypeEnum = context.i32_type().into();
+        let map_free_with_drop_ty = context
+            .void_type()
+            .fn_type(&[ptr_md, i32_ty, i32_ty], false);
+        let karac_map_free_with_drop_vec_fn = module.add_function(
+            "karac_map_free_with_drop_vec",
+            map_free_with_drop_ty,
             Some(Linkage::External),
         );
 
@@ -1765,7 +1789,7 @@ impl<'ctx> Codegen<'ctx> {
             http_shim_cache: HashMap::new(),
             karac_map_new_fn,
             karac_map_free_fn,
-            karac_map_free_with_val_drop_vec_fn,
+            karac_map_free_with_drop_vec_fn,
             karac_map_insert_old_fn,
             karac_map_get_fn,
             karac_map_remove_old_fn,
@@ -2831,14 +2855,23 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Track a Map alloca for scope-exit `karac_map_free` call. When the
-    /// value type is itself a Vec/String, the cleanup routes to
-    /// `karac_map_free_with_val_drop_vec` so each live entry's value
-    /// buffer is freed before the bucket array is deallocated.
-    fn track_map_var(&mut self, map_alloca: PointerValue<'ctx>, val_is_vec: bool) {
+    /// Track a Map / Set alloca for scope-exit free. `key_is_vec` /
+    /// `val_is_vec` tell the cleanup whether each side follows the
+    /// Vec/String `{ptr, len, cap}` layout and therefore needs per-entry
+    /// buffer release before the bucket storage is deallocated. Both
+    /// false → plain `karac_map_free`. Either true → routes through
+    /// `karac_map_free_with_drop_vec(handle, key_is_vec, val_is_vec)`
+    /// so the per-entry walk runs.
+    fn track_map_var(
+        &mut self,
+        map_alloca: PointerValue<'ctx>,
+        key_is_vec: bool,
+        val_is_vec: bool,
+    ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
                 map_alloca,
+                key_is_vec,
                 val_is_vec,
             });
         }
@@ -3205,6 +3238,7 @@ impl<'ctx> Codegen<'ctx> {
             }
             CleanupAction::FreeMapHandle {
                 map_alloca,
+                key_is_vec,
                 val_is_vec,
             } => {
                 let handle = self
@@ -3212,22 +3246,31 @@ impl<'ctx> Codegen<'ctx> {
                     .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
                     .unwrap()
                     .into_pointer_value();
-                // When V is a Vec/String struct, route through the
-                // recursive-drop runtime helper so each live entry's
-                // value buffer is freed before the bucket array is
-                // deallocated. Plain `karac_map_free` is correct
-                // only when V owns no heap. Closes the 2026-05-13
-                // bucket leak measured on LeetCode #3629 bfs_sieve
-                // where `Map[i64, Vec[i64]]` retained one inner
-                // buffer per prime per `min_jumps` call.
-                let free_fn = if *val_is_vec {
-                    self.karac_map_free_with_val_drop_vec_fn
+                // When either the key or value type follows the Vec/String
+                // `{ptr, len, cap}` layout, route through the recursive-
+                // drop runtime helper so each live entry's heap content
+                // is freed before the bucket array is deallocated. Plain
+                // `karac_map_free` is correct only when both sides own
+                // no heap. Closes the 2026-05-13 bucket leak (LeetCode
+                // #3629 `Map[i64, Vec[i64]]`) and the 2026-05-14
+                // `Set[String]` / `Map[String, V]` leaks (slice α /
+                // β of the recursive-drop work).
+                if *key_is_vec || *val_is_vec {
+                    let i32_t = self.context.i32_type();
+                    let key_flag = i32_t.const_int(if *key_is_vec { 1 } else { 0 }, false);
+                    let val_flag = i32_t.const_int(if *val_is_vec { 1 } else { 0 }, false);
+                    self.builder
+                        .build_call(
+                            self.karac_map_free_with_drop_vec_fn,
+                            &[handle.into(), key_flag.into(), val_flag.into()],
+                            "",
+                        )
+                        .unwrap();
                 } else {
-                    self.karac_map_free_fn
-                };
-                self.builder
-                    .build_call(free_fn, &[handle.into()], "")
-                    .unwrap();
+                    self.builder
+                        .build_call(self.karac_map_free_fn, &[handle.into()], "")
+                        .unwrap();
+                }
             }
             // Phase 7.2 Slice DP — invoke the per-enum drop
             // function on the alloca. The drop fn takes a
@@ -6040,12 +6083,24 @@ impl<'ctx> Codegen<'ctx> {
                             || self.set_elem_types.contains_key(var_name.as_str()))
                     {
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            // `key_is_vec` reads from `map_key_types` for Map
+                            // bindings or `set_elem_types` for Set bindings
+                            // (Set lowers to Map[T, ()] with the elem type
+                            // as the "key"). `val_is_vec` reads only from
+                            // `map_val_types` — Sets have val_size = 0 so
+                            // their val_is_vec is always false.
+                            let key_is_vec = self
+                                .map_key_types
+                                .get(var_name.as_str())
+                                .or_else(|| self.set_elem_types.get(var_name.as_str()))
+                                .copied()
+                                .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
                             let val_is_vec = self
                                 .map_val_types
                                 .get(var_name.as_str())
                                 .copied()
                                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
-                            self.track_map_var(slot.ptr, val_is_vec);
+                            self.track_map_var(slot.ptr, key_is_vec, val_is_vec);
                         }
                     }
                 }
@@ -11994,8 +12049,9 @@ impl<'ctx> Codegen<'ctx> {
                 ty: ptr_ty.into(),
             },
         );
+        let key_is_vec = self.llvm_ty_is_vec_struct(key_ty);
         let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
-        self.track_map_var(slot_ptr, val_is_vec);
+        self.track_map_var(slot_ptr, key_is_vec, val_is_vec);
         Ok(())
     }
 
@@ -12070,8 +12126,15 @@ impl<'ctx> Codegen<'ctx> {
         // Set handles use the same `karac_map_free` cleanup as Map handles —
         // the runtime is the same; only the type-system identity differs.
         // Sets have no value slot (val_size = 0 in the bucket layout), so the
-        // recursive value-drop path doesn't apply — pass `false`.
-        self.track_map_var(slot_ptr, false);
+        // value-side recursive drop never applies (`val_is_vec = false`).
+        // The KEY side, however, is the element type — `Set[Vec[T]]` /
+        // `Set[String]` need `key_is_vec = true` so the runtime helper
+        // walks live entries and frees each key's data buffer before
+        // deallocating the bucket storage (slice α of the recursive-drop
+        // work, 2026-05-14). Primitive-element sets (`Set[i64]`) keep
+        // `key_is_vec = false` and stay on plain `karac_map_free`.
+        let key_is_vec = self.llvm_ty_is_vec_struct(elem_ty);
+        self.track_map_var(slot_ptr, key_is_vec, false);
         Ok(())
     }
 
@@ -12123,8 +12186,11 @@ impl<'ctx> Codegen<'ctx> {
                 .into_pointer_value();
             let k_val = self.compile_expr(k_expr)?;
             let v_val = self.compile_expr(v_expr)?;
-            // Move semantics for tracked Vec/String values — see
-            // `Map.insert` arm below for the rationale.
+            // Move semantics for tracked Vec/String keys and values —
+            // see `Map.insert` arm below for the rationale. Key
+            // suppression added alongside the recursive key-drop path
+            // (slice α/β, 2026-05-14).
+            self.suppress_source_vec_cleanup_for_arg(k_expr);
             self.suppress_source_vec_cleanup_for_arg(v_expr);
             self.builder.build_store(key_slot, k_val).unwrap();
             self.builder.build_store(val_slot, v_val).unwrap();
@@ -12546,12 +12612,15 @@ impl<'ctx> Codegen<'ctx> {
                 let key_val = self.compile_expr(&args[0].value)?;
                 let val_val = self.compile_expr(&args[1].value)?;
                 // Move semantics — same shape as `Vec.push`. When the
-                // value argument is a tracked Vec/String binding, the
-                // bucket bit-copies its `{ptr, len, cap}` and the
-                // `karac_map_free_with_val_drop_vec` cleanup would
+                // key OR value argument is a tracked Vec/String binding,
+                // the bucket bit-copies its `{ptr, len, cap}` and the
+                // `karac_map_free_with_drop_vec` cleanup would
                 // double-free the buffer against the source binding's
                 // own scope-exit `FreeVecBuffer`. Suppress the source's
-                // cleanup so the Map becomes the unique owner.
+                // cleanup on both sides so the Map becomes the unique
+                // owner. Slice α/β (2026-05-14): key suppression added
+                // alongside the new key-side drop in the runtime helper.
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
                 let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
@@ -13847,6 +13916,16 @@ impl<'ctx> Codegen<'ctx> {
                     return Err("Set.insert requires a value argument".to_string());
                 }
                 let elem_val = self.compile_expr(&args[0].value)?;
+                // Move semantics for tracked Vec/String elements: the
+                // bucket bit-copies the element's `{ptr, len, cap}` and
+                // the `karac_map_free_with_drop_vec` cleanup (when
+                // `key_is_vec = true` for `Set[Vec[T]]` / `Set[String]`)
+                // would double-free against the source binding's own
+                // scope-exit `FreeVecBuffer`. Suppress so the Set
+                // becomes the unique owner. Mirrors the `Map.insert`
+                // key-side suppression added alongside the recursive
+                // key-drop path.
+                self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 let fn_val = self.current_fn.unwrap();
                 let elem_slot = self.create_entry_alloca(fn_val, "set.insert.elem", elem_ty);
                 self.builder.build_store(elem_slot, elem_val).unwrap();
