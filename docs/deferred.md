@@ -970,9 +970,9 @@ The string parser validates index consistency (each index appears at most twice 
 
 ### `std.embeddings` — Cosine Similarity and Top-K Primitives
 
-**Decision:** Ship `std.embeddings` at v1 (P1, Phase 11). Promoted from "not committed" to v1 in the v66 graduation. Minimum surface: cosine similarity (scalar + batched), L2 normalize (in-place + non-mutating), batched dot product, top-k indices+scores. Five functions over existing `Tensor[f32, ...]` primitives.
+**Decision:** Ship `std.embeddings` at v1 (P1, Phase 11). Promoted from "not committed" to v1 in the v66 graduation. Minimum surface: cosine similarity (scalar + batched single-query + Q×N matrix), L2 normalize (in-place + non-mutating), batched dot product, top-k indices+scores. Six functions over existing `Tensor[f32, ...]` primitives.
 
-**Why ship at v1.** RAG, semantic search, and recommendation workloads are mainstream backend patterns. Without `std.embeddings`, every adopter doing AI-adjacent work hand-rolls the same `cosine_similarity` against `Tensor` primitives — wasteful for a 5-function surface. Vector indices (HNSW, IVF, scalar quantization) stay community territory.
+**Why ship at v1.** RAG, semantic search, and recommendation workloads are mainstream backend patterns. Without `std.embeddings`, every adopter doing AI-adjacent work hand-rolls the same `cosine_similarity` against `Tensor` primitives — wasteful for a 6-function surface. Vector indices (HNSW, IVF, scalar quantization) stay community territory.
 
 **Why non-breaking:** New stdlib module.
 
@@ -982,14 +982,17 @@ The string parser validates index consistency (each index appears at most twice 
 use std.embeddings;
 
 let sim: f32 = embeddings.cosine_similarity(query, target);                    // Tensor[f32, [D]] × Tensor[f32, [D]]
-let sims: Tensor[f32, [N]] = embeddings.cosine_similarity_batched(query, corpus);  // [D] × [N, D]
+let sims: Tensor[f32, [N]] = embeddings.cosine_similarity_batched(query, corpus);     // [D] × [N, D]  — SGEMV (BLAS-2)
+let mat:  Tensor[f32, [Q, N]] = embeddings.cosine_similarity_matrix(queries, corpus); // [Q, D] × [N, D]  — SGEMM (BLAS-3)
 let normed: Tensor[f32, S] = embeddings.l2_normalize_to(t);
 embeddings.l2_normalize(mut ref t);                                              // in-place
 let dots: Tensor[f32, [N, M]] = embeddings.dot_batched(a, b);                  // [N, D] × [M, D]
 let top: Tensor[(i64, f32), [k]] = embeddings.top_k(scores, k: 10);            // indices + scores
 ```
 
-Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.1`.
+`cosine_similarity_matrix` is the Q×N production-RAG shape: Q queries against an N-vector corpus produces a Q×N similarity matrix. SGEMM-shaped (BLAS-3) — this is where the compute-bound speedup lives. `cosine_similarity_batched` (single query × N corpus) remains the SGEMV-shaped convenience for the common single-query path. Adding `_matrix` rather than overloading `_batched` on the query rank is deliberate: Kāra prefers explicit-over-magic in API surface, consistent with the resolver restriction on user `impl Add` and the explicit ownership-tier syntax.
+
+Cross-reference: `brainstorming/archive/v66_general_purpose_with_data_bonus.md § 3.1`; `brainstorming/archive/v67_simd_strategy.md § 3.1.1` (BLAS-3 cosine path decision); `deferred.md § Hand-Vectorized Data-Spine Commitment` (the v67 §3 spine that this surface relies on).
 
 ---
 
@@ -1345,13 +1348,15 @@ Returns broadcast-expanded (strided) views by default. `.compact()` materializes
 
 **Decision:** Defer the full suite of element-wise unary math functions — and the `clip` clamp utility — to Phase 11+ as `Tensor` methods and free functions in `std.math`.
 
-**Why deferred:** These require the `Tensor` stdlib (Phase 11) and LLVM auto-vectorization (Phase 7) to perform well. No language decisions are blocking.
+**Why deferred:** These require the `Tensor` stdlib (Phase 11). No language decisions are blocking.
+
+**Performance contract.** Element-wise rows on the v66 numerical surface (autograd activations, statistical reductions, Tensor arithmetic) are covered by the v67 §3 hand-vectorized spine — see `deferred.md § Hand-Vectorized Data-Spine Commitment`. Transcendentals (`exp`, `log`, `sqrt`, `sin`, `cos`, `tanh`, etc.) get their per-element vectorization via the new `std.simd.math` sub-surface (Sleef-class polynomial approximations) rather than auto-vec — LLVM auto-vec does *not* substitute vectorized exp for scalar `expf`, so transcendentals are a separate implementation surface. Rounding (`floor`, `ceil`, `round`, `abs`, `sign`) and `clip` family are auto-vec-friendly under bounds-check elision; they trust LLVM rather than ship hand-written kernels.
 
 **Why non-breaking:** New methods/functions. No existing API affected.
 
 **Design shape:**
 
-Transcendental and rounding functions dispatch through `std.math` and vectorize via LLVM:
+Transcendental and rounding functions dispatch through `std.math`; transcendentals route through `std.simd.math` per the v67 spine commitment, rounding/clip vectorize via LLVM:
 
 ```kara
 // Element-wise — return Tensor of same shape
@@ -1375,6 +1380,47 @@ arr.clip_hi(1.0)                     // upper bound only
 ```
 
 All functions require `T: Float`. The `clip` family operates analogously to scalar broadcasting: `lo` and `hi` are `T`, not `Tensor[T, Shape]`.
+
+---
+
+### Hand-Vectorized Data-Spine Commitment
+
+**Decision:** Ship a designated set of stdlib kernels at v1 (P1, Phase 11) as **hand-written `Vector[T, N]` implementations** rather than relying on LLVM auto-vectorization. Eight kernel families covering the v66 numerical-stdlib graduation (embeddings, autograd, Tensor element-wise, statistical methods). Graduated from `brainstorming/archive/v67_simd_strategy.md § 3` (2026-05-13).
+
+**Why ship at v1.** The v66 graduation put `std.embeddings`, `std.autograd`, Tensor element-wise math, and statistical methods on the v1 plate — each currently committed without a documented performance fallback if LLVM auto-vec underperforms. Per `feedback_v1_ship_reality_not_promises`, a benchmark-day reality check on those rows is a v1 launch risk. Hand-vectorizing the spine converts the v66 numerical narrative from "hopefully fast" to "measurably fast." Bounded named scope (~8 kernel families, 2–3 weeks engineering against existing `Vector[T, N]` codegen and the `chunks_simd` iteration API).
+
+**Why deferred from canonical:** This is a stdlib-internals + perf-contract decision, not a language-surface decision. Recorded in `deferred.md` rather than `design.md` because the user-facing API is unchanged — only the implementation strategy.
+
+**Kernel list (ceiling commitment, narrowed by measurement).** Per v67 §3.1:
+
+| Kernel family | BLAS class | Bound by | Speedup target vs scalar |
+|---|---|---|---|
+| `embeddings.cosine_similarity` (single, `[D] × [D]`) | BLAS-1 | Memory | 2–4× |
+| `embeddings.cosine_similarity_batched` (single-query, `[D] × [N, D]`) | BLAS-2 | Memory | 2–4× |
+| `embeddings.cosine_similarity_matrix` (Q×N, `[Q, D] × [N, D]`) | BLAS-3 | Compute | NumPy parity (5–10× over scalar) |
+| `embeddings.dot_batched` (`[N, D] × [M, D]`) | BLAS-3 | Compute | NumPy parity (5–10× over scalar) |
+| `embeddings.l2_normalize` (in-place + non-mutating) | BLAS-1 | Memory | 2–4× |
+| `embeddings.top_k` | BLAS-1 + reduction | Memory | 2–3× |
+| Tensor element-wise `+`, `-`, `*`, `/` | BLAS-1 | Memory | 2–4× |
+| Tensor reductions: `sum`, `mean`, `min`, `max` | BLAS-1 + reduction | Memory | 2–4× |
+| Activations: `relu`, `sigmoid`, `tanh` | BLAS-1 | Memory (`relu`) / Mixed (`sigmoid`, `tanh`) | 2–3× / 4–8× |
+| `softmax` | BLAS-1 + reduction + transcendental | Mixed | 4–6× |
+| `exp`, `log`, `sqrt` element-wise (via `std.simd.math`) | BLAS-1 (transcendental) | Compute (per element) | 4–8× (~2× of NumPy contingent on `std.simd.math` quality) |
+
+**`std.simd.math` sub-surface.** New stdlib surface for SIMD-friendly polynomial approximations of transcendentals: `Vector[f32, N].exp()`, `.log()`, `.sqrt()`, `.tanh()`, `.sigmoid()`. Sleef-class quality for f32; f64 follows the same pattern. Required because LLVM auto-vec does not substitute vectorized exp for scalar `expf` — that is a known auto-vec dead end. Without `std.simd.math`, the transcendental rows in the spine degrade to "auto-vec maybe, scalar usually" and the 4–8× target vanishes.
+
+**Per-kernel perf targets (defensive against adversarial reading).**
+- BLAS-3 rows target **NumPy parity** (NumPy itself dispatches to OpenBLAS / MKL; matching is the goal, not beating).
+- BLAS-1 memory-bound rows target **NumPy ±20%** (memory bandwidth is the ceiling; both implementations approach it).
+- Transcendental rows target **~2× of NumPy** (NumPy's `exp` calls into libm which is already vectorized on most platforms; closing this gap is `std.simd.math`-quality-dependent).
+
+**Bit-exactness scope.** Treat user-observable bit-exactness as a guarantee **for a given execution path** — same target, same compile flags, same hardware feature level. Cross-path bit-exactness (SIMD vs scalar fallback; AVX-2 baseline vs an AVX-512 multiversioned variant) is *not* promised, because the reduction order differs by construction. Polars and NumPy make the same scoped commitment.
+
+**Sequencing.** The kernel list is a **ceiling**; final scope is narrowed kernel-by-kernel by a §6.4-style auto-vec measurement once Phase 7's LLVM backend can compile a representative kernel (e.g., `cosine_similarity_batched` on `Tensor[f32, [10_000, 768]]`). Rows where LLVM auto-vec already hits ~80% of hand-written SIMD drop out of the hand-vec list and into a "trust auto-vec, benchmark number documented" footnote at implementation time. Rows where auto-vec hits ~20% stay in.
+
+**Why non-breaking:** Implementation strategy — no API change. The same scalar-equivalent semantics are observable; only the perf curve changes.
+
+**Cross-reference:** `brainstorming/archive/v67_simd_strategy.md § 3` (kernel scope + alternatives); `brainstorming/archive/v67_simd_strategy.md § 3.1.1` (BLAS-3 cosine path); `brainstorming/archive/v66_general_purpose_with_data_bonus.md` (the v66 graduation that put the numerical stdlib on the v1 plate); `design.md § Portable SIMD — Vector[T, N]` (the type the kernels build on); `design.md § Multiversioning` (`cpu-baseline` + `#[multiversion]` for AVX-512 / SVE2 variant kernels); `deferred.md § Tensor Element-Wise Math and Clamp` (the entry whose perf contract this binds).
 
 ---
 
@@ -2694,11 +2740,34 @@ A codegen change that closes the inlining gap between Karac's `Vec.sort_by` and 
 
 ### Recursive Drop for Heap-Owned Collection Elements
 
-Scope-exit cleanup that recursively drops nested heap-owned content. Today `CleanupAction::FreeVecBuffer` (`src/codegen.rs:2908-2943`) and `karac_map_free` (`runtime/src/map.rs:241-248`) both free only the outer container's backing storage — the Vec's data buffer / the Map's bucket-and-kv-blob array — and never iterate the live elements to release nested heap allocations they own. For element types that are themselves heap-allocated (`Vec[Vec[T]]`, `Map[K, Vec[T]]`, `Vec[String]`, `Vec[Map[…]]`, struct fields holding any of those), the inner buffers leak on function return. The existing `CleanupAction::EnumDrop` variant has the right shape (codegen-emitted per-enum drop fn invoked at scope exit); the gap is generalising that machinery to Vec and Map element types.
+Scope-exit cleanup that recursively drops nested heap-owned content. Originally filed when `CleanupAction::FreeVecBuffer` and `karac_map_free` both freed only the outer container's backing storage and never iterated live elements. The 2026-05-12 / 2026-05-13 slices closed the most-frequently-hit cases (one-level recursive Vec drop, Map[K, Vec[V]] via a new runtime helper, match-arm-bound Vec/String cleanup, and `ExprKind::Return` cleanup parity with the function-end tail-return path — see commits `a8eb553` and `b0b37ab`). The bfs_sieve workload that surfaced the gap is fully closed (kara 60.3 MiB matches rust 60.1 MiB; was 3× rust pre-fix). What's still missing is the general type-keyed drop synthesis that handles every heap-owning composite type, not just the shapes the bfs_sieve workload happened to exercise.
+
+**Open gaps as of 2026-05-13** (each independently leaks on programs using that shape; entries ordered by how common the shape is in real code):
+
+- **(b, common) Struct fields with heap content.** `struct Holder { v: Vec[i64] }`, then `let h: Holder = …`. Today h's drop is a no-op (no per-struct drop fn is synthesized for non-`shared` structs); the Vec field's buffer leaks. Same shape: `Vec[Container]` where `Container.v: Vec[T]`. Any non-trivial app with composite types is affected.
+- **(c, common) Map keys that own heap.** `Map[String, V]` / `Map[Vec[T], V]`. `karac_map_free` and `karac_map_free_with_val_drop_vec` both only free value-side Vecs, never recurse into keys. Key buffers leak. `String`-keyed maps are pervasive in everyday code.
+- **(e, common) `Set[T]` where T owns heap.** `Set[String]`, `Set[Vec[i64]]`. Set lowers to `Map[T, ()]` at codegen; cleanup routes to plain `karac_map_free` regardless of whether T has heap. Key heap content leaks. Set-of-string is a standard pattern.
+- **(d, common) Map values that aren't Vec/String.** `Map[K, Map[J, V]]`, `Map[K, Holder]`. The val-drop-vec helper specifically expects the value to follow the `{ptr, len, cap}` shape — anything else routes to plain `karac_map_free` and leaks the entire value.
+- **(a, less common) Deeper-than-one-level nesting.** `Vec[Vec[Vec[T]]]`, `Map[K, Vec[Vec[T]]]`. The shipped one-level inline drop frees the middle layer's data buffer but the per-element body is itself just `free(inner.data)` — no recursion into the middle layer's *element* drop. Innermost buffers leak.
+- **(f, occasional) Enum payloads with deeper heap structure.** `EnumDrop` handles `Vec[T]` / `String` payload fields directly but doesn't recurse into nested-collection payloads (`Vec[Vec[T]]` inside a variant) or struct-with-heap payloads.
+- **(g, occasional) Tuple destructure binding of heap-owning components.** `let (a, b): (Vec[i64], String) = …`. The destructure binds `a` and `b` to fresh allocas; not verified that both get `track_vec_var` registration the way a direct `let v: Vec[i64] = …` does.
+
+**Common architectural fix that collapses (a)–(g) into one feature:** type-keyed `emit_drop_fn_for_type(ty: &Type) -> Option<FunctionValue<'ctx>>` that recursively synthesizes a per-type drop function by walking T's structure. Cached by T in a `drop_fns: HashMap<TypeKey, FunctionValue>` so each T is emitted once and recursive types (e.g. `enum E { Cons(Vec[E]) }`) are handled via reservation-then-fill (insert a placeholder before recursing). Rules:
+
+  - primitive / slice / ref → returns `None` (no drop needed)
+  - `Vec[T]` → emit fn that loads cap, if cap > 0: for i in 0..len call `drop_T(data + i*sizeof(T))` (if present), then `free(data)`
+  - `Map[K, V]` → emit fn that walks live buckets calling `drop_K(key_ptr)` / `drop_V(val_ptr)` (if present), then deallocs bucket storage
+  - `String` → free the inline buffer (mostly already handled, but plumb through the per-type fn surface)
+  - `Set[T]` → routes to map free with `drop_T` as the key fn, no val fn (val_size = 0)
+  - tuple → emit fn that drops each non-primitive component
+  - struct → emit fn that drops each non-primitive field
+  - enum → route to the existing `emit_enum_drop_switch` machinery (already type-keyed via `enum_drop_fns`)
 
 **Why deferred:** The fix touches codegen's cleanup-action emission and the runtime's Map free path, with type-directed drop-fn synthesis (recursing through nested generic-collection types and struct/tuple field shapes). Sizable codegen work — multi-day at minimum to land safely with the existing memory-sanitizer test bar. Not a one-line fix, so it doesn't slip into a routine PR.
 
 **Why deferred isn't "we should defer this indefinitely":** For short-lived programs (CLI tools, kata bench harnesses, single-shot binaries) the leak is reclaimed on process exit and never observed. For long-running programs (servers, daemons, REPL-style hosts) it's an unbounded leak. v1 ships both classes of program, so this needs to land for v1 — but the codegen scope makes it a planned slice, not an inline cleanup.
+
+**Promotion-now-vs-stay-deferred read (2026-05-13):** Gaps (b) / (c) / (e) above are everyday-code shapes (struct with Vec field; `Map[String, V]`; `Set[String]`), not exotic patterns. Any non-trivial program hits at least one of them. The "leak only matters for long-running programs" framing under-sells the surface — even short-lived tools that build up a `Set[String]` and let it go out of scope leak the key buffers, and a v1 program that uses these shapes ships a real bug. Recommend promoting to active work in slices: (1) type-keyed drop-fn synthesis framework; (2) wire through Vec/Map/Set/String element types — closes (a, c, d, e); (3) struct field drop synthesis — closes (b); (4) enum deeper recursion — closes (f); (5) tuple destructure — closes (g). Each slice is testable independently via `tests/memory_sanitizer.rs`.
 
 **Empirical measurement (2026-05-12, LeetCode #3629 `bfs_sieve` bench):**
 
@@ -3209,6 +3278,42 @@ No deopt, no OSR, no fresh verification — the v2 binary went through the same 
 **Why non-breaking:** Purely additive. Existing resolution annotations continue to be honored at trust-the-author level by the codegen path. The new verification mode is opt-in; failure to run it does not change codegen behavior.
 
 **Cross-reference:** `design.md § Compiler Queries` (the v1 trust-the-author baseline); `design.md § Specification Layers > Compiler Queries > Author claims are trusted at v1` (the v1 stance); brainstorm archive `brainstorming/archive/v63_llm_compiler_query_channel.md` Problem 7 and Open Questions on author-claim verification.
+
+---
+
+### MLIR Adoption as Codegen Substrate
+
+**Decision:** Defer MLIR adoption as Kāra's codegen substrate from v1 and v2. LLVM-direct (via Inkwell) is the right substrate under v66's positioning (general-purpose backend with data as quiet bonus). MLIR's value is heterogeneous numerical compute as a primary thesis — Mojo's territory — which is explicitly **not** Kāra's positioning per v66 § Problem 1.
+
+**Why deferred.** MLIR is a multi-level IR designed for compilers whose center of gravity is heterogeneous numerical compute (CPU + GPU + TPU + custom accelerators) with cross-target kernel fusion as a load-bearing optimization. Adopting MLIR would cost a substantial codegen rewrite for marginal v1 gain: Kāra's CPU + GPU coverage already routes through LLVM (NVPTX for CUDA, wgpu/WGSL for vendor-neutral GPU), and `Vector[T, N]` SIMD lowering is well-served by LLVM's existing SIMD infrastructure. The MLIR ecosystem's chief advantage — *cheap new-target codegen via dialect plug-in* — only pays off if Kāra commits to adding new accelerator backends (NPU/TPU/FPGA), which is itself deferred (see § Heterogeneous Compute — Beyond CPU + GPU).
+
+**Architectural intent (v1 lemma).** Codegen is deliberately the only LLVM-aware phase in the pipeline (`src/codegen.rs`); upstream phases (AST, typecheck, effect, ownership, concurrency analysis) treat the backend as a black box. A future MLIR adoption would be a **contained surgery on one module**, not a rewrite of the compiler. The full architectural commitment — including the maintainership invariant that future contributors must not couple LLVM types into AST-level or analysis-level structures — is canonical in [`design.md § Codegen architecture`](../design.md#codegen-architecture).
+
+**Promotion gate (P2 → scheduled).** Promote when (a) Kāra's positioning shifts toward heterogeneous numerical compute as a primary thesis — itself a positioning brainstorm (not a backend brainstorm), AND (b) the heterogeneous-compute capability expansion in § Heterogeneous Compute — Beyond CPU + GPU has been scheduled, generating concrete demand for cheap new-target codegen. Without (a), MLIR is solving a problem Kāra has chosen not to have; without (b), MLIR's chief advantage is unrealized.
+
+**Why non-breaking:** Codegen-substrate swap is invisible to source. No user-language semantics change. Build-system flags and intermediate artifacts may change (LLVM IR dump → MLIR dump for diagnostics), but those are tooling, not language surface.
+
+**Cross-reference:** [`design.md § Codegen architecture`](../design.md#codegen-architecture) (the architectural-intent record — codegen is the only LLVM-aware phase, upstream phases treat the backend as a black box; verified against the codebase 2026-05-13); v66 § Problem 1 (positioning rejection of "heterogeneous compute" as launch axis); `brainstorming/archive/v67_simd_strategy.md § 6.2` (CPU half of heterogeneous-compute capability surface); deferred.md § Heterogeneous Compute — Beyond CPU + GPU (paired post-v1 capability question).
+
+---
+
+### Heterogeneous Compute — Beyond CPU + GPU
+
+**Decision:** Defer heterogeneous-compute capability expansion beyond CPU + GPU from v1 (and v2 absent a positioning shift). v1 ships CPU SIMD (`Vector[T, N]`, Phase 7) + GPU codegen (wgpu/WGSL primary, NVPTX opt-in, Phase 10) as a capability surface — but **not** as a positioning axis (v66 § Problem 1 rejects "Kāra for AI" / "Mojo competitor" framings). Further accelerators, kernel fusion, and unified-memory abstraction are post-v1 work, scheduled per the sub-item promotion gates below.
+
+**Why deferred.** Each sub-item has real engineering cost and a small population of users at the v1 / v2 timeframe given Kāra's positioning. Building them at v1 would compete with the v66 backend + general-purpose floor for engineering bandwidth and would signal a positioning shift the project has explicitly rejected. None are precluded by the v1 architecture — they are additive capabilities, deferrable without v1 design debt.
+
+**Sub-items (each independently promoteable):**
+
+- **NPU / ANE backend.** Apple Neural Engine (CoreML), Qualcomm AI Engine, modern Snapdragon NPUs, Intel AMX. Codegen target: a new dialect / IR layer or direct lowering through MLIR (see § MLIR Adoption as Codegen Substrate). **Promotion gate:** on-device inference becomes a Kāra workload class with concrete users (not before).
+- **TPU backend.** Google Cloud TPU via XLA / OpenXLA HLO. **Promotion gate:** Kāra develops a Google-Cloud-resident user base willing to fund the toolchain work (small audience; unlikely without a positioning shift).
+- **FPGA bitstreams.** Already noted as a Phase 10 stretch goal in `design.md § Feature 7` / `phase-10-targets.md`. This entry tracks it as a deferred-from-v1 capability rather than a Phase 10 spec gap. **Promotion gate:** as the Phase 10 stretch-goal note documents — not before stable Phase 10 CPU + GPU codegen, and not before a concrete FPGA workload exists.
+- **Unified-memory abstraction.** Apple M-series, integrated GPUs, AMD APUs all share physical RAM between CPU and GPU; the `Tensor.on(gpu)` / `.to_cpu()` boundary ops on those platforms could be zero-copy. Industry-standard frameworks (NumPy + CuPy, PyTorch `mps`) don't unify this cleanly. **Promotion gate:** Phase 10 GPU codegen has shipped and produced runtime data on transfer overhead on M-series / APU platforms; concrete workloads exist where the unification matters.
+- **Kernel fusion compiler pass.** Automatic fusion of adjacent elementwise + reduction kernels to amortize GPU launch overhead and reduce VRAM round-trips. The optimization that separates "uses a GPU" from "uses a GPU well" — `torch.compile` / `XLA` / `JAX` all do this. **Promotion gate:** (a) Phase 10 GPU codegen has shipped and produced data on the launch-overhead ceiling for representative Kāra ML workloads, AND (b) MLIR adoption has been scheduled OR an LLVM-based fusion pass has been spec'd. Without (b), the engineering cost is multi-year. The MLIR `linalg` dialect is the obvious substrate.
+
+**Why non-breaking:** All sub-items are additive capabilities. Each composes with the existing `Tensor` / `GpuTensor` / `Vector[T, N]` surface and the trait-dispatched ops (`Reduce`, `ElementwiseMap`, etc.) per `roadmap.md § Phase 11`. New backend = new lowering target; new optimization pass = new IR pass. No source-language changes implied.
+
+**Cross-reference:** `design.md § Feature 7 — Compilation Target Flexibility` (CPU + GPU + WASM + embedded at v1); `phase-10-targets.md` (Phase 10 backend codegen + FPGA stretch note); `phase-11-stdlib-longtail.md:897` (`GpuTensor` post-Phase-10 boundary type); v66 § Problem 1 (positioning rejection of heterogeneous compute as launch axis); `brainstorming/archive/v67_simd_strategy.md § 6.2` (CPU half of the heterogeneous-compute capability surface); deferred.md § MLIR Adoption as Codegen Substrate (paired substrate question).
 
 ---
 

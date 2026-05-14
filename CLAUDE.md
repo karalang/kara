@@ -54,6 +54,8 @@ Each phase is a separate module under `src/`:
 
 The entry point for programmatic use is `src/lib.rs`, which exposes `tokenize`, `parse`, `resolve`, `typecheck`, `effectcheck`, and `ownershipcheck` as top-level functions.
 
+**Codegen containment is a load-bearing architectural invariant.** `src/codegen.rs` (gated behind `--features llvm`) is the **only** module that imports `inkwell` or references LLVM types. All upstream phases — `token`, `lexer`, `ast`, `parser`, `resolver`, `typechecker`, `effectchecker`, `ownership`, `concurrency`, `interpreter` — treat the backend as a black box and use plain Rust types. **Never add `inkwell::` or LLVM-typed imports to those modules.** New phases that need to communicate codegen hints (layout decisions, vectorization annotations, etc.) must do so through plain-data hint records consumed by `codegen.rs`, not through embedded LLVM types in the analysis output. This containment is what makes a future codegen-substrate swap (e.g., MLIR) a contained surgery on one module rather than a compiler rewrite. Full architectural commitment in [`docs/design.md § Codegen architecture`](docs/design.md#codegen-architecture).
+
 Integration tests live in `tests/` (one file per phase). End-to-end `.kara` programs live in `examples/`.
 
 ## Language Design

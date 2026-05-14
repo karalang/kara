@@ -8866,6 +8866,16 @@ All statements inside execute in source order. Auto-parallelism is suppressed fo
 
 **Resource-modeling friction signals.** The same language-health rationale extends beyond `seq { }` frequency to other resource-modeling patterns: dense `independent A, B;` declarations across related resources (a possible over-fragmentation hint, suggesting a coarser parent resource would simplify), and `resource` declarations that exist only to force ordering between operations the effect system would otherwise classify as independent (a possible "missing effect primitive" hint). These signals belong in `karac build --perf-report` rather than in normal compilation, for the same reason `seq { }` does — domain-legitimate uses must not produce noise. Specific lint shapes are deferred until enough real-world Kāra programs exist to distinguish reliable misuse patterns from legitimate domain expression; lints added later are non-breaking by construction (warning level, suppressible per call site, no semantic change).
 
+### Composition with SIMD
+
+Auto-concurrency (across cores) and SIMD (within a lane) are independent dimensions of parallelism. The runtime composes them without coordination:
+
+- **Multiplicative on workloads that admit both.** Auto-par splits the iteration space across N cores; SIMD chunks each thread's slice into K lanes. Peak speedup is N×K on the embarrassingly-parallel + auto-vec-friendly case (e.g., element-wise Tensor arithmetic over a large flat buffer). Real-world ceilings are lower (cache contention, scheduling overhead, NUMA effects), but the model is correct.
+- **No SIMD-lane migration across threads.** Threads cooperate only at chunk boundaries — work is split per-thread before any SIMD ops execute, and aggregated only after each thread's SIMD work completes. The runtime does not move individual SIMD lanes (or partial-vector state) across thread boundaries; that would require cross-thread vector-register coordination, which neither LLVM nor any production OS scheduler provides cheaply.
+- **`#[require_simd]` is orthogonal to auto-par.** A `#[require_simd]` function inside a `par for` body must still vectorize — which means the function body must remain auto-vec-friendly (no early exit, no function calls into non-vectorizable code, no aliasing-defeating patterns) even though the outer loop is parallelized. The `#[require_simd]` diagnostic fires on the inner SIMD-fallback path; the outer auto-par decision is unchanged by the attribute.
+
+The compositional model means: when writing performance-critical numerical code, use `Vector[T, N]` (or hand-vectorized stdlib kernels per `deferred.md § Hand-Vectorized Data-Spine Commitment`) for the inner lane-level work, and let the auto-par effect analysis split the outer iteration space across cores automatically. No additional annotation is required to opt into the combination.
+
 ### Cost Model — v1 Status
 
 The "Three layers, named" framing above separates *semantic independence* (when operations *may* parallelize, governed by data-dependency and effect-conflict rules) from *compiler parallelization* (when the compiler *chooses* to, governed by a cost model). **The cost model is deliberately not specified in v1.** This subsection documents what is and is not committed.
@@ -10459,6 +10469,18 @@ Kāra is designed for AI-first code generation. Compilation frequency is high �
 
 **Phase names are part of the public contract.** The pipeline stages named above — `lex`, `parse`, `resolve`, `typecheck`, `effect`, `ownership`, `concurrency`, `codegen` — are the observable phases in the streaming diagnostic protocol (§ AI-First Compiler Interface > 1b. Streaming Phase Events). Renaming them is a breaking change to any AI client consuming `--output=jsonl`.
 
+### Codegen architecture
+
+**Codegen is the only LLVM-aware phase in the pipeline.** `src/codegen.rs` is the sole module that imports `inkwell` and references LLVM types; every upstream phase — `lex`, `parse`, `resolve`, `typecheck`, `effect`, `ownership`, `concurrency` analysis, and the tree-walk interpreter — treats the backend as a black box. AST nodes, type representations, effect records, ownership facts, and concurrency-group descriptors all live in plain Kāra/Rust data structures with no LLVM types embedded.
+
+This is a load-bearing architectural commitment for three reasons:
+
+1. **Backend independence at the analysis layer.** Type checking, effect inference, and ownership analysis are semantic properties of the source program, not artifacts of the chosen codegen substrate. Coupling LLVM types into those layers would entangle a backend-specific representation with language-level analysis, making the semantics harder to reason about and the analysis layer harder to test in isolation.
+2. **Containment for future codegen-substrate swaps.** A migration to a different codegen substrate (e.g., MLIR — see [`deferred.md § MLIR Adoption as Codegen Substrate`](deferred.md#mlir-adoption-as-codegen-substrate)) is a **contained surgery on one module**, not a compiler rewrite. The cost of evaluating or adopting a different backend is bounded.
+3. **Multiple delivery modes from one analysis pipeline.** The AOT (`karac build`) and JIT (`karac repl`, `karac test`) paths share the entire analysis pipeline; the only divergence is at codegen-output handoff (object file vs LLJIT engine). The tree-walk interpreter (development/debugging-only) reuses the same upstream phases without touching codegen at all.
+
+**Maintainership invariant.** Future contributors must not couple LLVM types into AST-level or analysis-level structures. New phases that need to communicate codegen hints (e.g., layout decisions, vectorization annotations) do so through plain-data hint records consumed by `codegen.rs`, not through embedded LLVM types in the analysis output.
+
 ---
 
 ## Execution Model and Compilation Targets
@@ -10467,7 +10489,7 @@ Kāra has a single execution backend (LLVM) and two delivery modes built on it: 
 
 ### AOT — `karac build`
 
-The default path. Source → `lex` → `parse` → `resolve` → `typecheck` → `effect` → `ownership` → `concurrency` → `codegen` → LLVM object → linked native binary via `cc`. Produces a statically-linked executable with the runtime archive (`libkarac_runtime.a`) embedded. Optimization level is configurable (`-O0` … `-O3`); default is `-O2`. `--target-cpu=native` is exposed as an opt-in flag once bounds-check elision lets autovectorization fire (see § Spatial safety).
+The default path. Source → `lex` → `parse` → `resolve` → `typecheck` → `effect` → `ownership` → `concurrency` → `codegen` → LLVM object → linked native binary via `cc`. Produces a statically-linked executable with the runtime archive (`libkarac_runtime.a`) embedded. Optimization level is configurable (`-O0` … `-O3`); default is `-O2`. CPU-feature targeting is controlled by `cpu-baseline` in `kara.toml` (default `"v3"` — see [§ Portable SIMD — Vector[T, N] > Multiversioning](#multiversioning-cpu-baseline-and-multiversion)) rather than `--target-cpu=native`, because single-binary distribution needs predictable feature requirements per build target. `--target-cpu=native` remains available as an opt-in flag for self-hosted deploys where the runtime hardware is known to match the build host; it is **not** the default. Bounds-check elision (see § Spatial safety) is what makes either path actually exercise autovectorization.
 
 ### JIT — `karac repl` and `karac test`
 
@@ -11501,6 +11523,8 @@ Kāra's standard library is split into three layers, each with strictly increasi
 dependencies. This mirrors Rust's `core`/`alloc`/`std` split and enables
 bare-metal targets.
 
+**Internal SIMD usage policy.** Stdlib implementations may use `Vector[T, N]` and `#[target_feature]` paths internally where doing so provides a measurable improvement on representative workloads. The user-facing API surface remains scalar — `String.contains`, `Vec.iter().sum()`, `Map.get`, etc. all present the same scalar signatures regardless of internal vectorization. Multiversioned internal variants follow the rules in [§ Portable SIMD — Vector[T, N] > Multiversioning](#multiversioning-cpu-baseline-and-multiversion). This policy unlocks simdjson-class JSON parsing, simdutf-class UTF-8 validation, SWAR-accelerated HTTP header tokenization, Hyperscan-style regex prefilter, and similar internal optimizations — none of which are commitments, each of which follows per-workload as benchmarks justify.
+
 ### `core` — always available
 
 Language fundamentals with zero OS or allocator dependencies:
@@ -12427,17 +12451,95 @@ let y = a[0]        // lane access -> f32
 
 **Auto-fallback rule.** A `Vector[T, N]` operation lowers in this order:
 
-1. **Native instruction.** If the target exposes a vector instruction that covers `T` and `N` exactly (e.g., `Vector[f32, 4]` on SSE / NEON, `Vector[f64, 4]` on AVX, `Vector[i32, 16]` on AVX-512), the operation is emitted as one instruction.
+1. **Native instruction.** If the target exposes a vector instruction that covers `T` and `N` exactly (e.g., `Vector[f32, 4]` on SSE / NEON / **wasm-simd-128**, `Vector[f64, 4]` on AVX, `Vector[i32, 16]` on AVX-512), the operation is emitted as one instruction.
 2. **Wider lane width with masking.** If the target has a vector unit but `N` doesn't fit a single instruction, the compiler emits two or more vector operations and combines the results — still vectorised, just spread across instructions.
 3. **Scalar fallback.** If the target has no vector unit at all, or the element type isn't supported by any vector unit (e.g., `Vector[i128, 4]`), the compiler emits a scalar `for i in 0..N { ... }` loop. The program still compiles, links, and runs — it is portable by guarantee, fast where the hardware allows.
 
 The fallback is silent by default. A `--simd-report=verbose` flag (Phase 7+) prints which operations dropped to scalar, for tuning hot loops. A `#[require_simd]` attribute on a function makes scalar fallback a hard error: useful for code where the *whole point* is hardware vectorisation and a scalar loop would silently lose orders of magnitude of throughput.
+
+**WebAssembly SIMD-128 is a first-class lowering target.** WASM exposes a fixed 128-bit vector register file (`v128`) with element types matching every primitive Kāra `Numeric` lane. `Vector[f32, 4]`, `Vector[i32, 4]`, `Vector[i16, 8]`, `Vector[i8, 16]`, `Vector[f64, 2]` all lower to single WASM SIMD-128 instructions on `wasm_browser` and `wasm_wasi` targets. Wider Kāra vectors (e.g., `Vector[f32, 8]`) lower under tier 2 (two `v128` operations combined). The portable-by-guarantee rule applies: WASM hosts without SIMD-128 support drop to scalar fallback automatically. Browser-playground perf benchmarks depend on this being committed — same code, same perf curve story, different ISA.
 
 **Architecture-specific intrinsics.** Beyond the portable surface, target-specific intrinsics — AVX-512 mask shuffles, NEON pairwise adds, SVE predicates — live in platform modules gated by `#[cfg(target_feature = "...")]`. Code that uses them is non-portable by construction, so cfg-gating is mandatory: every direct intrinsic call is in a `#[cfg]`-scoped function. The portable `Vector[T, N]` API never panics on a missing vector unit; cfg-gated intrinsic modules simply don't compile when the target feature is absent.
 
 **GPU mapping.** On the GPU backend, `Vector[T, N]` for `N ∈ {2, 3, 4}` maps directly to SPIR-V `OpTypeVector` / WGSL `vec<N, T>`. Larger `N` lowers to GPU buffer ops with explicit lane-width loops — same auto-fallback principle, different hardware.
 
 **Memory layout.** `Vector[T, N]` is `repr(simd)`-equivalent: `N` contiguous `T` lanes, alignment equal to `align_of[T] * next_pow2(N)`. The layout is FFI-stable for power-of-two `N` (matches `__m128`, `__m256`, NEON / SVE register layouts); non-power-of-two `N` is not FFI-stable — pad to the next power of two and ignore the trailing lanes if interop is required.
+
+**Trait surface.** `Vector[T, N]` exposes the following operations at the language level. Borrowed from Rust's `std::simd` as the v1 baseline; gather/scatter are tier-dependent (cheap on AVX-2 / AVX-512, expensive on NEON):
+
+| Category | Operations |
+|---|---|
+| Construction | `Vector::splat(x)` (broadcast scalar), `Vector::from_array([...])`, `Vector::from_slice(s)` |
+| Element-wise arithmetic | `+`, `-`, `*`, `/`, `%` (per `Numeric` trait) |
+| Element-wise comparison | `lt`, `le`, `gt`, `ge`, `eq`, `ne` → `Mask[N]` |
+| Bitwise | `&`, `\|`, `^`, `!` (integer lanes only) |
+| Horizontal reductions | `reduce_sum`, `reduce_product`, `reduce_max`, `reduce_min`, `reduce_and`, `reduce_or`, `reduce_xor` |
+| Lane access / mutation | `v[i]`, `v.set(i, x)`, `v.replace(i, x)` (returns new vector) |
+| Lane shuffling | `v.shuffle::<[i64; M]>()` (compile-time indices), `v.reverse()`, `v.rotate_lanes_left(n)`, `v.rotate_lanes_right(n)` |
+| Masked load/store | `Vector::load_masked(slice, mask)`, `v.store_masked(slice, mask)` |
+| Conditional select | `mask.select(a, b)` — per-lane choice between two vectors |
+| Conversion | `v.cast::<U>()` (lossy where applicable), saturating-cast variants |
+| Cross product | `v.cross(w)` (`N == 3` only) |
+| Dot product | `v.dot(w) -> T` |
+| Gather / scatter | `Vector::gather(slice, indices)`, `v.scatter(slice_mut, indices)` — **P1 if the target supports native gather/scatter (AVX-2+, AVX-512); P2 otherwise.** Always available semantically; the auto-fallback rule covers the unsupported case. |
+
+The full method-by-method specification lives in the `core::simd` API reference; this table enumerates the surface as a contract.
+
+**`Tensor[T, S]` ↔ `Vector[T, N]` interop.** Iterating a Tensor as a stream of `Vector[T, N]` chunks is the canonical pattern for writing hand-vectorized stdlib kernels (see [`deferred.md § Hand-Vectorized Data-Spine Commitment`](deferred.md#hand-vectorized-data-spine-commitment)). The four-function interop API:
+
+```kara
+// Yields successive Vector[T, N] chunks of a contiguous Tensor view, plus a Slice for the non-multiple tail.
+fn chunks_simd[T, S, const N: i64](t: ref Tensor[T, S]) -> (Iter[Vector[T, N]], Slice[T])
+
+// Mutable counterpart for in-place ops.
+fn chunks_simd_mut[T, S, const N: i64](t: mut ref Tensor[T, S]) -> (Iter[mut ref Vector[T, N]], mut Slice[T])
+
+// Single-vector load/store at a given offset, with mask for the tail.
+fn load_simd[T, const N: i64](t: ref Tensor[T, [?]], offset: i64, mask: Mask[N]) -> Vector[T, N]
+fn store_simd[T, const N: i64](t: mut ref Tensor[T, [?]], offset: i64, mask: Mask[N], v: Vector[T, N])
+```
+
+**Split-borrow handling.** `chunks_simd` returns *both* an iterator over disjoint vector chunks and a `Slice[T]` over the tail — a split borrow against the same Tensor. `Slice[T]` is a borrow form (not an owned thing), and the iterator's `Vector[T, N]` chunks borrow disjoint segments. The implementation verifies the split point is not reachable through both handles simultaneously — same shape as Rust's `split_at_mut`. The user-facing API exposes the split via tuple destructuring; no annotation is required.
+
+**Non-contiguous Tensors.** `chunks_simd` requires `t.is_contiguous()` and panics otherwise — caller must `.contiguous()` first, matching NumPy / PyTorch convention. Non-contiguous SIMD via gather/scatter is a v1.5+ extension (the gather/scatter trait-surface entries above are the substrate).
+
+**Multi-dimensional chunking.** `Tensor[T, [M, N]]` chunks the **last axis** (row-major); the iterator yields rows of vector chunks. Axis-stride-aware SIMD (chunking arbitrary axes) is a v1.5+ extension.
+
+### Multiversioning: `cpu-baseline` and `#[multiversion]`
+
+CPU-feature variance across deployment hardware is handled by two complementary mechanisms:
+
+**1. `cpu-baseline` (project-level, `kara.toml`).** Declares the minimum CPU feature level the produced binary requires. Single binary, no runtime dispatch overhead. Default: `cpu-baseline = "v3"` — covers ~95% of x86 hardware deployed in 2026 (excludes pre-Haswell) and aligns with the recent Linux distro shift (RHEL 9, Ubuntu 23.10+) toward v3-class baselines. On aarch64, the corresponding sweet spot is ARMv8.4-A: Apple M1+ are ARMv8.4+; AWS Graviton 3 is ARMv8.4-A; Graviton 4 is ARMv9-A (a strict superset). Users on M-series Macs and modern Graviton get the v3 baseline automatically.
+
+The `cpu-baseline` knob is **target-agnostic at the surface**; the actual feature implications are per-architecture:
+
+| Knob value | x86_64 (`-march=...`) | aarch64 (`-march=...`) |
+|---|---|---|
+| `"v1"` | `x86-64` (SSE2 baseline) | `armv8-a` (NEON baseline) |
+| `"v2"` | `x86-64-v2` (SSE3 / SSSE3 / SSE4.1 / SSE4.2 / POPCNT) | `armv8.2-a` (FP16, dotprod) |
+| `"v3"` (default) | `x86-64-v3` (AVX / AVX2 / BMI / FMA) | `armv8.4-a` (extended FP16) |
+| `"v4"` | `x86-64-v4` (AVX-512F / BW / CD / DQ / VL) | `armv8.6-a` (BF16, I8MM) |
+
+ARMv9 / SVE / SVE2 as a *programming model* — variable-length SIMD vectors — is out of v1 scope; `Vector[T, N]` is fixed-length by construction and lowers to NEON, not SVE. ARMv8.6-A's BF16 and I8MM extensions cover the practical "modern feature-rich" payoff (Tensor Core-style INT8 matmul, BF16 arithmetic) without entering SVE territory.
+
+**2. `#[target_feature]` / `#[multiversion]` (function-level, opt-in).** For hot kernels — the v67 §3 hand-vectorized data spine — selected functions can ship multiple variants compiled against different feature sets. A dispatcher selects at first call:
+
+```kara
+#[target_feature("avx512f", "avx512bw")]
+fn cosine_similarity_avx512(a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 { ... }
+
+#[multiversion(baseline, "avx2", "avx512f")]
+fn cosine_similarity(a: ref Tensor[f32, [D]], b: ref Tensor[f32, [D]]) -> f32 {
+    // Compiler synthesizes the dispatcher; body is the baseline implementation.
+    ...
+}
+```
+
+`#[multiversion(...)]` is sugar over multiple `#[target_feature(...)]` variants of the same function. The dispatcher is a runtime function-pointer set on first call (ifunc on Linux; manual pointer-swap on macOS / Windows). On aarch64, the analogous attribute names are `#[target_feature("sve2")]`, `#[target_feature("i8mm")]`, `#[target_feature("bf16")]`; same `#[multiversion(...)]` sugar wraps either set.
+
+**ABI / inlining interaction.** Function-multiversioning canonically defeats inlining of the multiversioned function (since the call site doesn't know which variant will run). Mitigated by ensuring the multiversioned function is *itself* the hot kernel — the caller is cold, the callee is hot, so inlining at the call site is low-value.
+
+**Stdlib-internals SIMD policy.** Stdlib implementations may use `Vector[T, N]` and `#[target_feature]` paths internally where doing so provides a measurable improvement on representative workloads. The user-facing API surface remains scalar. Multiversioned variants follow the rules above. See [`design.md § Standard Library`](#standard-library-layers-core--alloc--std).
 
 ---
 
