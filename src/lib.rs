@@ -237,6 +237,33 @@ pub fn provider_escape_check(
     provider_escape::check_provider_escape(program, types)
 }
 
+/// Run a closure on a freshly spawned thread with a 16 MB stack and
+/// return its result. The tree-walk interpreter's `eval_expr_inner` and
+/// `eval_call` are huge match-on-AST functions; debug builds give them
+/// large frames, and each Kāra function call traverses ~8 Rust frames,
+/// so a `fib(10)` (Kāra depth 10) overflows the default 2 MB cargo-test
+/// thread stack on Windows. Lifting the interpreter onto a fat-stack
+/// scoped thread keeps the fix local to the entry points without
+/// instrumenting every recursion site with `stacker::maybe_grow`. Panics
+/// inside the closure propagate back to the caller via `resume_unwind`
+/// so test assertions and runtime panics still surface normally.
+fn run_on_interp_thread<R, F>(f: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    std::thread::scope(|scope| {
+        let handle = std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn_scoped(scope, f)
+            .expect("failed to spawn interpreter thread");
+        match handle.join() {
+            Ok(v) => v,
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    })
+}
+
 /// Run a program through all phases and execute it via the interpreter.
 /// Returns captured output lines (for testing).
 pub fn run_program(source: &str) -> Vec<String> {
@@ -259,26 +286,28 @@ pub fn run_program_with_trace(
 /// (live-range-end placement) tests since the interpreter has no
 /// observable user-`impl Drop` dispatch yet.
 pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
-    let mut parsed = parse(source);
-    assert!(
-        parsed.errors.is_empty(),
-        "Parse errors: {:?}",
-        parsed.errors
-    );
-    let resolved = resolve(&parsed.program);
-    assert!(
-        resolved.errors.is_empty(),
-        "Resolve errors: {:?}",
-        resolved.errors
-    );
-    let typed = typecheck(&parsed.program, &resolved);
-    lower(&mut parsed.program, &typed);
-    let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-    interp.captured_output = Some(Vec::new());
-    interp.run();
-    let output = interp.captured_output.take().unwrap_or_default();
-    let drops = std::mem::take(&mut interp.drop_trace);
-    (output, drops)
+    run_on_interp_thread(|| {
+        let mut parsed = parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "Parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "Resolve errors: {:?}",
+            resolved.errors
+        );
+        let typed = typecheck(&parsed.program, &resolved);
+        lower(&mut parsed.program, &typed);
+        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.captured_output = Some(Vec::new());
+        interp.run();
+        let output = interp.captured_output.take().unwrap_or_default();
+        let drops = std::mem::take(&mut interp.drop_trace);
+        (output, drops)
+    })
 }
 
 /// Run a program with `dbg()` output capture enabled. Returns
@@ -292,30 +321,32 @@ pub fn run_program_with_dbg(
     source: &str,
     mode: interpreter::DbgOutputMode,
 ) -> (Vec<String>, Vec<String>) {
-    let mut parsed = parse(source);
-    assert!(
-        parsed.errors.is_empty(),
-        "Parse errors: {:?}",
-        parsed.errors
-    );
-    let resolved = resolve(&parsed.program);
-    assert!(
-        resolved.errors.is_empty(),
-        "Resolve errors: {:?}",
-        resolved.errors
-    );
-    let typed = typecheck(&parsed.program, &resolved);
-    lower(&mut parsed.program, &typed);
-    let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-    interp.captured_output = Some(Vec::new());
-    interp.captured_dbg = Some(Vec::new());
-    interp.set_source_text(source);
-    interp.set_source_filename("test.kara");
-    interp.set_dbg_output_mode(mode);
-    interp.run();
-    let stdout = interp.captured_output.take().unwrap_or_default();
-    let dbg = interp.captured_dbg.take().unwrap_or_default();
-    (stdout, dbg)
+    run_on_interp_thread(|| {
+        let mut parsed = parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "Parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "Resolve errors: {:?}",
+            resolved.errors
+        );
+        let typed = typecheck(&parsed.program, &resolved);
+        lower(&mut parsed.program, &typed);
+        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.captured_output = Some(Vec::new());
+        interp.captured_dbg = Some(Vec::new());
+        interp.set_source_text(source);
+        interp.set_source_filename("test.kara");
+        interp.set_dbg_output_mode(mode);
+        interp.run();
+        let stdout = interp.captured_output.take().unwrap_or_default();
+        let dbg = interp.captured_dbg.take().unwrap_or_default();
+        (stdout, dbg)
+    })
 }
 
 /// Run a program and return output, runtime errors, error trace, and truncation flag.
@@ -330,29 +361,31 @@ pub fn run_program_full(
     Vec<interpreter::ErrorTraceFrame>,
     bool,
 ) {
-    let mut parsed = parse(source);
-    assert!(
-        parsed.errors.is_empty(),
-        "Parse errors: {:?}",
-        parsed.errors
-    );
-    let resolved = resolve(&parsed.program);
-    assert!(
-        resolved.errors.is_empty(),
-        "Resolve errors: {:?}",
-        resolved.errors
-    );
-    // Type-check but don't abort on errors — the tree-walk interpreter
-    // is dynamically typed and handles generics, partial types, etc.
-    let typed = typecheck(&parsed.program, &resolved);
-    // Operator lowering: rewrite Binary/Unary into trait-method calls.
-    lower(&mut parsed.program, &typed);
-    let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
-    interp.captured_output = Some(Vec::new());
-    interp.run();
-    let trace = interp.error_trace().to_vec();
-    let truncated = interp.error_trace_truncated();
-    let errors = std::mem::take(&mut interp.runtime_errors);
-    let output = interp.captured_output.take().unwrap_or_default();
-    (output, errors, trace, truncated)
+    run_on_interp_thread(|| {
+        let mut parsed = parse(source);
+        assert!(
+            parsed.errors.is_empty(),
+            "Parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "Resolve errors: {:?}",
+            resolved.errors
+        );
+        // Type-check but don't abort on errors — the tree-walk interpreter
+        // is dynamically typed and handles generics, partial types, etc.
+        let typed = typecheck(&parsed.program, &resolved);
+        // Operator lowering: rewrite Binary/Unary into trait-method calls.
+        lower(&mut parsed.program, &typed);
+        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.captured_output = Some(Vec::new());
+        interp.run();
+        let trace = interp.error_trace().to_vec();
+        let truncated = interp.error_trace_truncated();
+        let errors = std::mem::take(&mut interp.runtime_errors);
+        let output = interp.captured_output.take().unwrap_or_default();
+        (output, errors, trace, truncated)
+    })
 }
