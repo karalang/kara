@@ -2401,6 +2401,39 @@ impl Parser {
 
         self.expect(&Token::RightBracket)?;
 
+        // Slice 5 of the `unsafe_op_in_unsafe_fn` epic
+        // (`docs/implementation_checklist/phase-5-diagnostics.md` §
+        // `unsafe_op_in_unsafe_fn` rule, slice 5). Kāra is greenfield —
+        // there is no migration story — so the rule is a hard error with
+        // no opt-out. Reject `#[allow(unsafe_op_in_unsafe_fn)]` at parse
+        // time and redirect the author to the actual fix: wrap the
+        // offending operation in an `unsafe { ... }` block (with a
+        // `// Safety:` comment per the `undocumented_unsafe` lint). The
+        // attribute is recognised in two surface forms — positional
+        // (`#[allow(unsafe_op_in_unsafe_fn)]`, the form anyone would
+        // write) and named (`#[allow(name = unsafe_op_in_unsafe_fn)]`,
+        // theoretical only) — both are caught.
+        if name == "allow"
+            && args.iter().any(|a| {
+                a.name.as_deref() == Some("unsafe_op_in_unsafe_fn")
+                    || a.value
+                        .as_ref()
+                        .map(|v| {
+                            matches!(&v.kind, ExprKind::Identifier(n) if n == "unsafe_op_in_unsafe_fn")
+                        })
+                        .unwrap_or(false)
+            })
+        {
+            self.error(
+                "`#[allow(unsafe_op_in_unsafe_fn)]` is not accepted — the \
+                 `unsafe_op_in_unsafe_fn` rule is a hard error with no opt-out \
+                 (Kāra is greenfield; there is no migration story). Wrap the \
+                 offending operation in an `unsafe { ... }` block instead, and \
+                 add a `// Safety: ...` comment above the block per the \
+                 `undocumented_unsafe` lint.",
+            );
+        }
+
         Some(Attribute {
             span: self.span_from(&start),
             name,

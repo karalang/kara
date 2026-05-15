@@ -1745,6 +1745,63 @@ fn mutual_recursion_groups_json(pipeline: &Pipeline) -> String {
     }
 }
 
+/// Render a `crate::unsafe_lint::LintDiagnostic` in rustc-style format:
+/// the primary line plus optional `= note:` and `= help:` continuation
+/// lines. The `note:` carries the conceptual explanation (e.g. the two
+/// distinct roles of `unsafe`); the `help:` carries the actionable
+/// suggestion (wrap in `unsafe { ... }` and add a `// Safety:` comment).
+fn render_unsafe_lint_diag(diag: &crate::unsafe_lint::LintDiagnostic, filename: &str) {
+    eprintln!(
+        "{}[{}]: {}:{}:{}: {}",
+        if diag.level == crate::unsafe_lint::LintLevel::Error {
+            "error"
+        } else {
+            "warning"
+        },
+        diag.lint_name,
+        filename,
+        diag.span.line,
+        diag.span.column,
+        diag.message
+    );
+    if let Some(note) = &diag.note {
+        eprintln!("   = note: {note}");
+    }
+    if let Some(help) = &diag.help {
+        eprintln!("   = help: {help}");
+    }
+}
+
+/// Render a `crate::must_use_lint::LintDiagnostic` in the same
+/// rustc-style three-piece shape (primary / `= note:` / `= help:`) as
+/// `render_unsafe_lint_diag`. Kept parallel rather than unified because
+/// each lint module currently owns its own `LintDiagnostic` struct (the
+/// pre-existing pattern across `unsafe_lint`, `logical_lint`,
+/// `ffi_lint`); a future lint-registry refactor (`docs/implementation_
+/// checklist/phase-5-diagnostics.md` § "Lint level attributes") would
+/// unify these.
+fn render_must_use_lint_diag(diag: &crate::must_use_lint::LintDiagnostic, filename: &str) {
+    eprintln!(
+        "{}[{}]: {}:{}:{}: {}",
+        if diag.level == crate::must_use_lint::LintLevel::Error {
+            "error"
+        } else {
+            "warning"
+        },
+        diag.lint_name,
+        filename,
+        diag.span.line,
+        diag.span.column,
+        diag.message
+    );
+    if let Some(note) = &diag.note {
+        eprintln!("   = note: {note}");
+    }
+    if let Some(help) = &diag.help {
+        eprintln!("   = help: {help}");
+    }
+}
+
 fn emit_json_output(pipeline: &Pipeline) {
     let diags = collect_diagnostics(pipeline);
     let effects = program_effects_json(pipeline);
@@ -2027,19 +2084,7 @@ fn cmd_run(filename: &str, output: OutputMode, sequential: bool) {
         // Lint: undocumented_unsafe
         for diag in crate::unsafe_lint::check_undocumented_unsafe(&pipeline.parsed.program, &source)
         {
-            eprintln!(
-                "{}[{}]: {}:{}:{}: {}",
-                if diag.level == crate::unsafe_lint::LintLevel::Error {
-                    "error"
-                } else {
-                    "warning"
-                },
-                diag.lint_name,
-                filename,
-                diag.span.line,
-                diag.span.column,
-                diag.message
-            );
+            render_unsafe_lint_diag(&diag, filename);
         }
         // Lint: unsafe_op_in_unsafe_fn (slice 3) — walks every fn body
         // and rejects raw-pointer deref / unsafe-fn calls outside an
@@ -2050,19 +2095,18 @@ fn cmd_run(filename: &str, output: OutputMode, sequential: bool) {
             &pipeline.parsed.program,
             pipeline.typed.as_ref(),
         ) {
-            eprintln!(
-                "{}[{}]: {}:{}:{}: {}",
-                if diag.level == crate::unsafe_lint::LintLevel::Error {
-                    "error"
-                } else {
-                    "warning"
-                },
-                diag.lint_name,
-                filename,
-                diag.span.line,
-                diag.span.column,
-                diag.message
-            );
+            render_unsafe_lint_diag(&diag, filename);
+        }
+        // Lint: must_use (slice 1 — implicit `#[must_use]` for the two
+        // language-level types `Result[T, E]` and `Option[T]`). Walks
+        // every fn body and warns on discarded values of either type at
+        // statement position. Needs typecheck info to recognise the
+        // types from `expr_types`.
+        for diag in crate::must_use_lint::check_implicit_must_use(
+            &pipeline.parsed.program,
+            pipeline.typed.as_ref(),
+        ) {
+            render_must_use_lint_diag(&diag, filename);
         }
         // Lint: ffi_float_eq
         for diag in crate::ffi_lint::check_ffi_float_eq(&pipeline.parsed.program) {

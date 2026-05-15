@@ -440,6 +440,159 @@ fn test_plain_method_call_does_not_trigger() {
     assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
 }
 
+// ── Slice 4: diagnostic shape ────────────────────────────────────────
+//
+// Every `unsafe_op_in_unsafe_fn` diagnostic carries three pieces:
+// (1) a focused primary message pointing at the offending operation,
+// (2) a `help` line suggesting the `unsafe { ... }` wrap + `// Safety:`
+//     comment per the `undocumented_unsafe` lint, and
+// (3) a `note` line distinguishing the two roles of `unsafe` — on `fn` a
+//     precondition declared for callers, and on `{ ... }` a trust
+//     assertion by the implementer. Conflating these is the most common
+//     newcomer mistake the rule is designed to surface, so the note
+//     ships in the *same* diagnostic, not as separate documentation.
+//
+// These tests pin the shape: presence of `help` / `note`, the actionable
+// content of `help` (wrap-in-unsafe + Safety-comment guidance), and the
+// presence of the two-role distinction in `note`.
+
+fn assert_diag_has_slice4_shape(diag: &LintDiagnostic, target_substring_in_help: &str) {
+    let help = diag
+        .help
+        .as_ref()
+        .expect("slice 4: every unsafe_op_in_unsafe_fn diagnostic must carry a `help` line");
+    assert!(
+        help.contains("unsafe {"),
+        "help should suggest wrapping in `unsafe {{ ... }}`, got: {help}"
+    );
+    assert!(
+        help.contains("// Safety:"),
+        "help should suggest adding a `// Safety:` comment, got: {help}"
+    );
+    assert!(
+        help.contains("undocumented_unsafe"),
+        "help should reference the `undocumented_unsafe` lint as the carrier, got: {help}"
+    );
+    assert!(
+        help.contains(target_substring_in_help),
+        "help should reference the offending operation ({target_substring_in_help}), got: {help}"
+    );
+    let note = diag
+        .note
+        .as_ref()
+        .expect("slice 4: every unsafe_op_in_unsafe_fn diagnostic must carry a `note` line");
+    // The note must surface BOTH roles of `unsafe` in the same string so a
+    // first-time reader cannot conflate them: declaration-side precondition
+    // for callers vs. implementer-side trust assertion on a block.
+    assert!(
+        note.contains("`unsafe fn`"),
+        "note should reference `unsafe fn` (declaration side), got: {note}"
+    );
+    assert!(
+        note.contains("`unsafe { ... }`"),
+        "note should reference `unsafe {{ ... }}` (implementer side), got: {note}"
+    );
+    assert!(
+        note.contains("caller"),
+        "note should mention the caller's role, got: {note}"
+    );
+    assert!(
+        note.contains("does not implicitly wrap"),
+        "note should pin the `unsafe fn` body non-wrap rule, got: {note}"
+    );
+}
+
+#[test]
+fn test_raw_pointer_deref_diagnostic_has_slice4_shape() {
+    let diags = lint_op("fn caller(p: *const i64) -> i64 { *p }");
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    let d = &diags[0];
+    assert_eq!(d.level, LintLevel::Error);
+    assert_eq!(d.lint_name, "unsafe_op_in_unsafe_fn");
+    assert!(
+        d.message.contains("raw-pointer dereference"),
+        "primary message should name the operation, got: {}",
+        d.message
+    );
+    assert!(
+        d.message.contains("must be wrapped"),
+        "primary message should state the rule, got: {}",
+        d.message
+    );
+    assert_diag_has_slice4_shape(d, "pointer is valid");
+}
+
+#[test]
+fn test_unsafe_fn_call_diagnostic_has_slice4_shape() {
+    let diags = lint_op(
+        "unsafe fn raw() {}\n\
+         fn caller() { raw(); }",
+    );
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    let d = &diags[0];
+    assert_eq!(d.level, LintLevel::Error);
+    assert_eq!(d.lint_name, "unsafe_op_in_unsafe_fn");
+    assert!(
+        d.message.contains("call to `unsafe fn raw`"),
+        "primary message should name the callee, got: {}",
+        d.message
+    );
+    assert!(
+        d.message.contains("must be wrapped"),
+        "primary message should state the rule, got: {}",
+        d.message
+    );
+    // The help line names the specific callee so the Safety: comment author
+    // knows which precondition set they are asserting.
+    assert_diag_has_slice4_shape(d, "`raw`'s preconditions");
+}
+
+#[test]
+fn test_unsafe_method_call_diagnostic_has_slice4_shape() {
+    let diags = lint_op(
+        "struct S { x: i64 }\n\
+         impl S { unsafe fn raw_read(self) -> i64 { self.x } }\n\
+         fn caller(s: S) -> i64 { s.raw_read() }",
+    );
+    assert_eq!(diags.len(), 1, "expected one error, got: {diags:?}");
+    let d = &diags[0];
+    assert_eq!(d.level, LintLevel::Error);
+    assert_eq!(d.lint_name, "unsafe_op_in_unsafe_fn");
+    assert!(
+        d.message.contains("call to `unsafe fn S.raw_read`"),
+        "primary message should name `Type.method`, got: {}",
+        d.message
+    );
+    assert!(
+        d.message.contains("must be wrapped"),
+        "primary message should state the rule, got: {}",
+        d.message
+    );
+    assert_diag_has_slice4_shape(d, "`S.raw_read`'s preconditions");
+}
+
+#[test]
+fn test_undocumented_unsafe_diags_have_no_help_or_note() {
+    // Slice 4's `help` / `note` carrier is wired through the same
+    // `LintDiagnostic` struct, but it is scoped to `unsafe_op_in_unsafe_fn`.
+    // The `undocumented_unsafe` lint shares the struct only as a transport;
+    // it must continue to emit single-line diagnostics until its own polish
+    // pass lands. This test pins that scoping decision.
+    let diags = lint("fn f() {\n    unsafe { }\n}");
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].lint_name, "undocumented_unsafe");
+    assert!(
+        diags[0].help.is_none(),
+        "undocumented_unsafe should not carry a help line yet, got: {:?}",
+        diags[0].help
+    );
+    assert!(
+        diags[0].note.is_none(),
+        "undocumented_unsafe should not carry a note line yet, got: {:?}",
+        diags[0].note
+    );
+}
+
 #[test]
 fn test_unsafe_block_wraps_multiple_ops() {
     // Inside a single `unsafe { }`, multiple unsafe ops are all accepted —

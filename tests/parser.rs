@@ -2121,6 +2121,132 @@ fn test_unsafe_link_section_round_trips_through_formatter() {
     assert_eq!(formatted, src, "round-trip mismatch:\n{formatted}");
 }
 
+// ── Slice 5 of the `unsafe_op_in_unsafe_fn` epic ──────────────────────
+//
+// Kāra is greenfield — there is no migration story — so the rule is a
+// hard error with no opt-out. `#[allow(unsafe_op_in_unsafe_fn)]` is
+// rejected at the attribute parser with a focused diagnostic that
+// redirects the author to the actual fix (wrap the offending operation
+// in an `unsafe { ... }` block).
+//
+// Scope: only `#[allow]` is rejected on the rule's name. The companion
+// `#[warn]` / `#[deny]` / `#[expect]` lint-level attributes are a
+// separate future feature (`docs/implementation_checklist/phase-5-
+// diagnostics.md` § "Lint level attributes"); when that feature lands
+// it will reject all four uniformly on `unsafe_op_in_unsafe_fn` via the
+// same hard-rule channel.
+
+#[test]
+fn test_allow_unsafe_op_in_unsafe_fn_rejected_with_focused_diagnostic() {
+    let (_, errors) = parse_with_errors(
+        "#[allow(unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { *p }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection of #[allow(unsafe_op_in_unsafe_fn)]"
+    );
+    assert!(
+        errors_contain(&errors, "unsafe_op_in_unsafe_fn"),
+        "diagnostic should name the rule; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "hard error"),
+        "diagnostic should state the rule is a hard error; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "unsafe {"),
+        "diagnostic should redirect to wrapping in `unsafe {{ ... }}`; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "// Safety:"),
+        "diagnostic should mention the `// Safety:` comment per the \
+         undocumented_unsafe lint; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_allow_unsafe_op_in_unsafe_fn_rejected_on_impl_method() {
+    // The rejection fires from the attribute parser, so the position the
+    // attribute appears in (free fn, impl method, etc.) does not change
+    // the outcome — this test pins that the parser surface is uniform.
+    let (_, errors) = parse_with_errors(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+             #[allow(unsafe_op_in_unsafe_fn)]\n\
+             unsafe fn raw_read(self) -> i64 { self.x }\n\
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection on impl-method attribute"
+    );
+    assert!(
+        errors_contain(&errors, "unsafe_op_in_unsafe_fn"),
+        "diagnostic should name the rule on impl-method site; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_allow_other_lints_still_accepted() {
+    // Slice 5 is scoped to `unsafe_op_in_unsafe_fn`. Other lint names
+    // continue to parse cleanly — `#[allow(undocumented_unsafe)]` is the
+    // documented suppression mechanism for the older lint and must
+    // remain a no-op at parse time.
+    let prog = parse_ok(
+        "#[allow(undocumented_unsafe)]\n\
+         fn f() { unsafe { } }",
+    );
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected function"),
+    };
+    assert_eq!(f.attributes.len(), 1);
+    assert_eq!(f.attributes[0].name, "allow");
+    assert_eq!(f.attributes[0].args.len(), 1);
+}
+
+#[test]
+fn test_allow_with_multiple_lints_including_unsafe_op_rejected() {
+    // The rejection is per-argument: if `unsafe_op_in_unsafe_fn` appears
+    // anywhere in an `#[allow(...)]` list, the whole attribute is
+    // rejected. Tests the iter-any branch of the check.
+    let (_, errors) = parse_with_errors(
+        "#[allow(undocumented_unsafe, unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { *p }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection when `unsafe_op_in_unsafe_fn` appears in a \
+         multi-lint `#[allow(...)]`"
+    );
+    assert!(
+        errors_contain(&errors, "unsafe_op_in_unsafe_fn"),
+        "diagnostic should name the offending rule; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_deny_unsafe_op_in_unsafe_fn_still_accepted() {
+    // Slice 5 only rejects `#[allow]` on the rule. `#[deny]` (and the
+    // not-yet-recognised `#[warn]` / `#[expect]`) parse as plain
+    // attributes today; when the lint-level-attributes feature lands it
+    // will reject all four uniformly via the hard-rule channel. Until
+    // then, `#[deny(unsafe_op_in_unsafe_fn)]` is redundant (the rule is
+    // already deny-by-default) but not parse-rejected — this pins that
+    // current scoping decision.
+    let prog = parse_ok(
+        "#[deny(unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { unsafe { *p } }",
+    );
+    let f = match &prog.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected function"),
+    };
+    assert_eq!(f.attributes.len(), 1);
+    assert_eq!(f.attributes[0].name, "deny");
+}
+
 #[test]
 fn test_bare_extern_fn_at_module_scope_rejected() {
     // The pre-v1 shorthand `extern "C" fn name(...);` (without an enclosing

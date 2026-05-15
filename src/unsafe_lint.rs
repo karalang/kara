@@ -39,7 +39,27 @@ pub struct LintDiagnostic {
     pub span: Span,
     pub message: String,
     pub lint_name: String,
+    /// Actionable suggestion: how to fix the offending operation. Rendered
+    /// as a `= help:` continuation line under the primary diagnostic.
+    pub help: Option<String>,
+    /// Conceptual explanation: why the rule exists or what subtle invariant
+    /// the reader may be missing. Rendered as a `= note:` continuation line.
+    pub note: Option<String>,
 }
+
+/// Shared explanation of the two roles `unsafe` plays in the language. Emitted
+/// as the `note:` line on every `unsafe_op_in_unsafe_fn` diagnostic so that a
+/// first-time reader who hits the error in any of its forms (raw-pointer
+/// deref, top-level `unsafe fn` call, impl-method `unsafe fn` call) sees the
+/// declaration-side / implementer-side distinction in the same message — the
+/// two roles are easy to conflate, and the diagnostic is where the
+/// disambiguation matters most.
+const UNSAFE_TWO_ROLES_NOTE: &str =
+    "`unsafe` has two distinct roles — on a function (`unsafe fn`) it declares \
+     a precondition the *caller* must uphold before calling; on a block \
+     (`unsafe { ... }`) the writer asserts the operation's preconditions hold \
+     here. `unsafe fn` does not implicitly wrap its body — every unsafe \
+     operation in the body still needs its own `unsafe { ... }` block.";
 
 /// Run the `undocumented_unsafe` lint over the parsed program.
 ///
@@ -90,6 +110,8 @@ fn check_extern_block_safety_doc(block: &ExternBlock, deny: bool, diags: &mut Ve
                       section explaining the trust contract for its imports"
                 .to_string(),
             lint_name: "undocumented_unsafe".to_string(),
+            help: None,
+            note: None,
         });
     }
 }
@@ -171,6 +193,8 @@ fn check_unsafe_span(span: &Span, lines: &[&str], deny: bool, diags: &mut Vec<Li
             span: span.clone(),
             message: "unsafe block is not preceded by a `// Safety:` comment".to_string(),
             lint_name: "undocumented_unsafe".to_string(),
+            help: None,
+            note: None,
         });
     }
 }
@@ -549,11 +573,17 @@ impl OpWalker<'_> {
                     self.diags.push(LintDiagnostic {
                         level: LintLevel::Error,
                         span: expr.span.clone(),
-                        message: "raw-pointer dereference requires an `unsafe { ... }` block — \
-                                  `unsafe fn` declares a precondition for callers but does not \
-                                  implicitly wrap its body"
+                        message: "raw-pointer dereference must be wrapped in an \
+                                  `unsafe { ... }` block"
                             .to_string(),
                         lint_name: "unsafe_op_in_unsafe_fn".to_string(),
+                        help: Some(
+                            "wrap the dereference in `unsafe { ... }` and add a \
+                             `// Safety: ...` comment above the block explaining why the \
+                             pointer is valid (per the `undocumented_unsafe` lint)."
+                                .to_string(),
+                        ),
+                        note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
                     });
                 }
                 self.walk_expr(operand, in_unsafe);
@@ -566,11 +596,17 @@ impl OpWalker<'_> {
                                 level: LintLevel::Error,
                                 span: expr.span.clone(),
                                 message: format!(
-                                    "call to `unsafe fn {name}` requires an `unsafe {{ ... }}` \
-                                     block — the callee declares a precondition the caller must \
-                                     assert"
+                                    "call to `unsafe fn {name}` must be wrapped in an \
+                                     `unsafe {{ ... }}` block"
                                 ),
                                 lint_name: "unsafe_op_in_unsafe_fn".to_string(),
+                                help: Some(format!(
+                                    "wrap the call in `unsafe {{ ... }}` and add a \
+                                     `// Safety: ...` comment above the block explaining why \
+                                     `{name}`'s preconditions are satisfied (per the \
+                                     `undocumented_unsafe` lint)."
+                                )),
+                                note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
                             });
                         }
                     }
@@ -592,11 +628,17 @@ impl OpWalker<'_> {
                                 level: LintLevel::Error,
                                 span: expr.span.clone(),
                                 message: format!(
-                                    "call to `unsafe fn {recv}.{m}` requires an `unsafe \
-                                     {{ ... }}` block — the callee declares a precondition the \
-                                     caller must assert"
+                                    "call to `unsafe fn {recv}.{m}` must be wrapped in an \
+                                     `unsafe {{ ... }}` block"
                                 ),
                                 lint_name: "unsafe_op_in_unsafe_fn".to_string(),
+                                help: Some(format!(
+                                    "wrap the call in `unsafe {{ ... }}` and add a \
+                                     `// Safety: ...` comment above the block explaining why \
+                                     `{recv}.{m}`'s preconditions are satisfied (per the \
+                                     `undocumented_unsafe` lint)."
+                                )),
+                                note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
                             });
                         }
                     }

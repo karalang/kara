@@ -19,6 +19,7 @@ pub mod logical_lint;
 pub mod lowering;
 pub mod manifest;
 pub mod module;
+pub mod must_use_lint;
 pub mod ownership;
 pub mod parser;
 pub mod prelude;
