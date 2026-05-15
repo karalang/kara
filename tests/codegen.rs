@@ -5537,6 +5537,78 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_i32_i64_mono_symbol_for_char_key() {
+        // Slice 2.1 — `Map[char, i64]` (char lowers to LLVM i32)
+        // now routes through the `karac_map_i32_i64_*` mono symbol
+        // family. The same family will serve `Map[i32, i64]` if
+        // anyone instantiates it — both keys mangle to `i32` and
+        // share the FNV-1a-over-4-bytes hash and 4-byte slot
+        // layout, so dedupe is correct. We bind the char to a
+        // local first because `ExprKind::CharLit` lowers to
+        // `0_i64` in `compile_expr` (pre-existing gap from Slice
+        // 1b's chars work) — the for-loop-bound char is i32 as
+        // expected, so we route a real i32 key through mono.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut m: Map[char, i64] = Map.new();
+    for c in "abc".chars() {
+        m.insert(c, 1_i64);
+    }
+    println(m.len());
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_map_i32_i64_insert_old"),
+            "mono insert symbol for i32 key should be emitted; IR:\n{}",
+            ir
+        );
+        // Calling convention is value-pass with i32 key + i64 val.
+        let define_line = ir
+            .lines()
+            .find(|l| l.contains("@karac_map_i32_i64_insert_old") && l.starts_with("define"))
+            .unwrap_or_else(|| panic!("could not find define for i32 mono insert; IR:\n{}", ir));
+        assert!(
+            define_line.contains("linkonce_odr"),
+            "i32 mono insert should have linkonce_odr linkage; saw: {}",
+            define_line
+        );
+        assert!(
+            define_line.contains("i32") && define_line.contains("i64"),
+            "i32 mono insert signature should carry i32 key + i64 val types; saw: {}",
+            define_line
+        );
+        // Extract body; hash should now go through karac_hash_i32
+        // (mangle-token-named helper), not karac_hash_i64.
+        let mut in_body = false;
+        let mut body_lines: Vec<&str> = Vec::new();
+        for line in ir.lines() {
+            if line.starts_with("define") && line.contains("@karac_map_i32_i64_insert_old") {
+                in_body = true;
+                continue;
+            }
+            if in_body {
+                if line.starts_with('}') {
+                    break;
+                }
+                body_lines.push(line);
+            }
+        }
+        let body = body_lines.join("\n");
+        assert!(
+            body.contains("@karac_hash_i32"),
+            "i32 mono insert fast path should call karac_hash_i32 directly; body:\n{}",
+            body
+        );
+        assert!(
+            body.contains("icmp eq i32"),
+            "i32 mono insert should inline icmp eq on i32; body:\n{}",
+            body
+        );
+    }
+
+    #[test]
     fn test_ir_map_i64_i64_get_uses_mono_symbol_with_inline_probe() {
         // Slice 1b.3 — Map[i64, i64].get routes through the mono
         // `karac_map_i64_i64_get` symbol with the same inline-probe

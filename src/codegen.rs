@@ -13270,21 +13270,24 @@ impl<'ctx> Codegen<'ctx> {
                 // forwarding to the erased runtime today; Slice 1b.2b
                 // adds the inline fast path.
                 //
-                // Gate on the *actually-compiled* value types rather
-                // than the side-table-derived `key_ty` / `val_ty`.
-                // Map vars that miss `map_key_types` /
-                // `map_val_types` registration default to `i64` from
-                // the fallback at the top of this fn — for the
-                // value-pass calling convention that's an LLVM
-                // verifier error when the real value is e.g. i32
-                // (char in `Map[char, i64]`). The erased path uses
-                // ptrs so it tolerates the side-table gap; mono
-                // doesn't.
-                let key_val_is_i64 = key_val.get_type() == i64_t.into();
-                let val_val_is_i64 = val_val.get_type() == i64_t.into();
+                // Gate the *compiled value types* against the side-
+                // table-derived `key_ty` / `val_ty`. They must
+                // agree before routing to mono — the mono fn's
+                // calling convention is value-pass per K/V, so a
+                // mismatch is an LLVM verifier error. The erased
+                // path uses pointers so it tolerates side-table
+                // shape drift; mono doesn't. Also catches the
+                // pre-existing `ExprKind::CharLit → 0_i64` gap
+                // where literal chars compile to i64 zero in
+                // `compile_expr` (per Slice 1b notes); the
+                // resulting i64 key won't match an i32 key_ty
+                // and falls through to erased — same behavior as
+                // pre-mono.
+                let key_val_matches = key_val.get_type() == key_ty;
+                let val_val_matches = val_val.get_type() == val_ty;
                 let existed = if self.should_use_mono_map_for(key_ty, val_ty)
-                    && key_val_is_i64
-                    && val_val_is_i64
+                    && key_val_matches
+                    && val_val_matches
                 {
                     let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
                     self.builder
@@ -13370,8 +13373,8 @@ impl<'ctx> Codegen<'ctx> {
                 let key_slot = self.create_entry_alloca(fn_val, "map.get.key", key_ty);
                 let val_slot = self.create_entry_alloca(fn_val, "map.get.val", val_ty);
                 self.builder.build_store(key_slot, key_val).unwrap();
-                let key_val_is_i64 = key_val.get_type() == i64_t.into();
-                let found = if self.should_use_mono_map_for(key_ty, val_ty) && key_val_is_i64 {
+                let key_val_matches = key_val.get_type() == key_ty;
+                let found = if self.should_use_mono_map_for(key_ty, val_ty) && key_val_matches {
                     let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
                     self.builder
                         .build_call(
@@ -22768,18 +22771,29 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Gate predicate: does this K/V tuple route through the
-    /// monomorphized Map path? Slice 1 ships `Map[i64, i64]` only;
-    /// every other tuple falls through to the erased `karac_map_*`
-    /// runtime per § 3.6 coexist-during-migration. Slices 2-4 widen
-    /// the predicate; Slice 5 deletes the erased fallback entirely.
+    /// monomorphized Map path? Every tuple that returns `false`
+    /// falls through to the erased `karac_map_*` runtime per § 3.6
+    /// coexist-during-migration. Slice 5 deletes the erased
+    /// fallback entirely.
+    ///
+    /// Slice 1 shipped `Map[i64, i64]`. Slice 2 adds the `i32`
+    /// key family — that covers `Map[char, i64]` (the LeetCode #3
+    /// kata's K/V tuple, since `char` lowers to LLVM `i32` per
+    /// Slice 2.0) and `Map[i32, i64]` if anyone instantiates it.
+    /// Both mangle identically (`i32_i64`) and share a single
+    /// mono symbol — the K/V slot layout and FNV-1a-over-4-bytes
+    /// hash are byte-identical regardless of which surface name
+    /// the user wrote.
     fn should_use_mono_map_for(
         &self,
         key_ty: BasicTypeEnum<'ctx>,
         val_ty: BasicTypeEnum<'ctx>,
     ) -> bool {
+        let i32_t = self.context.i32_type();
         let i64_t = self.context.i64_type();
-        matches!(key_ty, BasicTypeEnum::IntType(t) if t == i64_t)
-            && matches!(val_ty, BasicTypeEnum::IntType(t) if t == i64_t)
+        let key_ok = matches!(key_ty, BasicTypeEnum::IntType(t) if t == i32_t || t == i64_t);
+        let val_ok = matches!(val_ty, BasicTypeEnum::IntType(t) if t == i64_t);
+        key_ok && val_ok
     }
 
     /// Lazily emit the monomorphized `Map[K, V]` method-symbol family
@@ -22844,14 +22858,13 @@ impl<'ctx> Codegen<'ctx> {
         };
 
         // insert_old: fast path inlines load-factor check, FNV-1a
-        // hash (via direct call to the existing `karac_hash_i64`
+        // hash (via direct call to the existing `karac_hash_<K>`
         // helper — same hash as the erased fallback so cross-path
         // consistency holds while coexist is in effect), linear
         // probe with empty / tombstone / occupied switch, and
-        // inline i64 eq. Slow path (resize-needed branch and
-        // safety fallback for the impossible exhausted-probe case)
-        // forwards to `karac_map_insert_old` extern. Slice 1b.3
-        // will mirror this shape for `get`.
+        // inline K-typed icmp eq. Slow path (resize-needed branch
+        // and safety fallback for the impossible exhausted-probe
+        // case) forwards to `karac_map_insert_old` extern.
         let insert_name = format!("karac_map_{cache_key}_insert_old");
         let insert_old_fn = match self.module.get_function(&insert_name) {
             Some(f) => f,
@@ -22864,7 +22877,7 @@ impl<'ctx> Codegen<'ctx> {
                 let f =
                     self.module
                         .add_function(&insert_name, insert_ty, Some(Linkage::LinkOnceODR));
-                self.emit_mono_map_i64_i64_insert_old_body(f);
+                self.emit_mono_map_insert_old_body(f, key_ty, val_ty);
                 f
             }
         };
@@ -22885,7 +22898,7 @@ impl<'ctx> Codegen<'ctx> {
                 let f = self
                     .module
                     .add_function(&get_name, get_ty, Some(Linkage::LinkOnceODR));
-                self.emit_mono_map_i64_i64_get_body(f);
+                self.emit_mono_map_get_body(f, key_ty, val_ty);
                 f
             }
         };
@@ -22904,33 +22917,51 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Emit the fast-path-inlined body of the monomorphized
-    /// `karac_map_i64_i64_insert_old` function. The shape mirrors
+    /// `karac_map_<K>_<V>_insert_old` function. The shape mirrors
     /// the runtime's `KaracMap::insert` algorithm
     /// (`runtime/src/map.rs:166`) — load-factor branch first,
     /// then linear probe — but inlines the hash (via direct call
-    /// to `karac_hash_i64`, the same FNV-1a helper the erased
+    /// to `karac_hash_<K>`, the same FNV-1a helper the erased
     /// fallback's function-pointer hash dispatches to) and the eq
-    /// (direct i64 icmp), dropping the function-pointer
-    /// indirection that defines the erasure tax.
+    /// (direct icmp on the K LLVM type), dropping the function-
+    /// pointer indirection that defines the erasure tax.
     ///
-    /// On entry, the function has signature `i1 (ptr map, i64
-    /// key, i64 val, ptr out_old_val)`. On exit, every path
-    /// terminates with `ret i1` (the existed bit).
-    fn emit_mono_map_i64_i64_insert_old_body(&mut self, f: FunctionValue<'ctx>) {
+    /// Slice 1b emitted this for (i64, i64) only; Slice 2 generalizes
+    /// to any (i32 / i64 key) × (i64 val) pair so `Map[char, i64]`
+    /// can share the shape — char lowers to LLVM i32 (Slice 2.0).
+    ///
+    /// On entry the function has signature `i1 (ptr map, K key,
+    /// V val, ptr out_old_val)`. On exit, every path terminates
+    /// with `ret i1` (the existed bit).
+    fn emit_mono_map_insert_old_body(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) {
         let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
         let bool_t = self.context.bool_type();
+        let key_int_ty = key_ty.into_int_type();
+        let val_int_ty = val_ty.into_int_type();
+        let key_size = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+        let val_size = (val_int_ty.get_bit_width() as u64).div_ceil(8);
+        let kv_size_bytes = key_size + val_size;
 
         let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
         let key_arg = f.get_nth_param(1).unwrap().into_int_value();
         let val_arg = f.get_nth_param(2).unwrap().into_int_value();
         let out_old_arg = f.get_nth_param(3).unwrap().into_pointer_value();
 
-        // Ensure `karac_hash_i64` exists at the module level so the
-        // fast path can call it directly. `emit_hash_fn_for_type`
-        // already memoizes via `module.get_function`, and saves/
-        // restores its own builder position.
-        let hash_fn = self.emit_hash_fn_for_type("i64", i64_t.into());
+        // Match the mangle-token used by `mono_map_cache_key` so the
+        // helper name aligns with the symbol family. Both `char` (4-
+        // byte) and `i32` keys hash via `karac_hash_i32` here even
+        // though the erased fallback's stored function-pointer might
+        // be `karac_hash_char` — both are FNV-1a over 4 bytes and
+        // produce identical output for identical input, so cross-
+        // path consistency holds.
+        let hash_name = self.llvm_type_to_mangle_str(key_ty);
+        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
 
         let entry_bb = self.context.append_basic_block(f, "entry");
         let slow_bb = self.context.append_basic_block(f, "slow_path");
@@ -23016,8 +23047,8 @@ impl<'ctx> Codegen<'ctx> {
 
         // ── slow_path: forward to erased karac_map_insert_old ─────
         self.builder.position_at_end(slow_bb);
-        let slow_key_slot = self.builder.build_alloca(i64_t, "slow.key.slot").unwrap();
-        let slow_val_slot = self.builder.build_alloca(i64_t, "slow.val.slot").unwrap();
+        let slow_key_slot = self.builder.build_alloca(key_ty, "slow.key.slot").unwrap();
+        let slow_val_slot = self.builder.build_alloca(val_ty, "slow.val.slot").unwrap();
         self.builder.build_store(slow_key_slot, key_arg).unwrap();
         self.builder.build_store(slow_val_slot, val_arg).unwrap();
         let slow_existed = self
@@ -23074,10 +23105,10 @@ impl<'ctx> Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // Compute hash via direct call to karac_hash_i64. Stack-
+        // Compute hash via direct call to karac_hash_<K>. Stack-
         // alloca + store + call matches the existing erased path's
         // hash exactly (same FNV-1a basis + prime, same byte order).
-        let hash_key_slot = self.builder.build_alloca(i64_t, "hash.key.slot").unwrap();
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
         self.builder.build_store(hash_key_slot, key_arg).unwrap();
         let hash = self
             .builder
@@ -23163,7 +23194,7 @@ impl<'ctx> Codegen<'ctx> {
             .build_select(ft_set_val, ft_val, slot, "target.slot")
             .unwrap()
             .into_int_value();
-        let kv_size = i64_t.const_int(16, false); // sizeof(i64) + sizeof(i64)
+        let kv_size = i64_t.const_int(kv_size_bytes, false);
         let target_off = self
             .builder
             .build_int_mul(target_slot, kv_size, "target.off")
@@ -23179,7 +23210,7 @@ impl<'ctx> Codegen<'ctx> {
                 .build_in_bounds_gep(
                     i8_t,
                     target_kv_p,
-                    &[i64_t.const_int(8, false)],
+                    &[i64_t.const_int(key_size, false)],
                     "target.val.p",
                 )
                 .unwrap()
@@ -23248,7 +23279,7 @@ impl<'ctx> Codegen<'ctx> {
         };
         let slot_key = self
             .builder
-            .build_load(i64_t, slot_kv_p, "slot.key")
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
             .unwrap()
             .into_int_value();
         let key_match = self
@@ -23271,12 +23302,17 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(match_found_bb);
         let slot_val_p = unsafe {
             self.builder
-                .build_in_bounds_gep(i8_t, slot_kv_p, &[i64_t.const_int(8, false)], "slot.val.p")
+                .build_in_bounds_gep(
+                    i8_t,
+                    slot_kv_p,
+                    &[i64_t.const_int(key_size, false)],
+                    "slot.val.p",
+                )
                 .unwrap()
         };
         let old_val = self
             .builder
-            .build_load(i64_t, slot_val_p, "old.val")
+            .build_load(val_int_ty, slot_val_p, "old.val")
             .unwrap()
             .into_int_value();
         self.builder.build_store(out_old_arg, old_val).unwrap();
@@ -23288,8 +23324,8 @@ impl<'ctx> Codegen<'ctx> {
         // ── exhausted: unreachable under correct resize policy,
         //               fall back to erased extern for safety ──────
         self.builder.position_at_end(exhausted_bb);
-        let safe_key_slot = self.builder.build_alloca(i64_t, "safe.key.slot").unwrap();
-        let safe_val_slot = self.builder.build_alloca(i64_t, "safe.val.slot").unwrap();
+        let safe_key_slot = self.builder.build_alloca(key_ty, "safe.key.slot").unwrap();
+        let safe_val_slot = self.builder.build_alloca(val_ty, "safe.val.slot").unwrap();
         self.builder.build_store(safe_key_slot, key_arg).unwrap();
         self.builder.build_store(safe_val_slot, val_arg).unwrap();
         let safe_existed = self
@@ -23311,26 +23347,41 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Emit the fast-path-inlined body of the monomorphized
-    /// `karac_map_i64_i64_get` function. Mirrors `KaracMap::lookup`
+    /// `karac_map_<K>_<V>_get` function. Mirrors `KaracMap::lookup`
     /// + `KaracMap::get` from `runtime/src/map.rs:120` — but inlines
-    /// hash + probe + i64 eq + the val load on match. No
+    /// hash + probe + K-typed eq + the val load on match. No
     /// load-factor / resize branch (get never resizes); no
     /// tombstone-tracking PHI (get doesn't write).
     ///
-    /// On entry the function has signature `i1 (ptr map, i64 key,
+    /// Slice 1b emitted this for (i64, i64) only; Slice 2 generalizes
+    /// to any (i32 / i64 key) × (i64 val) pair so `Map[char, i64]`
+    /// shares the shape.
+    ///
+    /// On entry the function has signature `i1 (ptr map, K key,
     /// ptr out_val)`. Returns true and writes the value through
     /// `out_val` on match; returns false otherwise, leaving
     /// `out_val` untouched.
-    fn emit_mono_map_i64_i64_get_body(&mut self, f: FunctionValue<'ctx>) {
+    fn emit_mono_map_get_body(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) {
         let i8_t = self.context.i8_type();
         let i64_t = self.context.i64_type();
         let bool_t = self.context.bool_type();
+        let key_int_ty = key_ty.into_int_type();
+        let val_int_ty = val_ty.into_int_type();
+        let key_size = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+        let val_size = (val_int_ty.get_bit_width() as u64).div_ceil(8);
+        let kv_size_bytes = key_size + val_size;
 
         let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
         let key_arg = f.get_nth_param(1).unwrap().into_int_value();
         let out_val_arg = f.get_nth_param(2).unwrap().into_pointer_value();
 
-        let hash_fn = self.emit_hash_fn_for_type("i64", i64_t.into());
+        let hash_name = self.llvm_type_to_mangle_str(key_ty);
+        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
 
         let entry_bb = self.context.append_basic_block(f, "entry");
         let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
@@ -23391,7 +23442,7 @@ impl<'ctx> Codegen<'ctx> {
             .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
             .unwrap()
             .into_pointer_value();
-        let hash_key_slot = self.builder.build_alloca(i64_t, "hash.key.slot").unwrap();
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
         self.builder.build_store(hash_key_slot, key_arg).unwrap();
         let hash = self
             .builder
@@ -23470,9 +23521,9 @@ impl<'ctx> Codegen<'ctx> {
             .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
             .unwrap();
 
-        // ── eq.check: inline icmp eq on i64 key ──────────────────
+        // ── eq.check: inline icmp eq on K key ────────────────────
         self.builder.position_at_end(eq_check_bb);
-        let kv_size = i64_t.const_int(16, false);
+        let kv_size = i64_t.const_int(kv_size_bytes, false);
         let slot_off = self
             .builder
             .build_int_mul(slot, kv_size, "slot.off")
@@ -23484,7 +23535,7 @@ impl<'ctx> Codegen<'ctx> {
         };
         let slot_key = self
             .builder
-            .build_load(i64_t, slot_kv_p, "slot.key")
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
             .unwrap()
             .into_int_value();
         let key_match = self
@@ -23504,12 +23555,17 @@ impl<'ctx> Codegen<'ctx> {
         self.builder.position_at_end(match_found_bb);
         let slot_val_p = unsafe {
             self.builder
-                .build_in_bounds_gep(i8_t, slot_kv_p, &[i64_t.const_int(8, false)], "slot.val.p")
+                .build_in_bounds_gep(
+                    i8_t,
+                    slot_kv_p,
+                    &[i64_t.const_int(key_size, false)],
+                    "slot.val.p",
+                )
                 .unwrap()
         };
         let val = self
             .builder
-            .build_load(i64_t, slot_val_p, "val")
+            .build_load(val_int_ty, slot_val_p, "val")
             .unwrap()
             .into_int_value();
         self.builder.build_store(out_val_arg, val).unwrap();
