@@ -22210,6 +22210,17 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        // Slice 0.a sub-step 2 — codegen monomorphization-request bound
+        // enforcement (defense-in-depth). The typechecker discharges
+        // bounds at every call site (`discharge_type_bounds` /
+        // `normalize_bounds_into_where_clause`); this hook fires only
+        // for paths that reach codegen with a still-unsatisfied bound
+        // (a future cross-module path, or a typechecker-internal call
+        // that bypassed the discharge). Covers built-in trait names
+        // against primitive LLVM types only — user-trait-on-user-type
+        // requires an impl-table threading slice that isn't built yet.
+        self.verify_bounds_at_codegen(&generic_fn, &subst)?;
+
         // Mangle a unique name for this specialization (e.g. `max$i64`).
         let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
 
@@ -22442,6 +22453,111 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
         mangled
+    }
+
+    /// Slice 0.a sub-step 2 — codegen monomorphization-request bound
+    /// enforcement.
+    ///
+    /// Walks both inline-form (`fn f[T: Bound]`) and where-clause
+    /// (`fn f[T] where T: Bound`) bounds against the concrete LLVM
+    /// substitution. Returns `Err` when a primitive LLVM type
+    /// demonstrably fails to satisfy a built-in trait bound (e.g.
+    /// `f64` for `Hash` / `Eq` / `Ord`), matching the typechecker's
+    /// `type_supports_*` shape on primitives.
+    ///
+    /// **Scope is intentionally narrow.** The typechecker discharges
+    /// bound violations at every call site (`discharge_type_bounds`),
+    /// so this hook is purely defense-in-depth for paths that reach
+    /// codegen without a typechecker pass (no such path exists in the
+    /// single-CU compiler today, but cross-module compilation would
+    /// open one). Coverage:
+    /// - Built-in traits (`Hash` / `Eq` / `PartialEq` / `Ord` /
+    ///   `PartialOrd` / `Display` / `Clone` / `Copy`) checked against
+    ///   primitive LLVM types via `llvm_type_satisfies_trait`.
+    /// - Non-primitive LLVM types (pointers, structs) and unknown
+    ///   trait names fall through permissively — verifying those
+    ///   requires plumbing the typechecker's impl table into codegen
+    ///   (deferred; tracked as a hard-stop trigger in
+    ///   `phase-7-codegen.md § Trait-bounds-at-codegen enforcement`).
+    fn verify_bounds_at_codegen(
+        &self,
+        generic_fn: &Function,
+        subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> Result<(), String> {
+        if let Some(gp) = &generic_fn.generic_params {
+            for param in &gp.params {
+                if param.bounds.is_empty() {
+                    continue;
+                }
+                let Some(concrete) = subst.get(&param.name) else {
+                    continue;
+                };
+                for bound in &param.bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.llvm_type_satisfies_trait(*concrete, trait_name) {
+                        return Err(format!(
+                            "trait bound `{}: {}` is not satisfied at monomorphization site for `{}` \
+                             (concrete type `{}` does not implement `{}`)",
+                            param.name,
+                            trait_name,
+                            generic_fn.name,
+                            self.llvm_type_to_mangle_str(*concrete),
+                            trait_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(wc) = &generic_fn.where_clause {
+            for constraint in &wc.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = constraint
+                else {
+                    continue;
+                };
+                let Some(concrete) = subst.get(type_name) else {
+                    continue;
+                };
+                for bound in bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.llvm_type_satisfies_trait(*concrete, trait_name) {
+                        return Err(format!(
+                            "trait bound `{}: {}` is not satisfied at monomorphization site for `{}` \
+                             (concrete type `{}` does not implement `{}`)",
+                            type_name,
+                            trait_name,
+                            generic_fn.name,
+                            self.llvm_type_to_mangle_str(*concrete),
+                            trait_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Conservative LLVM-type-vs-built-in-trait predicate used by
+    /// `verify_bounds_at_codegen`. Mirrors the typechecker's
+    /// `type_supports_*` helpers but operates on `BasicTypeEnum`
+    /// instead of `Type`. Permissive on non-primitive shapes
+    /// (`PointerType`, `StructType`) and unknown trait names — those
+    /// cases are the typechecker's responsibility today; the codegen
+    /// hook only catches the unambiguous primitive violations
+    /// (f32/f64 failing `Hash` / `Eq` / `Ord`).
+    fn llvm_type_satisfies_trait(&self, ty: BasicTypeEnum<'ctx>, trait_name: &str) -> bool {
+        match trait_name {
+            "Hash" | "Eq" | "Ord" => !matches!(ty, BasicTypeEnum::FloatType(_)),
+            "PartialEq" | "PartialOrd" | "Display" | "Clone" | "Copy" => true,
+            _ => true,
+        }
     }
 
     /// Produce a stable string token for an LLVM type suitable for name mangling.
