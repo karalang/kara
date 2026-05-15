@@ -16,7 +16,8 @@
 //! have all shipped against this skeleton.
 
 use crate::ast::{
-    EffectVerbKind, EnumDef, Function, Item, StructDef, StructField, TypeExpr, Variant, VariantKind,
+    EffectVerbKind, EnumDef, ExternFunction, ExternItem, Function, Item, StructDef, StructField,
+    TypeExpr, Variant, VariantKind,
 };
 use crate::module::{ModulePath, ProgramTree};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -110,15 +111,17 @@ pub fn build_docs(
         if module.is_synthetic {
             continue;
         }
-        for item in &module.items {
-            let Some(doc) = item_doc(item) else { continue };
-            let name = item_name(item).to_string();
+        for d in documentables(&module.items) {
+            let Some(doc) = documentable_doc(d) else {
+                continue;
+            };
+            let name = documentable_name(d).to_string();
             let module_dir = module_output_dir(output_dir, &module.path);
             let file_path = module_dir.join(format!("{name}.html"));
             index_entries.push(IndexEntry {
                 module_path: module.path.clone(),
                 item_name: name,
-                kind: item_kind(item),
+                kind: documentable_kind(d),
                 relative_href: relative_href(&file_path, output_dir),
                 summary: summarize_doc(doc),
             });
@@ -143,11 +146,13 @@ pub fn build_docs(
         let module_dir = module_output_dir(output_dir, &module.path);
         let mut module_had_docs = false;
 
-        for item in &module.items {
-            let Some(doc) = item_doc(item) else { continue };
-            let name = item_name(item).to_string();
-            let kind = item_kind(item);
-            let signature = render_signature(item, &module.path, effects);
+        for d in documentables(&module.items) {
+            let Some(doc) = documentable_doc(d) else {
+                continue;
+            };
+            let name = documentable_name(d).to_string();
+            let kind = documentable_kind(d);
+            let signature = render_signature(d, &module.path, effects);
 
             if !module_had_docs {
                 create_dir_all(&module_dir)?;
@@ -156,7 +161,7 @@ pub fn build_docs(
 
             let file_path = module_dir.join(format!("{name}.html"));
             let page_dir = file_path.parent().unwrap_or(output_dir).to_path_buf();
-            let extras = render_item_extras(item, &link_table, &page_dir, output_dir);
+            let extras = render_item_extras(d, &link_table, &page_dir, output_dir);
             let sidebar = render_sidebar(&index_entries, &module_docs, &page_dir, output_dir);
             let html = render_item_page_with_links(
                 &name,
@@ -306,51 +311,100 @@ struct IndexEntry {
     summary: String,
 }
 
-/// Pull the doc comment off an item, if any. Returns `None` for kinds
-/// the MVP doesn't render (impl blocks, use decls, etc.) and for items
-/// with no `///` prose.
-fn item_doc(item: &Item) -> Option<&str> {
-    match item {
-        Item::Function(f) => f.doc_comment.as_deref(),
-        Item::StructDef(s) => s.doc_comment.as_deref(),
-        Item::EnumDef(e) => e.doc_comment.as_deref(),
-        Item::TraitDef(t) => t.doc_comment.as_deref(),
-        Item::ConstDecl(c) => c.doc_comment.as_deref(),
-        Item::TypeAlias(t) => t.doc_comment.as_deref(),
-        Item::DistinctType(d) => d.doc_comment.as_deref(),
-        Item::ExternFunction(e) => e.doc_comment.as_deref(),
-        Item::LayoutDef(l) => l.doc_comment.as_deref(),
-        _ => None,
+/// One documentable view in a module's source order. `Top` is a
+/// top-level item; `ExternBlockChild` is one item drawn from inside an
+/// `unsafe extern "ABI" { ... }` block. Each child gets its own doc
+/// page exactly like the pre-block standalone `extern "ABI" fn ...;`
+/// shape did, so the `///` prose on a foreign-import declaration still
+/// surfaces in `karac doc`.
+#[derive(Copy, Clone)]
+enum Documentable<'a> {
+    Top(&'a Item),
+    ExternBlockChild {
+        abi: &'a str,
+        function: &'a ExternFunction,
+    },
+}
+
+/// Walk `items` in source order, expanding each `Item::ExternBlock`
+/// into one `Documentable` per child. The block itself does not
+/// currently produce a documentable view — block-level `///` prose
+/// (the `# Safety` carrier) lands with the `undocumented_unsafe`
+/// block-level lint slice (slice 5 of the FFI hardening epic).
+fn documentables(items: &[Item]) -> Vec<Documentable<'_>> {
+    let mut out = Vec::with_capacity(items.len());
+    for item in items {
+        match item {
+            Item::ExternBlock(block) => {
+                for ext in &block.items {
+                    match ext {
+                        ExternItem::Function(f) => out.push(Documentable::ExternBlockChild {
+                            abi: &block.abi,
+                            function: f,
+                        }),
+                    }
+                }
+            }
+            _ => out.push(Documentable::Top(item)),
+        }
+    }
+    out
+}
+
+/// Pull the doc comment off a documentable, if any. Returns `None` for
+/// kinds the MVP doesn't render (impl blocks, use decls, etc.) and for
+/// items with no `///` prose.
+fn documentable_doc(d: Documentable<'_>) -> Option<&str> {
+    match d {
+        Documentable::Top(item) => match item {
+            Item::Function(f) => f.doc_comment.as_deref(),
+            Item::StructDef(s) => s.doc_comment.as_deref(),
+            Item::EnumDef(e) => e.doc_comment.as_deref(),
+            Item::TraitDef(t) => t.doc_comment.as_deref(),
+            Item::ConstDecl(c) => c.doc_comment.as_deref(),
+            Item::TypeAlias(t) => t.doc_comment.as_deref(),
+            Item::DistinctType(d) => d.doc_comment.as_deref(),
+            Item::ExternFunction(e) => e.doc_comment.as_deref(),
+            Item::LayoutDef(l) => l.doc_comment.as_deref(),
+            _ => None,
+        },
+        Documentable::ExternBlockChild { function, .. } => function.doc_comment.as_deref(),
     }
 }
 
-fn item_name(item: &Item) -> &str {
-    match item {
-        Item::Function(f) => &f.name,
-        Item::StructDef(s) => &s.name,
-        Item::EnumDef(e) => &e.name,
-        Item::TraitDef(t) => &t.name,
-        Item::ConstDecl(c) => &c.name,
-        Item::TypeAlias(t) => &t.name,
-        Item::DistinctType(d) => &d.name,
-        Item::ExternFunction(e) => &e.name,
-        Item::LayoutDef(l) => &l.name,
-        _ => "",
+fn documentable_name(d: Documentable<'_>) -> &str {
+    match d {
+        Documentable::Top(item) => match item {
+            Item::Function(f) => &f.name,
+            Item::StructDef(s) => &s.name,
+            Item::EnumDef(e) => &e.name,
+            Item::TraitDef(t) => &t.name,
+            Item::ConstDecl(c) => &c.name,
+            Item::TypeAlias(t) => &t.name,
+            Item::DistinctType(d) => &d.name,
+            Item::ExternFunction(e) => &e.name,
+            Item::LayoutDef(l) => &l.name,
+            _ => "",
+        },
+        Documentable::ExternBlockChild { function, .. } => &function.name,
     }
 }
 
-fn item_kind(item: &Item) -> ItemKind {
-    match item {
-        Item::Function(_) => ItemKind::Function,
-        Item::StructDef(_) => ItemKind::Struct,
-        Item::EnumDef(_) => ItemKind::Enum,
-        Item::TraitDef(_) => ItemKind::Trait,
-        Item::ConstDecl(_) => ItemKind::Const,
-        Item::TypeAlias(_) => ItemKind::TypeAlias,
-        Item::DistinctType(_) => ItemKind::DistinctType,
-        Item::ExternFunction(_) => ItemKind::ExternFn,
-        Item::LayoutDef(_) => ItemKind::Layout,
-        _ => ItemKind::Function,
+fn documentable_kind(d: Documentable<'_>) -> ItemKind {
+    match d {
+        Documentable::Top(item) => match item {
+            Item::Function(_) => ItemKind::Function,
+            Item::StructDef(_) => ItemKind::Struct,
+            Item::EnumDef(_) => ItemKind::Enum,
+            Item::TraitDef(_) => ItemKind::Trait,
+            Item::ConstDecl(_) => ItemKind::Const,
+            Item::TypeAlias(_) => ItemKind::TypeAlias,
+            Item::DistinctType(_) => ItemKind::DistinctType,
+            Item::ExternFunction(_) => ItemKind::ExternFn,
+            Item::LayoutDef(_) => ItemKind::Layout,
+            _ => ItemKind::Function,
+        },
+        Documentable::ExternBlockChild { .. } => ItemKind::ExternFn,
     }
 }
 
@@ -363,10 +417,16 @@ fn item_kind(item: &Item) -> ItemKind {
 /// `with <effects>` clause (e.g. ` with reads(File) + writes(Stdout)`).
 /// Private fns and items without an entry in the map are unchanged.
 fn render_signature(
-    item: &Item,
+    d: Documentable<'_>,
     module_path: &[String],
     effects: Option<&EffectsByItem>,
 ) -> String {
+    let item = match d {
+        Documentable::Top(item) => item,
+        Documentable::ExternBlockChild { abi, function } => {
+            return format!("extern \"{abi}\" fn {}", function.name);
+        }
+    };
     match item {
         Item::Function(f) => {
             let params = f
@@ -413,11 +473,18 @@ fn render_signature(
 /// that don't carry public surface here (functions, consts, etc. — the
 /// signature line already shows everything).
 fn render_item_extras(
-    item: &Item,
+    d: Documentable<'_>,
     link_table: &HashMap<String, String>,
     page_dir: &Path,
     doc_root: &Path,
 ) -> String {
+    let item = match d {
+        Documentable::Top(item) => item,
+        // Foreign-import declarations don't carry per-param `///` prose
+        // through the parser today; matches pre-block standalone-form
+        // parity. Lift if param-doc surface lands for extern fns.
+        Documentable::ExternBlockChild { .. } => return String::new(),
+    };
     match item {
         Item::StructDef(s) => render_struct_extras(s, link_table, page_dir, doc_root),
         Item::EnumDef(e) => render_enum_extras(e, link_table, page_dir, doc_root),
@@ -963,8 +1030,8 @@ fn build_link_table(tree: &ProgramTree) -> HashMap<String, String> {
         if module.is_synthetic {
             continue;
         }
-        for item in &module.items {
-            let name = item_name(item);
+        for d in documentables(&module.items) {
+            let name = documentable_name(d);
             if name.is_empty() {
                 continue;
             }

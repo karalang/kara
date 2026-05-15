@@ -1271,3 +1271,124 @@ fn doc_outside_project_emits_manifest_error() {
         "expected a manifest-related diagnostic; got: {stderr}"
     );
 }
+
+// ── Extern block child surfacing ─────────────────────────────────────────
+// `unsafe extern "ABI" { ... }` blocks expand into per-child documentables
+// so foreign-import declarations surface their `///` prose exactly like the
+// pre-block standalone form did. The block itself does not produce a doc
+// page yet — that lands with the slice-5 `undocumented_unsafe` block-level
+// surface (FFI hardening epic).
+
+#[test]
+fn doc_emits_html_for_extern_block_child_function() {
+    let scratch = ScratchDir::new("extern-block-child");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"ffi\"\nedition = \"2026\"\n",
+    );
+    scratch.write(
+        "src/main.kara",
+        "effect resource FileSystem;\n\
+         unsafe extern \"C\" {\n\
+             /// Closes the file descriptor.\n\
+             pub fn close(fd: i32) -> i32 writes(FileSystem);\n\
+         }\n\
+         fn main() {}\n",
+    );
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(out.status.success(), "karac doc failed: stderr={stderr}");
+
+    let doc_root = scratch.root().join("dist").join("doc");
+    let item_page = doc_root.join("close.html");
+    assert!(
+        item_page.exists(),
+        "expected per-child page at {item_page:?}"
+    );
+    let html = fs::read_to_string(&item_page).unwrap();
+    assert!(html.contains("Closes the file descriptor."));
+    assert!(html.contains("extern &quot;C&quot; fn close"));
+    // The kind tag uses the existing ExternFn label.
+    assert!(html.contains("extern fn"));
+
+    // Index lists the extern child like any other documented item.
+    let index_html = fs::read_to_string(doc_root.join("index.html")).unwrap();
+    assert!(index_html.contains("close"));
+}
+
+#[test]
+fn doc_emits_per_child_pages_for_multi_item_extern_block() {
+    let scratch = ScratchDir::new("extern-block-multi");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"ffi_multi\"\nedition = \"2026\"\n",
+    );
+    scratch.write(
+        "src/main.kara",
+        "unsafe extern \"C\" {\n\
+             /// Returns the current pid.\n\
+             pub fn getpid() -> i32;\n\
+             pub fn undocumented_helper() -> i32;\n\
+             /// Returns the parent pid.\n\
+             pub fn getppid() -> i32;\n\
+         }\n\
+         fn main() {}\n",
+    );
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let doc_root = scratch.root().join("dist").join("doc");
+    assert!(doc_root.join("getpid.html").exists());
+    assert!(doc_root.join("getppid.html").exists());
+    // Undocumented sibling is skipped — same rule as top-level items.
+    assert!(!doc_root.join("undocumented_helper.html").exists());
+
+    let getpid_html = fs::read_to_string(doc_root.join("getpid.html")).unwrap();
+    assert!(getpid_html.contains("Returns the current pid."));
+}
+
+#[test]
+fn doc_resolves_cross_reference_to_extern_block_child() {
+    // A `[close]` reference in another item's prose should rewrite to a
+    // link pointing at `close.html` because the project's `unsafe extern`
+    // block defines `close` and the link table walks the block's children.
+    let scratch = ScratchDir::new("extern-xref");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"ffi_xref\"\nedition = \"2026\"\n",
+    );
+    scratch.write(
+        "src/main.kara",
+        "unsafe extern \"C\" {\n\
+             /// Closes the descriptor.\n\
+             pub fn close(fd: i32) -> i32;\n\
+         }\n\
+         /// Calls into [close] under the hood.\n\
+         pub fn shutdown(fd: i32) -> i32 { close(fd) }\n\
+         fn main() {}\n",
+    );
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let html = fs::read_to_string(scratch.root().join("dist/doc/shutdown.html")).unwrap();
+    assert!(
+        html.contains("href=\"close.html\""),
+        "expected resolved link to close.html; got:\n{html}"
+    );
+    assert!(html.contains(">close</a>"));
+}
