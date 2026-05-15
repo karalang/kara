@@ -1275,9 +1275,10 @@ fn doc_outside_project_emits_manifest_error() {
 // ── Extern block child surfacing ─────────────────────────────────────────
 // `unsafe extern "ABI" { ... }` blocks expand into per-child documentables
 // so foreign-import declarations surface their `///` prose exactly like the
-// pre-block standalone form did. The block itself does not produce a doc
-// page yet — that lands with the slice-5 `undocumented_unsafe` block-level
-// surface (FFI hardening epic).
+// pre-block standalone form did. Block-level `///` prose (the `# Safety`
+// carrier the `undocumented_unsafe` lint reads) is inlined at the top of
+// each child's rendered page — same carrier shared by lint and renderer,
+// no separate block-level page (slice 5b, FFI hardening epic).
 
 #[test]
 fn doc_emits_html_for_extern_block_child_function() {
@@ -1391,4 +1392,96 @@ fn doc_resolves_cross_reference_to_extern_block_child() {
         "expected resolved link to close.html; got:\n{html}"
     );
     assert!(html.contains(">close</a>"));
+}
+
+#[test]
+fn doc_inlines_block_level_doc_on_each_child_page() {
+    // Block-level `///` prose (carrying `# Safety`) shows up on every
+    // documented child page, prepended to the child's own prose. This
+    // is slice 5b of the unsafe-extern hardening epic: same carrier the
+    // `undocumented_unsafe` lint reads (`ExternBlock.doc_comment`), now
+    // surfaced through the renderer too.
+    let scratch = ScratchDir::new("extern-block-doc-inline");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"ffi_doc\"\nedition = \"2026\"\n",
+    );
+    scratch.write(
+        "src/main.kara",
+        "/// libc string utilities.\n\
+         ///\n\
+         /// # Safety\n\
+         ///\n\
+         /// Callers must pass valid NUL-terminated pointers.\n\
+         unsafe extern \"C\" {\n\
+             /// Returns string length.\n\
+             pub fn strlen(s: i64) -> i64;\n\
+         }\n\
+         fn main() {}\n",
+    );
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let html = fs::read_to_string(scratch.root().join("dist/doc/strlen.html")).unwrap();
+    assert!(
+        html.contains("Callers must pass valid NUL-terminated pointers."),
+        "expected block-level Safety prose inlined on strlen page; got:\n{html}"
+    );
+    assert!(
+        html.contains("Returns string length."),
+        "expected child's own prose still rendered; got:\n{html}"
+    );
+    // Block-level `# Safety` header survives rendering (the `#` becomes
+    // an `<h1>` or `<h2>` depending on the markdown renderer). Just look
+    // for the Safety text adjacent to a heading tag.
+    assert!(
+        html.contains("Safety"),
+        "expected `Safety` heading from block-level prose; got:\n{html}"
+    );
+}
+
+#[test]
+fn doc_block_level_doc_alone_still_generates_child_page() {
+    // A block has prose but the child function has none. The child
+    // page is generated anyway because the block's safety contract is
+    // documentation that applies to every import in the block — every
+    // child deserves a landing page where the contract is reachable.
+    let scratch = ScratchDir::new("extern-block-doc-alone");
+    scratch.write(
+        "kara.toml",
+        "[package]\nname = \"ffi_doc_alone\"\nedition = \"2026\"\n",
+    );
+    scratch.write(
+        "src/main.kara",
+        "/// # Safety\n\
+         ///\n\
+         /// All imports require initialised state.\n\
+         unsafe extern \"C\" {\n\
+             pub fn raw_op(x: i32) -> i32;\n\
+         }\n\
+         fn main() {}\n",
+    );
+
+    let out = karac_bin()
+        .arg("doc")
+        .current_dir(scratch.root())
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+
+    let page = scratch.root().join("dist/doc/raw_op.html");
+    assert!(
+        page.exists(),
+        "expected raw_op.html even though only the block has prose"
+    );
+    let html = fs::read_to_string(&page).unwrap();
+    assert!(
+        html.contains("All imports require initialised state."),
+        "expected inherited block prose on raw_op page; got:\n{html}"
+    );
 }

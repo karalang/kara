@@ -20,6 +20,7 @@ use crate::ast::{
     StructField, TypeExpr, Variant, VariantKind,
 };
 use crate::module::{ModulePath, ProgramTree};
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
@@ -123,7 +124,7 @@ pub fn build_docs(
                 item_name: name,
                 kind: documentable_kind(d),
                 relative_href: relative_href(&file_path, output_dir),
-                summary: summarize_doc(doc),
+                summary: summarize_doc(&doc),
             });
         }
     }
@@ -167,7 +168,7 @@ pub fn build_docs(
                 &name,
                 kind,
                 &signature,
-                doc,
+                &doc,
                 &extras,
                 &sidebar,
                 &link_table,
@@ -319,36 +320,53 @@ struct IndexEntry {
 /// page exactly like the pre-block standalone `extern "ABI" fn ...;`
 /// shape did, so the `///` prose on a foreign-import declaration still
 /// surfaces in `karac doc`.
+///
+/// `block_doc` on the extern-block variants holds the enclosing
+/// `ExternBlock.doc_comment` so each child page can surface the block's
+/// `# Safety` contract alongside the child's own prose. Same carrier
+/// the `undocumented_unsafe` lint reads (`src/unsafe_lint.rs`) — authors
+/// write the safety justification once and both the lint and the
+/// renderer consume it.
 #[derive(Copy, Clone)]
 enum Documentable<'a> {
     Top(&'a Item),
     ExternBlockChild {
         abi: &'a str,
         function: &'a ExternFunction,
+        block_doc: Option<&'a str>,
     },
     ExternBlockOpaqueType {
         opaque_type: &'a OpaqueTypeDecl,
+        block_doc: Option<&'a str>,
     },
 }
 
 /// Walk `items` in source order, expanding each `Item::ExternBlock`
-/// into one `Documentable` per child. The block itself does not
-/// currently produce a documentable view — block-level `///` prose
-/// (the `# Safety` carrier) lands with the `undocumented_unsafe`
-/// block-level lint slice (slice 5 of the FFI hardening epic).
+/// into one `Documentable` per child. The block itself does not produce
+/// a separate documentable view — block-level `///` prose is threaded
+/// through each child's `block_doc` field and inlined at the top of the
+/// child's rendered page. This makes the safety contract reachable for
+/// every documented import without introducing a separate URL whose
+/// naming, link-table key, and sidebar entry would all be open design
+/// questions (slice 5b of the FFI hardening epic, phase-5-diagnostics.md).
 fn documentables(items: &[Item]) -> Vec<Documentable<'_>> {
     let mut out = Vec::with_capacity(items.len());
     for item in items {
         match item {
             Item::ExternBlock(block) => {
+                let block_doc = block.doc_comment.as_deref();
                 for ext in &block.items {
                     match ext {
                         ExternItem::Function(f) => out.push(Documentable::ExternBlockChild {
                             abi: &block.abi,
                             function: f,
+                            block_doc,
                         }),
                         ExternItem::OpaqueType(o) => {
-                            out.push(Documentable::ExternBlockOpaqueType { opaque_type: o })
+                            out.push(Documentable::ExternBlockOpaqueType {
+                                opaque_type: o,
+                                block_doc,
+                            })
                         }
                     }
                 }
@@ -359,25 +377,49 @@ fn documentables(items: &[Item]) -> Vec<Documentable<'_>> {
     out
 }
 
-/// Pull the doc comment off a documentable, if any. Returns `None` for
-/// kinds the MVP doesn't render (impl blocks, use decls, etc.) and for
-/// items with no `///` prose.
-fn documentable_doc(d: Documentable<'_>) -> Option<&str> {
+/// Pull the effective doc-comment off a documentable, if any. Returns
+/// `None` for kinds the MVP doesn't render (impl blocks, use decls,
+/// etc.) and for items with no `///` prose. For extern-block children,
+/// the block-level `///` prose is prepended to the child's own prose so
+/// the safety contract surfaces on every documented child page. When
+/// only one of the two is present, returns it borrowed without
+/// allocation; when both are present, returns an owned concatenation
+/// joined by a blank line so the child markdown still parses cleanly.
+fn documentable_doc(d: Documentable<'_>) -> Option<Cow<'_, str>> {
     match d {
-        Documentable::Top(item) => match item {
-            Item::Function(f) => f.doc_comment.as_deref(),
-            Item::StructDef(s) => s.doc_comment.as_deref(),
-            Item::EnumDef(e) => e.doc_comment.as_deref(),
-            Item::TraitDef(t) => t.doc_comment.as_deref(),
-            Item::ConstDecl(c) => c.doc_comment.as_deref(),
-            Item::TypeAlias(t) => t.doc_comment.as_deref(),
-            Item::DistinctType(d) => d.doc_comment.as_deref(),
-            Item::ExternFunction(e) => e.doc_comment.as_deref(),
-            Item::LayoutDef(l) => l.doc_comment.as_deref(),
-            _ => None,
-        },
-        Documentable::ExternBlockChild { function, .. } => function.doc_comment.as_deref(),
-        Documentable::ExternBlockOpaqueType { opaque_type } => opaque_type.doc_comment.as_deref(),
+        Documentable::Top(item) => doc_for_top_item(item).map(Cow::Borrowed),
+        Documentable::ExternBlockChild {
+            function,
+            block_doc,
+            ..
+        } => combine_doc(block_doc, function.doc_comment.as_deref()),
+        Documentable::ExternBlockOpaqueType {
+            opaque_type,
+            block_doc,
+        } => combine_doc(block_doc, opaque_type.doc_comment.as_deref()),
+    }
+}
+
+fn doc_for_top_item(item: &Item) -> Option<&str> {
+    match item {
+        Item::Function(f) => f.doc_comment.as_deref(),
+        Item::StructDef(s) => s.doc_comment.as_deref(),
+        Item::EnumDef(e) => e.doc_comment.as_deref(),
+        Item::TraitDef(t) => t.doc_comment.as_deref(),
+        Item::ConstDecl(c) => c.doc_comment.as_deref(),
+        Item::TypeAlias(t) => t.doc_comment.as_deref(),
+        Item::DistinctType(d) => d.doc_comment.as_deref(),
+        Item::ExternFunction(e) => e.doc_comment.as_deref(),
+        Item::LayoutDef(l) => l.doc_comment.as_deref(),
+        _ => None,
+    }
+}
+
+fn combine_doc<'a>(block_doc: Option<&'a str>, own_doc: Option<&'a str>) -> Option<Cow<'a, str>> {
+    match (block_doc, own_doc) {
+        (None, None) => None,
+        (None, Some(c)) | (Some(c), None) => Some(Cow::Borrowed(c)),
+        (Some(b), Some(c)) => Some(Cow::Owned(format!("{b}\n\n{c}"))),
     }
 }
 
@@ -396,7 +438,7 @@ fn documentable_name(d: Documentable<'_>) -> &str {
             _ => "",
         },
         Documentable::ExternBlockChild { function, .. } => &function.name,
-        Documentable::ExternBlockOpaqueType { opaque_type } => &opaque_type.name,
+        Documentable::ExternBlockOpaqueType { opaque_type, .. } => &opaque_type.name,
     }
 }
 
@@ -434,10 +476,10 @@ fn render_signature(
 ) -> String {
     let item = match d {
         Documentable::Top(item) => item,
-        Documentable::ExternBlockChild { abi, function } => {
+        Documentable::ExternBlockChild { abi, function, .. } => {
             return format!("extern \"{abi}\" fn {}", function.name);
         }
-        Documentable::ExternBlockOpaqueType { opaque_type } => {
+        Documentable::ExternBlockOpaqueType { opaque_type, .. } => {
             return format!("extern type {}", opaque_type.name);
         }
     };
