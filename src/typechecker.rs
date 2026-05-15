@@ -2511,11 +2511,12 @@ pub struct TypeEnv {
     /// Derived traits for each `distinct type` declaration.
     pub distinct_types: HashMap<String, HashSet<String>>,
     /// Names of opaque foreign types declared inside `unsafe extern "ABI" { ... }`
-    /// blocks (`type Foo;`). Tracked so type-resolution can distinguish
-    /// these from unknown names (slice 1) and so the future use-site
-    /// polish can emit `E_OPAQUE_TYPE_REQUIRES_INDIRECTION` /
-    /// `E_OPAQUE_TYPE_NO_FIELDS` / `E_OPAQUE_TYPE_NO_KNOWN_SIZE` from
-    /// design.md § Opaque Foreign Types (slice 1b).
+    /// blocks (`type Foo;`). Consulted by `lower_type_expr_inner` for
+    /// `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`, by `infer_field_access` for
+    /// `E_OPAQUE_TYPE_NO_FIELDS`, and by `env_add_impl` for
+    /// `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS` (slice 1b). Slice 1
+    /// (registration only) shipped 2026-05-14; slice 1b (use-site
+    /// precision) shipped alongside.
     pub opaque_foreign_types: HashSet<String>,
     pub functions: HashMap<String, FunctionSig>,
     pub constants: HashMap<String, Type>,
@@ -4300,23 +4301,67 @@ impl<'a> TypeChecker<'a> {
     // ── lower_type_expr ─────────────────────────────────────────
 
     fn lower_type_expr(&mut self, ty: &TypeExpr, generic_scope: &[String]) -> Type {
+        // Top-level entry: by default the type is in a sized-by-value
+        // position. Slice 1b's `E_OPAQUE_TYPE_REQUIRES_INDIRECTION` check
+        // flips `parent_is_ref` to `true` only when descending through
+        // `TypeKind::Ref` / `TypeKind::MutRef`, so opaque-foreign-type names
+        // are accepted at `ref Foo` / `mut ref Foo` and rejected everywhere
+        // else (fn params/return, struct fields, enum payloads, let
+        // bindings, generic args, tuples, arrays, etc.).
+        self.lower_type_expr_inner(ty, generic_scope, false)
+    }
+
+    fn lower_type_expr_inner(
+        &mut self,
+        ty: &TypeExpr,
+        generic_scope: &[String],
+        parent_is_ref: bool,
+    ) -> Type {
         match &ty.kind {
-            TypeKind::Path(path) => self.lower_path_type(path, generic_scope),
+            TypeKind::Path(path) => {
+                let lowered = self.lower_path_type(path, generic_scope);
+                // Slice 1b: opaque foreign types declared via `unsafe extern
+                // "ABI" { type Foo; }` have no known size and cannot appear
+                // by value. `parent_is_ref` is `true` only when the
+                // immediate parent is `Ref` / `MutRef`, so `Vec[Foo]` (Foo
+                // by-value inside Vec) and `ref Vec[Foo]` (Foo still
+                // by-value inside Vec) both correctly emit; `ref Foo` and
+                // `mut ref Foo` do not. The lowered type is returned
+                // unchanged so downstream phases see the user's intent for
+                // recovery purposes.
+                if !parent_is_ref {
+                    if let Type::Named { name, .. } = &lowered {
+                        if self.env.opaque_foreign_types.contains(name) {
+                            self.type_error(
+                                format!(
+                                    "error[E_OPAQUE_TYPE_REQUIRES_INDIRECTION]: opaque \
+                                     foreign type '{name}' has no known size and cannot \
+                                     appear by value here; wrap it in `ref {name}` / \
+                                     `mut ref {name}` to use it through indirection"
+                                ),
+                                ty.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
+                lowered
+            }
             TypeKind::Tuple(types) => Type::Tuple(
                 types
                     .iter()
-                    .map(|t| self.lower_type_expr(t, generic_scope))
+                    .map(|t| self.lower_type_expr_inner(t, generic_scope, false))
                     .collect(),
             ),
             TypeKind::Array { element, .. } => {
                 Type::Array {
-                    element: Box::new(self.lower_type_expr(element, generic_scope)),
+                    element: Box::new(self.lower_type_expr_inner(element, generic_scope, false)),
                     size: ConstArg::Literal(0), // const eval deferred
                 }
             }
             TypeKind::Pointer { is_mut, inner } => Type::Pointer {
                 is_mut: *is_mut,
-                inner: Box::new(self.lower_type_expr(inner, generic_scope)),
+                inner: Box::new(self.lower_type_expr_inner(inner, generic_scope, false)),
             },
             TypeKind::FnType {
                 params,
@@ -4326,11 +4371,11 @@ impl<'a> TypeChecker<'a> {
             } => {
                 let param_types: Vec<Type> = params
                     .iter()
-                    .map(|t| self.lower_type_expr(t, generic_scope))
+                    .map(|t| self.lower_type_expr_inner(t, generic_scope, false))
                     .collect();
                 let ret = return_type
                     .as_ref()
-                    .map(|t| self.lower_type_expr(t, generic_scope))
+                    .map(|t| self.lower_type_expr_inner(t, generic_scope, false))
                     .unwrap_or(Type::Unit);
                 if *is_once {
                     Type::OnceFunction {
@@ -4344,17 +4389,25 @@ impl<'a> TypeChecker<'a> {
                     }
                 }
             }
-            TypeKind::Ref(inner) => Type::Ref(Box::new(self.lower_type_expr(inner, generic_scope))),
-            TypeKind::MutRef(inner) => {
-                Type::MutRef(Box::new(self.lower_type_expr(inner, generic_scope)))
-            }
+            TypeKind::Ref(inner) => Type::Ref(Box::new(self.lower_type_expr_inner(
+                inner,
+                generic_scope,
+                true,
+            ))),
+            TypeKind::MutRef(inner) => Type::MutRef(Box::new(self.lower_type_expr_inner(
+                inner,
+                generic_scope,
+                true,
+            ))),
             TypeKind::MutSlice(element) => Type::Slice {
-                element: Box::new(self.lower_type_expr(element, generic_scope)),
+                element: Box::new(self.lower_type_expr_inner(element, generic_scope, false)),
                 mutable: true,
             },
-            TypeKind::Weak(inner) => {
-                Type::Weak(Box::new(self.lower_type_expr(inner, generic_scope)))
-            }
+            TypeKind::Weak(inner) => Type::Weak(Box::new(self.lower_type_expr_inner(
+                inner,
+                generic_scope,
+                false,
+            ))),
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,
         }
@@ -6069,6 +6122,42 @@ impl<'a> TypeChecker<'a> {
             .map(|gp| gp.params.iter().map(|p| p.name.clone()).collect())
             .unwrap_or_default();
 
+        // Slice 1b: `impl Foo { ... }` and `impl Trait for Foo` are both
+        // rejected when `Foo` is an opaque foreign type — opaque types have
+        // no Kāra-visible methods or trait implementations. We check this
+        // before `lower_type_expr` is called on the target so the user
+        // doesn't see a duplicate `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`
+        // diagnostic on the same span. Bail before `add_impl` so the impl
+        // doesn't register and produce downstream confusion.
+        if let TypeKind::Path(path) = &imp.target_type.kind {
+            if path.segments.len() == 1 {
+                let target_name = &path.segments[0];
+                if self.env.opaque_foreign_types.contains(target_name) {
+                    let prefix = match &imp.trait_name {
+                        Some(tp) => format!(
+                            "`impl {} for {}`",
+                            tp.segments.last().cloned().unwrap_or_default(),
+                            target_name
+                        ),
+                        None => format!("`impl {}`", target_name),
+                    };
+                    self.type_error(
+                        format!(
+                            "error[E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS]: cannot \
+                             write {prefix} — opaque foreign type '{target_name}' has \
+                             no Kāra-visible methods or trait implementations. Wrap \
+                             '{target_name}' in a Kāra-side newtype (e.g. `shared \
+                             struct {target_name}Handle {{ p: ref {target_name} }}`) \
+                             and impl on the wrapper instead"
+                        ),
+                        imp.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                    return;
+                }
+            }
+        }
+
         // Lower the target type-expression through the standard pipeline so
         // type aliases canonicalize at registration time (`type MyOpt =
         // Option[Ordering]; impl Foo for MyOpt` resolves to target_type
@@ -6311,14 +6400,17 @@ impl<'a> TypeChecker<'a> {
     }
 
     fn env_add_opaque_foreign_type(&mut self, o: &crate::ast::OpaqueTypeDecl) {
-        // Slice 1: register the name so downstream type-resolution sees
-        // the identifier as a known type (not an unknown-symbol error).
-        // Use-site precision (E_OPAQUE_TYPE_REQUIRES_INDIRECTION etc.)
-        // ships in slice 1b alongside raw-pointer surface syntax — the
-        // current consumer surface for opaque foreign types is the `ref`
-        // / `mut ref` reference form, which already lowers correctly via
-        // the existing reference-type machinery without inspecting the
-        // underlying name.
+        // Register the name so downstream type-resolution sees the
+        // identifier as a known type (not an unknown-symbol error). Slice
+        // 1b's use-site precision diagnostics (`E_OPAQUE_TYPE_REQUIRES_INDIRECTION`,
+        // `E_OPAQUE_TYPE_NO_FIELDS`, `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`)
+        // consult this set at `lower_type_expr_inner`, `infer_field_access`,
+        // and `env_add_impl` respectively. The fourth code from
+        // `design.md § Opaque Foreign Types` —
+        // `E_OPAQUE_TYPE_NO_KNOWN_SIZE` (`size_of[Foo]()` /
+        // `align_of[Foo]()`) — lands with the `offset_of[T](field)`
+        // intrinsic family per `design.md § Field Offsets`; the
+        // intrinsic surface does not exist in user code today.
         self.env.opaque_foreign_types.insert(o.name.clone());
     }
 
@@ -8080,6 +8172,15 @@ impl<'a> TypeChecker<'a> {
             TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
             _ => return,
         };
+        // Slice 1b: `env_add_impl` already emitted
+        // `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS` for impls on opaque
+        // foreign types and skipped registration. Silently skip method-body
+        // checking here too so the user sees one focused diagnostic, not a
+        // cascade of `self`-argument REQUIRES_INDIRECTION + missing-supertrait
+        // noise from the unregistered impl.
+        if self.env.opaque_foreign_types.contains(&type_name) {
+            return;
+        }
         let self_type = Type::Named {
             name: type_name.clone(),
             args: Vec::new(),
@@ -14388,6 +14489,40 @@ impl<'a> TypeChecker<'a> {
         }
         let obj_ty = self.infer_expr(object);
         if obj_ty == Type::Error {
+            return Type::Error;
+        }
+
+        // Slice 1b: opaque foreign types (`unsafe extern { type Foo; }`)
+        // have no fields visible to Kāra — the C side owns the layout, so
+        // even `r.field` through a `ref Foo` / `mut ref Foo` has no
+        // meaningful resolution. The bare `Type::Named` arm is a defensive
+        // belt for typecheck-error-recovery flows; the by-value binding
+        // itself would already have fired `E_OPAQUE_TYPE_REQUIRES_INDIRECTION`
+        // upstream.
+        let opaque_receiver_name = match &obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::Named { name, .. } if self.env.opaque_foreign_types.contains(name) => {
+                    Some(name.clone())
+                }
+                _ => None,
+            },
+            Type::Named { name, .. } if self.env.opaque_foreign_types.contains(name) => {
+                Some(name.clone())
+            }
+            _ => None,
+        };
+        if let Some(name) = opaque_receiver_name {
+            self.type_error(
+                format!(
+                    "error[E_OPAQUE_TYPE_NO_FIELDS]: opaque foreign type '{name}' \
+                     has no fields visible to Kāra; the C side owns the layout. \
+                     Field access through `ref {name}` / `mut ref {name}` is not \
+                     supported — pass the reference to a foreign function declared \
+                     in the same `unsafe extern {{ }}` block instead"
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
             return Type::Error;
         }
 

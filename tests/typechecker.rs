@@ -1603,6 +1603,194 @@ fn test_extern_block_opaque_type_alongside_function() {
     );
 }
 
+// ── Slice 1b: opaque foreign type use-site precision diagnostics ─
+//
+// Each test exercises one shape from design.md § Opaque Foreign
+// Types. Shipped codes: E_OPAQUE_TYPE_REQUIRES_INDIRECTION (by-value
+// uses), E_OPAQUE_TYPE_NO_FIELDS (field access through deref),
+// E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS (impl on opaque target).
+// E_OPAQUE_TYPE_NO_KNOWN_SIZE is a sub-deferral — `size_of[T]()` /
+// `align_of[T]()` intrinsic surface doesn't exist in user code yet
+// (lands with the `offset_of[T](field)` family per design.md
+// § Field Offsets).
+
+fn assert_error_code_present(errors: &[TypeError], code: &str) {
+    assert!(
+        errors.iter().any(|e| e.message.contains(code)),
+        "expected diagnostic '{code}' among errors, got: {:?}",
+        errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_opaque_type_by_value_fn_param_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn use_it(x: Foo) {}",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_by_value_fn_return_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn make_foo() -> ref Foo;\n\
+         }\n\
+         fn returns_by_value() -> Foo { make_foo() }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_by_value_let_binding_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn caller() {\n\
+             let x: Foo = 0;\n\
+         }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_by_value_struct_field_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         struct S { f: Foo }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_by_value_enum_payload_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         enum E { V(Foo) }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_in_generic_arg_rejected() {
+    // `Vec[Foo]` — Foo is by-value inside Vec, even though Vec itself is
+    // sized. The walker resets `parent_is_ref` to false when descending
+    // into generic args via `lower_generic_args_named` → `lower_type_expr`
+    // (the wrapper), so the leaf check fires correctly.
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn use_it(v: Vec[Foo]) {}",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_in_tuple_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn use_it(t: (Foo, i32)) {}",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_REQUIRES_INDIRECTION");
+}
+
+#[test]
+fn test_opaque_type_through_ref_accepted() {
+    // Positive control: `ref Foo` is the canonical Kāra-side use of an
+    // opaque foreign type and must continue to typecheck cleanly.
+    typecheck_ok(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn use_it(x: ref Foo);\n\
+         }\n\
+         fn caller(r: ref Foo) {\n\
+             use_it(r);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_opaque_type_through_mut_ref_accepted() {
+    typecheck_ok(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+             fn mutate(x: mut ref Foo);\n\
+         }\n\
+         fn caller(r: mut ref Foo) {\n\
+             mutate(r);\n\
+         }",
+    );
+}
+
+#[test]
+fn test_opaque_type_field_access_through_ref_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn caller(r: ref Foo) -> i32 {\n\
+             r.field\n\
+         }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_NO_FIELDS");
+}
+
+#[test]
+fn test_inherent_impl_on_opaque_type_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         impl Foo { fn bar(self) {} }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS");
+    assert!(
+        errors.iter().any(|e| e.message.contains("`impl Foo`")),
+        "expected message to mention `impl Foo`, got: {:?}",
+        errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_trait_impl_on_opaque_type_rejected() {
+    let errors = typecheck_errors(
+        "trait Bar { fn baz(self); }\n\
+         unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         impl Bar for Foo { fn baz(self) {} }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`impl Bar for Foo`")),
+        "expected message to mention `impl Bar for Foo`, got: {:?}",
+        errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_char_literal_type() {
     typecheck_ok("fn main() { let c: char = 'x'; }");
