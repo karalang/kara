@@ -1603,6 +1603,50 @@ fn test_extern_block_opaque_type_alongside_function() {
     );
 }
 
+// ── unsafe_op_in_unsafe_fn slice 2: typechecker passthrough confirmation ──
+//
+// `unsafe fn` is a precondition marker on the declaration; the typechecker
+// continues to walk the body identically to a plain `fn`. Slice 3 will add
+// the operation-lint pass that flags unsafe ops outside `unsafe { }`;
+// slice 2 just pins the no-behaviour-change story with focused tests.
+// (Calling an `unsafe fn` from a plain `fn` is accepted at slice 2 — the
+// lint that requires a wrap lands in slice 3.)
+
+#[test]
+fn test_unsafe_fn_with_only_safe_ops_typechecks() {
+    typecheck_ok(
+        "unsafe fn raw_add(a: i64, b: i64) -> i64 {\n\
+             a + b\n\
+         }",
+    );
+}
+
+#[test]
+fn test_unsafe_fn_param_and_return_types_typecheck() {
+    // Full type system passes through: params, return type, generics,
+    // sibling-fn calls inside the body — all behave identically to a
+    // plain `fn`.
+    typecheck_ok(
+        "fn double(x: i64) -> i64 { x + x }\n\
+         pub unsafe fn raw_compute(a: i64, b: i64) -> i64 {\n\
+             double(a) + double(b)\n\
+         }",
+    );
+}
+
+#[test]
+fn test_plain_fn_calling_unsafe_fn_typechecks_at_slice_2() {
+    // Slice 2 confirmation: the typechecker does not gate calls on the
+    // callee's `is_unsafe`. A plain `fn` calling an `unsafe fn` passes
+    // typecheck today; the wrap-required lint is slice 3's deliverable.
+    typecheck_ok(
+        "unsafe fn raw_op(x: i64) -> i64 { x }\n\
+         fn caller() -> i64 {\n\
+             raw_op(7)\n\
+         }",
+    );
+}
+
 // ── Slice 1b: opaque foreign type use-site precision diagnostics ─
 //
 // Each test exercises one shape from design.md § Opaque Foreign

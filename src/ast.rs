@@ -433,6 +433,14 @@ pub struct AssocTypeDecl {
 #[derive(Debug, Clone)]
 pub struct TraitMethod {
     pub span: Span,
+    /// `unsafe fn ...` in a trait-method declaration. Mirrors the
+    /// `Function.is_unsafe` precondition role: an impl satisfying this
+    /// trait method must itself be `unsafe fn`, and every call site
+    /// against the trait must be wrapped per `unsafe_op_in_unsafe_fn`.
+    /// Slice 1 captures the surface marker only; the impl/trait
+    /// coherence check that an `unsafe`-trait-method is implemented
+    /// by an `unsafe fn` is part of the wider v2 epic.
+    pub is_unsafe: bool,
     pub name: String,
     pub generic_params: Option<GenericParams>,
     pub self_param: Option<SelfParam>,

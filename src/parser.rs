@@ -1020,7 +1020,27 @@ impl Parser {
                 let item = self.parse_assoc_type_decl()?;
                 items.push(TraitItem::AssocType(item));
             } else {
-                let method = self.parse_trait_method()?;
+                // `unsafe fn` in a trait body mirrors the module-scope
+                // dispatch in `parse_item`: consume an optional `unsafe`
+                // before `fn` and thread it into `parse_trait_method`.
+                // `unsafe` followed by anything other than `fn` here is
+                // rejected with the same focused diagnostic.
+                let is_unsafe = if self.check(&Token::Unsafe) {
+                    if self.peek_token_at(1) == Token::Fn {
+                        self.advance(); // consume `unsafe`
+                        true
+                    } else {
+                        self.error(
+                            "expected `fn` after `unsafe` in trait body — `unsafe` \
+                             may only prefix an `unsafe fn` method declaration here.",
+                        );
+                        self.advance(); // consume `unsafe` for recovery
+                        false
+                    }
+                } else {
+                    false
+                };
+                let method = self.parse_trait_method(is_unsafe)?;
                 items.push(TraitItem::Method(Box::new(method)));
             }
         }
@@ -1132,7 +1152,7 @@ impl Parser {
         })
     }
 
-    fn parse_trait_method(&mut self) -> Option<TraitMethod> {
+    fn parse_trait_method(&mut self, is_unsafe: bool) -> Option<TraitMethod> {
         let start = self.current_span();
         self.expect(&Token::Fn)?;
         let name = self.expect_method_name()?;
@@ -1173,6 +1193,7 @@ impl Parser {
 
         Some(TraitMethod {
             span: self.span_from(&start),
+            is_unsafe,
             name,
             generic_params,
             self_param,
@@ -1228,14 +1249,28 @@ impl Parser {
                 } else {
                     false
                 };
-                // Methods inherit `unsafe` from the impl-block context if
-                // ever added; for v1 there is no `unsafe impl` syntax and
-                // `unsafe fn` inside an impl block is captured by parsing
-                // `unsafe` directly before `fn`. Slice 1 only sees the
-                // module-scope `unsafe fn` path; impl-method `unsafe fn`
-                // parses at the impl-method level (carry-forward to a
-                // sub-slice when needed).
-                let method = self.parse_function(attrs, is_pub, is_private, false)?;
+                // `unsafe fn` inside an impl block mirrors the module-scope
+                // dispatch in `parse_item`: consume an optional `unsafe`
+                // before `fn` and thread it into `parse_function`. `unsafe`
+                // followed by anything other than `fn` inside an impl body
+                // is rejected with the same focused diagnostic. There is no
+                // `unsafe impl` syntax at v1.
+                let is_unsafe = if self.check(&Token::Unsafe) {
+                    if self.peek_token_at(1) == Token::Fn {
+                        self.advance(); // consume `unsafe`
+                        true
+                    } else {
+                        self.error(
+                            "expected `fn` after `unsafe` in impl block — `unsafe` \
+                             may only prefix an `unsafe fn` method declaration here.",
+                        );
+                        self.advance(); // consume `unsafe` for recovery
+                        false
+                    }
+                } else {
+                    false
+                };
+                let method = self.parse_function(attrs, is_pub, is_private, is_unsafe)?;
                 items.push(ImplItem::Method(Box::new(method)));
             }
         }

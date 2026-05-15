@@ -720,6 +720,55 @@ fn test_unsafe_extern_block_resolves_type_reference_against_module_scope() {
     );
 }
 
+// ── unsafe_op_in_unsafe_fn slice 2: resolver passthrough confirmation ──
+//
+// `unsafe fn` is a precondition marker on the declaration; the resolver
+// erases the distinction (no `is_unsafe` lives on `SymbolKind::Function`).
+// Name resolution, scope handling, and duplicate-definition detection
+// behave identically for `unsafe fn` and plain `fn`. Slice 3 will add the
+// operation-lint pass that walks fn bodies; slice 2 just pins the
+// no-behaviour-change story with focused tests.
+
+#[test]
+fn test_unsafe_fn_resolves_at_module_scope_like_plain_fn() {
+    // `unsafe fn` registers a Function symbol at module scope; the
+    // resolver does not distinguish it from a plain `fn`.
+    let result = resolve_ok("unsafe fn raw_op() { }");
+    let sym = result.symbol_table.lookup_in_scope(ScopeId(0), "raw_op");
+    assert!(
+        sym.is_some(),
+        "expected `raw_op` to register at module scope"
+    );
+    assert!(matches!(sym.unwrap().kind, SymbolKind::Function { .. }));
+}
+
+#[test]
+fn test_unsafe_fn_body_resolves_against_module_scope() {
+    // Body name resolution inside `unsafe fn` is identical to plain `fn`:
+    // module-scope consts and sibling functions resolve normally.
+    resolve_ok(
+        "const LIMIT: i64 = 64;\n\
+         fn helper(x: i64) -> i64 { x }\n\
+         unsafe fn raw_compute(n: i64) -> i64 { helper(n) + LIMIT }",
+    );
+}
+
+#[test]
+fn test_unsafe_fn_collides_with_plain_fn_of_same_name() {
+    // The `unsafe` marker does not shield the name — declaring an
+    // `unsafe fn` and a plain `fn` with the same name at module scope
+    // is duplicate-definition like any other collision.
+    let errors = resolve_errors(
+        "fn act() {}\n\
+         unsafe fn act() {}",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("already defined")),
+        "expected duplicate-definition error across plain fn and unsafe fn, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_const_in_expression() {
     resolve_ok(

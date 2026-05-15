@@ -2214,6 +2214,147 @@ fn test_unsafe_followed_by_invalid_token_at_module_scope_rejected() {
     );
 }
 
+#[test]
+fn test_impl_method_unsafe_fn_parses_and_records_is_unsafe() {
+    // `unsafe fn` inside an impl body: parses, `is_unsafe` propagates
+    // onto the underlying `Function` node. Mirrors the module-scope
+    // dispatch in slice 1.
+    let prog = parse_ok(
+        r#"
+        impl Foo {
+            unsafe fn raw_get(self) -> i64 { 0 }
+            fn safe_get(self) -> i64 { 1 }
+        }
+        "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("expected ImplBlock");
+    };
+    let methods = impl_methods(imp);
+    assert_eq!(methods.len(), 2);
+    assert!(methods[0].is_unsafe, "first method should be unsafe");
+    assert_eq!(methods[0].name, "raw_get");
+    assert!(!methods[1].is_unsafe, "second method should be plain");
+    assert_eq!(methods[1].name, "safe_get");
+}
+
+#[test]
+fn test_impl_method_unsafe_fn_with_pub_and_effects_roundtrips() {
+    // Composition: `pub unsafe fn` with attributes / effects / params
+    // inside an impl block — same precedence as module-scope `unsafe fn`.
+    // (Per-method `///` doc comments inside impl bodies are a separate
+    // pre-existing limitation: the impl-block body loop does not yet
+    // call `collect_leading_doc_comments` — out of scope for this slice.)
+    let prog = parse_ok(
+        r#"
+        impl Foo {
+            #[noblock]
+            pub unsafe fn read_raw(self, n: i64) -> i64 reads(Memory) {
+                n
+            }
+        }
+        "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("expected ImplBlock");
+    };
+    let methods = impl_methods(imp);
+    assert_eq!(methods.len(), 1);
+    let m = methods[0];
+    assert!(m.is_unsafe);
+    assert!(m.is_pub);
+    assert_eq!(m.name, "read_raw");
+    assert_eq!(m.attributes.len(), 1);
+    assert!(m.effects.is_some());
+}
+
+#[test]
+fn test_impl_method_unsafe_followed_by_invalid_token_rejected() {
+    // `unsafe` in an impl body may only prefix `fn`. Any other shape is
+    // a focused diagnostic, mirroring the module-scope rule.
+    let (_, errors) = parse_with_errors(
+        r#"
+        impl Foo {
+            unsafe type Bad = i64;
+        }
+        "#,
+    );
+    assert!(!errors.is_empty());
+    assert!(
+        errors_contain(&errors, "expected `fn` after `unsafe` in impl block"),
+        "expected focused diagnostic; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_trait_method_unsafe_fn_signature_parses_and_records_is_unsafe() {
+    // Required `unsafe fn` signature in a trait body — no body, ends in
+    // `;`. The `is_unsafe` field propagates onto `TraitMethod`.
+    let prog = parse_ok(
+        r#"
+        trait RawAccess {
+            unsafe fn raw_get(self, i: i64) -> i64;
+            fn safe_get(self, i: i64) -> i64;
+        }
+        "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(methods.len(), 2);
+    assert!(methods[0].is_unsafe, "first trait method should be unsafe");
+    assert_eq!(methods[0].name, "raw_get");
+    assert!(methods[0].body.is_none());
+    assert!(!methods[1].is_unsafe, "second trait method should be plain");
+    assert_eq!(methods[1].name, "safe_get");
+}
+
+#[test]
+fn test_trait_method_unsafe_fn_with_default_body_parses() {
+    // `unsafe fn` trait method with a provided default body composes
+    // with effects and params. (Per-method `///` doc comments inside
+    // trait bodies are a separate pre-existing limitation — out of
+    // scope for this slice.)
+    let prog = parse_ok(
+        r#"
+        trait RawAccess {
+            unsafe fn read_raw(self, n: i64) -> i64 reads(Memory) {
+                n
+            }
+        }
+        "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(methods.len(), 1);
+    let m = methods[0];
+    assert!(m.is_unsafe);
+    assert_eq!(m.name, "read_raw");
+    assert!(m.body.is_some());
+    assert!(m.effects.is_some());
+}
+
+#[test]
+fn test_trait_method_unsafe_followed_by_invalid_token_rejected() {
+    // `unsafe` in a trait body may only prefix `fn`. Any other shape is
+    // a focused diagnostic mirroring the impl-block and module-scope rules.
+    let (_, errors) = parse_with_errors(
+        r#"
+        trait Bad {
+            unsafe type Assoc;
+        }
+        "#,
+    );
+    assert!(!errors.is_empty());
+    assert!(
+        errors_contain(&errors, "expected `fn` after `unsafe` in trait body"),
+        "expected focused diagnostic; got {errors:?}"
+    );
+}
+
 // ── Opaque foreign type declarations ──────────────────────────────────────
 
 #[test]
