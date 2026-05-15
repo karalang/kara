@@ -4504,6 +4504,37 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_bounds_elision_slice_under_while_guard() {
+        // Same elision pass widened to `Slice[T]` indexed reads. The pass
+        // mirrors compile_vec_index's wiring through emit_split_bounds_check
+        // with the Slice's struct type. Output correctness is the gate;
+        // the perf impact varies by workload (kata-88's pattern is neutral
+        // because its bounds aren't expressible from source guards; kata-5's
+        // would benefit if its expand function took Slice instead of Vec).
+        let out = run_program(
+            r#"
+fn sum_first(xs: Slice[i64], k: i64) -> i64 {
+    let mut i = 0i64;
+    let mut acc = 0i64;
+    let n = xs.len();
+    while i >= 0 and i < n and i < k {
+        acc = acc + xs[i];
+        i = i + 1;
+    }
+    acc
+}
+fn main() {
+    let arr: Array[i64, 5] = [10, 20, 30, 40, 50];
+    println(sum_first(arr, 3));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "60");
+        }
+    }
+
     // ── ? operator codegen ───────────────────────────────────────────────────
 
     #[test]

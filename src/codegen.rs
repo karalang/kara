@@ -6188,9 +6188,11 @@ impl<'ctx> Codegen<'ctx> {
                     // Bounds-check-elision len-alias tracking: `let n = v.len()`
                     // records `n → v`, so a later `while ... and i < n and ...`
                     // guard parsed in compile_while can resolve `n` back to
-                    // `v.len()` and assert `v[i]`'s upper bound. Limited to
-                    // bare-identifier receivers — `v[k].len()` and other
-                    // non-trivial receivers aren't tracked.
+                    // `v.len()` and assert `v[i]`'s upper bound. Covers both
+                    // Vec and Slice receivers (parameter slice handles bind
+                    // into `slice_elem_types` alongside the Vec table).
+                    // Limited to bare-identifier receivers — `v[k].len()`
+                    // and other non-trivial receivers aren't tracked.
                     if let ExprKind::MethodCall {
                         object,
                         method,
@@ -6199,9 +6201,11 @@ impl<'ctx> Codegen<'ctx> {
                     } = &value.kind
                     {
                         if method == "len" && method_args.is_empty() {
-                            if let ExprKind::Identifier(vec_name) = &object.kind {
-                                if self.vec_elem_types.contains_key(vec_name.as_str()) {
-                                    self.len_alias.insert(var_name.clone(), vec_name.clone());
+                            if let ExprKind::Identifier(coll_name) = &object.kind {
+                                if self.vec_elem_types.contains_key(coll_name.as_str())
+                                    || self.slice_elem_types.contains_key(coll_name.as_str())
+                                {
+                                    self.len_alias.insert(var_name.clone(), coll_name.clone());
                                 }
                             }
                         }
@@ -16031,6 +16035,43 @@ impl<'ctx> Codegen<'ctx> {
             return;
         }
 
+        // Neither half proven — fall back to the original single unsigned
+        // bounds check. `icmp uge idx, len` catches both negative-idx (which
+        // wraps to a huge unsigned value > any reasonable len) and
+        // idx >= len in one compare + branch. Splitting into signed lower +
+        // signed upper here would add an instruction without any elision
+        // benefit (regression measured on kata-88's `nums1[k]` indexing,
+        // where neither bound is asserted by the source guards).
+        if !lower_proven && !upper_proven {
+            let len_ptr = self
+                .builder
+                .build_struct_gep(vec_ty, vec_ptr, 1, "v.len.ptr")
+                .unwrap();
+            let len = self
+                .builder
+                .build_load(i64_t, len_ptr, "v.len")
+                .unwrap()
+                .into_int_value();
+            let oob_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("{label_prefix}.oob"));
+            let ok_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+            let cmp = self
+                .builder
+                .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
+                .unwrap();
+            self.builder
+                .build_conditional_branch(cmp, oob_bb, ok_bb)
+                .unwrap();
+            self.builder.position_at_end(oob_bb);
+            self.emit_panic("vec index out of bounds");
+            self.builder.build_unreachable().unwrap();
+            self.builder.position_at_end(ok_bb);
+            return;
+        }
+
         // Lower-bound half: `idx < 0`. Skipped when the guard proved
         // `idx >= 0`; the load of `len` below is then loop-invariant
         // and LLVM will likely hoist it if both halves are emitted but
@@ -16091,9 +16132,8 @@ impl<'ctx> Codegen<'ctx> {
                     .build_int_compare(inkwell::IntPredicate::SGE, idx_val, len, "bounds.upper")
                     .unwrap()
             } else {
-                // Negative idx is still possible (lower half above
-                // panicked it, but we're past that block — keep the
-                // unsigned compare so this branch alone is sound).
+                // Unreachable per the early-return above, but keep the
+                // arm sound in case the caller's logic changes.
                 self.builder
                     .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
                     .unwrap()
@@ -16149,47 +16189,37 @@ impl<'ctx> Codegen<'ctx> {
         index: &Expr,
         val: BasicValueEnum<'ctx>,
     ) -> Result<(), String> {
-        let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let slice_ty = self.slice_struct_type();
         let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
         let slice_ptr = self.get_data_ptr(var_name).unwrap();
+        let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
         let idx_val = self.compile_expr(index)?.into_int_value();
 
         let data_pp = self
             .builder
             .build_struct_gep(slice_ty, slice_ptr, 0, "s.st.data.pp")
             .unwrap();
-        let len_p = self
-            .builder
-            .build_struct_gep(slice_ty, slice_ptr, 1, "s.st.len.p")
-            .unwrap();
         let data = self
             .builder
             .build_load(ptr_ty, data_pp, "s.st.data")
             .unwrap()
             .into_pointer_value();
-        let len = self
-            .builder
-            .build_load(i64_t, len_p, "s.st.len")
-            .unwrap()
-            .into_int_value();
 
-        let fn_val = self.current_fn.unwrap();
-        let oob_bb = self.context.append_basic_block(fn_val, "s.st.oob");
-        let ok_bb = self.context.append_basic_block(fn_val, "s.st.ok");
-        let cmp = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(cmp, oob_bb, ok_bb)
-            .unwrap();
-        self.builder.position_at_end(oob_bb);
-        self.emit_panic("slice index out of bounds");
-        self.builder.build_unreachable().unwrap();
-
-        self.builder.position_at_end(ok_bb);
+        // Slice layout `{ptr, i64}` has len at field 1, same offset as
+        // Vec's `{ptr, i64, i64}` — the helper's struct-gep only touches
+        // field 1, so passing slice_ty is sound. The OOB diagnostic is
+        // shared with Vec (`vec index out of bounds`) per the kata-5
+        // precedent; users routing through `Slice.get` get the typed
+        // diagnostic via the safe path, this is the unsafe-form panic.
+        self.emit_split_bounds_check(
+            "s.st",
+            idx_val,
+            slice_ty,
+            slice_ptr,
+            lower_proven,
+            upper_proven,
+        );
         let elem_ptr = unsafe {
             self.builder
                 .build_gep(elem_ty, data, &[idx_val], "s.st.elem.ptr")
@@ -16204,47 +16234,38 @@ impl<'ctx> Codegen<'ctx> {
         var_name: &str,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let slice_ty = self.slice_struct_type();
         let elem_ty = *self.slice_elem_types.get(var_name).unwrap();
         let slice_ptr = self.get_data_ptr(var_name).unwrap();
+        // Source-level elision: bare-identifier index whose bounds are
+        // proven by an enclosing while-guard / short-circuit `and` skips
+        // the matching half of the runtime check. Mirrors the Vec read
+        // path. Captured before compiling the index so compound-index
+        // shapes (`v[i + 1]`) drop straight to (false, false) — the
+        // index-name match in `index_bounds_already_proven` requires a
+        // bare `Identifier` source-level node.
+        let (lower_proven, upper_proven) = self.index_bounds_already_proven(index, var_name);
         let idx_val = self.compile_expr(index)?.into_int_value();
 
         let data_pp = self
             .builder
             .build_struct_gep(slice_ty, slice_ptr, 0, "s.data.pp")
             .unwrap();
-        let len_p = self
-            .builder
-            .build_struct_gep(slice_ty, slice_ptr, 1, "s.len.p")
-            .unwrap();
         let data = self
             .builder
             .build_load(ptr_ty, data_pp, "s.data")
             .unwrap()
             .into_pointer_value();
-        let len = self
-            .builder
-            .build_load(i64_t, len_p, "s.len")
-            .unwrap()
-            .into_int_value();
 
-        let fn_val = self.current_fn.unwrap();
-        let oob_bb = self.context.append_basic_block(fn_val, "sidx.oob");
-        let ok_bb = self.context.append_basic_block(fn_val, "sidx.ok");
-        let cmp = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "bounds")
-            .unwrap();
-        self.builder
-            .build_conditional_branch(cmp, oob_bb, ok_bb)
-            .unwrap();
-        self.builder.position_at_end(oob_bb);
-        self.emit_panic("slice index out of bounds");
-        self.builder.build_unreachable().unwrap();
-
-        self.builder.position_at_end(ok_bb);
+        self.emit_split_bounds_check(
+            "sidx",
+            idx_val,
+            slice_ty,
+            slice_ptr,
+            lower_proven,
+            upper_proven,
+        );
         let elem_ptr = unsafe {
             self.builder
                 .build_gep(elem_ty, data, &[idx_val], "s.elem.ptr")
@@ -19733,11 +19754,13 @@ impl<'ctx> Codegen<'ctx> {
         }
     }
 
-    /// Resolve an expression to the Vec variable whose `.len()` it computes,
-    /// if any. Handles:
-    ///   - Direct `vec.len()` method call (Identifier receiver).
+    /// Resolve an expression to the Vec / Slice variable whose `.len()`
+    /// it computes, if any. Handles:
+    ///   - Direct `coll.len()` method call (Identifier receiver, either
+    ///     a Vec or a Slice).
     ///   - A bare Identifier whose binding was previously recorded in
-    ///     `len_alias` by the let-site tracking pass.
+    ///     `len_alias` by the let-site tracking pass (which also covers
+    ///     both Vec and Slice receivers).
     fn resolve_len_origin(&self, expr: &Expr) -> Option<String> {
         match &expr.kind {
             ExprKind::MethodCall {
@@ -19746,9 +19769,11 @@ impl<'ctx> Codegen<'ctx> {
                 args,
                 ..
             } if method == "len" && args.is_empty() => {
-                if let ExprKind::Identifier(vec_name) = &object.kind {
-                    if self.vec_elem_types.contains_key(vec_name.as_str()) {
-                        return Some(vec_name.clone());
+                if let ExprKind::Identifier(coll_name) = &object.kind {
+                    if self.vec_elem_types.contains_key(coll_name.as_str())
+                        || self.slice_elem_types.contains_key(coll_name.as_str())
+                    {
+                        return Some(coll_name.clone());
                     }
                 }
                 None
