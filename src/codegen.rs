@@ -916,6 +916,14 @@ struct SpawnSiteRecord {
 struct MapMonoMethods<'ctx> {
     /// `i64 karac_map_<keymangle>_<valmangle>_len(map: ptr)`.
     len_fn: FunctionValue<'ctx>,
+    /// `i1 karac_map_<keymangle>_<valmangle>_insert_old(map: ptr,
+    /// key: K, val: V, out_old_val: ptr)`. Slice 1b.2a ships a
+    /// slow-path-only body that delegates to the erased
+    /// `karac_map_insert_old` extern via stack-allocated key/val
+    /// slots; Slice 1b.2b adds the inline fast-path (load-factor
+    /// check + inline hash + probe loop + inline eq) that unlocks
+    /// the bench gain.
+    insert_old_fn: FunctionValue<'ctx>,
 }
 
 // ── Codegen ────────────────────────────────────────────────────
@@ -13233,27 +13241,67 @@ impl<'ctx> Codegen<'ctx> {
                 self.suppress_source_vec_cleanup_for_arg(&args[0].value);
                 self.suppress_source_vec_cleanup_for_arg(&args[1].value);
                 let fn_val = self.current_fn.unwrap();
-                let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
-                let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
                 let old_slot = self.create_entry_alloca(fn_val, "map.insert.old", val_ty);
-                self.builder.build_store(key_slot, key_val).unwrap();
-                self.builder.build_store(val_slot, val_val).unwrap();
-                let existed = self
-                    .builder
-                    .build_call(
-                        self.karac_map_insert_old_fn,
-                        &[
-                            map_handle.into(),
-                            key_slot.into(),
-                            val_slot.into(),
-                            old_slot.into(),
-                        ],
-                        "map.insert.existed",
-                    )
-                    .unwrap()
-                    .try_as_basic_value()
-                    .unwrap_basic()
-                    .into_int_value();
+                // Slice 1b.2a — Map[i64, i64] inserts route through
+                // the mono `karac_map_i64_i64_insert_old` symbol (value
+                // calling convention: i64 key + i64 val rather than
+                // pointer args). The mono body does the stack-alloca
+                // forwarding to the erased runtime today; Slice 1b.2b
+                // adds the inline fast path.
+                //
+                // Gate on the *actually-compiled* value types rather
+                // than the side-table-derived `key_ty` / `val_ty`.
+                // Map vars that miss `map_key_types` /
+                // `map_val_types` registration default to `i64` from
+                // the fallback at the top of this fn — for the
+                // value-pass calling convention that's an LLVM
+                // verifier error when the real value is e.g. i32
+                // (char in `Map[char, i64]`). The erased path uses
+                // ptrs so it tolerates the side-table gap; mono
+                // doesn't.
+                let key_val_is_i64 = key_val.get_type() == i64_t.into();
+                let val_val_is_i64 = val_val.get_type() == i64_t.into();
+                let existed = if self.should_use_mono_map_for(key_ty, val_ty)
+                    && key_val_is_i64
+                    && val_val_is_i64
+                {
+                    let mono = self.get_or_emit_map_mono_methods(key_ty, val_ty);
+                    self.builder
+                        .build_call(
+                            mono.insert_old_fn,
+                            &[
+                                map_handle.into(),
+                                key_val.into(),
+                                val_val.into(),
+                                old_slot.into(),
+                            ],
+                            "map.insert.existed",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value()
+                } else {
+                    let key_slot = self.create_entry_alloca(fn_val, "map.insert.key", key_ty);
+                    let val_slot = self.create_entry_alloca(fn_val, "map.insert.val", val_ty);
+                    self.builder.build_store(key_slot, key_val).unwrap();
+                    self.builder.build_store(val_slot, val_val).unwrap();
+                    self.builder
+                        .build_call(
+                            self.karac_map_insert_old_fn,
+                            &[
+                                map_handle.into(),
+                                key_slot.into(),
+                                val_slot.into(),
+                                old_slot.into(),
+                            ],
+                            "map.insert.existed",
+                        )
+                        .unwrap()
+                        .try_as_basic_value()
+                        .unwrap_basic()
+                        .into_int_value()
+                };
                 // Build Option[V]: Some(old) if existed, None if fresh insert.
                 let some_bb = self.context.append_basic_block(fn_val, "map.ins.some");
                 let none_bb = self.context.append_basic_block(fn_val, "map.ins.none");
@@ -22742,11 +22790,71 @@ impl<'ctx> Codegen<'ctx> {
             }
         };
 
+        // insert_old: slow-path delegation. Body allocates two
+        // stack slots for key and val (the erased extern takes
+        // pointers), forwards to `karac_map_insert_old`, returns
+        // the existed bit. Slice 1b.2b will branch on a load-factor
+        // check and only delegate to the erased extern on the
+        // resize-needed slow path; the fast path will inline the
+        // hash + probe + eq loop.
+        let insert_name = format!("karac_map_{cache_key}_insert_old");
+        let insert_old_fn = match self.module.get_function(&insert_name) {
+            Some(f) => f,
+            None => {
+                let bool_t = self.context.bool_type();
+                let insert_ty = bool_t.fn_type(
+                    &[ptr_ty.into(), key_ty.into(), val_ty.into(), ptr_ty.into()],
+                    false,
+                );
+                let f =
+                    self.module
+                        .add_function(&insert_name, insert_ty, Some(Linkage::LinkOnceODR));
+                let entry = self.context.append_basic_block(f, "entry");
+                self.builder.position_at_end(entry);
+                let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+                let key_arg = f.get_nth_param(1).unwrap();
+                let val_arg = f.get_nth_param(2).unwrap();
+                let out_old_arg = f.get_nth_param(3).unwrap().into_pointer_value();
+
+                let key_slot = self
+                    .builder
+                    .build_alloca(key_ty, "mono.insert.key.slot")
+                    .unwrap();
+                let val_slot = self
+                    .builder
+                    .build_alloca(val_ty, "mono.insert.val.slot")
+                    .unwrap();
+                self.builder.build_store(key_slot, key_arg).unwrap();
+                self.builder.build_store(val_slot, val_arg).unwrap();
+
+                let existed = self
+                    .builder
+                    .build_call(
+                        self.karac_map_insert_old_fn,
+                        &[
+                            map_arg.into(),
+                            key_slot.into(),
+                            val_slot.into(),
+                            out_old_arg.into(),
+                        ],
+                        "mono.insert.existed",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic();
+                self.builder.build_return(Some(&existed)).unwrap();
+                f
+            }
+        };
+
         if let Some(bb) = saved_bb {
             self.builder.position_at_end(bb);
         }
 
-        let methods = MapMonoMethods { len_fn };
+        let methods = MapMonoMethods {
+            len_fn,
+            insert_old_fn,
+        };
         self.map_mono_methods.insert(cache_key, methods);
         methods
     }

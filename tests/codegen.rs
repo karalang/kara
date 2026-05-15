@@ -5398,6 +5398,44 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_i64_i64_insert_uses_mono_symbol() {
+        // Slice 1b.2a — Map[i64, i64].insert routes through the mono
+        // `karac_map_i64_i64_insert_old` symbol; the calling
+        // convention is value-based (i64 key + i64 val) rather than
+        // the erased pointer-based shape. The mono body forwards to
+        // the erased runtime today (1b.2b adds the inline fast path).
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    m.insert(1_i64, 100_i64);
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_map_i64_i64_insert_old"),
+            "mono insert_old symbol should be emitted; IR:\n{}",
+            ir
+        );
+        // Define line should carry linkonce_odr per §3.2.
+        let define_line = ir
+            .lines()
+            .find(|l| l.contains("@karac_map_i64_i64_insert_old") && l.starts_with("define"))
+            .unwrap_or_else(|| panic!("could not find define for mono insert; IR:\n{}", ir));
+        assert!(
+            define_line.contains("linkonce_odr"),
+            "mono insert should have linkonce_odr linkage; saw: {}",
+            define_line
+        );
+        // The user-facing m.insert(...) site routes through mono.
+        assert!(
+            ir.contains("call i1 @karac_map_i64_i64_insert_old"),
+            "user-facing m.insert(...) should dispatch through mono symbol; IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_map_i64_i64_len_emitted_once_per_module() {
         // Multiple `m.len()` sites on Map[i64, i64] should share a
         // single emission (the side-table cache returns the cached
