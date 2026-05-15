@@ -1,0 +1,17 @@
+[workspace]
+
+[package]
+name = "hash_quality"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[[bin]]
+name = "hash_bench"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+debug = false
