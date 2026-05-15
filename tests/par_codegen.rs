@@ -614,6 +614,60 @@ fn main() {
         );
     }
 
+    /// Captured-mutation safety net: when a multi-stmt par-eligible
+    /// group mutates pre-existing locals (here `a` and `b` via mutating
+    /// methods on disjoint user-defined effect resources) and those
+    /// locals are read after the group, codegen must bail to sequential.
+    /// `karac_par_run` captures locals by value into the per-branch env
+    /// struct, so a branch's mutation lands on the bit-copy and is lost
+    /// at join time — only let-introduced bindings flow back through the
+    /// return-slot mechanism. Without this gate, `a.n` would still read
+    /// `0` after the par-run "completed" the bumps.
+    ///
+    /// Detection lives in the analyzer (`StmtInfo.defines −
+    /// StmtInfo.let_introduced`, unioned across group stmts as
+    /// `ParallelGroup.captured_mutations`); codegen consults the field
+    /// at `compute_return_slots_checked` and returns `None` (sequential
+    /// fallback) when it overlaps with the names read outside the group.
+    /// Pinning the absence of `karac_par_run` here regression-locks both
+    /// the analyzer's set computation and the codegen consumption.
+    #[test]
+    fn test_auto_par_bails_when_captured_mutation_read_after_group() {
+        let ir = ir_for_with_concurrency(
+            r#"
+effect resource R1;
+effect resource R2;
+
+struct Counter { n: i64 }
+
+impl Counter {
+    fn bump_a(mut ref self) writes(R1) {
+        self.n = self.n + 1;
+    }
+    fn bump_b(mut ref self) writes(R2) {
+        self.n = self.n + 1;
+    }
+}
+
+fn main() {
+    let mut a: Counter = Counter { n: 0 };
+    let mut b: Counter = Counter { n: 0 };
+    a.bump_a();
+    b.bump_b();
+    let _x: i64 = a.n;
+    let _y: i64 = b.n;
+}
+"#,
+        );
+        assert!(
+            !ir.contains("call void @karac_par_run"),
+            "captured-mutation read after group must bail to sequential; \
+             without the bail, `a` and `b` would be bit-copied into the \
+             per-branch env and the bumps would silently land on the \
+             local copies. IR:\n{ir}"
+        );
+    }
+
     // ── Auto-parallelization with return values ──
     //
     // Slice A (Phase-7 — Par codegen: return values, 2026-05-09) lifts

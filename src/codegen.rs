@@ -5671,14 +5671,14 @@ impl<'ctx> Codegen<'ctx> {
                 _ => {}
             }
         }
-        if defined.is_empty() {
-            return Some(Vec::new());
-        }
-
         // 2. Walk every stmt outside the group + final_expr collecting
         //    reads. Names actually consumed outside become slots; names
         //    only used inside the group remain class-(i) — branch-local
-        //    allocas with no slot.
+        //    allocas with no slot. Computed before the captured-mutation
+        //    check AND before the `defined.is_empty()` early return —
+        //    both consume `refs`, and the captured-mutation check must
+        //    fire even for side-effect-only groups (which have no let
+        //    bindings, so `defined` is empty by construction).
         let mut refs: HashSet<String> = HashSet::new();
         let mut defs: HashSet<String> = HashSet::new();
         for (idx, stmt) in body.stmts.iter().enumerate() {
@@ -5706,6 +5706,47 @@ impl<'ctx> Codegen<'ctx> {
         }
         if let Some(e) = &body.final_expr {
             self.refs_in_expr(e, &mut refs, &mut defs);
+        }
+
+        // 2.5. Reject groups whose branches would silently lose
+        //      captured-local mutations. Auto-par captures each local
+        //      bit-for-bit into the per-branch env struct (see
+        //      `emit_par_run` step 3), so a branch that mutates a
+        //      captured `Vec`/`Map`/scalar via `v.push(...)` /
+        //      `cap = max` / etc. mutates only its own local copy —
+        //      the parent's view is the pre-spawn snapshot. The
+        //      return-slot mechanism propagates *let-introduced*
+        //      bindings back across the join, but a mutation that
+        //      doesn't introduce a new name has no slot, so it's
+        //      silently dropped. If any such mutation targets a name
+        //      read outside the group, fall back to sequential
+        //      compilation — the analyzer's parallelization is an
+        //      optimization hint, not a semantic requirement, and
+        //      sequential is correct here.
+        //
+        //      Detection lives in the analyzer (`StmtInfo.defines −
+        //      StmtInfo.let_introduced`, unioned across group stmts)
+        //      because that's where method-mutates-receiver is
+        //      already decided via `method_effects_imply_receiver_mutation`.
+        //      Doing it here would either duplicate that effects
+        //      lookup or use a coarser "any method call mutates"
+        //      heuristic that would over-serialize pure-method
+        //      patterns like `let s = data.as_slice();`.
+        //
+        //      Runs *before* the `defined.is_empty()` early return so
+        //      side-effect-only groups (e.g. `a.bump_a(); b.bump_b()`
+        //      with no `let` bindings) are still gated — without this
+        //      ordering, the early return would emit a par-run that
+        //      silently drops the mutations.
+        if !group.captured_mutations.is_disjoint(&refs) {
+            return None;
+        }
+
+        // No let-introduced bindings to materialize as slots — the
+        // group is side-effect-only and the captured-mutation check
+        // above already cleared it. Empty-slot par-run is correct.
+        if defined.is_empty() {
+            return Some(Vec::new());
         }
 
         // 3. For each defined name read outside, infer the LLVM type.

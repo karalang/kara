@@ -146,6 +146,19 @@ pub struct ParallelGroup {
     /// (pure arithmetic, simple variable access, no I/O or function calls with effects).
     /// Codegen should run trivial groups inline instead of spawning tasks.
     pub is_trivial: bool,
+    /// Names of *captured* (pre-existing) locals that some stmt in this
+    /// group mutates without introducing them as a fresh let-binding —
+    /// e.g., `v.push(3)` mutates the captured `v`, `cap = max` mutates
+    /// the captured `cap`. The auto-par codegen captures locals by
+    /// value into the per-branch env struct, so these mutations live
+    /// on the branch's local copy and are lost at join time. Codegen
+    /// (`compute_return_slots_checked`) consults this set: if any name
+    /// in it is read outside the group, the par-group is dropped and
+    /// the stmts run sequentially. Names freshly introduced by
+    /// `let`/`let-uninit`/`let-else` patterns within the group itself
+    /// are excluded — those flow through the return-slot mechanism
+    /// already.
+    pub captured_mutations: HashSet<String>,
 }
 
 // ── Internal: Per-statement metadata ───────────────────────────
@@ -155,6 +168,13 @@ pub struct ParallelGroup {
 struct StmtInfo {
     /// Variables defined (written) by this statement.
     defines: HashSet<String>,
+    /// Names freshly introduced by `let`/`let-uninit`/`let-else`
+    /// patterns in this statement (subset of `defines`). The complement
+    /// `defines − let_introduced` is the set of *captured* names this
+    /// statement mutates — needed by the auto-par codegen to decide
+    /// whether a multi-stmt group can safely run in parallel given
+    /// that captures are bit-copied into per-branch envs.
+    let_introduced: HashSet<String>,
     /// Variables read by this statement.
     reads: HashSet<String>,
     /// Effects produced by this statement (from called functions).
@@ -307,6 +327,7 @@ impl<'a> ConcurrencyChecker<'a> {
     fn analyze_stmt(&self, stmt: &Stmt, is_seq: bool) -> StmtInfo {
         let mut info = StmtInfo {
             defines: HashSet::new(),
+            let_introduced: HashSet::new(),
             reads: HashSet::new(),
             effects: Vec::new(),
             calls_polymorphic: false,
@@ -318,12 +339,14 @@ impl<'a> ConcurrencyChecker<'a> {
             StmtKind::Let { pattern, value, .. } => {
                 // The pattern defines variables
                 self.collect_pattern_bindings(pattern, &mut info.defines);
+                self.collect_pattern_bindings(pattern, &mut info.let_introduced);
                 // The value expression may read variables and call functions
                 self.collect_expr_reads(value, &mut info.reads);
                 self.collect_expr_effects(value, &mut info);
             }
             StmtKind::LetUninit { name, .. } => {
                 info.defines.insert(name.clone());
+                info.let_introduced.insert(name.clone());
             }
             StmtKind::LetElse {
                 pattern,
@@ -332,6 +355,7 @@ impl<'a> ConcurrencyChecker<'a> {
                 ..
             } => {
                 self.collect_pattern_bindings(pattern, &mut info.defines);
+                self.collect_pattern_bindings(pattern, &mut info.let_introduced);
                 self.collect_expr_reads(value, &mut info.reads);
                 self.collect_expr_effects(value, &mut info);
                 self.collect_block_reads(else_block, &mut info.reads);
@@ -554,10 +578,23 @@ impl<'a> ConcurrencyChecker<'a> {
                 let is_trivial = group_indices
                     .iter()
                     .all(|&i| infos[i].effects.is_empty() && !infos[i].calls_polymorphic);
+                // Union of (defines − let_introduced) across the group's
+                // stmts. Names in this set name *captured* locals that
+                // some branch will mutate without introducing them as a
+                // fresh binding — the codegen needs this to bail when
+                // those mutations would otherwise be lost across the
+                // par-run join.
+                let mut captured_mutations: HashSet<String> = HashSet::new();
+                for &i in &group_indices {
+                    for name in infos[i].defines.difference(&infos[i].let_introduced) {
+                        captured_mutations.insert(name.clone());
+                    }
+                }
                 groups.push(ParallelGroup {
                     statement_indices: group_indices,
                     reason,
                     is_trivial,
+                    captured_mutations,
                 });
             }
         }

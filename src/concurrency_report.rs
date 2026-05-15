@@ -355,6 +355,7 @@ mod tests {
                     statement_indices: vec![0, 1],
                     reason: "pure computations".to_string(),
                     is_trivial: true,
+                    captured_mutations: std::collections::HashSet::new(),
                 }],
                 total_statements: 2,
             },
