@@ -103,38 +103,99 @@ pub unsafe extern "C" fn karac_string_decode_char(
     byte_offset: i64,
     out_codepoint: *mut u32,
 ) -> i64 {
+    // O(1)-per-call single-char UTF-8 decoder. Prior versions
+    // delegated to `std::str::from_utf8(slice)` over the *whole*
+    // remaining slice, then `chars().next()`. That made each call
+    // O(remaining_bytes) — for a 104K-char `for c in s.chars()`
+    // pass, total validation work grew quadratically (~5.4B bytes
+    // re-validated). Investigation (`wip-chars-inline.md`, 2026-05-15)
+    // measured this as the dominant per-char cost in karac vs Rust
+    // (karac 776 ns/char vs Rust 0.96 ns/char → 810× slower on
+    // pure-iter bench). The fix is mechanical: look at one to four
+    // bytes for the next character; never touch the rest of the
+    // slice.
+    //
+    // Output parity with the prior implementation on well-formed
+    // input is exact (same Unicode scalar value, same byte
+    // advancement). For malformed input the new version emits
+    // U+FFFD and advances 1 byte at the malformed position; the
+    // prior version tried a small valid-prefix recovery before
+    // emitting FFFD. Both shapes are forward-progressing and match
+    // `String::from_utf8_lossy`'s recovery family; the simpler
+    // single-byte advance is the standard "WHATWG UTF-8 decoder"
+    // recovery rule.
     if byte_offset < 0 || byte_offset >= len {
         *out_codepoint = 0;
         return len;
     }
     let start = byte_offset as usize;
     let total = len as usize;
-    let slice = std::slice::from_raw_parts(data.add(start), total - start);
-    match std::str::from_utf8(slice) {
-        Ok(s) => {
-            // Well-formed: take the first char, advance by its UTF-8 width.
-            if let Some(c) = s.chars().next() {
-                *out_codepoint = c as u32;
-                (start + c.len_utf8()) as i64
-            } else {
-                *out_codepoint = 0;
-                len
-            }
-        }
-        Err(e) => {
-            // Decode up to the first invalid byte; if that's offset 0 we
-            // emit the replacement char and advance by one byte to keep
-            // the loop forward-progressing.
-            let valid = e.valid_up_to();
-            if valid > 0 {
-                let valid_slice = std::str::from_utf8_unchecked(&slice[..valid]);
-                if let Some(c) = valid_slice.chars().next() {
-                    *out_codepoint = c as u32;
-                    return (start + c.len_utf8()) as i64;
-                }
-            }
-            *out_codepoint = 0xFFFD; // U+FFFD REPLACEMENT CHARACTER
-            (start + 1) as i64
-        }
+    let remaining = total - start;
+    let b0 = *data.add(start);
+
+    // ── ASCII fast path (the hot path for English / source code) ─
+    if b0 < 0x80 {
+        *out_codepoint = b0 as u32;
+        return (start + 1) as i64;
     }
+
+    // ── Determine continuation width from lead byte ──────────────
+    let width: usize = if b0 < 0xC2 {
+        // 0x80..0xC0: stray continuation byte at start (malformed).
+        // 0xC0..0xC2: 2-byte overlong of a 1-byte ASCII codepoint —
+        // disallowed by the UTF-8 spec since RFC 3629. Reject both.
+        *out_codepoint = 0xFFFD;
+        return (start + 1) as i64;
+    } else if b0 < 0xE0 {
+        2
+    } else if b0 < 0xF0 {
+        3
+    } else if b0 < 0xF5 {
+        // 0xF5..0xF8 would technically be 4-byte leads but they
+        // start above the U+10FFFF Unicode cap — disallowed.
+        4
+    } else {
+        *out_codepoint = 0xFFFD;
+        return (start + 1) as i64;
+    };
+
+    if remaining < width {
+        // Truncated sequence at end of string.
+        *out_codepoint = 0xFFFD;
+        return (start + 1) as i64;
+    }
+
+    // ── Combine continuation bytes, validating each ──────────────
+    let mut cp: u32 = match width {
+        2 => (b0 & 0x1F) as u32,
+        3 => (b0 & 0x0F) as u32,
+        4 => (b0 & 0x07) as u32,
+        _ => unreachable!(),
+    };
+    for i in 1..width {
+        let b = *data.add(start + i);
+        if b & 0xC0 != 0x80 {
+            // Expected a `10xxxxxx` continuation byte; got something
+            // else. Bail out with FFFD; advance 1 byte (don't
+            // consume the malformed lead+partial run).
+            *out_codepoint = 0xFFFD;
+            return (start + 1) as i64;
+        }
+        cp = (cp << 6) | ((b & 0x3F) as u32);
+    }
+
+    // ── Reject surrogates, overlongs, out-of-range codepoints ────
+    let valid = match width {
+        2 => cp >= 0x80,
+        3 => cp >= 0x800 && !(0xD800..=0xDFFF).contains(&cp),
+        4 => (0x10000..=0x10FFFF).contains(&cp),
+        _ => unreachable!(),
+    };
+    if !valid {
+        *out_codepoint = 0xFFFD;
+        return (start + 1) as i64;
+    }
+
+    *out_codepoint = cp;
+    (start + width) as i64
 }
