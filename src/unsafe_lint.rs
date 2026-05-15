@@ -1,16 +1,26 @@
 // src/unsafe_lint.rs
-//! `undocumented_unsafe` lint: every `unsafe { ... }` block must be preceded
-//! by a line comment whose text (after stripping the leading `//`) begins with
-//! `Safety:` (case-insensitive). The check is source-text-based because regular
-//! line comments are stripped from the token stream during lexing.
+//! `undocumented_unsafe` lint with two carriers, one diagnostic name:
 //!
-//! Suppression:
-//!   - `#[allow(undocumented_unsafe)]` on the enclosing function silences the
-//!     warning for all `unsafe` blocks inside that function.
+//! 1. **Expression form (`unsafe { ... }`).** Every block must be preceded
+//!    by a line comment whose text (after stripping the leading `//`) begins
+//!    with `Safety:` (case-insensitive). The check is source-text-based
+//!    because regular line comments are stripped from the token stream
+//!    during lexing.
+//! 2. **Declaration form (`unsafe extern "ABI" { ... }`).** Every block must
+//!    carry a `///` doc-comment containing a `# Safety` markdown section
+//!    (case-insensitive, any header level). The doc-comment is parsed onto
+//!    `ExternBlock.doc_comment` and is also rendered by `karac doc`, so the
+//!    lint and the renderer share one carrier — authors don't write a
+//!    safety justification twice.
+//!
+//! Suppression (both forms):
+//!   - `#[allow(undocumented_unsafe)]` on the enclosing function (form 1)
+//!     or on the block itself (form 2) silences the warning.
 //!   - `#[deny(undocumented_unsafe)]` promotes the warning to an error.
 
 use crate::ast::{
-    Attribute, Block, Expr, ExprKind, FieldInit, Item, MatchArm, Program, Stmt, StmtKind,
+    Attribute, Block, Expr, ExprKind, ExternBlock, FieldInit, Item, MatchArm, Program, Stmt,
+    StmtKind,
 };
 use crate::token::Span;
 
@@ -36,6 +46,14 @@ pub fn check_undocumented_unsafe(program: &Program, source: &str) -> Vec<LintDia
     let lines: Vec<&str> = source.lines().collect();
     let mut diags = Vec::new();
     for item in &program.items {
+        if let Item::ExternBlock(b) = item {
+            let allow = has_lint_attr(&b.attributes, "allow");
+            let deny = has_lint_attr(&b.attributes, "deny");
+            if !allow {
+                check_extern_block_safety_doc(b, deny, &mut diags);
+            }
+            continue;
+        }
         let (fn_allow, fn_deny) = match item {
             Item::Function(f) => (
                 has_lint_attr(&f.attributes, "allow"),
@@ -49,6 +67,48 @@ pub fn check_undocumented_unsafe(program: &Program, source: &str) -> Vec<LintDia
         collect_item_unsafe(item, &lines, fn_deny, &mut diags);
     }
     diags
+}
+
+fn check_extern_block_safety_doc(block: &ExternBlock, deny: bool, diags: &mut Vec<LintDiagnostic>) {
+    let has_safety = block
+        .doc_comment
+        .as_deref()
+        .map(doc_has_safety_section)
+        .unwrap_or(false);
+    if !has_safety {
+        diags.push(LintDiagnostic {
+            level: if deny {
+                LintLevel::Error
+            } else {
+                LintLevel::Warning
+            },
+            span: block.span.clone(),
+            message: "unsafe extern block is missing a `# Safety` doc-comment \
+                      section explaining the trust contract for its imports"
+                .to_string(),
+            lint_name: "undocumented_unsafe".to_string(),
+        });
+    }
+}
+
+/// True if any line of the doc-comment is a markdown header whose visible
+/// text begins with "Safety" (case-insensitive). Accepts any header level
+/// (`# Safety`, `## Safety`, ...) and any trailing text (`# Safety` and
+/// `# Safety considerations` both qualify). The doc-comment body has
+/// already been stripped of the `///` prefix by the lexer, so a header
+/// line looks like `# Safety` here, not `/// # Safety`.
+fn doc_has_safety_section(doc: &str) -> bool {
+    doc.lines().any(|line| {
+        let trimmed = line.trim_start();
+        let after_hashes = trimmed.trim_start_matches('#');
+        if after_hashes.len() == trimmed.len() {
+            return false;
+        }
+        after_hashes
+            .trim_start()
+            .to_ascii_lowercase()
+            .starts_with("safety")
+    })
 }
 
 fn has_lint_attr(attrs: &[Attribute], kind: &str) -> bool {
