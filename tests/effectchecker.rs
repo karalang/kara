@@ -227,6 +227,91 @@ fn test_noblock_removes_blocks_from_c_unwind_but_keeps_panics() {
 }
 
 #[test]
+fn test_block_level_noblock_propagates_to_every_child_extern_c() {
+    // Block-level `@noblock` lives on `ExternBlock.attributes` (not
+    // pre-merged into per-item attributes). The effectchecker must
+    // union block-level and per-item attrs when computing the ABI
+    // default suppression so every child sees the noblock effect.
+    let result = effectcheck_ok(
+        "@noblock\n\
+         unsafe extern \"C\" {\n\
+             fn cpu_work_a() -> i32;\n\
+             fn cpu_work_b() -> i32;\n\
+         }",
+    );
+    for name in ["cpu_work_a", "cpu_work_b"] {
+        let inferred = result.inferred_effects.get(name).unwrap();
+        assert!(
+            !inferred
+                .effects
+                .iter()
+                .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+            "block-level @noblock should suppress blocks on child `{name}`"
+        );
+    }
+}
+
+#[test]
+fn test_per_item_noblock_does_not_leak_to_sibling() {
+    // Symmetric negative: per-item `@noblock` on one sibling must NOT
+    // bubble to the block, and must NOT suppress the ABI default on
+    // any other sibling. Pins that the union is one-way (block → item),
+    // not bidirectional.
+    let result = effectcheck_ok(
+        "unsafe extern \"C\" {\n\
+             @noblock fn pure_cpu() -> i32;\n\
+             fn slow_io() -> i32;\n\
+         }",
+    );
+    let pure = result.inferred_effects.get("pure_cpu").unwrap();
+    assert!(
+        !pure
+            .effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "per-item @noblock should suppress blocks on its own item"
+    );
+    let slow = result.inferred_effects.get("slow_io").unwrap();
+    assert!(
+        slow.effects
+            .iter()
+            .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+        "sibling without @noblock should retain the extern \"C\" blocks default"
+    );
+}
+
+#[test]
+fn test_block_level_noblock_on_c_unwind_keeps_panics_on_every_child() {
+    // C-unwind ABI defaults to {blocks, panics}; `@noblock` suppresses
+    // blocks but cannot suppress panics. Block-level `@noblock` must
+    // apply that rule uniformly to every child.
+    let result = effectcheck_ok(
+        "@noblock\n\
+         unsafe extern \"C-unwind\" {\n\
+             fn throwing_a();\n\
+             fn throwing_b();\n\
+         }",
+    );
+    for name in ["throwing_a", "throwing_b"] {
+        let inferred = result.inferred_effects.get(name).unwrap();
+        assert!(
+            !inferred
+                .effects
+                .iter()
+                .any(|e| e.effect.verb == EffectVerbKind::Blocks),
+            "block-level @noblock should suppress blocks on C-unwind child `{name}`"
+        );
+        assert!(
+            inferred
+                .effects
+                .iter()
+                .any(|e| e.effect.verb == EffectVerbKind::Panics),
+            "C-unwind child `{name}` should retain panics even with @noblock"
+        );
+    }
+}
+
+#[test]
 fn test_extern_c_merges_programmer_annotations() {
     // Programmer-supplied effects are merged with the ABI defaults.
     // extern "C" fn read_db() reads(Db) → final = {blocks, reads(Db)}
