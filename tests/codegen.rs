@@ -4505,6 +4505,97 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_bounds_elision_for_range_zero_to_len() {
+        // `for i in 0..v.len()` proves both bounds on i: lower from the
+        // 0 literal start, upper from v.len() as the end. Inside the
+        // body, v[i] should skip both halves of the runtime bounds check.
+        let out = run_program(
+            r#"
+fn sum_all(v: ref Vec[i64]) -> i64 {
+    let mut acc = 0i64;
+    for i in 0..v.len() {
+        acc = acc + v[i];
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    v.push(4);
+    v.push(5);
+    println(sum_all(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "15");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_for_range_nonzero_start() {
+        // `for i in 1..n` where n aliases v.len(). Lower bound from the
+        // non-negative literal 1; upper bound via the alias. Both elide.
+        let out = run_program(
+            r#"
+fn sum_skip_first(v: ref Vec[i64]) -> i64 {
+    let n = v.len();
+    let mut acc = 0i64;
+    for i in 1..n {
+        acc = acc + v[i];
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(100);
+    v.push(1);
+    v.push(2);
+    v.push(3);
+    println(sum_skip_first(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "6");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bounds_elision_for_range_inclusive_keeps_upper_check() {
+        // Inclusive range `0..=n` includes i = n, which would be OOB on
+        // v[i]. The pass MUST NOT elide the upper-bound check here. We
+        // exercise the pattern with a safe `n - 1` end so the test
+        // passes correctness-wise; the gate is that the compiled code
+        // doesn't silently miscompile through elision.
+        let out = run_program(
+            r#"
+fn sum_inclusive(v: ref Vec[i64]) -> i64 {
+    let n = v.len();
+    let last = n - 1;
+    let mut acc = 0i64;
+    for i in 0..=last {
+        acc = acc + v[i];
+    }
+    acc
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(sum_inclusive(v));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "60");
+        }
+    }
+
+    #[test]
     fn test_e2e_bounds_elision_slice_under_while_guard() {
         // Same elision pass widened to `Slice[T]` indexed reads. The pass
         // mirrors compile_vec_index's wiring through emit_split_bounds_check

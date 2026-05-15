@@ -18468,7 +18468,23 @@ impl<'ctx> Codegen<'ctx> {
             .build_load::<BasicTypeEnum<'ctx>>(i64_t.into(), counter, "i")
             .unwrap();
         self.bind_pattern(pattern, cur)?;
+        // Bounds-check elision: a for-range loop establishes `start <= i < end`
+        // (or `<= end` for inclusive). Push the facts compile_vec_index /
+        // compile_slice_index need to elide the bounds check on `v[i]`
+        // inside the body. The conservative rules match what we can prove
+        // without arithmetic reasoning: start = 0 / non-negative literal
+        // gives a lower bound; end resolving to a Vec/Slice's `.len()`
+        // (directly or via a local alias) gives an upper bound, only for
+        // exclusive ranges (inclusive ranges include the end value, which
+        // would be OOB on `v[end]`).
+        let pushed_for_bounds =
+            self.collect_asserted_bounds_from_for_range(pattern, start, end, inclusive);
+        let pushed_for_count = pushed_for_bounds.len();
+        self.asserted_index_bounds.extend(pushed_for_bounds);
         self.compile_block(body)?;
+        for _ in 0..pushed_for_count {
+            self.asserted_index_bounds.pop();
+        }
         if self
             .builder
             .get_insert_block()
@@ -19643,6 +19659,54 @@ impl<'ctx> Codegen<'ctx> {
     fn collect_asserted_bounds_from_guard(&self, cond: &Expr) -> Vec<AssertedIndexBound> {
         let mut out = Vec::new();
         self.walk_guard_conjuncts(cond, &mut out);
+        out
+    }
+
+    /// Asserted-bounds facts for the body of `for i in start..end`. The
+    /// for-range loop natively establishes `start <= i < end` (or `<= end`
+    /// for inclusive), so we can short-cut the guard-parsing surface for
+    /// the common `for i in 0..v.len()` and `for i in 1..n` shapes.
+    ///
+    /// Lower bound: pushed when `start` is None (defaults to 0) or a
+    /// non-negative integer literal. Anything else (a variable, an
+    /// arithmetic expression) is conservative — we don't know its sign
+    /// without range analysis, so no LowerBound fact.
+    ///
+    /// Upper bound: pushed only for exclusive ranges (`0..end`, not
+    /// `0..=end`) when `end` resolves to a Vec or Slice's `.len()` via
+    /// `resolve_len_origin`. Inclusive ranges include the end value
+    /// itself, which would be one past the last valid index — proving
+    /// `i < v.len()` inside the body would require knowing `end <
+    /// v.len()`, which the source rarely makes explicit.
+    fn collect_asserted_bounds_from_for_range(
+        &self,
+        pattern: &Pattern,
+        start: &Option<Box<Expr>>,
+        end: &Option<Box<Expr>>,
+        inclusive: bool,
+    ) -> Vec<AssertedIndexBound> {
+        let idx_var = match &pattern.kind {
+            PatternKind::Binding(name) => name.clone(),
+            _ => return Vec::new(),
+        };
+        let mut out = Vec::new();
+        let lower_proven = match start.as_deref().map(|e| &e.kind) {
+            None => true,
+            Some(ExprKind::Integer(n, _)) if *n >= 0 => true,
+            _ => false,
+        };
+        if lower_proven {
+            out.push(AssertedIndexBound::LowerBound {
+                idx_var: idx_var.clone(),
+            });
+        }
+        if !inclusive {
+            if let Some(e) = end.as_deref() {
+                if let Some(vec_var) = self.resolve_len_origin(e) {
+                    out.push(AssertedIndexBound::UpperBound { idx_var, vec_var });
+                }
+            }
+        }
         out
     }
 
