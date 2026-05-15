@@ -2770,6 +2770,20 @@ impl<'ctx> Codegen<'ctx> {
             "f32" => self.context.f32_type().into(),
             "f64" => self.context.f64_type().into(),
             "bool" => self.context.bool_type().into(),
+            // `char` is a Unicode scalar value — 32 bits, same LLVM
+            // type as `i32` / `u32`. Without this arm, `char` falls
+            // through to the i64 default below, which caused
+            // `Map[char, V].new()` to allocate `key_size = 8` byte
+            // slots for 4-byte char keys; the runtime would then
+            // copy 4 bytes of stack-neighbor garbage alongside
+            // every char into the kv table. Hash/eq only read the
+            // first 4 bytes so it worked accidentally as long as
+            // the garbage was consistent between insert and get
+            // sites — Slice 1b.3 sidestepped that fragility with a
+            // forced alloca-order in the get arm; this fix
+            // addresses the root cause. Surfaced by the
+            // monomorphized-collections Slice 2 investigation.
+            "char" => self.context.i32_type().into(),
             "String" | "str" => self.vec_struct_type().into(),
             name => {
                 // Shared types are heap-allocated pointers.

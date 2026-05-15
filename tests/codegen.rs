@@ -5501,6 +5501,42 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_char_uses_i32_key_size() {
+        // Slice 2.0 — `llvm_type_for_name` now recognizes `"char"` as
+        // i32 (Unicode scalar value, 4 bytes). Prior to this fix,
+        // `Map[char, V].new()` allocated 8-byte key slots and the
+        // runtime memcpy'd 4 bytes of stack-neighbor garbage with
+        // each char key. This test pins the corrected emission.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let mut m: Map[char, i64] = Map.new();
+    m.insert('a', 1_i64);
+    println(m.len());
+}
+"#,
+        );
+        let new_line = ir
+            .lines()
+            .find(|l| l.contains("call ptr @karac_map_new"))
+            .unwrap_or_else(|| panic!("no karac_map_new call site; IR:\n{}", ir));
+        // sizeof(i32) = 4 bytes is rendered as `ptrtoint (ptr
+        // getelementptr (i32, ptr null, i32 1) to i64)` by inkwell's
+        // size_of() codegen; sizeof(i64) = 8 as the `i64` form. Pin
+        // both — key is i32, val is i64.
+        assert!(
+            new_line.contains("getelementptr (i32, ptr null, i32 1)"),
+            "char-key Map.new() should pass key_size = sizeof(i32); saw: {}",
+            new_line
+        );
+        assert!(
+            new_line.contains("getelementptr (i64, ptr null, i32 1)"),
+            "i64-value Map.new() should pass val_size = sizeof(i64); saw: {}",
+            new_line
+        );
+    }
+
+    #[test]
     fn test_ir_map_i64_i64_get_uses_mono_symbol_with_inline_probe() {
         // Slice 1b.3 — Map[i64, i64].get routes through the mono
         // `karac_map_i64_i64_get` symbol with the same inline-probe
