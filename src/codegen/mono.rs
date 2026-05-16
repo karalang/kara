@@ -1,0 +1,1302 @@
+//! Generic-call monomorphization + per-K/V Map specialization.
+//!
+//! Houses the generic-function compilation pipeline (
+//! `compile_generic_call`, `declare_mono_function`, `compile_mono_function`,
+//! `infer_type_args`, `unify_type_expr`, `is_known_concrete_type`,
+//! `mangle_mono_name`, `verify_bounds_at_codegen`,
+//! `llvm_type_satisfies_trait`, `llvm_type_to_mangle_str`)
+//! and the per-(K, V) `Map[K, V]` method monomorphization that
+//! emits inlined hash / probe / load functions to short-circuit
+//! the erased `karac_map_*` runtime path (`mono_map_cache_key`,
+//! `should_use_mono_map_for`, `get_or_emit_map_mono_methods`,
+//! `emit_mono_map_insert_old_body`, `emit_mono_map_get_body`).
+
+use crate::ast::*;
+use std::collections::HashMap;
+
+use inkwell::module::Linkage;
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue};
+use inkwell::AddressSpace;
+use inkwell::IntPredicate;
+
+use super::helpers::{const_value_from_literal_expr, const_value_to_mangle_str};
+use super::state::{MapMonoMethods, VarSlot};
+
+impl<'ctx> super::Codegen<'ctx> {
+    pub(super) fn compile_generic_call(
+        &mut self,
+        name: &str,
+        args: &[CallArg],
+        explicit_generic_args: Option<&[GenericArg]>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let generic_fn = self.generic_fns[name].clone();
+
+        // Compile argument values so we can infer concrete types.
+        let arg_vals: Vec<BasicValueEnum<'ctx>> = args
+            .iter()
+            .map(|a| self.compile_expr(&a.value))
+            .collect::<Result<_, _>>()?;
+
+        // Infer type arguments from the argument value types.
+        let mut subst = self.infer_type_args(&generic_fn, &arg_vals);
+
+        // Const generics slice 1b: process explicit generic args. For
+        // each formal param the user supplied an explicit arg for,
+        // override the inferred type subst (for type params) or
+        // populate a parallel const_subst (for const params). The
+        // const_subst flows to `mangle_mono_name` so each distinct
+        // const-arg tuple produces a distinct mono symbol. Slice 4
+        // will collapse this into a single `SubstValue<'ctx>` shape
+        // (fork F2) once codegen body lowering needs const-param
+        // identifier resolution.
+        let mut const_subst: HashMap<String, crate::prelude::ConstValue> = HashMap::new();
+        if let (Some(explicit), Some(gp)) = (explicit_generic_args, &generic_fn.generic_params) {
+            for (param, arg) in gp.params.iter().zip(explicit.iter()) {
+                match arg {
+                    GenericArg::Type(t) => {
+                        let llvm_ty = self.llvm_type_for_type_expr(t);
+                        subst.insert(param.name.clone(), llvm_ty);
+                    }
+                    GenericArg::Const(e) => {
+                        if let Some(cv) = const_value_from_literal_expr(e) {
+                            const_subst.insert(param.name.clone(), cv);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Slice 0.a sub-step 2 — codegen monomorphization-request bound
+        // enforcement (defense-in-depth). The typechecker discharges
+        // bounds at every call site (`discharge_type_bounds` /
+        // `normalize_bounds_into_where_clause`); this hook fires only
+        // for paths that reach codegen with a still-unsatisfied bound
+        // (a future cross-module path, or a typechecker-internal call
+        // that bypassed the discharge). Covers built-in trait names
+        // against primitive LLVM types only — user-trait-on-user-type
+        // requires an impl-table threading slice that isn't built yet.
+        self.verify_bounds_at_codegen(&generic_fn, &subst)?;
+
+        // Mangle a unique name for this specialization (e.g. `max$i64`).
+        let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
+
+        // Generate the specialization if we haven't done so yet.
+        if !self.generated_monos.contains(&mangled) {
+            // Mark as in-progress before recursing to avoid infinite loops.
+            self.generated_monos.insert(mangled.clone());
+
+            // Save all per-function codegen state — we're about to compile a
+            // different function inline.
+            let saved_bb = self.builder.get_insert_block();
+            let saved_fn = self.current_fn;
+            let saved_vars = std::mem::take(&mut self.variables);
+            let saved_var_types = std::mem::take(&mut self.var_type_names);
+            let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+            let saved_subst = std::mem::replace(&mut self.type_subst, subst.clone());
+            // Const generics slice 4: thread the const-arg substitution
+            // into the body-lowering pass so `compile_expr Identifier`
+            // can resolve const-param refs against it. Parallel to
+            // `type_subst`'s save/restore.
+            let saved_const_subst = std::mem::replace(&mut self.const_subst, const_subst.clone());
+
+            // Declare then compile the specialization.
+            self.declare_mono_function(&generic_fn, &mangled)?;
+            self.compile_mono_function(&generic_fn, &mangled)?;
+
+            // Restore state.
+            self.const_subst = saved_const_subst;
+            self.type_subst = saved_subst;
+            self.loop_stack = saved_loop_stack;
+            self.var_type_names = saved_var_types;
+            self.variables = saved_vars;
+            self.current_fn = saved_fn;
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+        }
+
+        // Call the specialized function.
+        let func = match self.module.get_function(&mangled) {
+            Some(f) => f,
+            None => return Ok(self.context.i64_type().const_int(0, false).into()),
+        };
+
+        let compiled_args: Vec<BasicMetadataValueEnum<'ctx>> = arg_vals
+            .iter()
+            .map(|v| BasicMetadataValueEnum::from(*v))
+            .collect();
+
+        let call = self
+            .builder
+            .build_call(func, &compiled_args, "call")
+            .unwrap();
+
+        let basic_val = call.try_as_basic_value();
+        if basic_val.is_instruction() {
+            Ok(self.context.i64_type().const_int(0, false).into())
+        } else {
+            Ok(basic_val.unwrap_basic())
+        }
+    }
+
+    /// Declare the LLVM function for a monomorphized specialization.
+    /// `type_subst` must already be populated before calling this.
+    pub(super) fn declare_mono_function(
+        &mut self,
+        func: &Function,
+        mangled: &str,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let param_types: Vec<BasicMetadataTypeEnum<'ctx>> = func
+            .params
+            .iter()
+            .map(|p| self.llvm_param_type(p))
+            .collect();
+
+        let fn_type = match self.llvm_return_type(&func.return_type) {
+            Some(BasicTypeEnum::IntType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::FloatType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::PointerType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::StructType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ArrayType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::VectorType(t)) => t.fn_type(&param_types, false),
+            Some(BasicTypeEnum::ScalableVectorType(_)) | None => {
+                self.context.void_type().fn_type(&param_types, false)
+            }
+        };
+
+        Ok(self.module.add_function(mangled, fn_type, None))
+    }
+
+    /// Compile the body of a monomorphized specialization.
+    /// `type_subst` must already be populated and per-function state must be fresh.
+    pub(super) fn compile_mono_function(
+        &mut self,
+        func: &Function,
+        mangled: &str,
+    ) -> Result<(), String> {
+        let fn_val = self
+            .module
+            .get_function(mangled)
+            .ok_or_else(|| format!("Mono '{}' not declared", mangled))?;
+
+        self.current_fn = Some(fn_val);
+        self.variables.clear();
+        self.var_type_names.clear();
+
+        let entry = self.context.append_basic_block(fn_val, "entry");
+        self.builder.position_at_end(entry);
+
+        for (i, param) in func.params.iter().enumerate() {
+            let param_name = self.param_name(param);
+            let param_val = fn_val.get_nth_param(i as u32).unwrap();
+            let alloca = self.create_entry_alloca(fn_val, &param_name, param_val.get_type());
+            self.builder.build_store(alloca, param_val).unwrap();
+            // Track declared type name for struct/enum field resolution.
+            if let TypeKind::Path(path) = &param.ty.kind {
+                if let Some(type_name) = path.segments.first() {
+                    self.var_type_names
+                        .insert(param_name.clone(), type_name.clone());
+                }
+            }
+            self.variables.insert(
+                param_name,
+                VarSlot {
+                    ptr: alloca,
+                    ty: param_val.get_type(),
+                },
+            );
+        }
+
+        let result = self.compile_block(&func.body)?;
+
+        if self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_none()
+        {
+            if let Some(val) = result {
+                self.builder.build_return(Some(&val)).unwrap();
+            } else {
+                self.builder.build_return(None).unwrap();
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Infer the type-parameter substitution for a generic function call by
+    /// matching each parameter's declared type against the concrete argument type.
+    pub(super) fn infer_type_args(
+        &self,
+        func: &Function,
+        arg_vals: &[BasicValueEnum<'ctx>],
+    ) -> HashMap<String, BasicTypeEnum<'ctx>> {
+        let mut subst = HashMap::new();
+        for (param, val) in func.params.iter().zip(arg_vals.iter()) {
+            self.unify_type_expr(&param.ty, val.get_type(), &mut subst);
+        }
+        subst
+    }
+
+    /// Recursively match a declared type expression against a concrete LLVM type,
+    /// recording bindings for any unbound type parameters found.
+    pub(super) fn unify_type_expr(
+        &self,
+        ty: &TypeExpr,
+        concrete: BasicTypeEnum<'ctx>,
+        subst: &mut HashMap<String, BasicTypeEnum<'ctx>>,
+    ) {
+        if let TypeKind::Path(path) = &ty.kind {
+            if path.segments.len() == 1 && path.generic_args.is_none() {
+                let name = &path.segments[0];
+                // Treat as a type parameter if it's not a known concrete type.
+                if !self.is_known_concrete_type(name) {
+                    subst.entry(name.clone()).or_insert(concrete);
+                }
+            }
+            // TODO: unify generic args (e.g. `Vec[T]`) when container types are codegen'd.
+        }
+    }
+
+    /// Returns true if `name` is a built-in concrete type or a declared struct/enum.
+    pub(super) fn is_known_concrete_type(&self, name: &str) -> bool {
+        matches!(
+            name,
+            "i8" | "i16"
+                | "i32"
+                | "i64"
+                | "u8"
+                | "u16"
+                | "u32"
+                | "u64"
+                | "isize"
+                | "usize"
+                | "f32"
+                | "f64"
+                | "bool"
+                | "str"
+                | "String"
+                | "char"
+        ) || self.struct_types.contains_key(name)
+            || self.enum_layouts.contains_key(name)
+    }
+
+    /// Build a mangled name for a specialization, e.g. `max$i64` or `zip$i64$f64`.
+    pub(super) fn mangle_mono_name(
+        &self,
+        base: &str,
+        func: &Function,
+        subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+        const_subst: &HashMap<String, crate::prelude::ConstValue>,
+    ) -> String {
+        let params = match &func.generic_params {
+            Some(gp) => &gp.params,
+            None => return base.to_string(),
+        };
+
+        let mut mangled = base.to_string();
+        for param in params {
+            // Const generics slice 1b: const params take priority over
+            // type subst when both maps are populated (the const_subst
+            // is keyed by formal name, the type subst doesn't carry
+            // const params).
+            if param.is_const {
+                if let Some(cv) = const_subst.get(&param.name) {
+                    mangled.push('$');
+                    mangled.push_str(&const_value_to_mangle_str(cv));
+                }
+            } else if let Some(ty) = subst.get(&param.name) {
+                mangled.push('$');
+                mangled.push_str(&self.llvm_type_to_mangle_str(*ty));
+            }
+        }
+        mangled
+    }
+
+    /// Slice 0.a sub-step 2 — codegen monomorphization-request bound
+    /// enforcement.
+    ///
+    /// Walks both inline-form (`fn f[T: Bound]`) and where-clause
+    /// (`fn f[T] where T: Bound`) bounds against the concrete LLVM
+    /// substitution. Returns `Err` when a primitive LLVM type
+    /// demonstrably fails to satisfy a built-in trait bound (e.g.
+    /// `f64` for `Hash` / `Eq` / `Ord`), matching the typechecker's
+    /// `type_supports_*` shape on primitives.
+    ///
+    /// **Scope is intentionally narrow.** The typechecker discharges
+    /// bound violations at every call site (`discharge_type_bounds`),
+    /// so this hook is purely defense-in-depth for paths that reach
+    /// codegen without a typechecker pass (no such path exists in the
+    /// single-CU compiler today, but cross-module compilation would
+    /// open one). Coverage:
+    /// - Built-in traits (`Hash` / `Eq` / `PartialEq` / `Ord` /
+    ///   `PartialOrd` / `Display` / `Clone` / `Copy`) checked against
+    ///   primitive LLVM types via `llvm_type_satisfies_trait`.
+    /// - Non-primitive LLVM types (pointers, structs) and unknown
+    ///   trait names fall through permissively — verifying those
+    ///   requires plumbing the typechecker's impl table into codegen
+    ///   (deferred; tracked as a hard-stop trigger in
+    ///   `phase-7-codegen.md § Trait-bounds-at-codegen enforcement`).
+    pub(super) fn verify_bounds_at_codegen(
+        &self,
+        generic_fn: &Function,
+        subst: &HashMap<String, BasicTypeEnum<'ctx>>,
+    ) -> Result<(), String> {
+        if let Some(gp) = &generic_fn.generic_params {
+            for param in &gp.params {
+                if param.bounds.is_empty() {
+                    continue;
+                }
+                let Some(concrete) = subst.get(&param.name) else {
+                    continue;
+                };
+                for bound in &param.bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.llvm_type_satisfies_trait(*concrete, trait_name) {
+                        return Err(format!(
+                            "trait bound `{}: {}` is not satisfied at monomorphization site for `{}` \
+                             (concrete type `{}` does not implement `{}`)",
+                            param.name,
+                            trait_name,
+                            generic_fn.name,
+                            self.llvm_type_to_mangle_str(*concrete),
+                            trait_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        if let Some(wc) = &generic_fn.where_clause {
+            for constraint in &wc.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = constraint
+                else {
+                    continue;
+                };
+                let Some(concrete) = subst.get(type_name) else {
+                    continue;
+                };
+                for bound in bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if !self.llvm_type_satisfies_trait(*concrete, trait_name) {
+                        return Err(format!(
+                            "trait bound `{}: {}` is not satisfied at monomorphization site for `{}` \
+                             (concrete type `{}` does not implement `{}`)",
+                            type_name,
+                            trait_name,
+                            generic_fn.name,
+                            self.llvm_type_to_mangle_str(*concrete),
+                            trait_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Conservative LLVM-type-vs-built-in-trait predicate used by
+    /// `verify_bounds_at_codegen`. Mirrors the typechecker's
+    /// `type_supports_*` helpers but operates on `BasicTypeEnum`
+    /// instead of `Type`. Permissive on non-primitive shapes
+    /// (`PointerType`, `StructType`) and unknown trait names — those
+    /// cases are the typechecker's responsibility today; the codegen
+    /// hook only catches the unambiguous primitive violations
+    /// (f32/f64 failing `Hash` / `Eq` / `Ord`).
+    pub(super) fn llvm_type_satisfies_trait(
+        &self,
+        ty: BasicTypeEnum<'ctx>,
+        trait_name: &str,
+    ) -> bool {
+        match trait_name {
+            "Hash" | "Eq" | "Ord" => !matches!(ty, BasicTypeEnum::FloatType(_)),
+            "PartialEq" | "PartialOrd" | "Display" | "Clone" | "Copy" => true,
+            _ => true,
+        }
+    }
+
+    /// Produce a stable string token for an LLVM type suitable for name mangling.
+    pub(super) fn llvm_type_to_mangle_str(&self, ty: BasicTypeEnum<'ctx>) -> String {
+        match ty {
+            BasicTypeEnum::IntType(t) => match t.get_bit_width() {
+                1 => "bool".to_string(),
+                8 => "i8".to_string(),
+                16 => "i16".to_string(),
+                32 => "i32".to_string(),
+                64 => "i64".to_string(),
+                w => format!("i{}", w),
+            },
+            BasicTypeEnum::FloatType(t) => {
+                // Distinguish f32 from f64 by comparing with context-canonical types.
+                if t == self.context.f32_type() {
+                    "f32".to_string()
+                } else {
+                    "f64".to_string()
+                }
+            }
+            BasicTypeEnum::PointerType(_) => "ptr".to_string(),
+            BasicTypeEnum::StructType(_) => "struct".to_string(),
+            _ => "opaque".to_string(),
+        }
+    }
+
+    // ── Monomorphized Map[K, V] symbol emission (Slice 1) ───────
+
+    /// Byte offsets into the runtime's `#[repr(C)]` `KaracMap`
+    /// layout (`runtime/src/map.rs`). Codegen-emitted monomorphized
+    /// `Map[K, V]` method symbols load these fields by direct GEP +
+    /// load against a `*mut KaracMap` opaque pointer rather than
+    /// calling through the type-erased `karac_map_*` runtime
+    /// functions. Pinned by the runtime-side unit test
+    /// `karac_map_field_offsets_match_codegen` — any drift trips
+    /// the runtime test before the binary can diverge.
+    const KARAC_MAP_STATUS_OFFSET: u64 = 0;
+    const KARAC_MAP_KV_OFFSET: u64 = 8;
+    const KARAC_MAP_CAPACITY_OFFSET: u64 = 16;
+    const KARAC_MAP_LEN_OFFSET: u64 = 24;
+    const KARAC_MAP_TOMBSTONES_OFFSET: u64 = 32;
+    /// Bucket status-byte sentinels for the monomorphized probe
+    /// loop. Must match the runtime's `BUCKET_EMPTY` /
+    /// `BUCKET_OCCUPIED` / `BUCKET_TOMBSTONE` constants in
+    /// `runtime/src/map.rs`.
+    const BUCKET_EMPTY: u64 = 0;
+    const BUCKET_OCCUPIED: u64 = 1;
+    const BUCKET_TOMBSTONE: u64 = 2;
+
+    /// Cache key for the monomorphized Map[K, V] symbol family —
+    /// `"{key_mangle}_{val_mangle}"` (e.g. `"i64_i64"`). Mirrors the
+    /// content-addressed scheme used by `mangle_mono_name` for user
+    /// generic fns, expressed in terms of `llvm_type_to_mangle_str`'s
+    /// stable token set so distinct K/V tuples never collide.
+    pub(super) fn mono_map_cache_key(
+        &self,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> String {
+        format!(
+            "{}_{}",
+            self.llvm_type_to_mangle_str(key_ty),
+            self.llvm_type_to_mangle_str(val_ty),
+        )
+    }
+
+    /// Gate predicate: does this K/V tuple route through the
+    /// monomorphized Map path? Every tuple that returns `false`
+    /// falls through to the erased `karac_map_*` runtime per § 3.6
+    /// coexist-during-migration. Slice 5 deletes the erased
+    /// fallback entirely.
+    ///
+    /// Slice 1 shipped `Map[i64, i64]`. Slice 2 adds the `i32`
+    /// key family — that covers `Map[char, i64]` (the LeetCode #3
+    /// kata's K/V tuple, since `char` lowers to LLVM `i32` per
+    /// Slice 2.0) and `Map[i32, i64]` if anyone instantiates it.
+    /// Both mangle identically (`i32_i64`) and share a single
+    /// mono symbol — the K/V slot layout and FNV-1a-over-4-bytes
+    /// hash are byte-identical regardless of which surface name
+    /// the user wrote.
+    pub(super) fn should_use_mono_map_for(
+        &self,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> bool {
+        let i32_t = self.context.i32_type();
+        let i64_t = self.context.i64_type();
+        let key_ok = matches!(key_ty, BasicTypeEnum::IntType(t) if t == i32_t || t == i64_t);
+        let val_ok = matches!(val_ty, BasicTypeEnum::IntType(t) if t == i64_t);
+        key_ok && val_ok
+    }
+
+    /// Lazily emit the monomorphized `Map[K, V]` method-symbol family
+    /// for a given K/V tuple and return the cached handles. Each
+    /// per-method `FunctionValue` is emitted with `LinkOnceODR`
+    /// linkage so cross-crate / cross-TU duplicates collapse at link
+    /// time (locked design § 3.2).
+    ///
+    /// Slice 1a ships **wrapper bodies only**: each mono method
+    /// forwards to the corresponding erased `karac_map_*` runtime
+    /// function 1:1. The wrapper exists at this slice to validate
+    /// emission, mangling, dispatch wiring, and `linkonce_odr`
+    /// linkage — `nm | grep karac_map_i64_i64_len | wc -l == 1`
+    /// after the slice lands. Slice 1b replaces hot-path bodies
+    /// (`insert_old`, `get`) with fully-inlined LLVM (direct i64
+    /// hash + icmp eq), unlocking the bench gain.
+    pub(super) fn get_or_emit_map_mono_methods(
+        &mut self,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) -> MapMonoMethods<'ctx> {
+        let cache_key = self.mono_map_cache_key(key_ty, val_ty);
+        if let Some(entry) = self.map_mono_methods.get(&cache_key) {
+            return *entry;
+        }
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        // len: direct GEP + load against the runtime's `#[repr(C)]`
+        // `KaracMap.len` field. Drops the function-pointer indirection
+        // and the extern call overhead the erased fallback's
+        // `karac_map_len` carried. Offset pinned by the runtime-side
+        // `karac_map_field_offsets_match_codegen` unit test.
+        let len_name = format!("karac_map_{cache_key}_len");
+        let len_fn = match self.module.get_function(&len_name) {
+            Some(f) => f,
+            None => {
+                let len_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+                let f = self
+                    .module
+                    .add_function(&len_name, len_ty, Some(Linkage::LinkOnceODR));
+                let entry = self.context.append_basic_block(f, "entry");
+                self.builder.position_at_end(entry);
+                let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+                let i8_t = self.context.i8_type();
+                let offset = i64_t.const_int(Self::KARAC_MAP_LEN_OFFSET, false);
+                let len_field_ptr = unsafe {
+                    self.builder
+                        .build_in_bounds_gep(i8_t, map_arg, &[offset], "mono.len.field.ptr")
+                        .unwrap()
+                };
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_field_ptr, "mono.len")
+                    .unwrap();
+                self.builder.build_return(Some(&len)).unwrap();
+                f
+            }
+        };
+
+        // insert_old: fast path inlines load-factor check, FNV-1a
+        // hash (via direct call to the existing `karac_hash_<K>`
+        // helper — same hash as the erased fallback so cross-path
+        // consistency holds while coexist is in effect), linear
+        // probe with empty / tombstone / occupied switch, and
+        // inline K-typed icmp eq. Slow path (resize-needed branch
+        // and safety fallback for the impossible exhausted-probe
+        // case) forwards to `karac_map_insert_old` extern.
+        let insert_name = format!("karac_map_{cache_key}_insert_old");
+        let insert_old_fn = match self.module.get_function(&insert_name) {
+            Some(f) => f,
+            None => {
+                let bool_t = self.context.bool_type();
+                let insert_ty = bool_t.fn_type(
+                    &[ptr_ty.into(), key_ty.into(), val_ty.into(), ptr_ty.into()],
+                    false,
+                );
+                let f =
+                    self.module
+                        .add_function(&insert_name, insert_ty, Some(Linkage::LinkOnceODR));
+                self.emit_mono_map_insert_old_body(f, key_ty, val_ty);
+                f
+            }
+        };
+
+        // get: same shape as insert_old's fast path but read-only.
+        // No load-factor branch (get never resizes), no tombstone
+        // tracking, no fresh-slot writes. Probe loop terminates on
+        // EMPTY (return false) or OCCUPIED-with-matching-key (load
+        // val, store to out_val, return true). On exhausted probe
+        // (would be unreachable under valid resize policy, but
+        // guarded for safety) returns false.
+        let get_name = format!("karac_map_{cache_key}_get");
+        let get_fn = match self.module.get_function(&get_name) {
+            Some(f) => f,
+            None => {
+                let bool_t = self.context.bool_type();
+                let get_ty = bool_t.fn_type(&[ptr_ty.into(), key_ty.into(), ptr_ty.into()], false);
+                let f = self
+                    .module
+                    .add_function(&get_name, get_ty, Some(Linkage::LinkOnceODR));
+                self.emit_mono_map_get_body(f, key_ty, val_ty);
+                f
+            }
+        };
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        let methods = MapMonoMethods {
+            len_fn,
+            insert_old_fn,
+            get_fn,
+        };
+        self.map_mono_methods.insert(cache_key, methods);
+        methods
+    }
+
+    /// Emit the fast-path-inlined body of the monomorphized
+    /// `karac_map_<K>_<V>_insert_old` function. The shape mirrors
+    /// the runtime's `KaracMap::insert` algorithm
+    /// (`runtime/src/map.rs:166`) — load-factor branch first,
+    /// then linear probe — but inlines the hash (via direct call
+    /// to `karac_hash_<K>`, the same FNV-1a helper the erased
+    /// fallback's function-pointer hash dispatches to) and the eq
+    /// (direct icmp on the K LLVM type), dropping the function-
+    /// pointer indirection that defines the erasure tax.
+    ///
+    /// Slice 1b emitted this for (i64, i64) only; Slice 2 generalizes
+    /// to any (i32 / i64 key) × (i64 val) pair so `Map[char, i64]`
+    /// can share the shape — char lowers to LLVM i32 (Slice 2.0).
+    ///
+    /// On entry the function has signature `i1 (ptr map, K key,
+    /// V val, ptr out_old_val)`. On exit, every path terminates
+    /// with `ret i1` (the existed bit).
+    pub(super) fn emit_mono_map_insert_old_body(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let key_int_ty = key_ty.into_int_type();
+        let val_int_ty = val_ty.into_int_type();
+        let key_size = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+        let val_size = (val_int_ty.get_bit_width() as u64).div_ceil(8);
+        let kv_size_bytes = key_size + val_size;
+
+        let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+        let key_arg = f.get_nth_param(1).unwrap().into_int_value();
+        let val_arg = f.get_nth_param(2).unwrap().into_int_value();
+        let out_old_arg = f.get_nth_param(3).unwrap().into_pointer_value();
+
+        // Match the mangle-token used by `mono_map_cache_key` so the
+        // helper name aligns with the symbol family. Both `char` (4-
+        // byte) and `i32` keys hash via `karac_hash_i32` here even
+        // though the erased fallback's stored function-pointer might
+        // be `karac_hash_char` — both are FNV-1a over 4 bytes and
+        // produce identical output for identical input, so cross-
+        // path consistency holds.
+        let hash_name = self.llvm_type_to_mangle_str(key_ty);
+        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let slow_bb = self.context.append_basic_block(f, "slow_path");
+        let fast_bb = self.context.append_basic_block(f, "fast_path");
+        let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
+        let probe_body_bb = self.context.append_basic_block(f, "probe.body");
+        let case_empty_bb = self.context.append_basic_block(f, "case.empty");
+        let case_tomb_check_bb = self.context.append_basic_block(f, "case.check_tomb");
+        let case_tomb_bb = self.context.append_basic_block(f, "case.tomb");
+        let case_occupied_bb = self.context.append_basic_block(f, "case.occupied");
+        let match_found_bb = self.context.append_basic_block(f, "match.found");
+        let exhausted_bb = self.context.append_basic_block(f, "exhausted");
+
+        // ── entry: field loads + load-factor check ────────────────
+        self.builder.position_at_end(entry_bb);
+        let len_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_LEN_OFFSET, false)],
+                    "len.p",
+                )
+                .unwrap()
+        };
+        let len = self
+            .builder
+            .build_load(i64_t, len_p, "len")
+            .unwrap()
+            .into_int_value();
+        let tomb_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_TOMBSTONES_OFFSET, false)],
+                    "tomb.p",
+                )
+                .unwrap()
+        };
+        let tombs = self
+            .builder
+            .build_load(i64_t, tomb_p, "tombs")
+            .unwrap()
+            .into_int_value();
+        let cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_CAPACITY_OFFSET, false)],
+                    "cap.p",
+                )
+                .unwrap()
+        };
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_p, "cap")
+            .unwrap()
+            .into_int_value();
+
+        // Load factor: (len + tombs + 1) * 4 > cap * 3 → resize
+        let sum = self.builder.build_int_add(len, tombs, "len+tombs").unwrap();
+        let sum1 = self
+            .builder
+            .build_int_add(sum, i64_t.const_int(1, false), "lt+1")
+            .unwrap();
+        let lhs = self
+            .builder
+            .build_int_mul(sum1, i64_t.const_int(4, false), "lhs")
+            .unwrap();
+        let rhs = self
+            .builder
+            .build_int_mul(cap, i64_t.const_int(3, false), "rhs")
+            .unwrap();
+        let need_resize = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, lhs, rhs, "need_resize")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(need_resize, slow_bb, fast_bb)
+            .unwrap();
+
+        // ── slow_path: forward to erased karac_map_insert_old ─────
+        self.builder.position_at_end(slow_bb);
+        let slow_key_slot = self.builder.build_alloca(key_ty, "slow.key.slot").unwrap();
+        let slow_val_slot = self.builder.build_alloca(val_ty, "slow.val.slot").unwrap();
+        self.builder.build_store(slow_key_slot, key_arg).unwrap();
+        self.builder.build_store(slow_val_slot, val_arg).unwrap();
+        let slow_existed = self
+            .builder
+            .build_call(
+                self.karac_map_insert_old_fn,
+                &[
+                    map_arg.into(),
+                    slow_key_slot.into(),
+                    slow_val_slot.into(),
+                    out_old_arg.into(),
+                ],
+                "slow.existed",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder.build_return(Some(&slow_existed)).unwrap();
+
+        // ── fast_path: load status/kv ptrs, inline hash ───────────
+        self.builder.position_at_end(fast_bb);
+        let status_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_STATUS_OFFSET, false)],
+                    "status.pp",
+                )
+                .unwrap()
+        };
+        let status_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                status_pp,
+                "status",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let kv_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_KV_OFFSET, false)],
+                    "kv.pp",
+                )
+                .unwrap()
+        };
+        let kv_ptr = self
+            .builder
+            .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
+            .unwrap()
+            .into_pointer_value();
+
+        // Compute hash via direct call to karac_hash_<K>. Stack-
+        // alloca + store + call matches the existing erased path's
+        // hash exactly (same FNV-1a basis + prime, same byte order).
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
+        self.builder.build_store(hash_key_slot, key_arg).unwrap();
+        let hash = self
+            .builder
+            .build_call(hash_fn, &[hash_key_slot.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── probe.cond: 3-PHI'd state, bound check on i ───────────
+        self.builder.position_at_end(probe_cond_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        let ft_phi = self.builder.build_phi(i64_t, "ft").unwrap();
+        let ft_set_phi = self.builder.build_phi(bool_t, "ft_set").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), fast_bb)]);
+        ft_phi.add_incoming(&[(&i64_t.const_zero(), fast_bb)]);
+        ft_set_phi.add_incoming(&[(&bool_t.const_zero(), fast_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let ft_val = ft_phi.as_basic_value().into_int_value();
+        let ft_set_val = ft_set_phi.as_basic_value().into_int_value();
+        let bound_done = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bound_done, exhausted_bb, probe_body_bb)
+            .unwrap();
+
+        // ── probe.body: compute slot, load status, switch ─────────
+        self.builder.position_at_end(probe_body_bb);
+        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
+        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "is.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, case_empty_bb, case_tomb_check_bb)
+            .unwrap();
+
+        // ── case.check_tomb: branch tomb vs occupied ──────────────
+        self.builder.position_at_end(case_tomb_check_bb);
+        let is_tomb = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_TOMBSTONE, false),
+                "is.tomb",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_tomb, case_tomb_bb, case_occupied_bb)
+            .unwrap();
+
+        // ── case.empty: write fresh entry, possibly at earlier tomb
+        self.builder.position_at_end(case_empty_bb);
+        let target_slot = self
+            .builder
+            .build_select(ft_set_val, ft_val, slot, "target.slot")
+            .unwrap()
+            .into_int_value();
+        let kv_size = i64_t.const_int(kv_size_bytes, false);
+        let target_off = self
+            .builder
+            .build_int_mul(target_slot, kv_size, "target.off")
+            .unwrap();
+        let target_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[target_off], "target.kv.p")
+                .unwrap()
+        };
+        self.builder.build_store(target_kv_p, key_arg).unwrap();
+        let target_val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    target_kv_p,
+                    &[i64_t.const_int(key_size, false)],
+                    "target.val.p",
+                )
+                .unwrap()
+        };
+        self.builder.build_store(target_val_p, val_arg).unwrap();
+        let target_status_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[target_slot], "target.status.p")
+                .unwrap()
+        };
+        self.builder
+            .build_store(
+                target_status_p,
+                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
+            )
+            .unwrap();
+        // len += 1
+        let new_len = self
+            .builder
+            .build_int_add(len, i64_t.const_int(1, false), "len.new")
+            .unwrap();
+        self.builder.build_store(len_p, new_len).unwrap();
+        // if ft_set, tombs -= 1
+        let tombs_dec = self
+            .builder
+            .build_int_sub(tombs, i64_t.const_int(1, false), "tombs.dec")
+            .unwrap();
+        let new_tombs = self
+            .builder
+            .build_select(ft_set_val, tombs_dec, tombs, "tombs.new")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(tomb_p, new_tombs).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
+
+        // ── case.tomb: remember first tomb, continue probing ─────
+        self.builder.position_at_end(case_tomb_bb);
+        let new_ft = self
+            .builder
+            .build_select(ft_set_val, ft_val, slot, "ft.new")
+            .unwrap()
+            .into_int_value();
+        let tomb_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
+            .unwrap();
+        i_phi.add_incoming(&[(&tomb_i_next, case_tomb_bb)]);
+        ft_phi.add_incoming(&[(&new_ft, case_tomb_bb)]);
+        ft_set_phi.add_incoming(&[(&bool_t.const_int(1, false), case_tomb_bb)]);
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── case.occupied: eq-check, found vs continue ───────────
+        self.builder.position_at_end(case_occupied_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(slot, kv_size, "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "slot.kv.p")
+                .unwrap()
+        };
+        let slot_key = self
+            .builder
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
+            .unwrap()
+            .into_int_value();
+        let key_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
+            .unwrap();
+        let occ_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.occ")
+            .unwrap();
+        // Pre-build the no-match phi inputs.
+        i_phi.add_incoming(&[(&occ_i_next, case_occupied_bb)]);
+        ft_phi.add_incoming(&[(&ft_val, case_occupied_bb)]);
+        ft_set_phi.add_incoming(&[(&ft_set_val, case_occupied_bb)]);
+        self.builder
+            .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── match.found: copy old val out, write new val ─────────
+        self.builder.position_at_end(match_found_bb);
+        let slot_val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    slot_kv_p,
+                    &[i64_t.const_int(key_size, false)],
+                    "slot.val.p",
+                )
+                .unwrap()
+        };
+        let old_val = self
+            .builder
+            .build_load(val_int_ty, slot_val_p, "old.val")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(out_old_arg, old_val).unwrap();
+        self.builder.build_store(slot_val_p, val_arg).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // ── exhausted: unreachable under correct resize policy,
+        //               fall back to erased extern for safety ──────
+        self.builder.position_at_end(exhausted_bb);
+        let safe_key_slot = self.builder.build_alloca(key_ty, "safe.key.slot").unwrap();
+        let safe_val_slot = self.builder.build_alloca(val_ty, "safe.val.slot").unwrap();
+        self.builder.build_store(safe_key_slot, key_arg).unwrap();
+        self.builder.build_store(safe_val_slot, val_arg).unwrap();
+        let safe_existed = self
+            .builder
+            .build_call(
+                self.karac_map_insert_old_fn,
+                &[
+                    map_arg.into(),
+                    safe_key_slot.into(),
+                    safe_val_slot.into(),
+                    out_old_arg.into(),
+                ],
+                "safe.existed",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic();
+        self.builder.build_return(Some(&safe_existed)).unwrap();
+    }
+
+    /// Emit the fast-path-inlined body of the monomorphized
+    /// `karac_map_<K>_<V>_get` function. Mirrors `KaracMap::lookup` and
+    /// `KaracMap::get` from `runtime/src/map.rs:120` — but inlines hash,
+    /// probe, K-typed eq, and the val load on match. No load-factor /
+    /// resize branch (get never resizes); no tombstone-tracking PHI
+    /// (get doesn't write).
+    ///
+    /// Slice 1b emitted this for (i64, i64) only; Slice 2 generalizes
+    /// to any (i32 / i64 key) × (i64 val) pair so `Map[char, i64]`
+    /// shares the shape.
+    ///
+    /// On entry the function has signature `i1 (ptr map, K key,
+    /// ptr out_val)`. Returns true and writes the value through
+    /// `out_val` on match; returns false otherwise, leaving
+    /// `out_val` untouched.
+    pub(super) fn emit_mono_map_get_body(
+        &mut self,
+        f: FunctionValue<'ctx>,
+        key_ty: BasicTypeEnum<'ctx>,
+        val_ty: BasicTypeEnum<'ctx>,
+    ) {
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let bool_t = self.context.bool_type();
+        let key_int_ty = key_ty.into_int_type();
+        let val_int_ty = val_ty.into_int_type();
+        let key_size = (key_int_ty.get_bit_width() as u64).div_ceil(8);
+        let val_size = (val_int_ty.get_bit_width() as u64).div_ceil(8);
+        let kv_size_bytes = key_size + val_size;
+
+        let map_arg = f.get_nth_param(0).unwrap().into_pointer_value();
+        let key_arg = f.get_nth_param(1).unwrap().into_int_value();
+        let out_val_arg = f.get_nth_param(2).unwrap().into_pointer_value();
+
+        let hash_name = self.llvm_type_to_mangle_str(key_ty);
+        let hash_fn = self.emit_hash_fn_for_type(&hash_name, key_ty);
+
+        let entry_bb = self.context.append_basic_block(f, "entry");
+        let probe_cond_bb = self.context.append_basic_block(f, "probe.cond");
+        let probe_body_bb = self.context.append_basic_block(f, "probe.body");
+        let check_occupied_bb = self.context.append_basic_block(f, "check.occupied");
+        let eq_check_bb = self.context.append_basic_block(f, "eq.check");
+        let match_found_bb = self.context.append_basic_block(f, "match.found");
+        let not_found_bb = self.context.append_basic_block(f, "not.found");
+
+        // ── entry: load cap / status / kv, compute hash and start ─
+        self.builder.position_at_end(entry_bb);
+        let cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_CAPACITY_OFFSET, false)],
+                    "cap.p",
+                )
+                .unwrap()
+        };
+        let cap = self
+            .builder
+            .build_load(i64_t, cap_p, "cap")
+            .unwrap()
+            .into_int_value();
+        let status_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_STATUS_OFFSET, false)],
+                    "status.pp",
+                )
+                .unwrap()
+        };
+        let status_ptr = self
+            .builder
+            .build_load(
+                self.context.ptr_type(AddressSpace::default()),
+                status_pp,
+                "status",
+            )
+            .unwrap()
+            .into_pointer_value();
+        let kv_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_arg,
+                    &[i64_t.const_int(Self::KARAC_MAP_KV_OFFSET, false)],
+                    "kv.pp",
+                )
+                .unwrap()
+        };
+        let kv_ptr = self
+            .builder
+            .build_load(self.context.ptr_type(AddressSpace::default()), kv_pp, "kv")
+            .unwrap()
+            .into_pointer_value();
+        let hash_key_slot = self.builder.build_alloca(key_ty, "hash.key.slot").unwrap();
+        self.builder.build_store(hash_key_slot, key_arg).unwrap();
+        let hash = self
+            .builder
+            .build_call(hash_fn, &[hash_key_slot.into()], "hash")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let mask = self
+            .builder
+            .build_int_sub(cap, i64_t.const_int(1, false), "mask")
+            .unwrap();
+        let start = self.builder.build_and(hash, mask, "start").unwrap();
+        self.builder
+            .build_unconditional_branch(probe_cond_bb)
+            .unwrap();
+
+        // ── probe.cond: PHI for i; bound-check vs cap ─────────────
+        self.builder.position_at_end(probe_cond_bb);
+        let i_phi = self.builder.build_phi(i64_t, "i").unwrap();
+        i_phi.add_incoming(&[(&i64_t.const_zero(), entry_bb)]);
+        let i_val = i_phi.as_basic_value().into_int_value();
+        let bound_done = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, i_val, cap, "bound.done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(bound_done, not_found_bb, probe_body_bb)
+            .unwrap();
+
+        // ── probe.body: load status, branch on empty ──────────────
+        self.builder.position_at_end(probe_body_bb);
+        let sum_si = self.builder.build_int_add(start, i_val, "sum.si").unwrap();
+        let slot = self.builder.build_and(sum_si, mask, "slot").unwrap();
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, status_ptr, &[slot], "status.slot.p")
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_EMPTY, false),
+                "is.empty",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_empty, not_found_bb, check_occupied_bb)
+            .unwrap();
+
+        // ── check.occupied: tombstone → continue, occupied → eq ──
+        self.builder.position_at_end(check_occupied_bb);
+        let is_occupied = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(Self::BUCKET_OCCUPIED, false),
+                "is.occupied",
+            )
+            .unwrap();
+        let tomb_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.tomb")
+            .unwrap();
+        // Tombstone path: advance i, branch to probe.cond.
+        i_phi.add_incoming(&[(&tomb_i_next, check_occupied_bb)]);
+        self.builder
+            .build_conditional_branch(is_occupied, eq_check_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── eq.check: inline icmp eq on K key ────────────────────
+        self.builder.position_at_end(eq_check_bb);
+        let kv_size = i64_t.const_int(kv_size_bytes, false);
+        let slot_off = self
+            .builder
+            .build_int_mul(slot, kv_size, "slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "slot.kv.p")
+                .unwrap()
+        };
+        let slot_key = self
+            .builder
+            .build_load(key_int_ty, slot_kv_p, "slot.key")
+            .unwrap()
+            .into_int_value();
+        let key_match = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, slot_key, key_arg, "key.match")
+            .unwrap();
+        let nomatch_i_next = self
+            .builder
+            .build_int_add(i_val, i64_t.const_int(1, false), "i.next.nomatch")
+            .unwrap();
+        i_phi.add_incoming(&[(&nomatch_i_next, eq_check_bb)]);
+        self.builder
+            .build_conditional_branch(key_match, match_found_bb, probe_cond_bb)
+            .unwrap();
+
+        // ── match.found: load val, write out, return true ────────
+        self.builder.position_at_end(match_found_bb);
+        let slot_val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    slot_kv_p,
+                    &[i64_t.const_int(key_size, false)],
+                    "slot.val.p",
+                )
+                .unwrap()
+        };
+        let val = self
+            .builder
+            .build_load(val_int_ty, slot_val_p, "val")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_store(out_val_arg, val).unwrap();
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        // ── not.found: return false, out_val untouched ───────────
+        self.builder.position_at_end(not_found_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_zero()))
+            .unwrap();
+    }
+}
