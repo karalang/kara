@@ -40,6 +40,7 @@ mod functions;
 mod helpers;
 mod http;
 mod maps;
+mod method_call;
 mod mono;
 mod par_blocks;
 mod pattern_binding;
