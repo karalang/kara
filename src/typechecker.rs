@@ -26,6 +26,7 @@ pub mod env;
 mod env_build;
 mod expr_call;
 mod expr_method_call;
+mod expr_ops;
 mod exprs;
 mod fields;
 mod inference;
