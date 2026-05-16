@@ -26,6 +26,7 @@ mod clone_drop;
 mod closures;
 mod collections;
 mod control_flow;
+mod control_flow_bce;
 mod control_flow_for;
 mod control_flow_match;
 mod declarations;
