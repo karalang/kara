@@ -4914,6 +4914,86 @@ fn test_tracing_noop_exporter_implements_trait() {
     assert_eq!(output, "ok\n");
 }
 
+// ── std.process — Command / Child surface ──────────────────────────
+
+#[test]
+fn test_process_command_builder_records_state() {
+    let output = run(r#"fn main() {
+         let cmd = Command.new("ls").arg("-la").arg("/tmp").env("PATH", "/usr/bin");
+         println(cmd.program);
+         println(cmd.cmd_args.len());
+         println(cmd.cmd_env.len());
+     }"#);
+    assert_eq!(output, "ls\n2\n1\n");
+}
+
+#[test]
+fn test_process_command_arg_order_preserved() {
+    let output = run(r#"fn main() {
+         let cmd = Command.new("echo").arg("hello").arg("world");
+         match cmd.cmd_args.get(0) {
+             Some(a) => println(a),
+             None => println("?"),
+         }
+         match cmd.cmd_args.get(1) {
+             Some(a) => println(a),
+             None => println("?"),
+         }
+     }"#);
+    assert_eq!(output, "hello\nworld\n");
+}
+
+#[test]
+fn test_process_command_env_records_kv() {
+    let output = run(r#"fn main() {
+         let cmd = Command.new("printenv").env("FOO", "bar");
+         match cmd.cmd_env.get(0) {
+             Some(e) => {
+                 println(e.key);
+                 println(e.value);
+             }
+             None => println("?"),
+         }
+     }"#);
+    assert_eq!(output, "FOO\nbar\n");
+}
+
+#[test]
+fn test_process_spawn_returns_err_placeholder() {
+    // The v1 surface compiles and runs; the placeholder `spawn` body
+    // returns `Err(IoError.NotFound)`. When the follow-up intrinsic
+    // lands, this test flips to the success path with a real Child.
+    let output = run(r#"fn main() {
+         let cmd = Command.new("nonexistent");
+         match cmd.spawn() {
+             Ok(_) => println("ok"),
+             Err(_) => println("err"),
+         }
+     }"#);
+    assert_eq!(output, "err\n");
+}
+
+#[test]
+fn test_process_user_can_declare_sends_process_table_effect() {
+    // `ProcessTable` is registered as a prelude effect resource so
+    // user wrappers can declare `with sends(ProcessTable)` without an
+    // explicit `effect resource ProcessTable;`. The body of this
+    // wrapper just forwards to `spawn` (which carries the same
+    // effect), so the effect declaration's verification path lights up.
+    let output = run(
+        r#"fn run_cmd(prog: String) -> Result[Child, IoError] with sends(ProcessTable) {
+             Command.new(prog).spawn()
+         }
+         fn main() {
+             match run_cmd("ls") {
+                 Ok(_) => println("ok"),
+                 Err(_) => println("err"),
+             }
+         }"#,
+    );
+    assert_eq!(output, "err\n");
+}
+
 #[test]
 fn test_tracing_user_can_implement_exporter_trait() {
     // The whole point of the `Exporter` trait shape is that user code

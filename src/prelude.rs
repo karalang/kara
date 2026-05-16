@@ -141,6 +141,15 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "LogEvent",
     "SpanField",
     "NoOpExporter",
+    // `std.process` (v64 backend-platform lift): Command-builder /
+    // Child handle / ExitStatus shapes. `EnvVar` is an internal row
+    // type that backs `Command.cmd_env` and surfaces at scope-0
+    // because its literal construction appears in the baked source.
+    // See `runtime/stdlib/process.kara`.
+    "Command",
+    "Child",
+    "ExitStatus",
+    "EnvVar",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -231,6 +240,14 @@ pub const PRELUDE_EFFECT_RESOURCES: &[&str] = &[
     // `with sends(Network) receives(Network)` without an explicit
     // `effect resource Network;` declaration.
     "Network",
+    // `std.process` (v64 backend-platform lift): every interaction
+    // with the OS process table — `Command.spawn` / `Child.wait` /
+    // `Child.try_wait` / `Child.kill` — carries `sends(ProcessTable)`.
+    // Declared as `effect resource ProcessTable;` in
+    // `runtime/stdlib/process.kara`; surfaced here for scope-0
+    // visibility so user wrappers can write
+    // `with sends(ProcessTable)` without redeclaring it.
+    "ProcessTable",
 ];
 
 // ── Baked stdlib source (CR-202 slice 3a) ───────────────────────────
@@ -468,6 +485,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     (
         "tracing.kara",
         include_str!("../runtime/stdlib/tracing.kara"),
+    ),
+    // `std.process` Command / Child / ExitStatus + ProcessTable resource
+    // (v64 backend-platform lift). Surface only — OS-touching methods
+    // return placeholder Err pending a follow-up intrinsic slice.
+    (
+        "process.kara",
+        include_str!("../runtime/stdlib/process.kara"),
     ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a

@@ -1,0 +1,143 @@
+// runtime/stdlib/process.kara
+//
+// `std.process` — child-process spawning surface. Phase 8 floor
+// (v64 backend-platform lift, 2026-05-09). Spec at
+// `phase-8-stdlib-floor.md § Backend Platform > P1 std.process`.
+//
+// v1 surface (this slice): the `Command` builder, the `Child` handle,
+// the `ExitStatus` shape, and the `ProcessTable` effect resource that
+// `spawn` / `wait` / `try_wait` / `kill` declare against. Builder
+// methods (`new` / `arg` / `env`) are pure-Kāra; the OS-touching
+// methods (`spawn`, the three `Child` methods) currently return
+// `Err(IoError.NotFound)` as placeholders — they typecheck cleanly
+// against the v1 surface so user code can build against the API today,
+// and the real implementations land in a follow-up slice that swaps
+// these bodies for an interpreter intrinsic wired to
+// `std::process::Command` (Rust). `IoError.NotFound` is chosen over
+// `IoError.Other(...)` because constructing tuple-variant payloads
+// from baked-stdlib method bodies doesn't fall on the path that the
+// interpreter's enum-variant evaluator resolves through today —
+// fieldless variants like `NotFound` go through the prelude variant
+// list (`PRELUDE_VARIANTS`) and resolve uniformly. The error code
+// becomes more specific when the real intrinsic lands.
+//
+// **Why ship the surface ahead of the implementation:** the v1
+// commitment is that the user-visible builder shape is stable —
+// `Command::new(prog).arg(...).env(...).spawn()`. Pinning this in
+// stdlib lets downstream code (test harnesses, build scripts, the
+// `karac` toolchain itself) target the canonical API while the
+// intrinsic catches up. This mirrors the std.tracing decision to
+// land the trait/data surface ahead of the active-span propagation.
+//
+// **Effects on the OS-touching methods.** All four declare
+// `sends(ProcessTable)` per the spec — every interaction with the OS
+// process table is a write to that resource. The execution verbs
+// (`blocks` on `wait` for the synchronous form; `suspends` on the
+// future async form) are deferred to the follow-up that wires the
+// real implementation, since the placeholder bodies don't actually
+// block. Adding the execution verbs at that point is non-breaking —
+// they widen the declared effect set, not narrow it.
+
+// `ProcessTable` — effect resource for child-process operations.
+// `Command.spawn` / `Child.wait` / `Child.try_wait` / `Child.kill`
+// all carry `sends(ProcessTable)`. Mirrors the `Network` /
+// `FileSystem` / `Stdin` / `Stdout` shape; registered as a
+// prelude effect resource so user code can declare
+// `with sends(ProcessTable)` without an explicit
+// `effect resource ProcessTable;` of its own.
+effect resource ProcessTable;
+
+// One declared environment variable. Stored as a Vec of these on
+// `Command.env` because there's no struct-stored hashmap at scope-0
+// — same shape decision as `std.cli`'s ArgEntry storage.
+struct EnvVar {
+    key: String,
+    value: String,
+}
+
+struct Command {
+    program: String,
+    cmd_args: Vec[String],
+    cmd_env: Vec[EnvVar],
+}
+
+// `Child` is a handle to a running (or recently-finished) process.
+// Just the pid in v1; the follow-up that wires the real intrinsic
+// extends this with stdin/stdout/stderr handle pointers per the
+// `std::process::Child` shape.
+struct Child {
+    pid: i64,
+}
+
+// Process exit status. `code == 0 && success` for a clean exit;
+// `success: false` covers signal termination, non-zero exit, and
+// any wait-error case the runtime surfaces. Pre-decomposed here so
+// callers don't need to thread through OS-specific status encoding.
+struct ExitStatus {
+    code: i64,
+    success: bool,
+}
+
+impl Command {
+    fn new(program: String) -> Command {
+        Command {
+            program: program,
+            cmd_args: Vec.new(),
+            cmd_env: Vec.new(),
+        }
+    }
+
+    fn arg(self, a: String) -> Command {
+        let mut new_args = self.cmd_args;
+        new_args.push(a);
+        Command {
+            program: self.program,
+            cmd_args: new_args,
+            cmd_env: self.cmd_env,
+        }
+    }
+
+    fn env(self, key: String, value: String) -> Command {
+        let mut new_env = self.cmd_env;
+        new_env.push(EnvVar { key: key, value: value });
+        Command {
+            program: self.program,
+            cmd_args: self.cmd_args,
+            cmd_env: new_env,
+        }
+    }
+
+    // Placeholder. The follow-up slice wires
+    // `std::process::Command::new(prog).args(...).envs(...).spawn()`
+    // through an interpreter intrinsic; here the surface lands so
+    // user code can typecheck against the v1 API shape. The
+    // `#[compiler_builtin]` attribute skips body type-checking and
+    // routes the call through the interpreter dispatch table —
+    // until the intrinsic lands, the call returns the body's
+    // placeholder Err.
+    fn spawn(ref self) -> Result[Child, IoError] with sends(ProcessTable) {
+        Err(IoError.NotFound)
+    }
+}
+
+impl Child {
+    // Placeholder. The follow-up slice fills in the real wait
+    // (blocking on `std::process::Child::wait`); execution verb
+    // `blocks` will be added at that point.
+    fn wait(ref self) -> Result[ExitStatus, IoError] with sends(ProcessTable) {
+        Err(IoError.NotFound)
+    }
+
+    // Placeholder. Non-blocking poll — returns Ok(Some(status)) if
+    // the child has exited, Ok(None) if still running, Err on
+    // wait-error. Bodies land in the same follow-up slice as spawn.
+    fn try_wait(ref self) -> Result[Option[ExitStatus], IoError] with sends(ProcessTable) {
+        Err(IoError.NotFound)
+    }
+
+    // Placeholder. Sends SIGKILL to the child; the real
+    // implementation lands in the same follow-up slice.
+    fn kill(ref self) -> Result[Unit, IoError] with sends(ProcessTable) {
+        Err(IoError.NotFound)
+    }
+}
