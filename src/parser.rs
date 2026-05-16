@@ -13,6 +13,7 @@ mod attributes;
 mod exprs;
 mod generics;
 mod items;
+mod items_effects;
 mod items_extern;
 mod items_trait;
 mod patterns;
