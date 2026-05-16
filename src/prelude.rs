@@ -132,6 +132,13 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "ArgEntry",
     "FlagEntry",
     "ParsedValue",
+    // C1 slice (2026-05-16): subcommand + auto --help / --version
+    // surface. `Subcommand` is the per-row storage on
+    // `Parser.subcommands`; `SubcommandResult` is the v1 flat result
+    // the dispatched subcommand fills in (one level of depth — the
+    // recursive nesting shape lands when a real user case appears).
+    "Subcommand",
+    "SubcommandResult",
     // `std.tracing` (v64 backend-platform lift, 2026-05-09): structured
     // logging + span context, OTel-export-ready. `Span` / `LogEvent` /
     // `SpanField` are the user-visible data shapes; `NoOpExporter` is

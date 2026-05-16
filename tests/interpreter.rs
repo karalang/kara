@@ -4848,6 +4848,217 @@ fn test_cli_arg_builder_chains() {
     assert_eq!(output, "true\na help\n");
 }
 
+// ── std.cli — subcommands + auto --help / --version (C1 slice) ─────
+
+#[test]
+fn test_cli_subcommand_dispatches_into_sub_parser() {
+    // The deferred.md sample: parent has `--name`, subcommand `upper`
+    // has its own `--shout` flag. argv `["prog", "--name", "alice",
+    // "upper", "--shout"]` should populate parent's `--name = "alice"`
+    // and dispatch into `upper` with `--shout` set.
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "--name", "alice", "upper", "--shout"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .arg("--name", Arg.string().required())
+                     .subcommand("upper", Parser.new("upper").flag("--shout", short: 's', help: ""));
+                 match parser.parse() {
+                     Ok(args) => {
+                         match args.get_string("--name") {
+                             Ok(n) => println(n),
+                             Err(e) => println(e.message),
+                         }
+                         match args.subcommand_name() {
+                             Some(name) => println(name),
+                             None => println("no_sub"),
+                         }
+                         match args.sub {
+                             Some(s) => println(s.get_flag("--shout")),
+                             None => println("no_sub"),
+                         }
+                     }
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "alice\nupper\ntrue\n");
+}
+
+#[test]
+fn test_cli_subcommand_name_none_when_no_subcommand_invoked() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .subcommand("upper", Parser.new("upper"));
+                 match parser.parse() {
+                     Ok(args) => {
+                         match args.subcommand_name() {
+                             Some(name) => println(name),
+                             None => println("none"),
+                         }
+                     }
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "none\n");
+}
+
+#[test]
+fn test_cli_subcommand_consumes_remaining_tokens_as_its_own() {
+    // Tokens AFTER the subcommand name match against the sub-parser,
+    // not the parent. Here `--name` is declared on the SUBCOMMAND, so
+    // the parent never sees it.
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "upper", "--name", "bob"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .subcommand("upper", Parser.new("upper").arg("--name", Arg.string()));
+                 match parser.parse() {
+                     Ok(args) => {
+                         match args.sub {
+                             Some(s) => {
+                                 match s.get_string("--name") {
+                                     Ok(n) => println(n),
+                                     Err(e) => println(e.message),
+                                 }
+                             }
+                             None => println("no_sub"),
+                         }
+                     }
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "bob\n");
+}
+
+#[test]
+fn test_cli_subcommand_missing_required_arg_errors() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "upper"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .subcommand("upper", Parser.new("upper").arg("--name", Arg.string().required()));
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "missing required subcommand argument\n");
+}
+
+#[test]
+fn test_cli_parse_help_short_circuits_with_rendered_text() {
+    // `--help` fires before normal arg checking — `--name` is declared
+    // required, but the help short-circuit wins. The error message
+    // carries the rendered help text.
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "--help"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet")
+                     .about("Greets a name")
+                     .arg("--name", Arg.string().required());
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert!(output.contains("greet - Greets a name"), "output: {output}");
+    assert!(output.contains("USAGE:"), "output: {output}");
+    assert!(output.contains("--name <VALUE>"), "output: {output}");
+    assert!(output.contains("[required]"), "output: {output}");
+    assert!(output.contains("-h, --help"), "output: {output}");
+}
+
+#[test]
+fn test_cli_parse_short_help_h_short_circuits() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "-h"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("p").about("about");
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert!(output.contains("p - about"), "output: {output}");
+    assert!(output.contains("USAGE:"), "output: {output}");
+}
+
+#[test]
+fn test_cli_parse_version_short_circuits() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "--version"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet").version("1.2.3");
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "greet 1.2.3\n");
+}
+
+#[test]
+fn test_cli_parse_short_version_v_short_circuits() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "-V"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet").version("0.1.0");
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    assert_eq!(output, "greet 0.1.0\n");
+}
+
+#[test]
+fn test_cli_version_line_falls_back_to_program_name_when_unset() {
+    let output = run(r#"struct FakeEnv {}
+         impl FakeEnv { fn args(self) -> Vec[String] { ["prog", "-V"] } }
+         fn main() {
+             with_provider[Env](FakeEnv {}, || {
+                 let parser = Parser.new("greet");
+                 match parser.parse() {
+                     Ok(_) => println("ok"),
+                     Err(e) => println(e.message),
+                 }
+             });
+         }"#);
+    // No version() declared — fall back to bare program name.
+    assert_eq!(output, "greet\n");
+}
+
+#[test]
+fn test_cli_help_text_renders_subcommands_section() {
+    let output = run(r#"fn main() {
+         let parser = Parser.new("greet")
+             .subcommand("upper", Parser.new("upper").about("uppercase"))
+             .subcommand("lower", Parser.new("lower").about("lowercase"));
+         let h = parser.help_text();
+         println(h);
+     }"#);
+    assert!(output.contains("SUBCOMMANDS:"), "output: {output}");
+    assert!(output.contains("    upper  uppercase"), "output: {output}");
+    assert!(output.contains("    lower  lowercase"), "output: {output}");
+}
+
 // ── std.tracing — structured logging + spans ───────────────────────
 
 #[test]

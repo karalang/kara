@@ -6,17 +6,28 @@
 // Surface:
 //   - `Parser.new(name) -> Parser`
 //   - `.about(s) -> Parser`
+//   - `.version(s) -> Parser`
 //   - `.arg(name, Arg) -> Parser`
 //   - `.flag(name, short, help) -> Parser`
+//   - `.subcommand(name, sub_parser) -> Parser`
 //   - `.parse() -> Result[Args, CliError]`   with `reads(Env)`
 //   - `Arg.string() / .required() / .help(s)`
 //   - `args.get_string(name) -> Result[String, CliError]`
 //   - `args.get_flag(name) -> bool`
+//   - `args.subcommand_name() -> Option[String]`
+//   - `s.get_string(name) / s.get_flag(name)` on `SubcommandResult`
 //
-// Subcommands and automatic `--help` / `--version` are deferred to a
-// follow-up slice. v1 perfection is not required; canonicality of the
-// builder surface is — this file establishes the import path so user
-// code and the wider ecosystem standardize on it from day one.
+// Subcommand depth is one level in v1 — matches clap's basic usage
+// shape and the example in `deferred.md § std.cli`. Nested subcommands
+// require a recursive `SubcommandResult` shape; defer until a real
+// user case appears.
+//
+// Automatic `--help` / `-h` / `--version` / `-V` detection: the parser
+// checks for these flags before normal arg/flag matching. When seen,
+// `parse()` returns `Err(CliError { message: ... })` with the
+// generated help / version text in the message — the user pattern
+// matches `Err` and prints the message. Sentinel-via-message rather
+// than a separate enum variant keeps the v1 `CliError` shape stable.
 //
 // Pure-Kāra implementation: methods are inferred through the impl-table
 // dispatch path; no compiler intrinsic hooks are required for any of
@@ -61,19 +72,43 @@ struct ParsedValue {
     value: String,
 }
 
-// Result of `parser.parse()` — captures every recognized value, every
-// set flag, and every positional token the parse loop encountered.
-struct Args {
+// One declared subcommand. Holds the subcommand's own `Parser` so its
+// args/flags/about-text/help can be matched + rendered. Storing the
+// `Parser` by value relies on Kāra accepting the recursive type cycle
+// `Parser -> Vec[Subcommand] -> Subcommand -> Parser`; the `Vec`
+// indirection breaks the size cycle (Vec is a heap reference).
+struct Subcommand {
+    name: String,
+    parser: Parser,
+}
+
+// Result of dispatching into a subcommand. Mirrors `Args`'s
+// values/flags/positional fields but flat — no nested subcommand
+// (v1 supports one level of depth).
+struct SubcommandResult {
+    name: String,
     values: Vec[ParsedValue],
     flags_set: Vec[String],
     positional: Vec[String],
 }
 
+// Result of `parser.parse()` — captures every recognized value, every
+// set flag, every positional token at the top level, plus the
+// dispatched subcommand's result if one fired.
+struct Args {
+    values: Vec[ParsedValue],
+    flags_set: Vec[String],
+    positional: Vec[String],
+    sub: Option[SubcommandResult],
+}
+
 struct Parser {
     program_name: String,
     about_text: String,
+    version_text: String,
     args: Vec[ArgEntry],
     flags: Vec[FlagEntry],
+    subcommands: Vec[Subcommand],
 }
 
 impl Arg {
@@ -95,8 +130,10 @@ impl Parser {
         Parser {
             program_name: name,
             about_text: "",
+            version_text: "",
             args: Vec.new(),
             flags: Vec.new(),
+            subcommands: Vec.new(),
         }
     }
 
@@ -104,8 +141,21 @@ impl Parser {
         Parser {
             program_name: self.program_name,
             about_text: description,
+            version_text: self.version_text,
             args: self.args,
             flags: self.flags,
+            subcommands: self.subcommands,
+        }
+    }
+
+    fn version(self, ver: String) -> Parser {
+        Parser {
+            program_name: self.program_name,
+            about_text: self.about_text,
+            version_text: ver,
+            args: self.args,
+            flags: self.flags,
+            subcommands: self.subcommands,
         }
     }
 
@@ -119,8 +169,10 @@ impl Parser {
         Parser {
             program_name: self.program_name,
             about_text: self.about_text,
+            version_text: self.version_text,
             args: new_args,
             flags: self.flags,
+            subcommands: self.subcommands,
         }
     }
 
@@ -135,75 +187,197 @@ impl Parser {
         Parser {
             program_name: self.program_name,
             about_text: self.about_text,
+            version_text: self.version_text,
             args: self.args,
             flags: new_flags,
+            subcommands: self.subcommands,
         }
     }
 
-    // Walk `Env.args()` (skipping argv[0] = program name) and bucket
-    // each token into named-value pairs, set flags, or positional
-    // tokens. Required args missing from the input produce an error;
-    // unknown tokens become positionals (clap's permissive default).
+    fn subcommand(self, name: String, sub_parser: Parser) -> Parser {
+        let mut new_subs = self.subcommands;
+        new_subs.push(Subcommand { name: name, parser: sub_parser });
+        Parser {
+            program_name: self.program_name,
+            about_text: self.about_text,
+            version_text: self.version_text,
+            args: self.args,
+            flags: self.flags,
+            subcommands: new_subs,
+        }
+    }
+
+    // Walk `Env.args()` (skipping argv[0] = program name). Auto-handle
+    // `--help` / `-h` (returns Err carrying the generated help text)
+    // and `--version` / `-V` (returns Err carrying the version line).
+    // Otherwise bucket each token: parent args/flags first, then
+    // subcommand-name match (dispatches the rest of argv into the
+    // sub-parser's territory), else positional.
     fn parse(ref self) -> Result[Args, CliError] with reads(Env) {
         let argv = Env.args();
         let n = argv.len();
+
+        // --help / --version short-circuit. Single pre-pass before the
+        // main loop so that `prog --name foo --help` still prints help
+        // (instead of erroring on a missing-value or treating --help
+        // as a positional).
+        let mut h: i64 = 1;
+        while h < n {
+            match argv.get(h) {
+                Some(t) => {
+                    if t == "--help" or t == "-h" {
+                        return Err(CliError { message: self.help_text() });
+                    }
+                    if t == "--version" or t == "-V" {
+                        return Err(CliError { message: self.version_line() });
+                    }
+                }
+                None => { }
+            }
+            h = h + 1;
+        }
+
         let mut values: Vec[ParsedValue] = Vec.new();
         let mut flags_set: Vec[String] = Vec.new();
         let mut positional: Vec[String] = Vec.new();
+        let mut sub_values: Vec[ParsedValue] = Vec.new();
+        let mut sub_flags_set: Vec[String] = Vec.new();
+        let mut sub_positional: Vec[String] = Vec.new();
+        let mut sub_name: String = "";
+        let mut sub_parser_idx: i64 = -1;
+        let mut in_sub: bool = false;
         let mut i: i64 = 1;
         while i < n {
             match argv.get(i) {
                 Some(token) => {
-                    let mut matched: bool = false;
-                    let mut j: i64 = 0;
-                    while j < self.args.len() {
-                        match self.args.get(j) {
-                            Some(entry) => {
-                                if entry.name == token {
-                                    i = i + 1;
-                                    match argv.get(i) {
-                                        Some(val) => {
-                                            values.push(ParsedValue {
-                                                name: entry.name,
-                                                value: val,
-                                            });
+                    if in_sub {
+                        // Match against the dispatched sub-parser.
+                        let mut matched: bool = false;
+                        match self.subcommands.get(sub_parser_idx) {
+                            Some(sentry) => {
+                                let mut j: i64 = 0;
+                                while j < sentry.parser.args.len() {
+                                    match sentry.parser.args.get(j) {
+                                        Some(entry) => {
+                                            if entry.name == token {
+                                                i = i + 1;
+                                                match argv.get(i) {
+                                                    Some(val) => {
+                                                        sub_values.push(ParsedValue {
+                                                            name: entry.name,
+                                                            value: val,
+                                                        });
+                                                    }
+                                                    None => {
+                                                        return Err(CliError {
+                                                            message: "missing value for subcommand argument",
+                                                        });
+                                                    }
+                                                }
+                                                matched = true;
+                                            }
                                         }
-                                        None => {
-                                            return Err(CliError {
-                                                message: "missing value for argument",
-                                            });
-                                        }
+                                        None => { }
                                     }
-                                    matched = true;
+                                    j = j + 1;
+                                }
+                                if not matched {
+                                    let mut k: i64 = 0;
+                                    while k < sentry.parser.flags.len() {
+                                        match sentry.parser.flags.get(k) {
+                                            Some(fentry) => {
+                                                if fentry.name == token {
+                                                    sub_flags_set.push(fentry.name);
+                                                    matched = true;
+                                                }
+                                            }
+                                            None => { }
+                                        }
+                                        k = k + 1;
+                                    }
+                                }
+                                if not matched {
+                                    sub_positional.push(token);
                                 }
                             }
                             None => { }
                         }
-                        j = j + 1;
-                    }
-                    if not matched {
-                        let mut k: i64 = 0;
-                        while k < self.flags.len() {
-                            match self.flags.get(k) {
-                                Some(fentry) => {
-                                    if fentry.name == token {
-                                        flags_set.push(fentry.name);
+                    } else {
+                        // Match against parent (self).
+                        let mut matched: bool = false;
+                        let mut j: i64 = 0;
+                        while j < self.args.len() {
+                            match self.args.get(j) {
+                                Some(entry) => {
+                                    if entry.name == token {
+                                        i = i + 1;
+                                        match argv.get(i) {
+                                            Some(val) => {
+                                                values.push(ParsedValue {
+                                                    name: entry.name,
+                                                    value: val,
+                                                });
+                                            }
+                                            None => {
+                                                return Err(CliError {
+                                                    message: "missing value for argument",
+                                                });
+                                            }
+                                        }
                                         matched = true;
                                     }
                                 }
                                 None => { }
                             }
-                            k = k + 1;
+                            j = j + 1;
                         }
-                    }
-                    if not matched {
-                        positional.push(token);
+                        if not matched {
+                            let mut k: i64 = 0;
+                            while k < self.flags.len() {
+                                match self.flags.get(k) {
+                                    Some(fentry) => {
+                                        if fentry.name == token {
+                                            flags_set.push(fentry.name);
+                                            matched = true;
+                                        }
+                                    }
+                                    None => { }
+                                }
+                                k = k + 1;
+                            }
+                        }
+                        if not matched {
+                            // Subcommand dispatch — the first token that
+                            // matches a registered subcommand name switches
+                            // matching to the sub-parser for all subsequent
+                            // tokens.
+                            let mut s: i64 = 0;
+                            while s < self.subcommands.len() {
+                                match self.subcommands.get(s) {
+                                    Some(sentry) => {
+                                        if sentry.name == token {
+                                            in_sub = true;
+                                            sub_name = sentry.name;
+                                            sub_parser_idx = s;
+                                            matched = true;
+                                        }
+                                    }
+                                    None => { }
+                                }
+                                s = s + 1;
+                            }
+                        }
+                        if not matched {
+                            positional.push(token);
+                        }
                     }
                 }
                 None => { }
             }
             i = i + 1;
         }
+
+        // Required-arg check: applies to parent args.
         let mut r: i64 = 0;
         while r < self.args.len() {
             match self.args.get(r) {
@@ -233,11 +407,154 @@ impl Parser {
             }
             r = r + 1;
         }
+
+        // Required-arg check for the dispatched subcommand.
+        if in_sub {
+            match self.subcommands.get(sub_parser_idx) {
+                Some(sentry) => {
+                    let mut rs: i64 = 0;
+                    while rs < sentry.parser.args.len() {
+                        match sentry.parser.args.get(rs) {
+                            Some(entry) => {
+                                if entry.is_required {
+                                    let mut found: bool = false;
+                                    let mut vs: i64 = 0;
+                                    while vs < sub_values.len() {
+                                        match sub_values.get(vs) {
+                                            Some(pv) => {
+                                                if pv.name == entry.name {
+                                                    found = true;
+                                                }
+                                            }
+                                            None => { }
+                                        }
+                                        vs = vs + 1;
+                                    }
+                                    if not found {
+                                        return Err(CliError {
+                                            message: "missing required subcommand argument",
+                                        });
+                                    }
+                                }
+                            }
+                            None => { }
+                        }
+                        rs = rs + 1;
+                    }
+                }
+                None => { }
+            }
+        }
+
+        let sub_result = if in_sub {
+            Some(SubcommandResult {
+                name: sub_name,
+                values: sub_values,
+                flags_set: sub_flags_set,
+                positional: sub_positional,
+            })
+        } else {
+            None
+        };
+
         Ok(Args {
             values: values,
             flags_set: flags_set,
             positional: positional,
+            sub: sub_result,
         })
+    }
+
+    // Render the help text from the declared parser shape. Format
+    // matches the conventional CLI tool layout: program / about /
+    // usage / options / subcommands. No flags-section header is
+    // emitted when there are no flags; same for the args and
+    // subcommands sections.
+    fn help_text(ref self) -> String {
+        let mut out: String = self.program_name;
+        if self.about_text != "" {
+            out = out + " - " + self.about_text;
+        }
+        out = out + "\n\nUSAGE:\n    " + self.program_name;
+        if self.args.len() > 0 or self.flags.len() > 0 {
+            out = out + " [OPTIONS]";
+        }
+        if self.subcommands.len() > 0 {
+            out = out + " <SUBCOMMAND>";
+        }
+        out = out + "\n";
+
+        if self.args.len() > 0 {
+            out = out + "\nARGS:\n";
+            let mut i: i64 = 0;
+            while i < self.args.len() {
+                match self.args.get(i) {
+                    Some(entry) => {
+                        out = out + "    " + entry.name + " <VALUE>";
+                        if entry.is_required {
+                            out = out + "  [required]";
+                        }
+                        if entry.help_text != "" {
+                            out = out + "  " + entry.help_text;
+                        }
+                        out = out + "\n";
+                    }
+                    None => { }
+                }
+                i = i + 1;
+            }
+        }
+
+        if self.flags.len() > 0 {
+            out = out + "\nFLAGS:\n";
+            let mut i: i64 = 0;
+            while i < self.flags.len() {
+                match self.flags.get(i) {
+                    Some(fentry) => {
+                        out = out + "    " + fentry.name;
+                        if fentry.help_text != "" {
+                            out = out + "  " + fentry.help_text;
+                        }
+                        out = out + "\n";
+                    }
+                    None => { }
+                }
+                i = i + 1;
+            }
+        }
+
+        if self.subcommands.len() > 0 {
+            out = out + "\nSUBCOMMANDS:\n";
+            let mut i: i64 = 0;
+            while i < self.subcommands.len() {
+                match self.subcommands.get(i) {
+                    Some(sentry) => {
+                        out = out + "    " + sentry.name;
+                        if sentry.parser.about_text != "" {
+                            out = out + "  " + sentry.parser.about_text;
+                        }
+                        out = out + "\n";
+                    }
+                    None => { }
+                }
+                i = i + 1;
+            }
+        }
+
+        out = out + "\nOPTIONS:\n    -h, --help     Print help\n    -V, --version  Print version\n";
+        out
+    }
+
+    // Render the version line. `<program_name> <version>` when a
+    // version was set via `.version(...)`, otherwise just the program
+    // name — keeps the surface defined even when the caller forgets
+    // to declare a version.
+    fn version_line(ref self) -> String {
+        if self.version_text == "" {
+            self.program_name
+        } else {
+            self.program_name + " " + self.version_text
+        }
     }
 }
 
@@ -256,6 +573,49 @@ impl Args {
             i = i + 1;
         }
         Err(CliError { message: "argument not found" })
+    }
+
+    fn get_flag(ref self, name: String) -> bool {
+        let mut i: i64 = 0;
+        while i < self.flags_set.len() {
+            match self.flags_set.get(i) {
+                Some(f) => {
+                    if f == name {
+                        return true;
+                    }
+                }
+                None => { }
+            }
+            i = i + 1;
+        }
+        false
+    }
+
+    // Which subcommand fired, if any. `None` when no subcommand was
+    // invoked on the command line.
+    fn subcommand_name(ref self) -> Option[String] {
+        match self.sub {
+            Some(s) => Some(s.name),
+            None => None,
+        }
+    }
+}
+
+impl SubcommandResult {
+    fn get_string(ref self, name: String) -> Result[String, CliError] {
+        let mut i: i64 = 0;
+        while i < self.values.len() {
+            match self.values.get(i) {
+                Some(pv) => {
+                    if pv.name == name {
+                        return Ok(pv.value);
+                    }
+                }
+                None => { }
+            }
+            i = i + 1;
+        }
+        Err(CliError { message: "subcommand argument not found" })
     }
 
     fn get_flag(ref self, name: String) -> bool {
