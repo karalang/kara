@@ -26,6 +26,7 @@ mod clone_drop;
 mod closures;
 mod collections;
 mod control_flow;
+mod control_flow_for;
 mod declarations;
 mod driver;
 mod entry_chains;
