@@ -49,6 +49,7 @@ mod runtime;
 mod state;
 mod stmts;
 mod synth;
+mod synth_display;
 mod types_lowering;
 mod vec_method;
 
