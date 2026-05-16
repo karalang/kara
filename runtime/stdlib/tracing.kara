@@ -1,0 +1,191 @@
+// runtime/stdlib/tracing.kara
+//
+// `std.tracing` — structured logging + span context, OTel-export-ready.
+// Phase 8 floor (v64 backend-platform lift, 2026-05-09). Spec at
+// `phase-8-stdlib-floor.md § Backend Platform > P1 std.tracing`.
+//
+// v1 surface (this slice): the data types, builder methods, and the
+// `Exporter` trait. `Span` and `LogEvent` are immutable values built
+// up via owned-self method chains; `span_id` / `parent_id` are
+// caller-supplied (typically from a monotonic counter) so the surface
+// is testable in isolation without thread-locals.
+//
+// **Deferred to a follow-up slice (requires compiler integration):**
+//
+//   - **Active-span context propagation across async boundaries.** The
+//     spec calls out "state-machine transform preserves the active
+//     span" — that's codegen + ownership-pass plumbing, not pure-Kāra,
+//     and lives outside this Agent A slice. Users of v1 thread `Span`
+//     values through their function signatures manually for now.
+//
+//   - **Comptime-driven trace-context plumbing.** The Kāra-native
+//     alternative to Rust's `tracing` proc-macro indirection — also
+//     compiler work.
+//
+//   - **Registered global exporter / sink.** Without thread-locals or
+//     ambient mutable state, the exporter is plumbed by the caller.
+//     A `with_provider`-style ambient exporter is a natural extension
+//     when the network event loop lands.
+//
+// What `v1` ships today: the surface that the v1 user-visible API
+// settles on, plus a `NoOpExporter` default so user code can write
+// against the trait from day one and swap in an OTel-shape exporter
+// (community library) without API churn.
+
+// One key/value pair carried on a `Span` or a `LogEvent`. Values are
+// stringified at attachment time — keeping the runtime representation
+// uniform here lets the exporter trait be non-generic.
+struct SpanField {
+    key: String,
+    value: String,
+}
+
+// Trace-context handle. `span_id` is the local identifier (caller
+// minted, usually from a monotonic counter); `parent_id == 0`
+// indicates a root span. `fields` carries the structured attributes
+// attached via `.with_field(...)`. Spans are values — closing one is
+// a no-op at the type level; the canonical "end of span" hook is the
+// exporter call site, which the caller drives explicitly.
+struct Span {
+    name: String,
+    span_id: i64,
+    parent_id: i64,
+    fields: Vec[SpanField],
+}
+
+// One emitted log entry. `level` is `"trace"` / `"debug"` / `"info"` /
+// `"warn"` / `"error"` (string-typed rather than enum to keep the
+// exporter trait shape uniform with foreign loggers). `span_id == 0`
+// means the event is outside any span.
+struct LogEvent {
+    level: String,
+    message: String,
+    fields: Vec[SpanField],
+    span_id: i64,
+}
+
+impl Span {
+    // Root span — `parent_id` zeroed. Caller supplies a unique
+    // `span_id` (in v1, typically from a per-program monotonic
+    // counter the caller maintains).
+    fn root(name: String, span_id: i64) -> Span {
+        Span {
+            name: name,
+            span_id: span_id,
+            parent_id: 0,
+            fields: Vec.new(),
+        }
+    }
+
+    // Child span with this span as parent. Caller supplies the
+    // child's `span_id`.
+    fn child(ref self, name: String, child_id: i64) -> Span {
+        Span {
+            name: name,
+            span_id: child_id,
+            parent_id: self.span_id,
+            fields: Vec.new(),
+        }
+    }
+
+    // Builder method: attach a structured key/value pair. Consumes
+    // and returns `self` to keep the chain readable.
+    fn with_field(self, key: String, value: String) -> Span {
+        let mut new_fields = self.fields;
+        new_fields.push(SpanField { key: key, value: value });
+        Span {
+            name: self.name,
+            span_id: self.span_id,
+            parent_id: self.parent_id,
+            fields: new_fields,
+        }
+    }
+}
+
+impl LogEvent {
+    fn trace(message: String) -> LogEvent {
+        LogEvent {
+            level: "trace",
+            message: message,
+            fields: Vec.new(),
+            span_id: 0,
+        }
+    }
+
+    fn debug(message: String) -> LogEvent {
+        LogEvent {
+            level: "debug",
+            message: message,
+            fields: Vec.new(),
+            span_id: 0,
+        }
+    }
+
+    fn info(message: String) -> LogEvent {
+        LogEvent {
+            level: "info",
+            message: message,
+            fields: Vec.new(),
+            span_id: 0,
+        }
+    }
+
+    fn warn(message: String) -> LogEvent {
+        LogEvent {
+            level: "warn",
+            message: message,
+            fields: Vec.new(),
+            span_id: 0,
+        }
+    }
+
+    fn error(message: String) -> LogEvent {
+        LogEvent {
+            level: "error",
+            message: message,
+            fields: Vec.new(),
+            span_id: 0,
+        }
+    }
+
+    // Builder method: attach a structured key/value pair.
+    fn with_field(self, key: String, value: String) -> LogEvent {
+        let mut new_fields = self.fields;
+        new_fields.push(SpanField { key: key, value: value });
+        LogEvent {
+            level: self.level,
+            message: self.message,
+            fields: new_fields,
+            span_id: self.span_id,
+        }
+    }
+
+    // Associate this event with a span. Caller passes the span's id
+    // explicitly — `span_id` rather than the whole `Span` keeps the
+    // signature ownership-flat.
+    fn in_span(self, span_id: i64) -> LogEvent {
+        LogEvent {
+            level: self.level,
+            message: self.message,
+            fields: self.fields,
+            span_id: span_id,
+        }
+    }
+}
+
+// Pluggable sink for spans and events. The default `NoOpExporter`
+// drops everything (v1 default — exporters are opt-in). An OTel
+// exporter ships post-v1 as a community library on this same trait
+// shape — that's the v1 commitment: trait surface is stable, default
+// is no-op, ecosystem fills the implementation slot.
+trait Exporter {
+    fn export_span(ref self, span: Span);
+    fn export_event(ref self, event: LogEvent);
+}
+
+struct NoOpExporter { }
+
+impl Exporter for NoOpExporter {
+    fn export_span(ref self, span: Span) { }
+    fn export_event(ref self, event: LogEvent) { }
+}

@@ -132,6 +132,15 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "ArgEntry",
     "FlagEntry",
     "ParsedValue",
+    // `std.tracing` (v64 backend-platform lift, 2026-05-09): structured
+    // logging + span context, OTel-export-ready. `Span` / `LogEvent` /
+    // `SpanField` are the user-visible data shapes; `NoOpExporter` is
+    // the default exporter so user code can swap implementations on the
+    // `Exporter` trait. See `runtime/stdlib/tracing.kara`.
+    "Span",
+    "LogEvent",
+    "SpanField",
+    "NoOpExporter",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -158,6 +167,8 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // CR-202 slice 5c: `PartialOrd` joins as the partial-ordering
     // counterpart to PartialEq.
     "PartialOrd",
+    // `std.tracing` exporter trait — see `runtime/stdlib/tracing.kara`.
+    "Exporter",
     "Ord",
     // CR-202 slice 5e.
     "Hash",
@@ -453,6 +464,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("json.kara", include_str!("../runtime/stdlib/json.kara")),
     // `std.cli` builder-style argument parser (v66 graduation).
     ("cli.kara", include_str!("../runtime/stdlib/cli.kara")),
+    // `std.tracing` structured logging + spans (v64 backend-platform lift).
+    (
+        "tracing.kara",
+        include_str!("../runtime/stdlib/tracing.kara"),
+    ),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
     // stdlib function — see `runtime/stdlib/intrinsics.kara`).

@@ -4848,6 +4848,97 @@ fn test_cli_arg_builder_chains() {
     assert_eq!(output, "true\na help\n");
 }
 
+// ── std.tracing — structured logging + spans ───────────────────────
+
+#[test]
+fn test_tracing_span_root_builder() {
+    let output = run(r#"fn main() {
+         let s = Span.root("request", 7).with_field("method", "GET");
+         println(s.name);
+         println(s.span_id);
+         println(s.parent_id);
+         println(s.fields.len());
+     }"#);
+    assert_eq!(output, "request\n7\n0\n1\n");
+}
+
+#[test]
+fn test_tracing_span_child_inherits_parent_id() {
+    let output = run(r#"fn main() {
+         let parent = Span.root("outer", 1);
+         let child = parent.child("inner", 2);
+         println(child.name);
+         println(child.span_id);
+         println(child.parent_id);
+     }"#);
+    assert_eq!(output, "inner\n2\n1\n");
+}
+
+#[test]
+fn test_tracing_log_event_levels() {
+    let output = run(r#"fn main() {
+         println(LogEvent.trace("a").level);
+         println(LogEvent.debug("b").level);
+         println(LogEvent.info("c").level);
+         println(LogEvent.warn("d").level);
+         println(LogEvent.error("e").level);
+     }"#);
+    assert_eq!(output, "trace\ndebug\ninfo\nwarn\nerror\n");
+}
+
+#[test]
+fn test_tracing_log_event_with_fields_and_span() {
+    let output = run(r#"fn main() {
+         let e = LogEvent.info("started")
+             .with_field("user_id", "42")
+             .with_field("ip", "127.0.0.1")
+             .in_span(5);
+         println(e.level);
+         println(e.message);
+         println(e.fields.len());
+         println(e.span_id);
+     }"#);
+    assert_eq!(output, "info\nstarted\n2\n5\n");
+}
+
+#[test]
+fn test_tracing_noop_exporter_implements_trait() {
+    let output = run(r#"fn main() {
+         let e = NoOpExporter {};
+         let s = Span.root("request", 1);
+         let ev = LogEvent.info("hello");
+         e.export_span(s);
+         e.export_event(ev);
+         println("ok");
+     }"#);
+    assert_eq!(output, "ok\n");
+}
+
+#[test]
+fn test_tracing_user_can_implement_exporter_trait() {
+    // The whole point of the `Exporter` trait shape is that user code
+    // can swap in a real implementation against the same surface. A
+    // capturing exporter verifies the dispatch reaches the user impl,
+    // not just the no-op default.
+    let output = run(r#"shared struct CaptureExporter {
+             mut span_count: i64,
+             mut event_count: i64,
+         }
+         impl Exporter for CaptureExporter {
+             fn export_span(ref self, span: Span) { self.span_count = self.span_count + 1; }
+             fn export_event(ref self, event: LogEvent) { self.event_count = self.event_count + 1; }
+         }
+         fn main() {
+             let e = CaptureExporter { span_count: 0, event_count: 0 };
+             e.export_span(Span.root("a", 1));
+             e.export_span(Span.root("b", 2));
+             e.export_event(LogEvent.info("c"));
+             println(e.span_count);
+             println(e.event_count);
+         }"#);
+    assert_eq!(output, "2\n1\n");
+}
+
 // ── Stats namespace ───────────────────────────────────────────────
 
 #[test]
