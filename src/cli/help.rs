@@ -56,6 +56,16 @@ COMMANDS:
     doc               Render HTML documentation under dist/doc/ from the
                       `///` doc comments attached to each public item.
                       MVP — flat per-module layout, no cross-references.
+    clean [--global]  Remove the project-local `dist/` cache. With
+                      --global, instead removes the user-wide cache
+                      at ~/.kara/cache/.
+    install <spec>    Build a binary package and install it into
+                      ~/.kara/bin/. Spec accepts `path = ...`,
+                      `git = ...`, or a registry-proxy reference.
+                      (v1 surface — resolver wiring pending.)
+    vendor            Copy resolved dependencies into ./vendor/.
+                      Pairs with `karac build --offline`. (v1 surface
+                      — resolver wiring pending.)
     help              Show this help
     version           Show version
 
@@ -284,6 +294,54 @@ RESOURCE PROBES:
 EXIT CODE:
     0 if every test passed or was skipped under permitted conditions.
     Non-zero if any test failed, or if any test was skipped under `--all`."
+        }
+        "clean" => {
+            "\
+karac clean - Remove build artifact caches
+
+USAGE:
+    karac clean              Remove the project-local `dist/` directory.
+    karac clean --global     Remove the user-wide cache at `~/.kara/cache/`.
+
+Bare form deletes ./dist (project artifacts, intermediate IR, link output).
+--global form deletes the shared dependency cache that backs cross-project
+artifact reuse per `design.md § Package System > Build artifact cache`.
+Both forms are idempotent — a missing directory is reported and treated
+as success."
+        }
+        "install" => {
+            "\
+karac install - Build and install a binary package into ~/.kara/bin/
+
+USAGE:
+    karac install <bin-spec>
+
+The <bin-spec> accepts the same shapes as a manifest dependency entry:
+    path = \"./local/path\"           — build from a local source directory
+    git  = \"https://github.com/...\" — build from a git repository
+    <name>                             — registry-proxy reference
+    <name>@<version>                   — pinned registry-proxy reference
+
+v1 status: the subcommand parses cleanly; the resolver + build + install
+machinery lands alongside the dependency-resolution slice. Until then,
+this command exits non-zero with a diagnostic that names the spec back.
+See `docs/implementation_checklist/phase-5-diagnostics.md`."
+        }
+        "vendor" => {
+            "\
+karac vendor - Copy resolved dependencies into ./vendor/
+
+USAGE:
+    karac vendor
+
+Air-gap workflow for regulated environments and offline CI. Pairs with
+`karac build --offline`, which reads dependencies only from ./vendor/
+and refuses any network access.
+
+v1 status: the subcommand parses cleanly but the resolver wiring lands
+alongside the dependency-resolution slice. Pair the canonical flag
+shape (`karac vendor` + `karac build --offline`) into your CI scripts
+today; the implementation swap is non-breaking."
         }
         _ => {
             print_help();

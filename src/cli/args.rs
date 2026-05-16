@@ -63,6 +63,9 @@ pub fn parse_args(args: &[String]) -> Command {
         "test" => parse_test_command(args),
         "repl" => parse_repl_command(args),
         "doc" => Command::Doc,
+        "clean" => parse_clean_command(args),
+        "install" => parse_install_command(args),
+        "vendor" => parse_vendor_command(args),
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => {
             let p = parse_file_args(args, 1);
@@ -197,6 +200,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut concurrency_report = false;
+    let mut offline = false;
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -206,6 +210,8 @@ fn parse_build_command(args: &[String]) -> Command {
             output = OutputMode::Jsonl;
         } else if arg == "--concurrency-report" {
             concurrency_report = true;
+        } else if arg == "--offline" {
+            offline = true;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -228,9 +234,65 @@ fn parse_build_command(args: &[String]) -> Command {
             file: f,
             output,
             concurrency_report,
+            offline,
         },
-        None => Command::BuildProject { output },
+        None => Command::BuildProject { output, offline },
     }
+}
+
+fn parse_clean_command(args: &[String]) -> Command {
+    let mut global = false;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--global" => global = true,
+            flag if flag.starts_with('-') => {
+                eprintln!("error: unknown flag '{flag}' for `karac clean`");
+                process::exit(1);
+            }
+            other => {
+                eprintln!("error: unexpected argument '{other}' for `karac clean`");
+                process::exit(1);
+            }
+        }
+    }
+    Command::Clean { global }
+}
+
+fn parse_install_command(args: &[String]) -> Command {
+    // `karac install <bin-spec>` takes a single positional. The spec is
+    // re-parsed downstream against the manifest dependency-entry shape
+    // (`path = "..."` / `git = "..."` / bare registry reference). Here
+    // we just lift it off the command line.
+    let mut spec: Option<String> = None;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac install`");
+                process::exit(1);
+            }
+            other => {
+                if spec.is_some() {
+                    eprintln!("error: `karac install` takes exactly one <bin-spec> argument");
+                    process::exit(1);
+                }
+                spec = Some(other.to_string());
+            }
+        }
+    }
+    let Some(spec) = spec else {
+        eprintln!("error: `karac install` requires a <bin-spec> argument");
+        eprintln!("       e.g. `karac install path=./tools/my-tool`");
+        process::exit(1);
+    };
+    Command::Install { spec }
+}
+
+fn parse_vendor_command(args: &[String]) -> Command {
+    if let Some(arg) = args.get(2) {
+        eprintln!("error: `karac vendor` takes no arguments (got '{arg}')");
+        process::exit(1);
+    }
+    Command::Vendor
 }
 
 /// Parse the comma-separated profile list passed to `--profiles=...`.

@@ -2806,3 +2806,141 @@ fn test_check_json_includes_replacement_for_n0507_note() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ── karac clean / install / vendor (new subcommands) ────────────────
+
+#[test]
+fn test_clean_bare_idempotent_when_no_dist() {
+    // `karac clean` against a tempdir with no `dist/` should exit 0
+    // and report "already absent" — bare form is idempotent.
+    let dir = std::env::temp_dir().join("kara-clean-bare-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let out = karac_bin().arg("clean").current_dir(&dir).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "`karac clean` should exit 0 on missing dist/"
+    );
+    assert!(
+        stdout.contains("already absent"),
+        "expected `already absent` notice, got: {stdout}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_clean_bare_removes_existing_dist() {
+    // `karac clean` should rm -rf the project-local `dist/` directory
+    // and report what was removed.
+    let dir = std::env::temp_dir().join("kara-clean-remove-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("dist").join("nested")).unwrap();
+    std::fs::write(dir.join("dist").join("artifact.txt"), b"old").unwrap();
+
+    let out = karac_bin().arg("clean").current_dir(&dir).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "`karac clean` should exit 0 (stdout: {stdout})"
+    );
+    assert!(stdout.contains("removed"));
+    assert!(stdout.contains("project dist/"));
+    assert!(!dir.join("dist").exists(), "dist/ should have been removed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_clean_global_targets_kara_cache() {
+    // `karac clean --global` should resolve `$HOME/.kara/cache/` even
+    // when the directory doesn't exist (idempotent) and reference the
+    // canonical path in its output.
+    let fake_home = std::env::temp_dir().join("kara-clean-global-test");
+    let _ = std::fs::remove_dir_all(&fake_home);
+    std::fs::create_dir_all(&fake_home).unwrap();
+    let out = karac_bin()
+        .args(["clean", "--global"])
+        .env("HOME", &fake_home)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains(".kara/cache"));
+    assert!(stdout.contains("global cache"));
+    let _ = std::fs::remove_dir_all(&fake_home);
+}
+
+#[test]
+fn test_install_requires_spec() {
+    let out = karac_bin().arg("install").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "`karac install` without spec must error"
+    );
+    assert!(stderr.contains("requires a <bin-spec>"));
+}
+
+#[test]
+fn test_install_with_spec_emits_not_yet_wired_notice() {
+    let out = karac_bin()
+        .args(["install", "path=./tools/my-tool"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "v1 placeholder should exit non-zero so CI scripts notice the gap"
+    );
+    assert!(stderr.contains("not yet wired"));
+    assert!(
+        stderr.contains("path=./tools/my-tool"),
+        "diagnostic must name the spec back, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_vendor_emits_not_yet_wired_notice() {
+    let out = karac_bin().arg("vendor").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "v1 placeholder should exit non-zero");
+    assert!(stderr.contains("not yet wired"));
+    assert!(stderr.contains("./vendor/"));
+}
+
+#[test]
+fn test_vendor_rejects_extra_args() {
+    let out = karac_bin().args(["vendor", "extra"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("takes no arguments"));
+}
+
+#[test]
+fn test_subcommand_help_clean() {
+    for flag in ["--help", "-h"] {
+        let out = karac_bin().args(["clean", flag]).output().unwrap();
+        assert!(out.status.success(), "`karac clean {flag}` should exit 0");
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(stdout.contains("karac clean"));
+        assert!(stdout.contains("--global"));
+    }
+}
+
+#[test]
+fn test_subcommand_help_install() {
+    let out = karac_bin().args(["install", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("karac install"));
+    assert!(stdout.contains("<bin-spec>"));
+}
+
+#[test]
+fn test_subcommand_help_vendor() {
+    let out = karac_bin().args(["vendor", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("karac vendor"));
+    assert!(stdout.contains("--offline"));
+}

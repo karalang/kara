@@ -80,6 +80,16 @@ pub enum Command {
         /// the speedup. See `docs/demo_ideas.md:80-88` for the locked
         /// output shape.
         concurrency_report: bool,
+        /// `--offline`: read resolved dependencies only from the
+        /// project-root `vendor/` directory (populated by
+        /// `karac vendor`) and refuse any network access. Air-gap
+        /// workflow per `design.md § Package System > Vendoring`.
+        /// v1 surface — actual offline gating wires up alongside the
+        /// dependency-resolution slice; v1 honors the flag at the
+        /// arg-parsing layer and emits a "not yet wired" notice from
+        /// the build command body so callers can scaffold their CI
+        /// config against the canonical flag name today.
+        offline: bool,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -87,6 +97,8 @@ pub enum Command {
     /// manifest and reports. Missing manifest → E0227 NotInsideKaraProject.
     BuildProject {
         output: OutputMode,
+        /// `--offline` — see `Build.offline` above. Same v1 contract.
+        offline: bool,
     },
     Query {
         kind: QueryKind,
@@ -147,6 +159,29 @@ pub enum Command {
     /// documented item under `dist/doc/`. v1 MVP — no cross-references,
     /// no effect display, flat per-module directory layout.
     Doc,
+    /// Remove the project's build artifact cache. Bare form deletes the
+    /// project-local `dist/` directory (idempotent — a missing directory
+    /// is not an error). `--global` instead targets the user-wide cache
+    /// at `~/.kara/cache/` per `design.md § Package System > Build
+    /// artifact cache`.
+    Clean {
+        global: bool,
+    },
+    /// Build a binary package and install it into `~/.kara/bin/`. The
+    /// `spec` accepts `path = ...`, `git = ...`, or a registry-proxy
+    /// reference per the manifest dependency spec shape. v1 surface —
+    /// the full resolver wiring lands in a follow-up alongside the
+    /// dependency-resolution slice; this arm parses the invocation and
+    /// emits a "not yet wired" diagnostic until then.
+    Install {
+        spec: String,
+    },
+    /// Copy all resolved dependencies into a project-root `vendor/`
+    /// directory. Subsequent `karac build --offline` reads from
+    /// `vendor/` and refuses network access. v1 surface — the resolver
+    /// wiring lands in a follow-up; this arm currently emits a
+    /// "not yet wired" diagnostic.
+    Vendor,
     Help,
     Version,
 }
@@ -188,8 +223,9 @@ pub fn execute(cmd: Command) {
             file,
             output,
             concurrency_report,
-        } => cmd_build(&file, output, concurrency_report),
-        Command::BuildProject { output } => cmd_build_project(output),
+            offline,
+        } => cmd_build(&file, output, concurrency_report, offline),
+        Command::BuildProject { output, offline } => cmd_build_project(output, offline),
         Command::Query {
             kind,
             file,
@@ -207,6 +243,9 @@ pub fn execute(cmd: Command) {
             crate::repl::run_with_options(crate::repl::ReplOptions { auto_clone })
         }
         Command::Doc => cmd_doc(),
+        Command::Clean { global } => cmd_clean(global),
+        Command::Install { spec } => cmd_install(&spec),
+        Command::Vendor => cmd_vendor(),
     }
 }
 
@@ -1638,7 +1677,18 @@ fn cmd_check_profiles(
     }
 }
 
-fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool) {
+fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool, offline: bool) {
+    if offline {
+        // v1 surface gate: the `--offline` flag parses and routes, but
+        // the resolver wiring that would consult `vendor/` and refuse
+        // network access lands in a follow-up slice. Surface the
+        // discrepancy so CI scripts pinning to the flag don't think
+        // they're already air-gapped.
+        eprintln!(
+            "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
+        );
+    }
+    let _ = offline;
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
@@ -1896,7 +1946,13 @@ fn effect_set_to_display(
 /// (`E0223`), and runs cross-module name resolution per module
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
-fn cmd_build_project(output: OutputMode) {
+fn cmd_build_project(output: OutputMode, offline: bool) {
+    if offline {
+        eprintln!(
+            "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
+        );
+    }
+    let _ = offline;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -4198,4 +4254,113 @@ fn cmd_init(directory: Option<String>, template: Template, force: bool) {
             process::exit(1);
         }
     }
+}
+
+// ── karac clean ──────────────────────────────────────────────────
+//
+// Remove a build-artifact cache. Bare form targets the project-local
+// `dist/`; `--global` targets the user-wide `~/.kara/cache/` per
+// `design.md § Package System > Build artifact cache`. Both forms are
+// idempotent — a missing directory is logged and treated as success.
+
+fn cmd_clean(global: bool) {
+    let target: PathBuf = if global {
+        match dirs_kara_cache_path() {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("error: cannot resolve global cache path: {e}");
+                process::exit(1);
+            }
+        }
+    } else {
+        let cwd = match std::env::current_dir() {
+            Ok(d) => d,
+            Err(e) => {
+                eprintln!("error: cannot read current directory: {e}");
+                process::exit(1);
+            }
+        };
+        cwd.join("dist")
+    };
+
+    let scope_label = if global {
+        "global cache"
+    } else {
+        "project dist/"
+    };
+    match fs::metadata(&target) {
+        Ok(_) => match fs::remove_dir_all(&target) {
+            Ok(()) => {
+                println!("removed {} ({})", target.display(), scope_label);
+            }
+            Err(e) => {
+                eprintln!("error: failed to remove {}: {e}", target.display());
+                process::exit(1);
+            }
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            println!(
+                "{} already absent ({}); nothing to do",
+                target.display(),
+                scope_label
+            );
+        }
+        Err(e) => {
+            eprintln!("error: cannot stat {}: {e}", target.display());
+            process::exit(1);
+        }
+    }
+}
+
+// Resolve `~/.kara/cache/`. Honors `$HOME` first (matches the canonical
+// behavior on Unix); on Windows-like setups where `$HOME` is unset,
+// falls back to `$USERPROFILE`. No external crate dependency because
+// the lookup is two env vars; an unset both-of-these case is the rare
+// CI image with no home directory and is treated as a hard error.
+fn dirs_kara_cache_path() -> Result<PathBuf, String> {
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "$HOME (and $USERPROFILE) unset".to_string())?;
+    Ok(PathBuf::from(home).join(".kara").join("cache"))
+}
+
+// ── karac install ────────────────────────────────────────────────
+//
+// Build a binary package from a `<bin-spec>` and install the resulting
+// executable into `~/.kara/bin/`. The spec accepts the same shapes as
+// the manifest dependency entry: `path = "./local"`, `git = "https://..."`,
+// or a bare registry-proxy reference like `my-tool` or `my-tool@1.2.3`.
+//
+// v1 surface (this slice): the subcommand parses cleanly and emits a
+// "not yet wired" diagnostic that names the spec back. Full resolver +
+// build + symlink machinery lands alongside the dependency-resolution
+// slice (same gating as `--offline`).
+
+fn cmd_install(spec: &str) {
+    eprintln!(
+        "karac install: not yet wired (received spec `{spec}`).\n\
+         Build + ~/.kara/bin/ install machinery lands alongside the\n\
+         dependency-resolution slice. Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
+    );
+    process::exit(2);
+}
+
+// ── karac vendor ─────────────────────────────────────────────────
+//
+// Copy all resolved dependencies into a `vendor/` directory at the
+// project root. Subsequent `karac build --offline` reads from
+// `vendor/` and refuses network access. v1 surface — the resolver
+// wiring lands alongside the dependency-resolution slice. v1 emits a
+// "not yet wired" diagnostic that points operators at the canonical
+// flag pairing (`vendor` + `build --offline`) so air-gap CI scripts
+// can be scaffolded against the final surface today.
+
+fn cmd_vendor() {
+    eprintln!(
+        "karac vendor: not yet wired.\n\
+         Dependency copy into ./vendor/ lands alongside the\n\
+         dependency-resolution slice. Pairs with `karac build --offline`.\n\
+         Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
+    );
+    process::exit(2);
 }
