@@ -150,6 +150,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Child",
     "ExitStatus",
     "EnvVar",
+    // `Pool[T]` (v64 backend-platform lift): connection-pool
+    // primitive. `Pool[T]` / `PooledConnection[T]` / `PoolError`
+    // are the user-facing surface. See `runtime/stdlib/pool.kara`.
+    "Pool",
+    "PooledConnection",
+    "PoolError",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -493,6 +499,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         "process.kara",
         include_str!("../runtime/stdlib/process.kara"),
     ),
+    // `Pool[T]` connection-pool primitive (v64 backend-platform lift).
+    // Surface only — acquire returns placeholder Err pending the
+    // follow-up bounded-waiters intrinsic.
+    ("pool.kara", include_str!("../runtime/stdlib/pool.kara")),
     // Compile-time layout introspection — `size_of[T]()` / `align_of[T]()`
     // (the `offset_of[T](field)` arm is a parser special-form, not a
     // stdlib function — see `runtime/stdlib/intrinsics.kara`).

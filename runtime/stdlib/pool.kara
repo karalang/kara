@@ -1,0 +1,82 @@
+// runtime/stdlib/pool.kara
+//
+// `Pool[T]` — connection-pool primitive. Phase 8 floor (v64
+// backend-platform lift, 2026-05-09). Spec at
+// `phase-8-stdlib-floor.md § Backend Platform > P1 Pool[T]`.
+//
+// v1 surface (this slice): the `Pool[T]` constructor signature,
+// `PooledConnection[T]` handle, and `PoolError` variants. The acquire
+// path returns `Err(PoolError.Timeout)` as a placeholder while the
+// real bounded-waiters-with-timeout machinery lands in a follow-up
+// slice — that machinery requires concurrency primitives (semaphore /
+// condition variable / monotonic clock) that the v1 interpreter
+// doesn't expose yet, and an interpreter intrinsic backed by a Rust
+// `parking_lot` semaphore. The signature shape is what callers
+// (community database drivers, the `Pool[Connection]` usage pattern)
+// build against from day one; the body swap is non-breaking.
+//
+// **Drop-releases-automatically.** The spec's "drop releases
+// automatically" contract is forward-looking: when the real impl
+// lands, `PooledConnection[T]`'s drop returns the resource to the
+// pool. v1's placeholder PooledConnection is never constructed
+// (acquire always returns Err), so the drop semantics are dormant.
+//
+// **Health-check hook.** Per spec, "health-check hook fires on
+// acquire (callable's responsibility); evict-on-error pattern."
+// v1 ships the contract here; user code passes a health-check
+// closure when it wires up its own pool wrapper (the v1 surface
+// doesn't capture the hook on the Pool itself, because the
+// closure-storage shape is the part that needs the follow-up
+// intrinsic to materialize).
+
+enum PoolError {
+    // The pool was at capacity and no slot freed before `timeout`.
+    Timeout,
+    // `Pool.close()` was called (post-v1 entry); subsequent
+    // `acquire` calls fail with this variant.
+    PoolClosed,
+    // The user-supplied `create_fn` returned an error path or
+    // panicked; the pool refuses to retain the failing slot.
+    CreateFailed,
+}
+
+// Opaque pool handle. v1 has no observable fields — the real
+// implementation will carry the slot vector, the waiter queue, the
+// monotonic-clock timestamp generator, and the stored
+// `create_fn` / `health_check_fn` closures. Empty in v1 keeps the
+// shape stable while leaving the field set additive when the
+// follow-up lands.
+struct Pool[T] { }
+
+// Handle to a single checked-out connection. Drop returns the slot
+// to the pool — see file-level comment for the v1 vs follow-up
+// behavior. Empty struct in v1 (the real impl threads a back-pointer
+// to the Pool and the slot index).
+struct PooledConnection[T] { }
+
+impl[T] Pool[T] {
+    // `create_fn` mints a fresh T when the pool needs to materialize
+    // a slot; `max_connections` bounds the slot count;
+    // `max_waiters` bounds the queue of `acquire` callers blocked
+    // on a free slot.
+    //
+    // v1 placeholder: returns an empty `Pool[T]`. The real
+    // intrinsic stores the closure and the bounds in a Rust-side
+    // pool object; user code holds the same `Pool[T]` value across
+    // the body swap because the struct shape is empty here.
+    fn new(create_fn: Fn() -> T, max_connections: i64, max_waiters: i64) -> Pool[T] {
+        Pool { }
+    }
+
+    // Block (or non-blocking, depending on timeout) for a free
+    // connection slot, up to `timeout` milliseconds. Returns
+    // `Err(PoolError.Timeout)` if the wait expires.
+    //
+    // v1 placeholder: always returns `Err(PoolError.Timeout)`. The
+    // real intrinsic acquires via the semaphore, calls the stored
+    // health-check on the slot, and either hands back a
+    // `PooledConnection[T]` or evicts + creates fresh.
+    fn acquire(ref self, timeout: i64) -> Result[PooledConnection[T], PoolError] {
+        Err(PoolError.Timeout)
+    }
+}

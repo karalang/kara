@@ -4994,6 +4994,59 @@ fn test_process_user_can_declare_sends_process_table_effect() {
     assert_eq!(output, "err\n");
 }
 
+// ── Pool[T] — connection-pool primitive surface ────────────────────
+
+#[test]
+fn test_pool_new_returns_pool_value() {
+    // v1 surface check: construct a `Pool[i64]` with a `Fn() -> i64`
+    // factory. The pool body is empty in v1 — the factory closure
+    // is stored when the real impl lands.
+    let output = run(r#"fn make_int() -> i64 { 42 }
+         fn main() {
+             let _pool: Pool[i64] = Pool.new(make_int, 4, 8);
+             println("constructed");
+         }"#);
+    assert_eq!(output, "constructed\n");
+}
+
+#[test]
+fn test_pool_acquire_returns_timeout_placeholder() {
+    // v1 placeholder: acquire always returns Err(PoolError.Timeout).
+    // When the real bounded-waiters intrinsic lands, this test flips
+    // to the Ok path with a real PooledConnection.
+    let output = run(r#"fn make_int() -> i64 { 0 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 4, 8);
+             match pool.acquire(100) {
+                 Ok(_) => println("ok"),
+                 Err(PoolError.Timeout) => println("timeout"),
+                 Err(PoolError.PoolClosed) => println("closed"),
+                 Err(PoolError.CreateFailed) => println("create_failed"),
+             }
+         }"#);
+    assert_eq!(output, "timeout\n");
+}
+
+#[test]
+fn test_pool_error_variants_match_in_pattern() {
+    // Sanity: the three PoolError variants are reachable from user
+    // pattern matches without an explicit import — confirms scope-0
+    // visibility for the enum + every variant.
+    let output = run(r#"fn classify(e: PoolError) -> String {
+             match e {
+                 PoolError.Timeout => "timeout",
+                 PoolError.PoolClosed => "closed",
+                 PoolError.CreateFailed => "create_failed",
+             }
+         }
+         fn main() {
+             println(classify(PoolError.Timeout));
+             println(classify(PoolError.PoolClosed));
+             println(classify(PoolError.CreateFailed));
+         }"#);
+    assert_eq!(output, "timeout\nclosed\ncreate_failed\n");
+}
+
 #[test]
 fn test_tracing_user_can_implement_exporter_trait() {
     // The whole point of the `Exporter` trait shape is that user code
