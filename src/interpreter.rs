@@ -21,6 +21,7 @@ mod method_call_iter;
 mod method_call_map;
 mod method_call_optres;
 mod method_call_regex;
+mod method_call_seq;
 mod method_call_set;
 mod pattern_match;
 mod resource_method;
