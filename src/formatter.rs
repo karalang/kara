@@ -15,40 +15,40 @@ pub fn format_program(program: &Program) -> String {
     f.output
 }
 
-struct Formatter {
-    output: String,
-    indent: usize,
+pub(super) struct Formatter {
+    pub(super) output: String,
+    pub(super) indent: usize,
 }
 
 impl Formatter {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         Formatter {
             output: String::new(),
             indent: 0,
         }
     }
 
-    fn push_indent(&mut self) {
+    pub(super) fn push_indent(&mut self) {
         self.indent += 1;
     }
 
-    fn pop_indent(&mut self) {
+    pub(super) fn pop_indent(&mut self) {
         self.indent -= 1;
     }
 
-    fn write_indent(&mut self) {
+    pub(super) fn write_indent(&mut self) {
         for _ in 0..self.indent {
             self.output.push_str(INDENT);
         }
     }
 
-    fn writeln(&mut self, s: &str) {
+    pub(super) fn writeln(&mut self, s: &str) {
         self.write_indent();
         self.output.push_str(s);
         self.output.push('\n');
     }
 
-    fn write_str(&mut self, s: &str) {
+    pub(super) fn write_str(&mut self, s: &str) {
         self.output.push_str(s);
     }
 
@@ -57,7 +57,7 @@ impl Formatter {
     /// when round-tripping requires the raw-identifier escape (design.md §
     /// Raw Identifiers). Structural markers (`self`/`Self`/`_`/etc.) are
     /// rejected at lex time and never reach the formatter as plain `name`s.
-    fn write_ident(&mut self, name: &str) {
+    pub(super) fn write_ident(&mut self, name: &str) {
         if needs_raw_escape(name) {
             self.output.push_str("r#");
         }
@@ -65,7 +65,7 @@ impl Formatter {
     }
 
     /// Emit a dotted path, escaping each segment independently.
-    fn write_path(&mut self, segments: &[String]) {
+    pub(super) fn write_path(&mut self, segments: &[String]) {
         for (i, seg) in segments.iter().enumerate() {
             if i > 0 {
                 self.output.push('.');
@@ -75,7 +75,7 @@ impl Formatter {
     }
 
     /// Emit a `, `-separated list of identifiers, escaping each independently.
-    fn write_ident_list(&mut self, names: &[String]) {
+    pub(super) fn write_ident_list(&mut self, names: &[String]) {
         for (i, n) in names.iter().enumerate() {
             if i > 0 {
                 self.output.push_str(", ");
@@ -86,7 +86,7 @@ impl Formatter {
 
     /// Emit the visibility keyword (`pub ` / `private ` / `""`) for items
     /// that carry the three-level `Visibility`.
-    fn write_visibility(&mut self, v: Visibility) {
+    pub(super) fn write_visibility(&mut self, v: Visibility) {
         match v {
             Visibility::Pub => self.write_str("pub "),
             Visibility::Private => self.write_str("private "),
@@ -96,7 +96,7 @@ impl Formatter {
 
     // ── Program ─────────────────────────────────────────────────
 
-    fn format_program(&mut self, program: &Program) {
+    pub(super) fn format_program(&mut self, program: &Program) {
         // Sort: use / import decls, then rest (preserving relative order within categories)
         let mut uses = Vec::new();
         let mut rest = Vec::new();
@@ -154,7 +154,7 @@ impl Formatter {
 
     // ── Items ───────────────────────────────────────────────────
 
-    fn format_item(&mut self, item: &Item) {
+    pub(super) fn format_item(&mut self, item: &Item) {
         match item {
             Item::Function(f) => self.format_function(f),
             Item::StructDef(s) => self.format_struct(s),
@@ -226,7 +226,7 @@ impl Formatter {
 
     // ── Attributes ──────────────────────────────────────────────
 
-    fn format_attributes(&mut self, attrs: &[Attribute]) {
+    pub(super) fn format_attributes(&mut self, attrs: &[Attribute]) {
         for attr in attrs {
             self.write_indent();
             // Linker attributes that carry trust-boundary obligations
@@ -280,7 +280,7 @@ impl Formatter {
 
     // ── Functions ───────────────────────────────────────────────
 
-    fn format_function(&mut self, f: &Function) {
+    pub(super) fn format_function(&mut self, f: &Function) {
         self.format_attributes(&f.attributes);
         self.write_indent();
         self.write_visibility(f.visibility());
@@ -303,7 +303,7 @@ impl Formatter {
         self.output.push('\n');
     }
 
-    fn format_fn_params(&mut self, self_param: &Option<SelfParam>, params: &[Param]) {
+    pub(super) fn format_fn_params(&mut self, self_param: &Option<SelfParam>, params: &[Param]) {
         let mut first = true;
         if let Some(ref sp) = self_param {
             first = false;
@@ -328,7 +328,7 @@ impl Formatter {
         }
     }
 
-    fn format_effects(&mut self, effects: &Option<EffectList>) {
+    pub(super) fn format_effects(&mut self, effects: &Option<EffectList>) {
         let effects = match effects {
             Some(e) => e,
             None => return,
@@ -357,7 +357,7 @@ impl Formatter {
         }
     }
 
-    fn format_requires(&mut self, requires: &[Expr]) {
+    pub(super) fn format_requires(&mut self, requires: &[Expr]) {
         for r in requires {
             self.write_str("\n");
             self.write_indent();
@@ -366,7 +366,7 @@ impl Formatter {
         }
     }
 
-    fn format_ensures(&mut self, ensures: &[EnsuresClause]) {
+    pub(super) fn format_ensures(&mut self, ensures: &[EnsuresClause]) {
         for e in ensures {
             self.write_str("\n");
             self.write_indent();
@@ -379,7 +379,7 @@ impl Formatter {
         }
     }
 
-    fn format_where_clause(&mut self, wc: &Option<WhereClause>) {
+    pub(super) fn format_where_clause(&mut self, wc: &Option<WhereClause>) {
         let wc = match wc {
             Some(w) => w,
             None => return,
@@ -426,7 +426,7 @@ impl Formatter {
 
     // ── Structs ─────────────────────────────────────────────────
 
-    fn format_struct(&mut self, s: &StructDef) {
+    pub(super) fn format_struct(&mut self, s: &StructDef) {
         self.format_attributes(&s.attributes);
         self.write_indent();
         self.write_visibility(s.visibility());
@@ -464,7 +464,7 @@ impl Formatter {
 
     // ── Enums ───────────────────────────────────────────────────
 
-    fn format_enum(&mut self, e: &EnumDef) {
+    pub(super) fn format_enum(&mut self, e: &EnumDef) {
         self.format_attributes(&e.attributes);
         self.write_indent();
         self.write_visibility(e.visibility());
@@ -515,7 +515,7 @@ impl Formatter {
 
     // ── Traits ──────────────────────────────────────────────────
 
-    fn format_marker_trait(&mut self, t: &MarkerTraitDef) {
+    pub(super) fn format_marker_trait(&mut self, t: &MarkerTraitDef) {
         self.format_attributes(&t.attributes);
         self.write_indent();
         if t.is_pub {
@@ -543,7 +543,7 @@ impl Formatter {
         }
     }
 
-    fn format_trait_alias(&mut self, t: &TraitAliasDef) {
+    pub(super) fn format_trait_alias(&mut self, t: &TraitAliasDef) {
         self.format_attributes(&t.attributes);
         self.write_indent();
         if t.is_pub {
@@ -565,7 +565,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_trait(&mut self, t: &TraitDef) {
+    pub(super) fn format_trait(&mut self, t: &TraitDef) {
         self.format_attributes(&t.attributes);
         self.write_indent();
         self.write_visibility(t.visibility());
@@ -609,7 +609,7 @@ impl Formatter {
         self.writeln("}");
     }
 
-    fn format_trait_method(&mut self, m: &TraitMethod) {
+    pub(super) fn format_trait_method(&mut self, m: &TraitMethod) {
         self.write_indent();
         self.write_str("fn ");
         self.write_ident(&m.name);
@@ -635,7 +635,7 @@ impl Formatter {
 
     // ── Impl Blocks ─────────────────────────────────────────────
 
-    fn format_impl(&mut self, imp: &ImplBlock) {
+    pub(super) fn format_impl(&mut self, imp: &ImplBlock) {
         self.format_attributes(&imp.attributes);
         self.write_indent();
         self.write_str("impl");
@@ -684,7 +684,7 @@ impl Formatter {
 
     // ── Effect Declarations ─────────────────────────────────────
 
-    fn format_effect_resource(&mut self, e: &EffectResourceDecl) {
+    pub(super) fn format_effect_resource(&mut self, e: &EffectResourceDecl) {
         self.write_indent();
         self.write_str("effect resource ");
         self.write_ident(&e.name);
@@ -696,7 +696,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_effect_group(&mut self, e: &EffectGroupDecl) {
+    pub(super) fn format_effect_group(&mut self, e: &EffectGroupDecl) {
         self.write_indent();
         if e.is_pub {
             self.write_str("pub ");
@@ -729,7 +729,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_effect_verb_decl(&mut self, e: &EffectVerbDecl) {
+    pub(super) fn format_effect_verb_decl(&mut self, e: &EffectVerbDecl) {
         self.write_indent();
         if e.is_pub {
             self.write_str("pub ");
@@ -744,7 +744,7 @@ impl Formatter {
 
     // ── Layout ──────────────────────────────────────────────────
 
-    fn format_layout(&mut self, l: &LayoutDef) {
+    pub(super) fn format_layout(&mut self, l: &LayoutDef) {
         self.write_indent();
         self.write_str("layout ");
         self.write_ident(&l.name);
@@ -788,7 +788,7 @@ impl Formatter {
 
     // ── Const ───────────────────────────────────────────────────
 
-    fn format_const(&mut self, c: &ConstDecl) {
+    pub(super) fn format_const(&mut self, c: &ConstDecl) {
         self.write_indent();
         self.write_visibility(c.visibility());
         self.write_str("const ");
@@ -802,7 +802,7 @@ impl Formatter {
 
     // ── Extern ──────────────────────────────────────────────────
 
-    fn format_extern_fn(&mut self, e: &ExternFunction) {
+    pub(super) fn format_extern_fn(&mut self, e: &ExternFunction) {
         self.write_indent();
         self.write_visibility(e.visibility());
         write!(self.output, "extern \"{}\" fn ", e.abi).unwrap();
@@ -825,7 +825,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_extern_block(&mut self, b: &ExternBlock) {
+    pub(super) fn format_extern_block(&mut self, b: &ExternBlock) {
         // Block-level attributes are stored on the block (not pre-merged
         // into per-item attributes) so the formatter renders them at the
         // block-header position, preserving round-trip idempotence:
@@ -845,7 +845,7 @@ impl Formatter {
         self.write_str("}\n");
     }
 
-    fn format_extern_block_item_fn(&mut self, e: &ExternFunction) {
+    pub(super) fn format_extern_block_item_fn(&mut self, e: &ExternFunction) {
         self.format_attributes(&e.attributes);
         self.write_indent();
         self.write_visibility(e.visibility());
@@ -869,7 +869,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_extern_block_item_opaque_type(&mut self, o: &OpaqueTypeDecl) {
+    pub(super) fn format_extern_block_item_opaque_type(&mut self, o: &OpaqueTypeDecl) {
         self.format_attributes(&o.attributes);
         self.write_indent();
         self.write_visibility(o.visibility());
@@ -880,7 +880,7 @@ impl Formatter {
 
     // ── Type Alias / Distinct ───────────────────────────────────
 
-    fn format_type_alias(&mut self, t: &TypeAliasDef) {
+    pub(super) fn format_type_alias(&mut self, t: &TypeAliasDef) {
         self.write_indent();
         self.write_visibility(t.visibility());
         self.write_str("type ");
@@ -891,7 +891,7 @@ impl Formatter {
         self.write_str(";\n");
     }
 
-    fn format_distinct_type(&mut self, d: &DistinctTypeDef) {
+    pub(super) fn format_distinct_type(&mut self, d: &DistinctTypeDef) {
         self.format_attributes(&d.attributes);
         self.write_indent();
         self.write_visibility(d.visibility());
@@ -905,7 +905,7 @@ impl Formatter {
 
     // ── Generics ────────────────────────────────────────────────
 
-    fn format_generic_params(&mut self, gp: &Option<GenericParams>) {
+    pub(super) fn format_generic_params(&mut self, gp: &Option<GenericParams>) {
         let gp = match gp {
             Some(g) => g,
             None => return,
@@ -946,7 +946,7 @@ impl Formatter {
         self.write_str("]");
     }
 
-    fn format_generic_args_opt(&mut self, args: &Option<Vec<GenericArg>>) {
+    pub(super) fn format_generic_args_opt(&mut self, args: &Option<Vec<GenericArg>>) {
         let args = match args {
             Some(a) => a,
             None => return,
@@ -966,7 +966,7 @@ impl Formatter {
 
     // ── Types ───────────────────────────────────────────────────
 
-    fn format_type_expr(&mut self, ty: &TypeExpr) {
+    pub(super) fn format_type_expr(&mut self, ty: &TypeExpr) {
         match &ty.kind {
             TypeKind::Path(p) => {
                 self.write_path(&p.segments);
@@ -1039,7 +1039,7 @@ impl Formatter {
 
     // ── Blocks ──────────────────────────────────────────────────
 
-    fn format_block(&mut self, block: &Block) {
+    pub(super) fn format_block(&mut self, block: &Block) {
         if block.stmts.is_empty() && block.final_expr.is_none() {
             self.write_str("{}");
             return;
@@ -1061,7 +1061,7 @@ impl Formatter {
 
     // ── Statements ──────────────────────────────────────────────
 
-    fn format_stmt(&mut self, stmt: &Stmt) {
+    pub(super) fn format_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
             StmtKind::Let {
                 is_mut,
@@ -1168,7 +1168,7 @@ impl Formatter {
 
     // ── Expressions ─────────────────────────────────────────────
 
-    fn format_expr(&mut self, expr: &Expr) {
+    pub(super) fn format_expr(&mut self, expr: &Expr) {
         match &expr.kind {
             ExprKind::Integer(n, sfx) => {
                 write!(self.output, "{n}").unwrap();
@@ -1662,7 +1662,7 @@ impl Formatter {
         }
     }
 
-    fn format_call_args(&mut self, args: &[CallArg]) {
+    pub(super) fn format_call_args(&mut self, args: &[CallArg]) {
         for (i, arg) in args.iter().enumerate() {
             if i > 0 {
                 self.write_str(", ");
@@ -1680,7 +1680,7 @@ impl Formatter {
 
     // ── Patterns ────────────────────────────────────────────────
 
-    fn format_pattern(&mut self, pat: &Pattern) {
+    pub(super) fn format_pattern(&mut self, pat: &Pattern) {
         match &pat.kind {
             PatternKind::Wildcard => self.write_str("_"),
             PatternKind::Binding(name) => self.write_ident(name),
@@ -1790,7 +1790,7 @@ impl Formatter {
         }
     }
 
-    fn format_literal_pattern(&mut self, lit: &LiteralPattern) {
+    pub(super) fn format_literal_pattern(&mut self, lit: &LiteralPattern) {
         match lit {
             LiteralPattern::Integer(n, sfx) => {
                 write!(self.output, "{n}").unwrap();
@@ -1819,7 +1819,7 @@ impl Formatter {
 
 /// String-returning equivalent of `Formatter::write_ident`. Used when the
 /// caller is composing output via `format!(...)` and can't take `&mut self`.
-fn ident_str(name: &str) -> String {
+pub(super) fn ident_str(name: &str) -> String {
     if needs_raw_escape(name) {
         format!("r#{name}")
     } else {
@@ -1828,7 +1828,7 @@ fn ident_str(name: &str) -> String {
 }
 
 /// String-returning equivalent of `Formatter::write_path`.
-fn path_str(segments: &[String]) -> String {
+pub(super) fn path_str(segments: &[String]) -> String {
     segments
         .iter()
         .map(|s| ident_str(s))
@@ -1842,7 +1842,7 @@ fn path_str(segments: &[String]) -> String {
 /// set; structural markers (`self`/`Self`/`_`/...) are excluded because they
 /// cannot reach the formatter as a plain `name` — the lexer rejects raw
 /// escapes for them.
-fn needs_raw_escape(name: &str) -> bool {
+pub(super) fn needs_raw_escape(name: &str) -> bool {
     matches!(
         name,
         // Declarations
@@ -1885,7 +1885,7 @@ fn needs_raw_escape(name: &str) -> bool {
     )
 }
 
-fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
+pub(super) fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
     match v {
         EffectVerbKind::Reads => "reads".to_string(),
         EffectVerbKind::Writes => "writes".to_string(),
@@ -1899,14 +1899,14 @@ fn format_effect_verb_kind(v: &EffectVerbKind) -> String {
     }
 }
 
-fn impl_item_name(item: &ImplItem) -> &str {
+pub(super) fn impl_item_name(item: &ImplItem) -> &str {
     match item {
         ImplItem::Method(m) => &m.name,
         ImplItem::AssocType(a) => &a.name,
     }
 }
 
-fn int_suffix_str(s: IntSuffix) -> &'static str {
+pub(super) fn int_suffix_str(s: IntSuffix) -> &'static str {
     match s {
         IntSuffix::I8 => "i8",
         IntSuffix::I16 => "i16",
@@ -1921,14 +1921,14 @@ fn int_suffix_str(s: IntSuffix) -> &'static str {
     }
 }
 
-fn float_suffix_str(s: FloatSuffix) -> &'static str {
+pub(super) fn float_suffix_str(s: FloatSuffix) -> &'static str {
     match s {
         FloatSuffix::F32 => "f32",
         FloatSuffix::F64 => "f64",
     }
 }
 
-fn escape_string(s: &str) -> String {
+pub(super) fn escape_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for ch in s.chars() {
         match ch {
