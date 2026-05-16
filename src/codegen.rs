@@ -19759,6 +19759,7 @@ impl<'ctx> Codegen<'ctx> {
     ///   - `idx >= 0`  /  `0 <= idx`           → LowerBound { idx }
     ///   - `idx < vec.len()`                    → UpperBound { idx, vec }
     ///   - `idx < n` where n aliases vec.len()  → UpperBound { idx, vec }
+    ///
     /// Strict-less only — `idx <= n-1` would be sound but isn't a shape
     /// the kata surface produces, and conservatively skipping it now keeps
     /// the elision predicate small.
@@ -23930,11 +23931,11 @@ impl<'ctx> Codegen<'ctx> {
     }
 
     /// Emit the fast-path-inlined body of the monomorphized
-    /// `karac_map_<K>_<V>_get` function. Mirrors `KaracMap::lookup`
-    /// + `KaracMap::get` from `runtime/src/map.rs:120` — but inlines
-    /// hash + probe + K-typed eq + the val load on match. No
-    /// load-factor / resize branch (get never resizes); no
-    /// tombstone-tracking PHI (get doesn't write).
+    /// `karac_map_<K>_<V>_get` function. Mirrors `KaracMap::lookup` and
+    /// `KaracMap::get` from `runtime/src/map.rs:120` — but inlines hash,
+    /// probe, K-typed eq, and the val load on match. No load-factor /
+    /// resize branch (get never resizes); no tombstone-tracking PHI
+    /// (get doesn't write).
     ///
     /// Slice 1b emitted this for (i64, i64) only; Slice 2 generalizes
     /// to any (i32 / i64 key) × (i64 val) pair so `Map[char, i64]`
