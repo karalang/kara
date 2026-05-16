@@ -461,6 +461,19 @@ impl<'a> super::EffectChecker<'a> {
                 // Conservative over-approximation is acceptable; false negatives are not.
                 const STDLIB_METHOD_MAP: &[(&str, &str)] = &[
                     ("push", "Vec.push"),
+                    // `VecDeque[T]` mutating method surface — paired with
+                    // the matching `inferred_effects` seeds in
+                    // `effectchecker.rs::seed_builtin_effects`. Without
+                    // these, the auto-parallelizer's
+                    // `method_effects_imply_receiver_mutation` lookup
+                    // doesn't find any non-pure verb on a bare
+                    // `push_back`/etc. method name and the receiver is
+                    // racily captured-by-value (Map+VecDeque corruption
+                    // repro 2026-05-16).
+                    ("push_back", "VecDeque.push_back"),
+                    ("push_front", "VecDeque.push_front"),
+                    ("pop_back", "VecDeque.pop_back"),
+                    ("pop_front", "VecDeque.pop_front"),
                     ("push_str", "String.push_str"),
                     ("insert", "Map.insert"),
                     ("insert", "SortedSet.insert"),

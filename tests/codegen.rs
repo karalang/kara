@@ -11449,4 +11449,150 @@ fn main() {
             );
         }
     }
+
+    /// Map+VecDeque co-existence regression (2026-05-16).
+    ///
+    /// `let m: Map[i64, i64] = Map.new()` followed by
+    /// `let q: VecDeque[i64] = VecDeque.new()` (or the reverse) used to
+    /// corrupt each other on `e4ca725`:
+    ///
+    /// 1. `llvm_type_for_type_expr` lowered `VecDeque[T]` to `i64` (only
+    ///    `Vec` had a fast-path; the baked `struct VecDeque[T] {}` shape
+    ///    is empty and never reaches `struct_types` from codegen's
+    ///    side). The auto-par escape-slot return struct then sized
+    ///    `q`'s slot at 8 bytes — but the branch fn stored the real
+    ///    24-byte `{ptr, len, cap}` aggregate, overflowing 16 bytes
+    ///    into the adjacent `m` alloca. Symptom: `q.len()` returned a
+    ///    pointer-sized integer; `q.pop_front()` either looped forever
+    ///    on the trashed `len` or read garbage.
+    /// 2. After (1) was fixed, `q.push_back(x)` was still raced against
+    ///    sibling `q.len()` / `q.pop_front()` reads inside a second
+    ///    auto-par group, because the analyzer's
+    ///    `method_effects_imply_receiver_mutation` lookup found no
+    ///    non-pure verb seeded for `push_back` / `pop_*` (the
+    ///    `VecDeque.*` keys weren't in `inferred_effects` and the
+    ///    bare-method-name `STDLIB_METHOD_MAP` had no `push_back` /
+    ///    `pop_front` / `push_front` / `pop_back` entries). The captured
+    ///    `q` was bit-copied into the branch env, so each branch saw
+    ///    the pre-spawn snapshot. Symptom: `q.len()` printed 0 even
+    ///    though `q.push_back(42)` ran first in source order.
+    ///
+    /// This test exercises both orderings of Map / VecDeque
+    /// construction plus a push_back → len → pop_front trailing
+    /// sequence on each. Compiles through the full pipeline
+    /// (concurrency_analyze included) so the auto-par dispatch runs
+    /// for real.
+    #[test]
+    fn test_e2e_map_and_vec_deque_coexistence_no_corruption() {
+        use karac::codegen::{compile_to_object_with_options, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        fn run(src: &str, id: u64) -> Option<String> {
+            let mut parsed = karac::parse(src);
+            if !parsed.errors.is_empty() {
+                panic!("parse errors: {:?}", parsed.errors);
+            }
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            karac::lower(&mut parsed.program, &typed);
+            let effects = karac::effectcheck(&parsed.program);
+            let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+
+            let obj_path = format!("/tmp/karac_e2e_mapvd_{}_{}.o", std::process::id(), id);
+            let exe_path = format!("/tmp/karac_e2e_mapvd_{}_{}", std::process::id(), id);
+
+            if let Err(e) = compile_to_object_with_options(
+                &parsed.program,
+                &obj_path,
+                None,
+                Some(&analysis),
+                None,
+                None,
+            ) {
+                panic!("codegen failed: {e}");
+            }
+            // Link or exec failure → soft skip (matches the rest of the
+            // codegen E2E suite — runtime archive may be missing in CI).
+            link_executable(&obj_path, &exe_path).ok()?;
+            let output = std::process::Command::new(&exe_path).output().ok()?;
+            let _ = std::fs::remove_file(&obj_path);
+            let _ = std::fs::remove_file(&exe_path);
+            Some(String::from_utf8_lossy(&output.stdout).to_string())
+        }
+
+        // Order 1: Map declared first, then VecDeque. Interleave the
+        // insert / push_back, then read q.len(), then pop_front. Pre-fix
+        // this hung (corrupted len overflowed into the loop count of
+        // memmove) or printed garbage; post-fix prints `1\n42`.
+        let id1 = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let src1 = r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let _ = m.insert(1, 100);
+    q.push_back(42);
+    println(q.len());
+    if let Some(v) = q.pop_front() {
+        println(v);
+    } else {
+        println(-1);
+    }
+}
+"#;
+        if let Some(out) = run(src1, id1) {
+            assert_eq!(
+                out, "1\n42\n",
+                "Map + VecDeque co-exist (Map-first): len + pop_front must agree with push_back"
+            );
+        }
+
+        // Order 2: VecDeque ops BEFORE Map.insert — same end state.
+        // Pre-fix this printed `4378427392` (a pointer-sized integer
+        // — `q4`'s slot read off the end of the alloca because the
+        // par-group return struct under-sized `q`'s field).
+        let id2 = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let src2 = r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    q.push_back(42);
+    let _ = m.insert(1, 100);
+    println(q.len());
+}
+"#;
+        if let Some(out) = run(src2, id2) {
+            assert_eq!(
+                out, "1\n",
+                "Map + VecDeque co-exist (VecDeque-first): len must reflect the push_back"
+            );
+        }
+
+        // Order 3: no .len() read — exercises `pop_front` as the
+        // sole post-mutation read so the regression is detected even
+        // when the program never asks for the explicit length. Pre-fix
+        // this hung inside `memmove` (the trashed len was on the order
+        // of 2^32, so the tail-shift's byte count was billions). Post-
+        // fix prints `42`.
+        let id3 = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let src3 = r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let _ = m.insert(1, 100);
+    q.push_back(42);
+    if let Some(v) = q.pop_front() {
+        println(v);
+    } else {
+        println(-1);
+    }
+}
+"#;
+        if let Some(out) = run(src3, id3) {
+            assert_eq!(
+                out, "42\n",
+                "Map + VecDeque co-exist (no len read): pop_front must return the pushed value"
+            );
+        }
+    }
 }

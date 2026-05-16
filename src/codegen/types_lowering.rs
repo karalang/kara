@@ -44,7 +44,22 @@ impl<'ctx> super::Codegen<'ctx> {
                         return arr_ty;
                     }
                 }
-                if name == "Vec" {
+                if name == "Vec" || name == "VecDeque" {
+                    // `VecDeque[T]` shares `Vec[T]`'s `{ptr, len, cap}`
+                    // codegen layout — see `extract_vec_elem_type` and
+                    // the `Vec.new` / `VecDeque.new` arm in
+                    // `compile_assoc_call`. Without this branch, the
+                    // baked `struct VecDeque[T] { }` shape (an empty
+                    // struct) isn't in `struct_types` either (codegen
+                    // doesn't import baked stdlib items), so the
+                    // fall-through reaches `llvm_type_for_name`'s
+                    // unknown-name arm and returns `i64`. That would
+                    // size every escaped-binding parent slot at 8
+                    // bytes — but the par-branch then stores a real
+                    // 24-byte vec aggregate at that slot, overflowing
+                    // 16 bytes into the adjacent alloca and corrupting
+                    // any neighbouring local (the Map+VecDeque
+                    // co-existence repro).
                     return self.vec_struct_type().into();
                 }
                 if name == "Slice" {
@@ -699,7 +714,13 @@ impl<'ctx> super::Codegen<'ctx> {
             // addresses the root cause. Surfaced by the
             // monomorphized-collections Slice 2 investigation.
             "char" => self.context.i32_type().into(),
-            "String" | "str" => self.vec_struct_type().into(),
+            // `VecDeque` shares `Vec[T]`'s `{ptr, len, cap}` layout (see
+            // the parallel arm in `llvm_type_for_type_expr`). The baked
+            // `struct VecDeque[T] { }` isn't in `struct_types` from
+            // codegen's perspective (baked stdlib items aren't fed in),
+            // so calls that reach `llvm_type_for_name` directly without
+            // generic args would otherwise fall to the i64 default.
+            "String" | "str" | "VecDeque" | "Vec" => self.vec_struct_type().into(),
             name => {
                 // Shared types are heap-allocated pointers.
                 if self.shared_types.contains_key(name) {

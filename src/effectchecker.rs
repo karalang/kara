@@ -426,6 +426,20 @@ impl<'a> EffectChecker<'a> {
             "Vec.new",
             "Vec.from_slice",
             "Vec.push",
+            // `VecDeque[T]`'s mutating method surface — seeded as
+            // `allocates(Heap)` so the auto-parallelizer's
+            // `method_effects_imply_receiver_mutation` lookup
+            // (`src/concurrency.rs`) treats them as receiver-mutating.
+            // Without these, a `q.push_back(x)` co-grouped with a sibling
+            // `q.len()` reads would race on the per-branch captured copy
+            // of `q`'s `{ptr, len, cap}` struct, dropping the update on
+            // join. `push_back` itself can also realloc (matching
+            // `Vec.push`), so the allocates verb is the accurate seed.
+            "VecDeque.new",
+            "VecDeque.push_back",
+            "VecDeque.push_front",
+            "VecDeque.pop_back",
+            "VecDeque.pop_front",
             "String.new",
             "String.push_str",
             "Map.new",
