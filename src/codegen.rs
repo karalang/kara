@@ -20,6 +20,7 @@ use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
 use crate::ownership::OwnershipCheckResult;
 use crate::token::Span;
 
+mod assoc_call;
 mod call_dispatch;
 mod calls;
 mod clone_drop;
