@@ -3000,6 +3000,57 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_receiver_plain_struct_vec_push() {
+        // Slice FR (sibling to MR): `outer.field.method(...)` on a plain
+        // struct must GEP into the slot's field, not extract-value.  The
+        // push must write back through the field pointer aliasing the
+        // parent slot so a subsequent `.len()` on the same field reads
+        // the new count. Iteration over a FieldAccess source (`for x in
+        // h.nums`) is a separate codegen path and out of scope for this
+        // test.
+        let out = run_program(
+            r#"
+struct Holder { nums: Vec[i64] }
+fn main() {
+    let h = Holder { nums: Vec.new() };
+    h.nums.push(10);
+    h.nums.push(20);
+    h.nums.push(30);
+    println(h.nums.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_field_receiver_shared_struct_vec_push() {
+        // Headline regression gate — closes the LeetCode 133 kata's primary
+        // codegen blocker (`curr_clone.neighbors.push(...)`) on a shared
+        // struct.  The push must persist through the RC heap GEP so a
+        // subsequent `.len()` on the same field returns the new count.
+        let out = run_program(
+            r#"
+shared struct Bag { tag: i64, mut items: Vec[i64] }
+fn main() {
+    let b = Bag { tag: 7, items: Vec.new() };
+    b.items.push(11);
+    b.items.push(22);
+    println(b.tag);
+    println(b.items.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["7", "2"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_indexed_receiver_slice_path_len() {
         // The outer is a `mut Slice[Vec[i64]]` view; indexed-receiver
         // dispatch goes through the slice lowering path.

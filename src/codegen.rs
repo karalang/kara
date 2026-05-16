@@ -158,6 +158,14 @@ pub(super) struct Codegen<'ctx> {
     /// the type of `o.inner` to resolve `name`'s field index in
     /// `compile_field_access` / `field_index_for`).
     pub(crate) struct_field_type_names: HashMap<String, Vec<Option<String>>>,
+    /// Full per-field `TypeExpr` in declaration order (struct name →
+    /// field TypeExprs). Carries the generic args that
+    /// `struct_field_type_names` discards (`Vec[Node]` vs just `"Vec"`),
+    /// which the field-receiver method dispatch path needs to populate
+    /// the synth's element-type side-tables via
+    /// `register_var_from_type_expr`. Populated alongside
+    /// `struct_field_type_names` in `declare_structs`.
+    pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
     /// Enum layouts for tagged-union codegen (enum name → layout).
     pub(crate) enum_layouts: HashMap<String, EnumLayout<'ctx>>,
     /// Nested loop stack — innermost frame is last.
@@ -1118,6 +1126,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
+            struct_field_type_exprs: HashMap::new(),
             enum_layouts: HashMap::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),

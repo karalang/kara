@@ -998,6 +998,30 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_indexed_receiver_method(inner, index, method, args, call_span);
         }
 
+        // Slice FR (2026-05-16): field-receiver method dispatch. Sibling to
+        // the MR slice above — when the receiver is `outer.field` (a
+        // `FieldAccess`), GEP into the struct (shared or plain) to the field
+        // pointer, mint a synth identifier bound to that pointer with the
+        // field type's side tables populated, and re-dispatch the method.
+        // Closes the LeetCode 133 kata's primary blocker
+        // (`curr_clone.neighbors.push(nb_clone)` on a `shared struct Node`
+        // with `mut neighbors: Vec[Node]`). Returns `Some(_)` only when the
+        // receiver shape is one we know how to lower; otherwise the regular
+        // dispatch below runs (so the generic field-by-value extract path
+        // and the fall-through diagnostic still apply for unsupported
+        // shapes).
+        if let ExprKind::FieldAccess {
+            object: inner,
+            field,
+        } = &object.kind
+        {
+            if let Some(value) =
+                self.try_compile_field_receiver_method(inner, field, method, args, call_span)?
+            {
+                return Ok(value);
+            }
+        }
+
         // Trailing-method dispatch on an entry-chain receiver — e.g.
         // `bucket.entry(p).or_insert(Vec.new()).push(j)`. The chain
         // produces a slot pointer (`*mut V`); the synth-identifier
@@ -1465,6 +1489,195 @@ impl<'ctx> super::Codegen<'ctx> {
         self.set_elem_type_exprs.remove(&synth);
 
         result
+    }
+
+    /// Slice FR (2026-05-16): field-receiver method dispatch. Sibling to
+    /// `compile_indexed_receiver_method` (MR slice) for the
+    /// `outer.field.method(...)` shape. The outer must be a named
+    /// variable bound to a struct (shared or plain) so we can recover
+    /// the struct name from `var_type_names` and the per-field LLVM /
+    /// `TypeExpr` info from the declaration registries. Returns
+    /// `Ok(None)` when the shape isn't a known struct field — caller
+    /// falls through to the regular dispatch.
+    ///
+    /// Locked design choices (FR1–FR4, sibling to MR1–MR5):
+    /// - FR1 receiver-shape early dispatch at the top of
+    ///   `compile_method_call`.
+    /// - FR2 routes by struct kind (shared via heap-GEP, plain via
+    ///   slot-GEP), not by method name.
+    /// - FR3 synth identifier `__field_elem_<n>` bound to the field
+    ///   pointer with the field's TypeExpr-derived registries
+    ///   populated through `register_var_from_type_expr`; both
+    ///   read-only and mutating methods flow through the same path
+    ///   because the field pointer aliases the parent storage.
+    /// - FR4 chained `outer.a.b.method()` is rejected with a clear
+    ///   diagnostic — bind the inner field to a temporary first.
+    pub(super) fn try_compile_field_receiver_method(
+        &mut self,
+        inner: &Expr,
+        field: &str,
+        method: &str,
+        args: &[CallArg],
+        call_span: &crate::token::Span,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        // FR4: reject chained field receivers up front.
+        if matches!(inner.kind, ExprKind::FieldAccess { .. }) {
+            return Err(format!(
+                "codegen: chained field receivers (`a.b.c.{}(...)`) are deferred to v1.x; \
+                 bind the inner field to a temporary first",
+                method
+            ));
+        }
+        // Outer must be a named variable so we can look up its struct
+        // type. Anything else (a call return, an index, …) falls through
+        // to the regular dispatch; the existing fall-through diagnostic
+        // already says the right thing.
+        let outer_name = match &inner.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            _ => return Ok(None),
+        };
+        let type_name = match self.var_type_names.get(outer_name.as_str()).cloned() {
+            Some(t) => t,
+            None => return Ok(None),
+        };
+        // Look up the field's declaration-order index and full TypeExpr.
+        let field_idx = match self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        let field_te = match self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|tes| tes.get(field_idx).cloned())
+        {
+            Some(te) => te,
+            None => return Ok(None),
+        };
+
+        // GEP the field pointer. Shared: load the handle, GEP at
+        // (idx + 1) past the refcount slot. Plain: GEP directly into
+        // the slot at idx.
+        let (field_ptr, field_ll_ty) =
+            if let Some(info) = self.shared_types.get(&type_name).cloned() {
+                if info.is_enum {
+                    return Ok(None);
+                }
+                // Load the handle pointer from the outer var slot.
+                let slot = self
+                    .variables
+                    .get(outer_name.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        format!(
+                            "codegen: field-receiver method '{}' — outer '{}' has no slot",
+                            method, outer_name
+                        )
+                    })?;
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, slot.ptr, "fr.shared.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let fp = self
+                    .builder
+                    .build_struct_gep(
+                        info.heap_type,
+                        handle,
+                        (field_idx + 1) as u32,
+                        &format!("fr_sh_{}", field),
+                    )
+                    .unwrap();
+                let fty = info
+                    .heap_type
+                    .get_field_type_at_index((field_idx + 1) as u32)
+                    .ok_or_else(|| {
+                        format!(
+                        "codegen: field-receiver method '{}' on '{}.{}' — field LLVM type missing",
+                        method, type_name, field
+                    )
+                    })?;
+                (fp, fty)
+            } else if let Some(st) = self.struct_types.get(&type_name).copied() {
+                // Plain struct: outer's slot stores the struct by value, so
+                // GEP into the slot directly.
+                let slot = self
+                    .variables
+                    .get(outer_name.as_str())
+                    .copied()
+                    .ok_or_else(|| {
+                        format!(
+                            "codegen: field-receiver method '{}' — outer '{}' has no slot",
+                            method, outer_name
+                        )
+                    })?;
+                let fp = self
+                    .builder
+                    .build_struct_gep(st, slot.ptr, field_idx as u32, &format!("fr_pl_{}", field))
+                    .unwrap();
+                let fty = st
+                    .get_field_type_at_index(field_idx as u32)
+                    .ok_or_else(|| {
+                        format!(
+                    "codegen: field-receiver method '{}' on '{}.{}' — field LLVM type missing",
+                    method, type_name, field
+                )
+                    })?;
+                (fp, fty)
+            } else {
+                // Not a tracked struct shape — fall through.
+                return Ok(None);
+            };
+
+        // Mint a fresh synth identifier and populate its registries so
+        // the recursive dispatch sees a regular Identifier-receiver flow.
+        let synth = format!("__field_elem_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: field_ptr,
+                ty: field_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &field_te);
+        // User-struct field: also populate `var_type_names` so the
+        // impl-block dispatch path resolves `Type.method`.
+        if let TypeKind::Path(path) = &field_te.kind {
+            if let Some(seg) = path.segments.first() {
+                if self.struct_types.contains_key(seg.as_str())
+                    || self.shared_types.contains_key(seg.as_str())
+                {
+                    self.var_type_names.insert(synth.clone(), seg.clone());
+                }
+            }
+        }
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: inner.span.clone(),
+        };
+        let result = self.compile_method_call(&synth_expr, method, args, call_span);
+
+        // Clean up synth registrations.
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.map_key_types.remove(&synth);
+        self.map_val_types.remove(&synth);
+        self.map_key_type_names.remove(&synth);
+        self.map_key_type_exprs.remove(&synth);
+        self.set_elem_types.remove(&synth);
+        self.set_elem_type_names.remove(&synth);
+        self.set_elem_type_exprs.remove(&synth);
+
+        result.map(Some)
     }
 
     /// Nested indexed read codegen (`a[i][j]`) — sibling to

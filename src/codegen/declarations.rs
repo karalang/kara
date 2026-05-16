@@ -49,6 +49,14 @@ impl<'ctx> super::Codegen<'ctx> {
                     .collect();
                 self.struct_field_type_names
                     .insert(s.name.clone(), field_type_names);
+                // Full per-field TypeExpr for the field-receiver method
+                // dispatch path — generic args (`Vec[Node]`) are needed to
+                // populate the synth's element-type side tables via
+                // `register_var_from_type_expr`.
+                let field_type_exprs: Vec<TypeExpr> =
+                    s.fields.iter().map(|f| f.ty.clone()).collect();
+                self.struct_field_type_exprs
+                    .insert(s.name.clone(), field_type_exprs);
 
                 if s.is_shared {
                     // Shared struct: heap layout is { i64 refcount, field0, field1, … }
