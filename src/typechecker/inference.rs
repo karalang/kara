@@ -13,8 +13,9 @@ use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
 use super::const_eval::substitute_const_arg;
-use super::types::{ConstArg, ConstVarId, SubstValue, Type, TypeVarId};
-use super::{type_display, types_compatible};
+use super::types::{
+    type_display, types_compatible, ConstArg, ConstVarId, SubstValue, Type, TypeVarId,
+};
 
 /// Structural substitution of `Type::TypeParam(name)` → concrete type
 /// from `subs`. Callers build `subs` externally from concrete types and

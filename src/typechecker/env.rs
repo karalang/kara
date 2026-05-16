@@ -13,8 +13,10 @@
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
-use super::types::{ConstArg, ConstVarId, Type, TypeVarId, VariantTypeInfo};
-use super::{impl_args_match, impl_table_key, types_compatible};
+use super::types::{
+    impl_args_match, impl_table_key, types_compatible, ConstArg, ConstVarId, Type, TypeVarId,
+    VariantTypeInfo,
+};
 
 // ── Type Environment ────────────────────────────────────────────
 
