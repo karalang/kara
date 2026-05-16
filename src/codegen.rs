@@ -27,6 +27,7 @@ mod closures;
 mod collections;
 mod control_flow;
 mod control_flow_for;
+mod control_flow_match;
 mod declarations;
 mod driver;
 mod entry_chains;
