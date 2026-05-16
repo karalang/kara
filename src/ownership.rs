@@ -115,7 +115,7 @@ pub enum SliceConflictShape {
 }
 
 #[derive(Debug, Clone)]
-enum ValueState {
+pub(crate) enum ValueState {
     Live,
     /// Declared via `let x: T;` (LetUninit) but not yet assigned.
     /// Reading errors with UseOfUninitialized; the first assignment
@@ -388,43 +388,43 @@ pub(crate) fn is_copy_type(ty: &Type, tc: &TypeCheckResult) -> bool {
 // ── Ownership Checker ───────────────────────────────────────────
 
 pub struct OwnershipChecker<'a> {
-    program: &'a Program,
-    typecheck_result: &'a TypeCheckResult,
-    param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
+    pub(crate) program: &'a Program,
+    pub(crate) typecheck_result: &'a TypeCheckResult,
+    pub(crate) param_modes: HashMap<String, Vec<(String, OwnershipMode)>>,
     /// Inferred closure parameter modes (round 12.23). Keyed by the
     /// closure expression's `SpanKey`; values mirror `param_modes`'s
     /// per-fn `(name, mode)` shape. Surfaced via
     /// `OwnershipCheckResult::closure_param_modes`.
-    closure_param_modes: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub(crate) closure_param_modes: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Inferred closure captures (round 12.24). Keyed by the closure
     /// expression's `SpanKey`. Surfaced via
     /// `OwnershipCheckResult::closure_captures`.
-    closure_captures: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
+    pub(crate) closure_captures: HashMap<SpanKey, Vec<(String, OwnershipMode)>>,
     /// Closure span → enclosing function key (round 12.25). Built
     /// up at every `Closure` arm visit alongside the param/capture
     /// inference. Surfaced via `OwnershipCheckResult::closure_function`.
-    closure_function: HashMap<SpanKey, String>,
+    pub(crate) closure_function: HashMap<SpanKey, String>,
     /// Closure `SpanKey` → full `Span`. Surfaced via
     /// `OwnershipCheckResult::closure_spans`.
-    closure_spans: HashMap<SpanKey, Span>,
-    errors: Vec<OwnershipError>,
-    notes: Vec<OwnershipError>,
+    pub(crate) closure_spans: HashMap<SpanKey, Span>,
+    pub(crate) errors: Vec<OwnershipError>,
+    pub(crate) notes: Vec<OwnershipError>,
     /// Per-function RC values populated during Phase 1.
-    rc_values: HashMap<String, HashMap<String, RcEntry>>,
+    pub(crate) rc_values: HashMap<String, HashMap<String, RcEntry>>,
     /// Per-function Arc-promoted values populated during Phase 2.
-    arc_values: HashMap<String, HashSet<String>>,
+    pub(crate) arc_values: HashMap<String, HashSet<String>>,
     /// Function currently being analysed (key into the per-function maps).
-    current_function: String,
+    pub(crate) current_function: String,
     /// Whether the current function suppresses RC fallback notes via
     /// `#[allow(rc_fallback)]`. Errors from `#[no_rc]` / `@no_rc` are
     /// not suppressed.
-    suppress_rc_notes: bool,
+    pub(crate) suppress_rc_notes: bool,
     /// Function keys where RC notes are suppressed via `#[allow(rc_fallback)]`.
     /// Consulted after Phase 2 when emitting flavor-annotated notes.
-    suppressed_rc_fn_keys: HashSet<String>,
+    pub(crate) suppressed_rc_fn_keys: HashSet<String>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
-    binding_type_names: HashMap<String, String>,
+    pub(crate) binding_type_names: HashMap<String, String>,
     /// Full type of each binding in scope for the current function.
     /// Parallel to `binding_type_names` but stores the structured `Type`
     /// rather than just the head name. Populated at the param-scan and
@@ -432,7 +432,7 @@ pub struct OwnershipChecker<'a> {
     /// the LHS / chained-access spans the typechecker may overwrite).
     /// Consumed by `consume_named_binding` to look up Copy-ness without
     /// going through the unreliable `expr_types[span]` path.
-    binding_types: HashMap<String, Type>,
+    pub(crate) binding_types: HashMap<String, Type>,
     // Round 12.38 — once-callable closure tracking removed from the
     // ownership-side state machine. Detection now lives in
     // `use_classifier::UseClassifier::once_callable_closures` (round
@@ -442,7 +442,7 @@ pub struct OwnershipChecker<'a> {
     /// program's impl blocks and trait declarations. Consulted at every
     /// `MethodCall` to drive consume-vs-read classification of the receiver
     /// per design.md § Consume Predicate step 1.
-    method_self_modes: HashMap<String, SelfParam>,
+    pub(crate) method_self_modes: HashMap<String, SelfParam>,
     /// Callee name → per-position parameter ownership modes. Free functions
     /// are keyed by bare name (`"my_fn"`); static methods (impl methods
     /// with no `self_param`) are keyed by `"Type.method"`. The mode of
@@ -450,7 +450,7 @@ pub struct OwnershipChecker<'a> {
     /// → `Ref`, `mut ref T` / `mut Slice[T]` → `MutRef`, otherwise
     /// `Own`. Drives `Call`-arg consume-vs-read classification per
     /// design.md § Consume Predicate step 2.
-    callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
+    pub(crate) callee_param_modes: HashMap<String, Vec<OwnershipMode>>,
     /// Callee name → per-position "is the formal a slice?" flag. `Some(true)`
     /// for `mut Slice[T]`, `Some(false)` for `Slice[T]`, `None` for
     /// non-slice formals. Drives the Slice 1 call-arg coercion site
@@ -458,43 +458,43 @@ pub struct OwnershipChecker<'a> {
     /// formal slot whose type is `Slice[T]` / `mut Slice[T]`, the
     /// implicit coercion creates a slice view that needs source
     /// attribution. Same key convention as `callee_param_modes`.
-    callee_param_slice_kind: HashMap<String, Vec<Option<bool>>>,
+    pub(crate) callee_param_slice_kind: HashMap<String, Vec<Option<bool>>>,
     /// Slice creation sites recorded by Slice 1. Surfaced via
     /// `OwnershipCheckResult::slice_borrow_sources`. Populated at
     /// `.as_slice()` / `.as_slice_mut()`, range-indexing, and call-arg
     /// coercion sites; the let-binding-rhs site reuses whichever
     /// recording its RHS expression already produced.
-    slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
+    pub(crate) slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
     /// Per-binding slice source attribution. Populated at `let pat = rhs`
     /// time when the RHS is a slice creation expression — the binding
     /// name maps to the same `(PlaceExpr, mutable)` pair recorded for the
     /// RHS's span. Consumed by `place_expr_root` so a use of the binding
     /// in a later slice creation chains through to the original storage
     /// root rather than the intermediate slice.
-    slice_binding_sources: HashMap<String, (PlaceExpr, bool)>,
+    pub(crate) slice_binding_sources: HashMap<String, (PlaceExpr, bool)>,
     /// Slice 2 — active borrow stack per source root binding name. Pushed
     /// at slice creation sites and at the call-statement-scoped ref-side
     /// boundary; drained at block exit when an entry's `scope_depth` is
     /// strictly greater than the current scope depth. Conflict detection
     /// scans this list at every push to find slice-vs-slice and
     /// slice-vs-ref overlaps against the same root.
-    active_borrows: HashMap<String, Vec<ActiveBorrow>>,
+    pub(crate) active_borrows: HashMap<String, Vec<ActiveBorrow>>,
     /// Slice 2 — current block scope depth, incremented on `check_block`
     /// entry and decremented on exit. Used to stamp `ActiveBorrow` and
     /// to drive the drain-on-exit cleanup. Top-level fn body sits at
     /// depth 1 after entry; nested blocks bump deeper.
-    current_scope_depth: usize,
+    pub(crate) current_scope_depth: usize,
     /// Slice 2 — scope depth at which each binding was declared. Used by
     /// drop-of-borrowed detection: at block-exit drain, a source binding
     /// whose scope ends now (`scope_depth == current_scope_depth`) with
     /// any live slice into it whose own binding scope is shallower
     /// triggers shape D.
-    binding_scope_depth: HashMap<String, usize>,
+    pub(crate) binding_scope_depth: HashMap<String, usize>,
     /// Slice 2 — scope depth at which each slice binding was declared.
     /// Populated at the `StmtKind::Let` arm when the RHS produced a
     /// `slice_borrow_sources` entry. Drives the drop-of-borrowed
     /// trigger comparison.
-    slice_binding_scope_depth: HashMap<String, usize>,
+    pub(crate) slice_binding_scope_depth: HashMap<String, usize>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -4838,7 +4838,7 @@ fn scan_expr_for_par_uses(
 /// `mutated` is true if the body mutates it (assignment-target root,
 /// `mut`-marker arg root, or `mut ref self` method-call receiver root).
 #[derive(Debug, Default, Clone, Copy)]
-struct CaptureBodyUsage {
+pub(crate) struct CaptureBodyUsage {
     referenced: bool,
     mutated: bool,
 }
@@ -4846,7 +4846,7 @@ struct CaptureBodyUsage {
 // ── Parameter Usage Tracking ────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]
-enum ParamUsage {
+pub(crate) enum ParamUsage {
     Unused,
     Read,
     #[allow(dead_code)]
@@ -4985,7 +4985,7 @@ fn slice_kind_from_type(ty: &TypeExpr) -> Option<bool> {
 
 /// Result of comparing a new borrow against an existing one against the
 /// same source. `None` for compatible pairs (two immutable views, etc.).
-enum BorrowConflict {
+pub(crate) enum BorrowConflict {
     None,
     SliceShape(SliceConflictShape),
     CrossForm,
