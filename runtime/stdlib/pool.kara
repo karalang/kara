@@ -4,94 +4,130 @@
 // backend-platform lift, 2026-05-09). Spec at
 // `phase-8-stdlib-floor.md § Backend Platform > P1 Pool[T]`.
 //
-// v1 surface (this slice): the `Pool[T]` constructor signature,
-// `PooledConnection[T]` handle, and `PoolError` variants. The acquire
-// path returns `Err(PoolError.Timeout)` as a placeholder while the
-// real bounded-waiters-with-timeout machinery lands in a follow-up
-// slice — that machinery requires concurrency primitives (semaphore /
-// condition variable / monotonic clock) that the v1 interpreter
-// doesn't expose yet, and an interpreter intrinsic backed by a Rust
-// `parking_lot` semaphore. The signature shape is what callers
-// (community database drivers, the `Pool[Connection]` usage pattern)
-// build against from day one; the body swap is non-breaking.
+// **Dispatch.** The OS-touching methods (`new` / `acquire` /
+// `release`) are `#[compiler_builtin]` — dispatch fires through the
+// interpreter's `try_eval_pool_method` arm (instance methods) and
+// the `"Pool.new"` path-string arm in `eval_call.rs` (associated
+// fn). State lives on the interpreter in `pool_table: HashMap<i64,
+// PoolEntry>` keyed by `Pool.handle_id`. The Kāra `Pool` value
+// carries only the handle; pool state (factory closure + bounds +
+// slot vec) lives Rust-side.
 //
-// **Drop-releases-automatically.** The spec's "drop releases
-// automatically" contract is forward-looking: when the real impl
-// lands, `PooledConnection[T]`'s drop returns the resource to the
-// pool. v1's placeholder PooledConnection is never constructed
-// (acquire always returns Err), so the drop semantics are dormant.
+// **Single-threaded semantics.** The tree-walk interpreter has no
+// concurrent thread, so the spec's "bounded waiters with timeout"
+// collapses: `acquire` serves immediately from a free slot, or
+// mints via `create_fn` if below `max_connections`, or returns
+// `PoolError.Timeout` straight away. `max_waiters` is captured on
+// the entry for forward compatibility with a future threaded
+// backend (codegen / runtime) but doesn't gate a waiter queue
+// today.
 //
-// **Health-check hook.** Per spec, "health-check hook fires on
-// acquire (callable's responsibility); evict-on-error pattern."
-// v1 ships the contract here; user code passes a health-check
-// closure when it wires up its own pool wrapper (the v1 surface
-// doesn't capture the hook on the Pool itself, because the
-// closure-storage shape is the part that needs the follow-up
-// intrinsic to materialize).
+// **Drop-releases-automatically — deferred.** The spec's
+// `PooledConnection` carrying a drop that returns the slot needs
+// user-`impl Drop` dispatch in the interpreter, which is not yet
+// wired (`src/interpreter/eval_stmt.rs::run_cleanup` —
+// `CleanupAction::Drop` is a trace-only no-op until user Drop
+// lands). v1 ships an explicit `pool.release(conn)` method
+// instead; once user Drop dispatches, `PooledConnection.drop`
+// can call the same release path and the explicit release call
+// becomes optional.
+//
+// **Health-check hook — deferred.** Per spec, "health-check hook
+// fires on acquire (callable's responsibility); evict-on-error
+// pattern." The hook closure would live alongside `create_fn` on
+// `PoolEntry` and run on the slot-from-`slots` branch of acquire,
+// invalidating + minting fresh on Err. Mechanically straightforward
+// once `Pool.new` grows a fourth parameter (the hook), but waits
+// for a real consumer to pin down the hook's signature.
 
 enum PoolError {
     // The pool was at capacity and no slot freed before `timeout`.
     Timeout,
     // `Pool.close()` was called (post-v1 entry); subsequent
-    // `acquire` calls fail with this variant.
+    // `acquire` calls fail with this variant. The interpreter
+    // currently surfaces this when the Pool's handle isn't in
+    // `pool_table` (e.g. a hand-rolled `Pool { handle_id: 0 }`).
     PoolClosed,
     // The user-supplied `create_fn` returned an error path or
     // panicked; the pool refuses to retain the failing slot.
+    // Reserved for the health-check / evict-on-error follow-up
+    // — not yet emitted by the v1 intrinsic.
     CreateFailed,
 }
 
-// Opaque pool handle. v1 has no observable fields — the real
-// implementation will carry the slot vector, the waiter queue, the
-// monotonic-clock timestamp generator, and the stored
-// `create_fn` / `health_check_fn` closures. Empty in v1 keeps the
-// shape stable while leaving the field set additive when the
-// follow-up lands.
-struct Pool[T] { }
+// Opaque pool handle. `handle_id` keys into the interpreter's
+// `pool_table` side-table; `0` is reserved for hand-rolled
+// `Pool { handle_id: 0 }` literals that bypass `Pool.new` —
+// `acquire` on such a value short-circuits with `PoolClosed`.
+struct Pool[T] {
+    handle_id: i64,
+}
 
-// Handle to a single checked-out connection. Drop returns the slot
-// to the pool — see file-level comment for the v1 vs follow-up
-// behavior. Empty struct in v1 (the real impl threads a back-pointer
-// to the Pool and the slot index).
+// Handle to a single checked-out connection. Carries the source
+// pool's `handle_id` (so `release` can route the value back to the
+// right pool) plus the wrapped `val: T` (the actual connection
+// value the user works with).
 //
 // **`#[must_use]` (slice 2 of the `#[must_use]` mandate).**
-// `PooledConnection[T]` is a guard-shaped handle: the drop-releases-
-// automatically contract (file-level comment, "drop releases
-// automatically") means discarding the handle hands the slot straight
-// back to the pool without ever using the connection — the user paid
-// for the acquire round-trip for nothing. Mirrors the guard / lock
-// category in the slice 2 spec (`MutexGuard`, `RwLockReadGuard`, …).
-// The attribute lands on the AST today and is inert until slice 4
-// wires the discard-site enforcement
-// (`docs/implementation_checklist/phase-5-diagnostics.md` § `#[must_use]`
-// mandate, slice 4). Once slice 4 ships, discarding a
-// `PooledConnection[T]` at statement position emits
-// `warning[must_use]` with the message below.
+// `PooledConnection[T]` is a guard-shaped handle: the
+// drop-releases-automatically contract (file-level comment, "drop
+// releases automatically") means discarding the handle hands the
+// slot straight back to the pool without ever using the connection
+// — the user paid for the acquire round-trip for nothing. Mirrors
+// the guard / lock category in the slice 2 spec (`MutexGuard`,
+// `RwLockReadGuard`, …). The attribute lands on the AST today and
+// is inert until slice 4 wires the discard-site enforcement
+// (`docs/implementation_checklist/phase-5-diagnostics.md` §
+// `#[must_use]` mandate, slice 4).
 #[must_use = "discarding the connection releases the slot back to the pool without using it — bind the handle to a variable so it lives across the work, or pass it to the consuming function"]
-struct PooledConnection[T] { }
+struct PooledConnection[T] {
+    pool_handle_id: i64,
+    val: T,
+}
 
 impl[T] Pool[T] {
     // `create_fn` mints a fresh T when the pool needs to materialize
     // a slot; `max_connections` bounds the slot count;
-    // `max_waiters` bounds the queue of `acquire` callers blocked
-    // on a free slot.
+    // `max_waiters` is captured on the pool entry for forward
+    // compatibility with a future threaded backend but doesn't gate
+    // a waiter queue in the v1 single-threaded interpreter.
     //
-    // v1 placeholder: returns an empty `Pool[T]`. The real
-    // intrinsic stores the closure and the bounds in a Rust-side
-    // pool object; user code holds the same `Pool[T]` value across
-    // the body swap because the struct shape is empty here.
+    // Dispatched through `eval_call.rs`'s `"Pool.new"` path-string
+    // arm, which writes the create_fn + bounds into `pool_table`
+    // and returns a `Pool { handle_id }` carrying the fresh handle.
+    #[compiler_builtin]
     fn new(create_fn: Fn() -> T, max_connections: i64, max_waiters: i64) -> Pool[T] {
-        Pool { }
+        Pool { handle_id: 0 }
     }
 
-    // Block (or non-blocking, depending on timeout) for a free
-    // connection slot, up to `timeout` milliseconds. Returns
-    // `Err(PoolError.Timeout)` if the wait expires.
+    // Hand back a `PooledConnection[T]` from the pool. Fast path:
+    // if a previously-released slot is sitting in `pool_table`'s
+    // slots vec, return it. Slow path: if the pool is below
+    // `max_connections`, call `create_fn` to mint a fresh T,
+    // increment the active count, and return that. Otherwise:
+    // `Err(PoolError.Timeout)` (the single-threaded interpreter
+    // has no peer to free a slot mid-wait, so timeout fires
+    // immediately at cap).
     //
-    // v1 placeholder: always returns `Err(PoolError.Timeout)`. The
-    // real intrinsic acquires via the semaphore, calls the stored
-    // health-check on the slot, and either hands back a
-    // `PooledConnection[T]` or evicts + creates fresh.
+    // The `timeout` parameter is accepted at the v1 API surface
+    // for shape stability but is currently ignored — the threaded
+    // backend will honor it.
+    #[compiler_builtin]
     fn acquire(ref self, timeout: i64) -> Result[PooledConnection[T], PoolError] {
         Err(PoolError.Timeout)
+    }
+
+    // Return a connection to the pool. Pushes the wrapped `val`
+    // into `pool_table.slots` for `acquire` to hand back later.
+    // Cross-pool release (passing a `PooledConnection` minted by
+    // a different pool) silently drops the value rather than
+    // corrupting the target pool's bookkeeping.
+    //
+    // Once user-`impl Drop` lands in the interpreter, `Pool[T]`
+    // will gain an `impl Drop for PooledConnection[T]` that calls
+    // this same release path, and explicit calls become optional.
+    #[compiler_builtin]
+    fn release(ref self, conn: PooledConnection[T]) -> Unit {
+        Unit
     }
 }

@@ -288,6 +288,11 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                 }
+                "Pool.new" => {
+                    if let Some(v) = self.eval_pool_new(args) {
+                        return v;
+                    }
+                }
                 "Stats.sum" | "Stats.prod" | "Stats.mean" | "Stats.variance" | "Stats.stddev"
                 | "Stats.median" | "Stats.min" | "Stats.max" => {
                     let xs: Vec<f64> = if let Some(arg) = args.first() {

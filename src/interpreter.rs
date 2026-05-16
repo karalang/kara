@@ -20,6 +20,7 @@ mod method_call_http;
 mod method_call_iter;
 mod method_call_map;
 mod method_call_optres;
+mod method_call_pool;
 mod method_call_process;
 mod method_call_regex;
 mod method_call_seq;
@@ -151,6 +152,37 @@ pub struct Interpreter<'a> {
     /// processes — same behavior as a Rust `Child` that's dropped
     /// without `wait`. See `src/interpreter/method_call_process.rs`.
     pub(crate) child_table: HashMap<i64, std::process::Child>,
+    /// `Pool[T]` intrinsic side-table — keyed by `Pool.handle_id`,
+    /// holds the per-pool state (factory closure + bounds + slot
+    /// vec). `Pool.new` populates an entry and returns a handle;
+    /// `acquire` / `release` walk the table by handle. Generic T
+    /// erases at runtime — the slot is just a `Value`. See
+    /// `src/interpreter/method_call_pool.rs`.
+    pub(crate) pool_table: HashMap<i64, PoolEntry>,
+    /// Monotonic counter for `Pool.handle_id` minting. Starts at 1
+    /// so a default-constructed `Pool { handle_id: 0 }` (e.g. a
+    /// hand-rolled struct literal that bypassed `Pool.new`) can be
+    /// distinguished from a legitimate pool.
+    pub(crate) pool_handle_counter: i64,
+}
+
+/// Per-pool state for the `Pool[T]` intrinsic. Lives in
+/// [`Interpreter::pool_table`]. `slots` holds connections that
+/// `release` has returned to the pool and that `acquire` can hand
+/// straight back without invoking `create_fn`; `active_count` is
+/// the number of T values the pool has minted so far (slots +
+/// checked-out connections combined) and is bounded by
+/// `max_connections`. `max_waiters` is honored at the API surface
+/// (the parameter exists for forward compatibility with a
+/// threaded backend) but doesn't gate any wait queue today —
+/// `acquire` in the single-threaded tree-walk interpreter is
+/// either immediately served or immediately fails with `Timeout`.
+pub struct PoolEntry {
+    pub create_fn: Value,
+    pub max_connections: i64,
+    pub max_waiters: i64,
+    pub slots: Vec<Value>,
+    pub active_count: i64,
 }
 
 /// Format mode for [`Interpreter`]'s `dbg()` output. See design.md §
@@ -241,6 +273,8 @@ impl<'a> Interpreter<'a> {
             task_id_counter: Arc::new(AtomicU64::new(0)),
             captured_dbg: None,
             child_table: HashMap::new(),
+            pool_table: HashMap::new(),
+            pool_handle_counter: 0,
         }
     }
 

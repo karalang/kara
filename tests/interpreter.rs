@@ -5337,34 +5337,120 @@ fn test_process_wait_on_unknown_child_returns_not_found() {
 // ── Pool[T] — connection-pool primitive surface ────────────────────
 
 #[test]
-fn test_pool_new_returns_pool_value() {
-    // v1 surface check: construct a `Pool[i64]` with a `Fn() -> i64`
-    // factory. The pool body is empty in v1 — the factory closure
-    // is stored when the real impl lands.
+fn test_pool_new_returns_pool_value_with_handle() {
+    // v1 surface check: construct a `Pool[i64]`. The Kāra Pool value
+    // is opaque except for the side-table handle_id, which the
+    // intrinsic mints fresh via the monotonic counter — non-zero
+    // tells us `Pool.new` actually fired (vs falling through to the
+    // typecheck-only placeholder body that would leave handle_id 0).
     let output = run(r#"fn make_int() -> i64 { 42 }
          fn main() {
-             let _pool: Pool[i64] = Pool.new(make_int, 4, 8);
-             println("constructed");
+             let pool: Pool[i64] = Pool.new(make_int, 4, 8);
+             println(pool.handle_id > 0);
          }"#);
-    assert_eq!(output, "constructed\n");
+    assert_eq!(output, "true\n");
 }
 
 #[test]
-fn test_pool_acquire_returns_timeout_placeholder() {
-    // v1 placeholder: acquire always returns Err(PoolError.Timeout).
-    // When the real bounded-waiters intrinsic lands, this test flips
-    // to the Ok path with a real PooledConnection.
-    let output = run(r#"fn make_int() -> i64 { 0 }
+fn test_pool_acquire_mints_via_create_fn() {
+    // Acquire on a fresh pool invokes `create_fn` and hands back a
+    // `PooledConnection` carrying the minted value. Verifies the
+    // intrinsic's closure-invocation path lights up.
+    let output = run(r#"fn make_int() -> i64 { 42 }
          fn main() {
              let pool: Pool[i64] = Pool.new(make_int, 4, 8);
-             match pool.acquire(100) {
-                 Ok(_) => println("ok"),
-                 Err(PoolError.Timeout) => println("timeout"),
-                 Err(PoolError.PoolClosed) => println("closed"),
-                 Err(PoolError.CreateFailed) => println("create_failed"),
+             match pool.acquire(0) {
+                 Ok(conn) => println(conn.val),
+                 Err(_) => println("err"),
+             }
+         }"#);
+    assert_eq!(output, "42\n");
+}
+
+#[test]
+fn test_pool_acquire_at_cap_returns_timeout() {
+    // `max_connections` is the hard cap. Filling it and trying
+    // another acquire fires `PoolError.Timeout` immediately —
+    // single-threaded interpreter has no peer to free a slot mid-wait.
+    let output = run(r#"fn make_int() -> i64 { 7 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 2, 8);
+             match pool.acquire(0) {
+                 Ok(_) => {
+                     match pool.acquire(0) {
+                         Ok(_) => {
+                             match pool.acquire(0) {
+                                 Ok(_) => println("ok??"),
+                                 Err(PoolError.Timeout) => println("timeout"),
+                                 Err(_) => println("other_err"),
+                             }
+                         }
+                         Err(_) => println("acq2_err"),
+                     }
+                 }
+                 Err(_) => println("acq1_err"),
              }
          }"#);
     assert_eq!(output, "timeout\n");
+}
+
+#[test]
+fn test_pool_release_returns_slot_for_next_acquire() {
+    // Saturate the pool, release one connection, acquire again —
+    // the released slot should be handed back without minting fresh
+    // (the value is recycled from the slot vec). Verifies both
+    // `release` populating slots and `acquire` consuming from slots
+    // ahead of the create_fn-mint path.
+    let output = run(r#"fn make_int() -> i64 { 99 }
+         fn main() {
+             let pool: Pool[i64] = Pool.new(make_int, 1, 4);
+             match pool.acquire(0) {
+                 Ok(c1) => {
+                     pool.release(c1);
+                     match pool.acquire(0) {
+                         Ok(c2) => println(c2.val),
+                         Err(_) => println("acq2_err"),
+                     }
+                 }
+                 Err(_) => println("acq1_err"),
+             }
+         }"#);
+    assert_eq!(output, "99\n");
+}
+
+#[test]
+fn test_pool_acquire_on_uninitialized_handle_returns_pool_closed() {
+    // A hand-rolled `Pool { handle_id: 0 }` bypasses `Pool.new` so
+    // there's no entry in the side-table — acquire surfaces this
+    // as `PoolError.PoolClosed` rather than panicking. Defensive
+    // against user code that constructs Pool literals manually.
+    let output = run(r#"fn main() {
+         let pool: Pool[i64] = Pool { handle_id: 0 };
+         match pool.acquire(0) {
+             Ok(_) => println("ok??"),
+             Err(PoolError.Timeout) => println("timeout"),
+             Err(PoolError.PoolClosed) => println("closed"),
+             Err(PoolError.CreateFailed) => println("create_failed"),
+         }
+     }"#);
+    assert_eq!(output, "closed\n");
+}
+
+#[test]
+fn test_pool_create_fn_can_be_a_closure_with_captures() {
+    // The factory slot accepts any `Fn() -> T`, including a closure
+    // with captures. v1 ships create_fn as a `Value::Function` (the
+    // interpreter's owned-fn representation); this test pins that
+    // closures-with-captures work the same way bare fn references do.
+    let output = run(r#"fn main() {
+         let prefix = "tag-";
+         let pool: Pool[String] = Pool.new(|| prefix + "x", 2, 4);
+         match pool.acquire(0) {
+             Ok(conn) => println(conn.val),
+             Err(_) => println("err"),
+         }
+     }"#);
+    assert_eq!(output, "tag-x\n");
 }
 
 #[test]
