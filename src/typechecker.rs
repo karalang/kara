@@ -413,6 +413,18 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: HashMap<SpanKey, String>,
+    /// MethodCall span → inner `TypeExpr` for `Option[T].unwrap`/`expect`
+    /// and `Result[T, E].unwrap`/`expect` receivers. Populated by
+    /// `infer_method_call` when the receiver type is `Option`/`Result` and
+    /// the method is one of `unwrap`, `expect`, `is_some`, `is_none`,
+    /// `is_ok`, `is_err` (the `is_*` arms record T for uniformity even
+    /// though codegen only consumes the tag). Codegen consults this map
+    /// to know the LLVM shape of the value to reconstitute from the
+    /// Option/Result payload words. Keyed by MethodCall span (same key
+    /// shape as `method_callee_types`); the receiver-span collision noted
+    /// there does not apply here because we record the inner *element*
+    /// type, not the receiver's whole type.
+    pub method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
     /// Bare-call dispatch resolutions: span of a `Call(Identifier(name))` →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when expected-
     /// type inference resolves a bare associated-function call to a concrete
@@ -580,6 +592,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: HashMap<SpanKey, String>,
+    /// MethodCall span → inner `TypeExpr` for `Option`/`Result` unwrap
+    /// dispatch. See the public copy on `TypeCheckResult` for the full
+    /// rationale.
+    pub(super) method_unwrap_inner_types: HashMap<SpanKey, TypeExpr>,
     /// Bare-call expected-type dispatch resolutions: call-expression span →
     /// resolved target type name (e.g. `"Wrapper"`). Populated when
     /// `try_apply_expected_assoc_fn_inference` resolves a bare `name(args)`
@@ -680,6 +696,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
+            method_unwrap_inner_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
             call_type_subs: HashMap::new(),
             pattern_binding_types: HashMap::new(),
@@ -737,6 +754,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            method_unwrap_inner_types: self.method_unwrap_inner_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             call_type_subs: self.call_type_subs,
             pattern_binding_types: self.pattern_binding_types,

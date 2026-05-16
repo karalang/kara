@@ -3051,6 +3051,120 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_receiver_indexed_inner_vec_push() {
+        // Slice FR follow-up (2026-05-16): `outer[i].field.method(...)`
+        // chained Index→FieldAccess→method dispatch. The inner Index
+        // lowers to an element pointer via the same per-container
+        // helper the MR-slice indexed-receiver arm uses; the field GEP
+        // then hangs off the element pointer.  Closes the LeetCode 133
+        // kata's inner-loop `nodes[i as u64].neighbors.push(nodes[j as
+        // u64])` shape (which the bench `clone_bfs.kara` workload
+        // depends on at construction time).
+        let out = run_program(
+            r#"
+shared struct Node { val: i64, mut neighbors: Vec[i64] }
+fn main() {
+    let mut nodes: Vec[Node] = Vec.new();
+    nodes.push(Node { val: 1, neighbors: Vec.new() });
+    nodes.push(Node { val: 2, neighbors: Vec.new() });
+    nodes[0_u64].neighbors.push(99);
+    nodes[0_u64].neighbors.push(88);
+    nodes[1_u64].neighbors.push(77);
+    println(nodes[0_u64].neighbors.len());
+    println(nodes[1_u64].neighbors.len());
+    println(nodes[0_u64].val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["2", "1", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_unwrap_map_get_primitive() {
+        // Slice OR (2026-05-16): `Option[T].unwrap()` dispatch lowering.
+        // The receiver here is a `MethodCall` (`m.get(k)`), exercising
+        // the receiver-shape-agnostic path that compiles the receiver
+        // to a temporary SSA value rather than minting a synth
+        // identifier.  Closes the previously unblockable `let x =
+        // m.get(k).unwrap()` shape — which `karac build` rejected with
+        // the "no handler for method 'unwrap' on non-identifier
+        // receiver" fall-through diagnostic before this slice.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let _ = m.insert(1, 42);
+    let _ = m.insert(2, 100);
+    let x = m.get(1).unwrap();
+    let y = m.get(2).unwrap();
+    println(x);
+    println(y);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["42", "100"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_unwrap_shared_struct() {
+        // Slice OR companion: `Option[SharedStruct].unwrap()` reconstitutes
+        // the RC heap-pointer from the i64 payload word via `inttoptr`,
+        // and downstream field access dispatches correctly through the
+        // shared-struct heap GEP. This is the kata-133 unwrap shape
+        // (`visited.get(curr.val).unwrap()` where `Node` is a `shared
+        // struct`) — the second half of the OR slice's coverage area
+        // (primitive payloads via the integer arm, shared-struct
+        // payloads via the pointer arm).
+        let out = run_program(
+            r#"
+shared struct Node { val: i64 }
+fn main() {
+    let n = Node { val: 99 };
+    let mut m: Map[i64, Node] = Map.new();
+    let _ = m.insert(7, n);
+    let got = m.get(7).unwrap();
+    println(got.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["99"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_option_is_some_is_none() {
+        // Slice OR companion: `is_some` / `is_none` are the tag-only
+        // arms of the OR dispatch (no payload reconstitution, no panic
+        // BB).  Verifies both polarities and that the surface return
+        // type is `bool` so the result composes with normal boolean
+        // arithmetic at the use site.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut m: Map[i64, i64] = Map.new();
+    let _ = m.insert(1, 42);
+    println(m.get(1).is_some());
+    println(m.get(2).is_some());
+    println(m.get(1).is_none());
+    println(m.get(2).is_none());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["true", "false", "false", "true"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_indexed_receiver_slice_path_len() {
         // The outer is a `mut Slice[Vec[i64]]` view; indexed-receiver
         // dispatch goes through the slice lowering path.

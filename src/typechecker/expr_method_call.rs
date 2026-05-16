@@ -758,6 +758,52 @@ impl<'a> super::TypeChecker<'a> {
             );
         }
 
+        // Option/Result unwrap-family side-table: record the inner `T` /
+        // success-`T` so codegen's `compile_method_call` arm for
+        // `unwrap`/`expect`/`is_*` knows the LLVM shape of the value to
+        // reconstitute from the Option/Result payload words. Sibling to
+        // `method_callee_types`; mirrors the per-MethodCall-span keying so
+        // the lookup at codegen time is O(1). The `is_*` arms record T for
+        // uniformity even though codegen only consumes the tag.
+        if matches!(
+            method,
+            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err"
+        ) {
+            let receiver_named = match &obj_ty {
+                Type::Named { .. } => Some(&obj_ty),
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { .. } => Some(inner.as_ref()),
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(Type::Named { name, args }) = receiver_named {
+                let inner_ty = match (name.as_str(), args.first()) {
+                    ("Option", Some(t)) => Some(t.clone()),
+                    ("Result", Some(t)) => Some(t.clone()),
+                    _ => None,
+                };
+                if let Some(inner_ty) = inner_ty {
+                    let resolved = resolve_type_var_top(&inner_ty, &self.env.substitutions);
+                    let te = Self::type_to_type_expr(&resolved);
+                    self.method_unwrap_inner_types
+                        .insert(SpanKey::from_span(span), te);
+                    // Surface a proper return type so the binding gets the
+                    // right Type rather than falling through to the
+                    // prelude-permissive `Type::Error`. Without this,
+                    // `let x = m.get(k).unwrap()` binds `x: Type::Error`,
+                    // which breaks downstream `x.field` / `x.method(...)`
+                    // resolution (field-access dispatch keys off
+                    // `var_type_names` populated from `pattern_binding_types`).
+                    return match method {
+                        "unwrap" | "expect" => resolved,
+                        "is_some" | "is_none" | "is_ok" | "is_err" => Type::Bool,
+                        _ => unreachable!(),
+                    };
+                }
+            }
+        }
+
         // Stdlib slice views on sequence types. `.as_slice()` / `.as_slice_mut()`
         // on a `Vec[T]` or `Array[T, N]` (or their ref borrows) produce a
         // `Slice[T]` / `mut Slice[T]` handle, per design.md § Slices.

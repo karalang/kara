@@ -72,6 +72,15 @@ pub type CalleeEffectfulTable = std::collections::HashMap<String, bool>;
 pub type MethodCalleeTypesTable = std::collections::HashMap<(usize, usize), String>;
 
 /// Side-table populated by the lowering pass from the typechecker's
+/// `method_unwrap_inner_types` map. Maps each `unwrap`/`expect`/`is_*`
+/// `MethodCall` expression's span to the inner `T` (for `Option[T]`) or
+/// success-`T` (for `Result[T, E]`) `TypeExpr`. Codegen consults this
+/// table in the `compile_method_call` arm for those methods to know
+/// the LLVM shape of the value to reconstitute from the Option/Result
+/// payload words.
+pub type MethodUnwrapInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
+
+/// Side-table populated by the lowering pass from the typechecker's
 /// `pattern_binding_types` map. Maps each pattern-binding's span (offset,
 /// length) to the canonical surface type name (e.g. `"MyError"`). Used by
 /// codegen at match-arm bind sites: when binding a tuple-variant payload
@@ -127,6 +136,9 @@ pub struct Program {
     pub callee_effectful: CalleeEffectfulTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
+    /// Set by the lowering pass from
+    /// `TypeCheckResult.method_unwrap_inner_types`; empty otherwise.
+    pub method_unwrap_inner_types: MethodUnwrapInnerTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_types`.
     pub pattern_binding_types: PatternBindingTypesTable,
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.

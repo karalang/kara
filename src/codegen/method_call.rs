@@ -36,6 +36,32 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // Slice OR (2026-05-16): Option/Result `unwrap`/`expect`/`is_*`
+        // dispatch is receiver-shape-agnostic — the receiver may be any
+        // Option-/Result-valued expression (identifier, method chain,
+        // field access, index, …). Lower the receiver to its
+        // `{ i64 tag, i64 w0, i64 w1, i64 w2 }` aggregate, dispatch on
+        // the tag, and either reconstitute the payload (`unwrap`/`expect`)
+        // or yield a bool (`is_some`/`is_none`/`is_ok`/`is_err`). The
+        // inner `T` for payload reconstitution is recovered from the
+        // typechecker-populated `method_unwrap_inner_types` side-table.
+        // Routing this dispatch BEFORE the Index/FieldAccess
+        // synth-identifier arms is intentional: those arms mint a synth
+        // tied to the *receiver's storage*, which doesn't exist for
+        // method-chain receivers like `m.get(k).unwrap()`. Keeping the
+        // receiver as a temporary SSA value sidesteps that constraint
+        // entirely.
+        if matches!(
+            method,
+            "unwrap" | "expect" | "is_some" | "is_none" | "is_ok" | "is_err"
+        ) {
+            if let Some(value) =
+                self.try_compile_option_result_method(object, method, args, call_span)?
+            {
+                return Ok(value);
+            }
+        }
+
         // Slice MR (2026-05-09): indexed-receiver method dispatch. When the
         // receiver expression is `obj[i]` (an `Index` node), lower the index
         // access to obtain a pointer into the outer container's storage,

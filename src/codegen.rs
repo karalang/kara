@@ -315,6 +315,14 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_method_call` apply the same narrowing that `compile_call`
     /// applies to free-function and `Type.assoc` calls.
     pub(crate) method_callee_types: HashMap<(usize, usize), String>,
+    /// Per-`unwrap`/`expect`/`is_*` MethodCall → inner `TypeExpr` side-
+    /// table — populated from `Program.method_unwrap_inner_types` (set by
+    /// the lowering pass from `TypeCheckResult.method_unwrap_inner_types`).
+    /// Key: `(span.offset, span.length)` of the MethodCall expression.
+    /// Value: the `T` of `Option[T]` (or success-`T` of `Result[T, E]`).
+    /// Codegen's `unwrap` arm uses this to lower the inner type to its
+    /// LLVM shape and reconstitute the payload words back to a value.
+    pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -1166,6 +1174,7 @@ impl<'ctx> Codegen<'ctx> {
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
+            method_unwrap_inner_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -1395,6 +1404,12 @@ impl<'ctx> Codegen<'ctx> {
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
         self.method_callee_types = program.method_callee_types.clone();
+
+        // Side-table set by `lowering::lower_program`: each
+        // `unwrap`/`expect`/`is_*` MethodCall on `Option[T]` or `Result[T, E]`
+        // maps to the inner `TypeExpr`. Read by the codegen `unwrap` arm
+        // to know how to reconstitute the payload back to a value of T.
+        self.method_unwrap_inner_types = program.method_unwrap_inner_types.clone();
 
         // Side-table set by `lowering::lower_program`: each pattern-
         // binding's span maps to its surface type name. Read by

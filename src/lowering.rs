@@ -46,6 +46,15 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the Option/Result unwrap-family inner-type table so codegen's
+    // `compile_method_call` arm for `unwrap`/`expect`/`is_*` knows the
+    // LLVM shape of the value to reconstitute from the Option/Result
+    // payload words. Sibling to `method_callee_types`; same keying.
+    program.method_unwrap_inner_types = tc
+        .method_unwrap_inner_types
+        .iter()
+        .map(|(k, v)| ((k.0, k.1), v.clone()))
+        .collect();
     // Forward the pattern-binding type table so codegen can reconstitute
     // struct payloads (single-field error wrappers, etc.) from the i64
     // word at match-arm bind sites. Without this, `Err(e) => e.field`
