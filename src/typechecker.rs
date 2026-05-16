@@ -33,6 +33,7 @@ mod inference;
 mod items;
 mod lowering;
 mod patterns;
+mod stdlib_io;
 mod stdlib_iter;
 mod stdlib_map;
 mod stdlib_methods;
