@@ -468,11 +468,18 @@ All entries here are v1.1 work — v1 ships with the current parsed-but-ignored 
 
 - [ ] **Build artifact cache (`~/.kara/cache/`).** Global cache of compiled deps keyed on `(compiler-version, package-version, edition, profile, target-triple)`. Two projects with the same dep version under the same compiler / edition / profile / target share a cached object. Per-project `dist/` is already in place. Auto-invalidate on compiler upgrade (cache key includes version); never invalidate on time.
 
-- [ ] **`karac clean` and `karac clean --global`.** Bare form removes the project `dist/`; `--global` removes the user-wide `~/.kara/cache/`.
+- [x] **`karac clean` and `karac clean --global`.** Bare form removes the project `dist/`; `--global` removes the user-wide `~/.kara/cache/`. Both idempotent — a missing directory is reported and treated as success. `--global` resolves the cache path from `$HOME` / `$USERPROFILE`. Commit `a5a516c`; tests in `tests/cli.rs` (`test_clean_bare_idempotent_when_no_dist`, `test_clean_bare_removes_existing_dist`, `test_clean_global_targets_kara_cache`).
 
 - [ ] **`karac install <bin-spec>`.** Build a binary package and install it into `~/.kara/bin/`. Spec accepts `path = ...`, `git = ...`, or a registry-proxy reference. Useful pre-registry for path/git deps.
+  - [x] Subcommand wired: parses `<bin-spec>` positional + help text; missing-spec errors; "not yet wired" diagnostic exits non-zero so CI scripts notice the gap — commit `a5a516c`
+  - [ ] Spec resolution against the manifest dependency-entry shape (`path = "..."` / `git = "..."` / bare registry-proxy reference / `name@version`)
+  - [ ] Binary build through the existing build pipeline + install into `~/.kara/bin/` (depends on dep-resolution slice)
 
 - [ ] **`karac vendor` and `karac build --offline`.** `karac vendor` copies all resolved dependencies into a `vendor/` directory at the project root. `karac build --offline` reads dependencies only from `vendor/` and refuses any network access. Air-gap workflow for regulated environments and offline CI.
+  - [x] `karac vendor` subcommand wired: parses cleanly, rejects extra args, emits "not yet wired" diagnostic + non-zero exit — commit `a5a516c`
+  - [x] `--offline` flag added to existing `Build` / `BuildProject`; parses cleanly + emits "not yet wired" notice before falling through to normal behavior — commit `a5a516c`
+  - [ ] `karac vendor` actually copies resolved dependencies into `./vendor/` (depends on dep-resolution slice)
+  - [ ] `karac build --offline` consults only `./vendor/` and refuses any network access (depends on dep-resolution slice + resolver hookpoint)
 
 - [ ] **`[target.X.dependencies]` and `[target.X.profile]` parsing.** Extend `manifest.rs` to recognize per-target dependency and profile blocks. Resolver consults the active target triple (from `karac build --target X` or `[build].target` default) to merge the relevant target block into the dep graph.
 
