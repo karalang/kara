@@ -1042,6 +1042,31 @@ impl<'a> super::OwnershipChecker<'a> {
                 self.closure_capture_paths
                     .insert(SpanKey::from_span(&expr.span), capture_paths);
 
+                // Disjoint capture slice 5 — Rule 2½ prefix interaction.
+                // When the closure carries an explicit `own` / `ref` /
+                // `mut ref` prefix, every enumerated capture path is
+                // pinned to the declared mode regardless of the body-
+                // usage inference above. Spec: design.md § Rule 2¼
+                // Interaction with Rule 2½ — "Disjoint-path detection
+                // still runs first to enumerate the paths; the prefix
+                // then pins the mode of each path to the declared one."
+                // Applied before slice 3 so the borrow checker sees the
+                // pinned modes (a `ref` prefix downgrades a body-mutated
+                // path to `Ref`, surfacing as the read-only borrow flavor
+                // in `ClosureCaptureBorrowConflict`; body-vs-prefix
+                // conflicts still surface via the existing K2 consume
+                // error at the closure expression site).
+                if let Some(declared) = capture_mode {
+                    let pinned = match declared {
+                        CaptureMode::Own => OwnershipMode::Own,
+                        CaptureMode::Ref => OwnershipMode::Ref,
+                        CaptureMode::MutRef => OwnershipMode::MutRef,
+                    };
+                    for (_, m) in path_modes.iter_mut() {
+                        *m = pinned.clone();
+                    }
+                }
+
                 // Disjoint capture slice 3 — register a closure-induced
                 // borrow per `Ref` / `MutRef` capture path so a later
                 // consume of an overlapping place under the same root

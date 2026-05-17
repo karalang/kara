@@ -3515,6 +3515,270 @@ fn capture_path_mode_modes_keyed_by_closure_expression_span() {
     );
 }
 
+// ── Disjoint closure capture — slice 5 (Rule 2½ prefix interaction) ─
+//
+// Line 353 phase-5 checklist — disjoint-capture slice 5. The bare
+// closure `|...|` runs Rule 2 per-path inference (slice 2). The three
+// explicit prefixes `own |...|`, `ref |...|`, `mut ref |...|` are
+// applied *after* path enumeration: each prefix pins every enumerated
+// capture path to a single declared mode regardless of body usage.
+// Spec: design.md § Rule 2¼ Interaction with Rule 2½ — "Disjoint-path
+// detection still runs first to enumerate the paths; the prefix then
+// pins the mode of each path to the declared one."
+//
+// These tests pin (a) the per-path mode map reflects the prefix-forced
+// mode, and (b) slice 3's borrow-conflict diagnostic surfaces the
+// pinned mode (not the body-inferred mode) in its "by `<mode>`" tail.
+
+#[test]
+fn slice5_ref_prefix_pins_read_only_path_to_ref() {
+    // `ref || u.x + 1` — bare-form inference would already produce
+    // `(u, ["x"])` Ref because the body only reads. The `ref` prefix
+    // is a no-op on the recorded mode here, but pinning that the
+    // prefix path still runs cleanly catches regressions where the
+    // prefix accidentally re-classifies a read-only path.
+    let result = ownership_ok(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1 };\n\
+             let _f = ref || o.x + 1;\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("o", &["x"]), OwnershipMode::Ref)],
+        "ref prefix on read-only body should keep path as Ref; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn slice5_mut_ref_prefix_pins_read_only_paths_to_mut_ref() {
+    // The slice-5 headline test. Body reads `o.x` + `o.y` — bare
+    // inference (slice 2) would record both paths as Ref. The
+    // `mut ref` prefix pins every enumerated path to MutRef, so both
+    // become MutRef. Without slice 5 the paths would remain Ref and
+    // the slice-3 borrow check would push only-read borrows that
+    // permit aliased outer reads — wrong for a `mut ref` declaration.
+    let result = ownership_ok(
+        "struct Owned { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1, y: 2 };\n\
+             let _f = mut ref || o.x + o.y;\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("o", &["x"]), OwnershipMode::MutRef),
+            (path("o", &["y"]), OwnershipMode::MutRef),
+        ],
+        "mut ref prefix should pin every enumerated path to MutRef \
+         regardless of body-usage inference; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn slice5_own_prefix_pins_read_only_path_to_own() {
+    // `own || o.x + 1` — bare inference would yield `(o, ["x"])` Ref.
+    // The `own` prefix pins every enumerated path to Own. Slice 5
+    // applies to all three prefixes (own / ref / mut ref) — the spec
+    // says "the prefix pins the mode of each path to the declared
+    // one" without restriction to ref / mut ref.
+    let result = ownership_ok(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1 };\n\
+             let _f = own || o.x + 1;\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("o", &["x"]), OwnershipMode::Own)],
+        "own prefix should pin every enumerated path to Own; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn slice5_mut_ref_prefix_pins_multiple_paths_under_one_root() {
+    // Two paths under root `u` with one mutated, one read in the
+    // body. Slice 2 would record `(u, ["age"])` MutRef + `(u, ["name"])`
+    // Ref (the slice-2 disjoint-modes test). The `mut ref` prefix
+    // collapses both to MutRef — the read-only path is also pinned
+    // strong. Pins that slice 5 walks the full path list, not just
+    // the inferred-Ref subset.
+    let result = ownership_ok(
+        "struct User { name: i64, age: i64 }\n\
+         fn main() {\n\
+             let mut u = User { name: 1, age: 2 };\n\
+             let _f = mut ref || { u.age = 99; u.name + 1 };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("u", &["age"]), OwnershipMode::MutRef),
+            (path("u", &["name"]), OwnershipMode::MutRef),
+        ],
+        "mut ref prefix should lift inferred-Ref sibling paths to \
+         MutRef too; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn slice5_mut_ref_prefix_pins_paths_across_multiple_roots() {
+    // Two roots, one mutated and one read in the body — bare slice 2
+    // would yield `(a, ["v"])` MutRef + `(b, ["v"])` Ref (the
+    // `capture_path_mode_independent_roots_independent_modes` test).
+    // The `mut ref` prefix pins both roots' paths to MutRef. Pins
+    // that the per-closure prefix applies across all roots, not just
+    // one.
+    let result = ownership_ok(
+        "struct Holder { v: i64 }\n\
+         fn main() {\n\
+             let mut a = Holder { v: 1 };\n\
+             let b = Holder { v: 2 };\n\
+             let _f = mut ref || { a.v = 10; b.v + 1 };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("a", &["v"]), OwnershipMode::MutRef),
+            (path("b", &["v"]), OwnershipMode::MutRef),
+        ],
+        "mut ref prefix should pin paths across all captured roots; \
+         got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn slice5_prefix_does_not_alter_path_set() {
+    // The prefix changes mode, not the path enumeration. Pin that
+    // the recorded `closure_capture_paths` (slice 1) is identical
+    // between bare and prefixed forms of the same body. Without this
+    // pin, an accidental coupling of the prefix into slice 1's walker
+    // could shrink/expand the captured path set.
+    let result_bare = ownership_ok(
+        "struct Owned { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1, y: 2 };\n\
+             let _f = || o.x + o.y;\n\
+         }",
+    );
+    let result_prefix = ownership_ok(
+        "struct Owned { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let o = Owned { x: 1, y: 2 };\n\
+             let _f = mut ref || o.x + o.y;\n\
+         }",
+    );
+    let paths_bare = single_closure_capture_paths(&result_bare);
+    let paths_prefix = single_closure_capture_paths(&result_prefix);
+    assert_eq!(
+        paths_bare, paths_prefix,
+        "capture-path enumeration must be identical between bare and \
+         prefixed forms; bare = {:?}, prefix = {:?}",
+        paths_bare, paths_prefix
+    );
+}
+
+#[test]
+fn slice5_mut_ref_prefix_surfaces_mut_ref_flavor_in_slice3_diagnostic() {
+    // Downstream-visibility check. Body reads `u.x` only — bare
+    // inference produces `(u, ["x"])` Ref, and an outer consume of
+    // `u` fires `ClosureCaptureBorrowConflict` with message tail
+    // `captures `u.x` by `ref``. The `mut ref` prefix pins the path
+    // to MutRef via slice 5, so the slice-3 push is a MutRef borrow
+    // and the same conflict diagnostic now reads "by `mut ref`".
+    // This is the user-visible consequence of slice 5.
+    let errors = ownership_errors(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let u = Owned { x: 1 };\n\
+             let _f = mut ref || u.x + 1;\n\
+             let _w = u;\n\
+         }",
+    );
+    let err = errors
+        .iter()
+        .find(|e| e.kind == OwnershipErrorKind::ClosureCaptureBorrowConflict)
+        .expect("expected ClosureCaptureBorrowConflict for outer consume");
+    assert!(
+        err.message.contains("by `mut ref`"),
+        "diagnostic should name `mut ref` flavor when slice 5 pins the \
+         path; got: {}",
+        err.message
+    );
+}
+
+#[test]
+fn slice5_own_prefix_skips_slice3_borrow_push() {
+    // Slice 3 skips Own-mode paths (the consume machinery handles
+    // them). With the `own` prefix, slice 5 forces every enumerated
+    // path to Own, so slice 3 pushes no closure-capture borrows. An
+    // outer consume that would otherwise overlap a captured path
+    // therefore does not fire `ClosureCaptureBorrowConflict`. Pin
+    // this so the slice-3/slice-5 coordination doesn't silently
+    // start emitting Own-path borrows.
+    //
+    // The bare form of this body — `|| u.profile.name + 1` — records
+    // `(u, ["profile", "name"])` Ref; without the prefix, the outer
+    // consume of `u.profile` (chain `["profile"]` is a prefix of
+    // `["profile", "name"]`) fires `ClosureCaptureBorrowConflict`.
+    // The `own` prefix forces the path's mode to Own, slice 3 skips
+    // it, and the outer consume runs through the per-name move
+    // machinery instead (which does not promote `u` to `Moved` here —
+    // the body only reads through field access, so the outer consume
+    // succeeds). Use `ownership_ok` rather than `ownership_errors` —
+    // the spec-prescribed outcome is *no* errors at all.
+    ownership_ok(
+        "struct Profile { name: i64 }\n\
+         struct User { profile: Profile, history: Profile }\n\
+         fn main() {\n\
+             let u = User { profile: Profile { name: 1 }, history: Profile { name: 2 } };\n\
+             let _f = own || u.profile.name + 1;\n\
+             let _p = u.profile;\n\
+         }",
+    );
+}
+
+#[test]
+fn slice5_bare_form_preserves_slice2_inferred_modes() {
+    // Negative pin: no prefix → slice 5 is a no-op → the recorded
+    // modes match slice 2's per-path inference. Without this pin,
+    // a future refactor that always-applies prefix forcing (e.g.,
+    // defaulting `capture_mode` to `Ref` for bare closures) would
+    // silently change inferred behavior.
+    let result = ownership_ok(
+        "struct Owned { x: i64, y: i64 }\n\
+         fn main() {\n\
+             let mut o = Owned { x: 1, y: 2 };\n\
+             let _f = || { o.x = 9; o.y + 1 };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("o", &["x"]), OwnershipMode::MutRef),
+            (path("o", &["y"]), OwnershipMode::Ref),
+        ],
+        "bare form (no prefix) should leave slice-2 inferred modes \
+         intact; got {:?}",
+        modes
+    );
+}
+
 // ── Disjoint closure capture — slice 3 (borrow-checker integration) ─
 
 // Line 353 phase-5 checklist — disjoint-capture slice 3. Pushes a
