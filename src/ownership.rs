@@ -344,6 +344,21 @@ pub struct OwnershipCheckResult {
     /// changing existing per-name semantics. Empty for any closure
     /// whose body references no outer bindings.
     pub closure_capture_paths: HashMap<SpanKey, Vec<CapturePath>>,
+    /// Per-closure capture-path *modes* — line 353 phase-5 checklist
+    /// disjoint-capture slice 2. Keyed by the closure expression's
+    /// `SpanKey`. Each entry is the same `CapturePath` list as
+    /// `closure_capture_paths` (in the same order) paired with the
+    /// per-path inferred mode: `Own` for an empty-projection path
+    /// whose root was consumed whole, `MutRef` for any path overlapping
+    /// a mutation event (assignment target, `mut`-marker arg, or
+    /// `mut ref self` method-call receiver), `Ref` otherwise. Lets two
+    /// disjoint paths under the same root take independent modes —
+    /// e.g. `(u, ["age"])` `MutRef` while `(u, ["name"])` stays `Ref`
+    /// when the body writes only one of them. Read-only surface for
+    /// now: borrow-checker integration (slice 3) and codegen
+    /// environment layout (slice 4) consume this map without changing
+    /// existing per-name semantics.
+    pub closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
     /// Closure expression span → enclosing function key (round
     /// 12.25). Lets `karac query ownership <fn>` filter
     /// `closure_param_modes` / `closure_captures` to closures whose
@@ -453,6 +468,13 @@ pub struct OwnershipChecker<'a> {
     /// `classify_capture_body_paths`. Surfaced via
     /// `OwnershipCheckResult::closure_capture_paths`.
     pub(crate) closure_capture_paths: HashMap<SpanKey, Vec<CapturePath>>,
+    /// Per-closure capture-path modes — line 353 phase-5 checklist
+    /// disjoint-capture slice 2. Populated in the same Closure arm
+    /// immediately after `closure_capture_paths`, combining the
+    /// slice-1 path set with the slice-2 mutation walker's per-path
+    /// overlap detection (see `classify_capture_path_mutations`).
+    /// Surfaced via `OwnershipCheckResult::closure_capture_path_modes`.
+    pub(crate) closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
     /// Closure span → enclosing function key (round 12.25). Built
     /// up at every `Closure` arm visit alongside the param/capture
     /// inference. Surfaced via `OwnershipCheckResult::closure_function`.
@@ -559,6 +581,7 @@ impl<'a> OwnershipChecker<'a> {
             closure_param_modes: HashMap::new(),
             closure_captures: HashMap::new(),
             closure_capture_paths: HashMap::new(),
+            closure_capture_path_modes: HashMap::new(),
             closure_function: HashMap::new(),
             closure_spans: HashMap::new(),
             errors: Vec::new(),
@@ -637,6 +660,7 @@ impl<'a> OwnershipChecker<'a> {
             closure_param_modes: self.closure_param_modes,
             closure_captures: self.closure_captures,
             closure_capture_paths: self.closure_capture_paths,
+            closure_capture_path_modes: self.closure_capture_path_modes,
             closure_function: self.closure_function,
             closure_spans: self.closure_spans,
             errors: self.errors,

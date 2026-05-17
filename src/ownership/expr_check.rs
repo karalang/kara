@@ -33,8 +33,8 @@ use crate::token::Span;
 use crate::typechecker::Type;
 
 use super::{
-    merge_branch_into, merge_states, restore_uninit_after_loop, snapshot_uninit, OwnershipError,
-    OwnershipErrorKind, OwnershipMode, ParamUsage, ValueState,
+    merge_branch_into, merge_states, restore_uninit_after_loop, snapshot_uninit, CapturePath,
+    OwnershipError, OwnershipErrorKind, OwnershipMode, ParamUsage, ValueState,
 };
 
 impl<'a> super::OwnershipChecker<'a> {
@@ -927,17 +927,49 @@ impl<'a> super::OwnershipChecker<'a> {
                 // paths the body touches against each pre-live root.
                 // Shares `pre_live` with the per-name walker above and
                 // applies the closure-param shadow filter identically.
-                // Slice 2 will run mode inference per path; slice 3
-                // will pass this set to the borrow checker so outer-
-                // scope sibling-path access is permitted.
+                // Slice 2 (below) consumes this set to infer per-path
+                // modes; slice 3 will pass the mode-tagged set to the
+                // borrow checker so outer-scope sibling-path access
+                // is permitted.
                 let path_pre_live: Vec<String> = pre_live
                     .iter()
                     .filter(|name| !closure_param_set.contains(*name))
                     .cloned()
                     .collect();
                 let capture_paths = self.classify_capture_body_paths(body, &path_pre_live);
+
+                // Disjoint capture slice 2 — per-path mode inference.
+                // Run the use-predicate scan from Rule 2 against each
+                // recorded path independently: a path overlapping any
+                // mutation event in the body is `MutRef`; an empty-
+                // projection path whose root was consumed whole is
+                // `Own` (only whole-root consume promotes to Own here
+                // — sub-place consumes either re-route through the
+                // typechecker or surface via the mutation walker's
+                // assign-target arm); everything else is `Ref`. The
+                // disjointness check is the existing place-expression
+                // algebra (root + projection prefix overlap), per
+                // spec: "no new logic". Slice 3 will consume the
+                // mode-tagged set in the borrow checker.
+                let path_mutations = self.classify_capture_path_mutations(body, &capture_paths);
+                let mut path_modes: Vec<(CapturePath, OwnershipMode)> =
+                    Vec::with_capacity(capture_paths.len());
+                for path in &capture_paths {
+                    let root_consumed =
+                        matches!(states.get(&path.root), Some(ValueState::Moved { .. }));
+                    let mode = if path.projection.is_empty() && root_consumed {
+                        OwnershipMode::Own
+                    } else if path_mutations.contains(path) {
+                        OwnershipMode::MutRef
+                    } else {
+                        OwnershipMode::Ref
+                    };
+                    path_modes.push((path.clone(), mode));
+                }
                 self.closure_capture_paths
                     .insert(SpanKey::from_span(&expr.span), capture_paths);
+                self.closure_capture_path_modes
+                    .insert(SpanKey::from_span(&expr.span), path_modes);
 
                 // K2 conflict-table row "mut ref + reads only" (Rule 2½):
                 // if the closure declared `mut ref` but the body never

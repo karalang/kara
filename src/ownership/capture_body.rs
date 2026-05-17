@@ -15,9 +15,17 @@
 //! because it tracks distinct *places* (root + projection chain),
 //! not per-name read/mutate signals — extending the existing
 //! per-binding walker to also carry projection state would conflate
-//! two analyses with different inputs and stopping rules. Slice 2
-//! will run mode inference per path on the output of this walker;
-//! slice 3 will pass the path set to the borrow checker.
+//! two analyses with different inputs and stopping rules.
+//!
+//! Slice 2 adds `classify_capture_path_mutations` — a second walk
+//! over the body that detects mutation events (assignment targets,
+//! `mut`-marker call args, `mut ref self` method-call receivers) and
+//! returns the subset of slice-1's path set whose places overlap any
+//! mutation target. The mode-inference layer at the Closure arm
+//! combines this with root-consume detection (from the main
+//! ownership-checker's `states` map) to produce the per-path mode
+//! (`Own` / `MutRef` / `Ref`). Slice 3 will pass the mode-tagged set
+//! to the borrow checker.
 //!
 //! Lives in a sibling `impl<'a> super::OwnershipChecker<'a>` block.
 
@@ -633,6 +641,339 @@ impl<'a> super::OwnershipChecker<'a> {
                 Self::walk_capture_paths_expr(value, pre_live, paths);
             }
             StmtKind::Expr(e) => Self::walk_capture_paths_expr(e, pre_live, paths),
+        }
+    }
+
+    // ── Disjoint capture slice 2 — per-path mutation walker ─────────
+    //
+    // Walks the body a second time looking for *mutation events*:
+    // assignment / compound-assign targets, `mut`-marker call/method
+    // args, and `mut ref self` method-call receivers. For each event
+    // we extract the target's `(root, projection)` if it is a place
+    // expression rooted at a pre-live name, then mark every recorded
+    // slice-1 path that *overlaps* the target as mutated. Overlap is
+    // bidirectional: the recorded path's projection is a prefix of
+    // the target's (writing a descendant of the recorded place
+    // mutates the place), OR the target's projection is a prefix of
+    // the recorded path's (writing an ancestor of the recorded place
+    // invalidates the place). Both cases require `MutRef` access at
+    // the closure boundary.
+    //
+    // The mode-inference layer at the Closure arm consumes the
+    // returned set; consumption of the *whole root* (mode `Own`) is
+    // detected separately at that wiring point via the main
+    // ownership-checker's `states` map — it does not appear as a
+    // mutation event here because the consume signal is determined
+    // by post-walk binding state, not by AST shape alone.
+
+    /// Walk `body` once and return the subset of `paths` whose
+    /// places overlap any mutation event in the body. Used by the
+    /// Closure arm's per-path mode inference (slice 2) to classify
+    /// each capture path as `MutRef` (overlapping a mutation event)
+    /// or `Ref` (not). Root-consume → `Own` is decided separately at
+    /// the wiring point. Result preserves no ordering — the caller
+    /// iterates `paths` in source order and probes membership.
+    pub(crate) fn classify_capture_path_mutations(
+        &self,
+        body: &Expr,
+        paths: &[CapturePath],
+    ) -> HashSet<CapturePath> {
+        let live: HashSet<&str> = paths.iter().map(|p| p.root.as_str()).collect();
+        let mut mutated: HashSet<CapturePath> = HashSet::new();
+        self.walk_capture_path_mutations_expr(body, &live, paths, &mut mutated);
+        mutated
+    }
+
+    /// If `expr` is a place expression rooted at a pre-live name
+    /// (chain of `FieldAccess` / `TupleIndex` from a captured
+    /// `Identifier`), return its `(root, projection)` shape.
+    /// Otherwise `None` — the caller's mutation event does not name a
+    /// captured place. Index / method-call / deref are not handled
+    /// here because slice 1's walker already commits those receivers
+    /// as whole-root captures; the mutation walker classifies events
+    /// targeting *pure* place expressions only.
+    fn extract_target_place<'b>(
+        expr: &'b Expr,
+        pre_live: &HashSet<&str>,
+    ) -> Option<(&'b str, Vec<String>)> {
+        match &expr.kind {
+            ExprKind::Identifier(n) if pre_live.contains(n.as_str()) => Some((n.as_str(), vec![])),
+            ExprKind::FieldAccess { object, field } => {
+                let (root, mut proj) = Self::extract_target_place(object, pre_live)?;
+                proj.push(field.clone());
+                Some((root, proj))
+            }
+            ExprKind::TupleIndex { object, index } => {
+                let (root, mut proj) = Self::extract_target_place(object, pre_live)?;
+                proj.push(index.to_string());
+                Some((root, proj))
+            }
+            _ => None,
+        }
+    }
+
+    /// Record any path in `paths` whose place overlaps the target
+    /// place `(target_root, target_proj)` into `mutated`. Overlap is
+    /// bidirectional: identical projections overlap, and one
+    /// projection being a prefix of the other overlaps too (a write
+    /// to an ancestor invalidates descendants; a write to a
+    /// descendant mutates ancestors).
+    fn mark_overlapping_paths(
+        target_root: &str,
+        target_proj: &[String],
+        paths: &[CapturePath],
+        mutated: &mut HashSet<CapturePath>,
+    ) {
+        for path in paths {
+            if path.root != target_root {
+                continue;
+            }
+            let shorter = path.projection.len().min(target_proj.len());
+            if path.projection[..shorter] == target_proj[..shorter] {
+                mutated.insert(path.clone());
+            }
+        }
+    }
+
+    /// Record a mutation event whose target is `expr`. If `expr`
+    /// extracts as a pure captured place, mark overlapping paths.
+    /// Otherwise the target is rooted off-capture (or behind a
+    /// stopping construct like Index — slice 1 already committed the
+    /// root whole, so any mutation through it is already covered by
+    /// the receiver-walk arm below for method calls). No-op when no
+    /// captured place is named.
+    fn note_mutation_target(
+        expr: &Expr,
+        pre_live: &HashSet<&str>,
+        paths: &[CapturePath],
+        mutated: &mut HashSet<CapturePath>,
+    ) {
+        if let Some((root, proj)) = Self::extract_target_place(expr, pre_live) {
+            Self::mark_overlapping_paths(root, &proj, paths, mutated);
+        }
+    }
+
+    fn walk_capture_path_mutations_expr(
+        &self,
+        expr: &Expr,
+        pre_live: &HashSet<&str>,
+        paths: &[CapturePath],
+        mutated: &mut HashSet<CapturePath>,
+    ) {
+        match &expr.kind {
+            ExprKind::MethodCall { object, args, .. } => {
+                // `mut ref self` method-call receiver mutates its
+                // root. Slice 1's walker already committed the root
+                // as whole-captured `(root, [])` at this site, so
+                // marking that path as mutated lifts the whole-root
+                // mode to MutRef.
+                if self.method_call_receiver_is_mut_ref(expr) {
+                    Self::note_mutation_target(object, pre_live, paths, mutated);
+                }
+                self.walk_capture_path_mutations_expr(object, pre_live, paths, mutated);
+                for arg in args {
+                    if arg.mut_marker {
+                        Self::note_mutation_target(&arg.value, pre_live, paths, mutated);
+                    }
+                    self.walk_capture_path_mutations_expr(&arg.value, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                self.walk_capture_path_mutations_expr(callee, pre_live, paths, mutated);
+                for arg in args {
+                    if arg.mut_marker {
+                        Self::note_mutation_target(&arg.value, pre_live, paths, mutated);
+                    }
+                    self.walk_capture_path_mutations_expr(&arg.value, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::Binary { left, right, .. } | ExprKind::NilCoalesce { left, right } => {
+                self.walk_capture_path_mutations_expr(left, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(right, pre_live, paths, mutated);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.walk_capture_path_mutations_expr(operand, pre_live, paths, mutated);
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.walk_capture_path_mutations_expr(object, pre_live, paths, mutated);
+            }
+            ExprKind::Index { object, index } => {
+                self.walk_capture_path_mutations_expr(object, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(index, pre_live, paths, mutated);
+            }
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_capture_path_mutations_expr(condition, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(then_block, pre_live, paths, mutated);
+                if let Some(eb) = else_branch {
+                    self.walk_capture_path_mutations_expr(eb, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(then_block, pre_live, paths, mutated);
+                if let Some(eb) = else_branch {
+                    self.walk_capture_path_mutations_expr(eb, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_capture_path_mutations_expr(scrutinee, pre_live, paths, mutated);
+                for arm in arms {
+                    if let Some(g) = &arm.guard {
+                        self.walk_capture_path_mutations_expr(g, pre_live, paths, mutated);
+                    }
+                    self.walk_capture_path_mutations_expr(&arm.body, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.walk_capture_path_mutations_expr(condition, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            ExprKind::For { iterable, body, .. } => {
+                self.walk_capture_path_mutations_expr(iterable, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            ExprKind::Loop { body, .. } => {
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            ExprKind::Closure { body, .. } => {
+                // Nested closure: a mutation of an outer capture
+                // inside a nested closure still mutates the outer
+                // capture from this closure's perspective.
+                self.walk_capture_path_mutations_expr(body, pre_live, paths, mutated);
+            }
+            ExprKind::Block(block)
+            | ExprKind::Unsafe(block)
+            | ExprKind::Try(block)
+            | ExprKind::Seq(block)
+            | ExprKind::Par(block)
+            | ExprKind::Lock { body: block, .. } => {
+                self.walk_capture_path_mutations_block(block, pre_live, paths, mutated);
+            }
+            ExprKind::Question(inner)
+            | ExprKind::OptionalChain { object: inner, .. }
+            | ExprKind::Cast { expr: inner, .. } => {
+                self.walk_capture_path_mutations_expr(inner, pre_live, paths, mutated);
+            }
+            ExprKind::Tuple(exprs) | ExprKind::ArrayLiteral(exprs) => {
+                for e in exprs {
+                    self.walk_capture_path_mutations_expr(e, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.walk_capture_path_mutations_expr(e, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(count, pre_live, paths, mutated);
+            }
+            ExprKind::MapLiteral(entries) => {
+                for (k, v) in entries {
+                    self.walk_capture_path_mutations_expr(k, pre_live, paths, mutated);
+                    self.walk_capture_path_mutations_expr(v, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for field in fields {
+                    self.walk_capture_path_mutations_expr(&field.value, pre_live, paths, mutated);
+                }
+                if let Some(s) = spread {
+                    self.walk_capture_path_mutations_expr(s, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
+                self.walk_capture_path_mutations_expr(left, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(right, pre_live, paths, mutated);
+            }
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.walk_capture_path_mutations_expr(s, pre_live, paths, mutated);
+                }
+                if let Some(e) = end {
+                    self.walk_capture_path_mutations_expr(e, pre_live, paths, mutated);
+                }
+            }
+            ExprKind::Return(Some(inner))
+            | ExprKind::Break {
+                value: Some(inner), ..
+            } => {
+                self.walk_capture_path_mutations_expr(inner, pre_live, paths, mutated);
+            }
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.walk_capture_path_mutations_expr(&b.value, pre_live, paths, mutated);
+                }
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            _ => {}
+        }
+    }
+
+    fn walk_capture_path_mutations_block(
+        &self,
+        block: &Block,
+        pre_live: &HashSet<&str>,
+        paths: &[CapturePath],
+        mutated: &mut HashSet<CapturePath>,
+    ) {
+        for stmt in &block.stmts {
+            self.walk_capture_path_mutations_stmt(stmt, pre_live, paths, mutated);
+        }
+        if let Some(expr) = &block.final_expr {
+            self.walk_capture_path_mutations_expr(expr, pre_live, paths, mutated);
+        }
+    }
+
+    fn walk_capture_path_mutations_stmt(
+        &self,
+        stmt: &Stmt,
+        pre_live: &HashSet<&str>,
+        paths: &[CapturePath],
+        mutated: &mut HashSet<CapturePath>,
+    ) {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } => {
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+            }
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::LetElse {
+                value, else_block, ..
+            } => {
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_block(else_block, pre_live, paths, mutated);
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.walk_capture_path_mutations_block(body, pre_live, paths, mutated);
+            }
+            StmtKind::Assign { target, value } => {
+                Self::note_mutation_target(target, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(target, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+            }
+            StmtKind::CompoundAssign { target, value, .. } => {
+                Self::note_mutation_target(target, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(target, pre_live, paths, mutated);
+                self.walk_capture_path_mutations_expr(value, pre_live, paths, mutated);
+            }
+            StmtKind::Expr(e) => {
+                self.walk_capture_path_mutations_expr(e, pre_live, paths, mutated);
+            }
         }
     }
 }

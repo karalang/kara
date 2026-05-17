@@ -3132,6 +3132,389 @@ fn capture_path_tuple_index_extends_projection() {
     );
 }
 
+// ── Disjoint closure capture — slice 2 (per-path mode inference) ─
+//
+// Phase-5 § Disjoint closure capture (line 353) slice 2: the closure
+// analyser pairs each `CapturePath` from slice 1 with a mode
+// (`Own` / `MutRef` / `Ref`) derived by running the use-predicate
+// scan from Rule 2 against that path independently. A path
+// overlapping any mutation event in the body (assignment target,
+// `mut`-marker arg, `mut ref self` method-call receiver) is
+// `MutRef`; an empty-projection path whose root was consumed whole
+// is `Own`; everything else is `Ref`. Overlap is bidirectional —
+// the recorded path's projection being a prefix of the target's
+// (write to descendant of recorded place) or vice versa (write to
+// ancestor) both mark the recorded path as mutated.
+//
+// Result is `Vec<(CapturePath, OwnershipMode)>` per closure, parallel
+// to slice 1's `Vec<CapturePath>` in the same order. Read-only
+// surface — slice 3 will consume the mode-tagged set in the borrow
+// checker.
+
+/// Pull the per-path mode list for the single closure in `result`.
+fn single_closure_capture_path_modes(
+    result: &OwnershipCheckResult,
+) -> &Vec<(CapturePath, OwnershipMode)> {
+    assert_eq!(
+        result.closure_capture_path_modes.len(),
+        1,
+        "expected exactly one closure in source; got {} entries",
+        result.closure_capture_path_modes.len()
+    );
+    result.closure_capture_path_modes.values().next().unwrap()
+}
+
+#[test]
+fn capture_path_mode_bare_identifier_read_is_ref() {
+    // `|| use_ref(cfg)` — wait, no — bare `cfg` passed by value to a
+    // by-value function consumes it. Instead use a body that only
+    // reads through a Copy projection so the bare-ident path stays
+    // un-consumed: `|| cfg.value + 1` registers `(cfg, ["value"])`
+    // not `(cfg, [])`. To pin the bare-ident-as-whole-path Ref leg,
+    // use a closure whose body calls a method with `ref self` on
+    // `cfg` — receiver commits `(cfg, [])` whole, and the method
+    // mode is ref so no mutation → `Ref`.
+    let result = ownership_ok(
+        "struct Config { value: i64 }\n\
+         impl Config { fn length(ref self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             let cfg = Config { value: 1 };\n\
+             let _f = || cfg.length();\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("cfg", &[]), OwnershipMode::Ref)],
+        "ref-self method on captured root → whole-root path is Ref; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_field_read_is_ref() {
+    // `|| cfg.value + 1` — body reads through a Copy field
+    // projection, never mutates. Path is `(cfg, ["value"])` and
+    // mode is `Ref` (no mutation event, not whole-root consumed).
+    let result = ownership_ok(
+        "struct Config { value: i64 }\n\
+         fn main() {\n\
+             let cfg = Config { value: 1 };\n\
+             let _f = || cfg.value + 1;\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("cfg", &["value"]), OwnershipMode::Ref)],
+        "read-only field projection should be Ref; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_field_assign_is_mut_ref() {
+    // `|| { o.x = 2 }` — assignment to a captured field is a
+    // mutation event whose target place is `(o, ["x"])`. The
+    // recorded path matches exactly → marked mutated → `MutRef`.
+    // Mirrors the per-name `capture_mutated_in_body_is_mut_ref`
+    // test but pins the per-path surface.
+    let result = ownership_ok(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let mut o = Owned { x: 1 };\n\
+             let _f = || { o.x = 2; };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("o", &["x"]), OwnershipMode::MutRef)],
+        "field-assign target should mark path MutRef; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_disjoint_fields_independent_modes() {
+    // The slice-2 headline test. Body reads one field and writes
+    // another sibling field of the same root:
+    //   { u.age = 99; u.name + 1 }
+    // Slice 1 records two paths under root `u`: `(u, ["age"])` and
+    // `(u, ["name"])`. Slice 2's per-path inference treats each
+    // independently — only `(u, ["age"])` overlaps a mutation
+    // target → it gets `MutRef` while `(u, ["name"])` stays `Ref`.
+    // This is the disjointness the per-name view CANNOT express:
+    // per-name `u` is uniformly `MutRef` because the root is
+    // mutated in aggregate.
+    let result = ownership_ok(
+        "struct User { name: i64, age: i64 }\n\
+         fn main() {\n\
+             let mut u = User { name: 1, age: 2 };\n\
+             let _f = || { u.age = 99; u.name + 1 };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("u", &["age"]), OwnershipMode::MutRef),
+            (path("u", &["name"]), OwnershipMode::Ref),
+        ],
+        "disjoint fields under same root should take independent modes; got {:?}",
+        modes
+    );
+    // Cross-check the per-name view collapses both to MutRef — the
+    // surface slice 2 supersedes for downstream consumers.
+    let caps = single_closure_captures(&result);
+    assert_eq!(
+        caps.as_slice(),
+        &[("u".to_string(), OwnershipMode::MutRef)],
+        "per-name view should collapse to MutRef (its existing semantics); got {:?}",
+        caps
+    );
+}
+
+#[test]
+fn capture_path_mode_compound_assign_is_mut_ref() {
+    // `o.x += 1` — compound-assign target is treated the same as a
+    // bare assign target. Path `(o, ["x"])` overlaps the mutation
+    // → `MutRef`.
+    let result = ownership_ok(
+        "struct Owned { x: i64 }\n\
+         fn main() {\n\
+             let mut o = Owned { x: 1 };\n\
+             let _f = || { o.x += 1; };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("o", &["x"]), OwnershipMode::MutRef)],
+        "compound-assign target should mark path MutRef; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_method_mut_ref_self_commits_root_mut_ref() {
+    // `|| u.bump()` where `bump` takes `mut ref self` — the
+    // receiver `u` is captured whole (slice 1 stopping construct)
+    // AND the receiver call is a mutation event → `(u, [])` is
+    // marked mutated → `MutRef`. Pins that the method-receiver
+    // mutation event correctly lifts the whole-root path's mode.
+    let result = ownership_ok(
+        "struct Counter { n: i64 }\n\
+         impl Counter { fn bump(mut ref self) { self.n = self.n + 1; } }\n\
+         fn main() {\n\
+             let mut u = Counter { n: 0 };\n\
+             let _f = || u.bump();\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("u", &[]), OwnershipMode::MutRef)],
+        "mut-ref-self method on captured root should be MutRef; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_method_ref_self_commits_root_ref() {
+    // `|| u.length()` where `length` takes `ref self` — receiver
+    // commits root whole, but no mutation event fires (the receiver
+    // mode is `ref`, not `mut ref`) → `(u, [])` stays `Ref`. Pairs
+    // with the mut-ref-self test above to pin both legs of the
+    // method-call mode discrimination.
+    let result = ownership_ok(
+        "struct User { name: i64 }\n\
+         impl User { fn length(ref self) -> i64 { 0 } }\n\
+         fn main() {\n\
+             let u = User { name: 1 };\n\
+             let _f = || u.length();\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("u", &[]), OwnershipMode::Ref)],
+        "ref-self method on captured root should be Ref; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_consumed_whole_root_is_own() {
+    // `|| apply(cfg)` — by-value pass to an owned-arg function
+    // consumes the captured root. Slice 1 records `(cfg, [])`
+    // (bare-ident through a stopping call boundary); slice 2's
+    // wiring sees `states[cfg] == Moved` and assigns mode `Own`.
+    // Mirrors `capture_consumed_in_body_is_own` for the per-name
+    // surface — pins per-path matches per-name for the consume
+    // leg.
+    let result = ownership_ok(
+        "struct Config { name: i64 }\n\
+         fn apply(c: Config) { }\n\
+         fn main() {\n\
+             let cfg = Config { name: 1 };\n\
+             let _f = || apply(cfg);\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[(path("cfg", &[]), OwnershipMode::Own)],
+        "by-value pass should mark whole-root path Own; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_independent_roots_independent_modes() {
+    // Two distinct captured bindings, one mutated through a field
+    // assign, one read through a field. Pins that mode inference
+    // is per-path, not per-root-aggregated: `(a, ["v"])` is
+    // `MutRef`, `(b, ["v"])` is `Ref`, even though both roots
+    // appear in the same body. Output ordering matches slice 1
+    // (lexicographic by root then projection).
+    let result = ownership_ok(
+        "struct Holder { v: i64 }\n\
+         fn main() {\n\
+             let mut a = Holder { v: 1 };\n\
+             let b = Holder { v: 2 };\n\
+             let _f = || { a.v = 10; b.v + 1 };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("a", &["v"]), OwnershipMode::MutRef),
+            (path("b", &["v"]), OwnershipMode::Ref),
+        ],
+        "independent roots should take independent modes; got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_ancestor_write_marks_whole_root() {
+    // Body has both a stopping construct that commits root whole
+    // AND a field assign on the same root:
+    //   { u.show(); u.age = 99 }
+    // Slice 1 records `(u, [])` (from the method call) AND
+    // `(u, ["age"])` (from the assign target's pure-path
+    // extraction). Slice 2's bidirectional overlap rule marks BOTH
+    // paths mutated: the assign target's projection `["age"]`
+    // overlaps `(u, [])` (path's empty projection is a prefix of
+    // any target). Pins that an ancestor (whole-root) path
+    // correctly inherits MutRef when a descendant is mutated —
+    // without this, the whole-root capture would be falsely Ref
+    // while a sibling field assign is MutRef, and the closure's
+    // env-slot for the whole root would lack the mut access the
+    // body needs.
+    let result = ownership_ok(
+        "struct User { name: i64, age: i64 }\n\
+         impl User { fn show(ref self) { } }\n\
+         fn main() {\n\
+             let mut u = User { name: 1, age: 2 };\n\
+             let _f = || { u.show(); u.age = 99; };\n\
+         }",
+    );
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        modes.as_slice(),
+        &[
+            (path("u", &[]), OwnershipMode::MutRef),
+            (path("u", &["age"]), OwnershipMode::MutRef),
+        ],
+        "ancestor whole-root path should be lifted to MutRef when descendant mutated; \
+         got {:?}",
+        modes
+    );
+}
+
+#[test]
+fn capture_path_mode_path_order_matches_capture_paths() {
+    // The slice-2 mode list is parallel to slice 1's path list —
+    // both keyed by the same closure span; entries in identical
+    // order. Pin this so consumers (slice 3's borrow checker) can
+    // rely on zip-iteration without re-sorting.
+    let result = ownership_ok(
+        "struct User { name: i64, age: i64 }\n\
+         fn main() {\n\
+             let mut u = User { name: 1, age: 2 };\n\
+             let _f = || { u.age = 99; u.name + 1 };\n\
+         }",
+    );
+    let paths = single_closure_capture_paths(&result);
+    let modes = single_closure_capture_path_modes(&result);
+    assert_eq!(
+        paths.len(),
+        modes.len(),
+        "path-list and mode-list lengths must match"
+    );
+    for (i, (p, (mp, _))) in paths.iter().zip(modes.iter()).enumerate() {
+        assert_eq!(
+            p, mp,
+            "path-list and mode-list must zip in identical order at index {}; \
+             path = {:?}, mode-path = {:?}",
+            i, p, mp
+        );
+    }
+}
+
+#[test]
+fn capture_path_mode_modes_keyed_by_closure_expression_span() {
+    // Two closures in the same function — each gets its own modes
+    // entry keyed by the closure expression's span. Mirrors
+    // `closure_param_modes_keyed_by_closure_expression_span` for
+    // the new per-path-modes map. Pins that the map is per-closure,
+    // not per-function.
+    let src = "struct Owned { x: i64 }\n\
+               fn main() {\n\
+                   let mut a = Owned { x: 1 };\n\
+                   let b = Owned { x: 2 };\n\
+                   let _f = || { a.x = 9; };\n\
+                   let _g = || b.x + 1;\n\
+               }";
+    let parsed = parse(src);
+    let resolved = resolve(&parsed.program);
+    let typed = typecheck(&parsed.program, &resolved);
+    let result = ownershipcheck(&parsed.program, &typed);
+    assert!(
+        result.errors.is_empty(),
+        "ownership errors: {:?}",
+        result.errors
+    );
+    assert_eq!(
+        result.closure_capture_path_modes.len(),
+        2,
+        "expected two distinct closure entries; got {:?}",
+        result.closure_capture_path_modes.keys().collect::<Vec<_>>()
+    );
+    let modes_lists: Vec<_> = result.closure_capture_path_modes.values().collect();
+    let mut_refs: Vec<_> = modes_lists
+        .iter()
+        .filter(|m| m.iter().any(|(_, mode)| *mode == OwnershipMode::MutRef))
+        .collect();
+    let refs_only: Vec<_> = modes_lists
+        .iter()
+        .filter(|m| m.iter().all(|(_, mode)| *mode == OwnershipMode::Ref))
+        .collect();
+    assert_eq!(
+        mut_refs.len(),
+        1,
+        "exactly one closure should have a MutRef path"
+    );
+    assert_eq!(
+        refs_only.len(),
+        1,
+        "exactly one closure should have only Ref paths"
+    );
+}
+
 // ── Step 7 sentinels: ref-captured value escape (E0508) ─────────
 //
 // Round 12.35 — design.md § Closures Rule 2 sub-case (iv):
