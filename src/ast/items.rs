@@ -630,6 +630,10 @@ pub struct ImportItem {
 #[derive(Debug, Clone)]
 pub struct ConstDecl {
     pub span: Span,
+    /// Attributes attached to this module-level const. Enables
+    /// item-level attributes like `#[deprecated]` to attach per
+    /// design.md § `#[deprecated]` for Item Deprecation.
+    pub attributes: Vec<Attribute>,
     /// Joined contents of `///` doc comments preceding the const.
     pub doc_comment: Option<String>,
     pub is_pub: bool,
@@ -637,6 +641,8 @@ pub struct ConstDecl {
     pub name: String,
     pub ty: TypeExpr,
     pub value: Expr,
+    /// `#[deprecated]` payload — see [`Deprecation`].
+    pub deprecation: Option<Deprecation>,
 }
 
 // ── Alias & Independent ──────────────────────────────────────────
@@ -727,6 +733,10 @@ pub struct OpaqueTypeDecl {
 #[derive(Debug, Clone)]
 pub struct TypeAliasDef {
     pub span: Span,
+    /// Attributes attached to this type alias. Enables item-level
+    /// attributes like `#[deprecated]` to attach per design.md §
+    /// `#[deprecated]` for Item Deprecation.
+    pub attributes: Vec<Attribute>,
     /// Joined contents of `///` doc comments preceding the alias.
     pub doc_comment: Option<String>,
     pub is_pub: bool,
@@ -735,6 +745,8 @@ pub struct TypeAliasDef {
     pub generic_params: Option<GenericParams>,
     pub ty: TypeExpr,
     pub refinement: Option<Expr>,
+    /// `#[deprecated]` payload — see [`Deprecation`].
+    pub deprecation: Option<Deprecation>,
 }
 
 // ── Distinct Types (Newtypes) ────────────────────────────────────

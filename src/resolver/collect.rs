@@ -708,6 +708,13 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_const(&mut self, c: &ConstDecl) {
+        // `#[non_exhaustive]` and `#[track_caller]` are rejected
+        // on module-level consts — `#[deprecated]` is the only
+        // attribute the spec lists as valid here. The other two
+        // produce placement diagnostics; the helper functions
+        // share the same "target kind" message shape.
+        self.reject_non_exhaustive_attr(&c.attributes, "module const");
+        self.reject_track_caller_attr(&c.attributes, "module const");
         if let Err(err) = self.table.define(
             c.name.clone(),
             SymbolKind::Constant,
@@ -719,6 +726,12 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_type_alias(&mut self, t: &TypeAliasDef) {
+        // Same rejection pattern as `collect_const` — type
+        // aliases are not fns (track_caller invalid) and aren't
+        // public types that grow new variants/fields
+        // (non_exhaustive invalid).
+        self.reject_non_exhaustive_attr(&t.attributes, "type alias");
+        self.reject_track_caller_attr(&t.attributes, "type alias");
         if let Err(err) = self.table.define(
             t.name.clone(),
             SymbolKind::TypeAlias,

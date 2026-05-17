@@ -2516,6 +2516,73 @@ fn lint_attrs_slice1_attribute_coexists_with_other_attributes() {
     assert!(f.deprecation.is_some());
 }
 
+// ── TypeAliasDef + ConstDecl attributes enabling change ──────────
+//
+// `ConstDecl` and `TypeAliasDef` AST nodes now carry `attributes`
+// and `deprecation`. Closes the remaining sub-open flagged in the
+// #[deprecated] entry (line 381): the spec listed module-level
+// consts and type aliases as legal #[deprecated] targets but the
+// AST nodes had no attributes field.
+
+#[test]
+fn const_attrs_module_const_captures_deprecated() {
+    let prog = parse_ok("#[deprecated = \"use NEW_VAL\"]\npub const OLD_VAL: i64 = 42;");
+    let Item::ConstDecl(c) = &prog.items[0] else {
+        panic!("Expected ConstDecl");
+    };
+    assert_eq!(c.attributes.len(), 1);
+    assert_eq!(c.attributes[0].name, "deprecated");
+    let d = c
+        .deprecation
+        .as_ref()
+        .expect("expected Deprecation payload");
+    assert_eq!(d.note.as_deref(), Some("use NEW_VAL"));
+}
+
+#[test]
+fn const_attrs_module_const_without_attribute_has_empty_fields() {
+    let prog = parse_ok("pub const VAL: i64 = 42;");
+    let Item::ConstDecl(c) = &prog.items[0] else {
+        panic!("Expected ConstDecl");
+    };
+    assert!(c.attributes.is_empty());
+    assert!(c.deprecation.is_none());
+}
+
+#[test]
+fn const_attrs_type_alias_captures_deprecated() {
+    let prog = parse_ok("#[deprecated]\npub type OldHandle = i64;");
+    let Item::TypeAlias(t) = &prog.items[0] else {
+        panic!("Expected TypeAlias");
+    };
+    assert_eq!(t.attributes.len(), 1);
+    assert!(t.deprecation.is_some());
+}
+
+#[test]
+fn const_attrs_type_alias_without_attribute_has_empty_fields() {
+    let prog = parse_ok("pub type Handle = i64;");
+    let Item::TypeAlias(t) = &prog.items[0] else {
+        panic!("Expected TypeAlias");
+    };
+    assert!(t.attributes.is_empty());
+    assert!(t.deprecation.is_none());
+}
+
+#[test]
+fn const_attrs_type_alias_long_form_deprecation() {
+    let prog = parse_ok(
+        "#[deprecated(since: \"1.2.0\", note: \"use NewHandle\")]\n\
+         pub type OldHandle = i64;",
+    );
+    let Item::TypeAlias(t) = &prog.items[0] else {
+        panic!("Expected TypeAlias");
+    };
+    let d = t.deprecation.as_ref().expect("expected Deprecation");
+    assert_eq!(d.since.as_deref(), Some("1.2.0"));
+    assert_eq!(d.note.as_deref(), Some("use NewHandle"));
+}
+
 #[test]
 fn test_const_generic_args() {
     let prog = parse_ok("fn dot(a: Array[f64, 3], b: Array[f64, 3]) -> f64 { 0.0 }");

@@ -2532,6 +2532,94 @@ fn enabling_change_deprecated_on_trait_method_accepted() {
     );
 }
 
+// ── TypeAliasDef + ConstDecl attribute placement validation ──────
+//
+// With attributes now landing on ConstDecl and TypeAliasDef:
+//   - `#[deprecated]` → ACCEPTED (spec lists both as legal targets)
+//   - `#[track_caller]` → rejected (not fns)
+//   - `#[non_exhaustive]` → rejected (not pub struct / pub enum)
+
+#[test]
+fn const_attrs_track_caller_on_module_const_rejected() {
+    let errs = resolve_errors("#[track_caller]\npub const VAL: i64 = 42;");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::TrackCallerInvalidTarget
+                && e.message.contains("module const")
+        }),
+        "Expected TrackCallerInvalidTarget on module const; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_attrs_non_exhaustive_on_module_const_rejected() {
+    let errs = resolve_errors("#[non_exhaustive]\npub const VAL: i64 = 42;");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("module const")
+        }),
+        "Expected NonExhaustiveInvalidTarget on module const; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_attrs_track_caller_on_type_alias_rejected() {
+    let errs = resolve_errors("#[track_caller]\npub type Handle = i64;");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::TrackCallerInvalidTarget && e.message.contains("type alias")
+        }),
+        "Expected TrackCallerInvalidTarget on type alias; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_attrs_non_exhaustive_on_type_alias_rejected() {
+    let errs = resolve_errors("#[non_exhaustive]\npub type Handle = i64;");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("type alias")
+        }),
+        "Expected NonExhaustiveInvalidTarget on type alias; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_attrs_deprecated_on_module_const_accepted() {
+    let parsed = parse("#[deprecated]\npub const OLD: i64 = 42;");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter().all(|e| !matches!(
+            e.kind,
+            ResolveErrorKind::DeprecatedOnImpl | ResolveErrorKind::DeprecatedOnField
+        )),
+        "#[deprecated] on module const should be accepted; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn const_attrs_deprecated_on_type_alias_accepted() {
+    let parsed = parse("#[deprecated]\npub type OldHandle = i64;");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter().all(|e| !matches!(
+            e.kind,
+            ResolveErrorKind::DeprecatedOnImpl | ResolveErrorKind::DeprecatedOnField
+        )),
+        "#[deprecated] on type alias should be accepted; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
 
 #[test]

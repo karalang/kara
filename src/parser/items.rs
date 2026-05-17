@@ -110,7 +110,7 @@ impl super::Parser {
                 Some(Item::Import(decl))
             }
             Token::Const => {
-                let decl = self.parse_const_decl(is_pub, is_private)?;
+                let decl = self.parse_const_decl(attributes, is_pub, is_private)?;
                 Some(Item::ConstDecl(decl))
             }
             Token::Alias => {
@@ -171,7 +171,7 @@ impl super::Parser {
                 Some(Item::DistinctType(def))
             }
             Token::Type => {
-                let def = self.parse_type_alias(is_pub, is_private)?;
+                let def = self.parse_type_alias(attributes, is_pub, is_private)?;
                 Some(Item::TypeAlias(def))
             }
             _ => {
@@ -1264,7 +1264,12 @@ impl super::Parser {
 
     // ── Constants ────────────────────────────────────────────────
 
-    fn parse_const_decl(&mut self, is_pub: bool, is_private: bool) -> Option<ConstDecl> {
+    fn parse_const_decl(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<ConstDecl> {
         let start = self.current_span();
         self.expect(&Token::Const)?;
         let name = self.expect_identifier()?;
@@ -1276,14 +1281,17 @@ impl super::Parser {
         let value = self.parse_expression()?;
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
+        let deprecation = self.scan_deprecated_attr(&attributes);
         Some(ConstDecl {
             span: self.span_from(&start),
+            attributes,
             doc_comment,
             is_pub,
             is_private,
             name,
             ty,
             value,
+            deprecation,
         })
     }
 
@@ -1319,7 +1327,12 @@ impl super::Parser {
 
     // ── Type Aliases ─────────────────────────────────────────────
 
-    fn parse_type_alias(&mut self, is_pub: bool, is_private: bool) -> Option<TypeAliasDef> {
+    fn parse_type_alias(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<TypeAliasDef> {
         let start = self.current_span();
         self.expect(&Token::Type)?;
         let name = self.expect_identifier()?;
@@ -1335,8 +1348,10 @@ impl super::Parser {
         };
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
+        let deprecation = self.scan_deprecated_attr(&attributes);
         Some(TypeAliasDef {
             span: self.span_from(&start),
+            attributes,
             doc_comment,
             is_pub,
             is_private,
@@ -1344,6 +1359,7 @@ impl super::Parser {
             generic_params,
             ty,
             refinement,
+            deprecation,
         })
     }
 
