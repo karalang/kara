@@ -159,6 +159,14 @@ impl<'a> super::TypeChecker<'a> {
                     trait_name: trait_path.segments.join("."),
                     trait_args,
                     origin: crate::resolver::SpanKey::from_span(&ty.span),
+                    // Slice 6: the TAIT marker is set later by
+                    // `env_add_type_alias` when this lowering happens
+                    // inside a `type X = impl Trait;` declaration.
+                    // Return-position / RPITIT existentials from slice
+                    // 3 stay `None` — their alias-less origin is the
+                    // distinguishing signal for slice 6's TAIT-aware
+                    // diagnostics.
+                    tait_alias: None,
                 }
             }
             // `dyn Trait` slice 5 — the dual of `impl Trait`. Slice 5

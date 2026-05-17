@@ -14544,3 +14544,76 @@ fn non_exhaustive_slice4_pattern_stdlib_internal_use_accepted() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── `impl Trait` slice 6: TAIT declaration + v1 stub ────────────
+
+#[test]
+fn impl_trait_slice6_tait_declaration_typechecks_cleanly() {
+    // Pin: `type X = impl Trait;` registers cleanly through parse →
+    // desugar → resolve → typecheck without firing any of the
+    // slice-1 / slice-3 stub diagnostics. After slice 6 the
+    // TAIT-RHS lowering routes through `env_add_type_alias` which
+    // tags the resulting `Type::Existential` with `tait_alias =
+    // Some("X")`, so downstream consumers know it's TAIT-sourced.
+    typecheck_desugared_ok(
+        "trait Display { fn show(ref self) -> String; }\n\
+         type Shown = impl Display;",
+    );
+}
+
+#[test]
+fn impl_trait_slice6_tait_use_through_trait_surface_method_works() {
+    // Spec test: a TAIT use site that calls a method declared on
+    // the trait surface succeeds. The slice-6 dispatcher routes the
+    // call through the trait's method declaration via
+    // `dispatch_existential_receiver_method`, lowering it
+    // identically to a `Type::TypeParam` receiver with the trait as
+    // its only bound (the trait-surface path slice 3 already
+    // established for return-position existentials).
+    typecheck_desugared_ok(
+        "trait Tagged { fn tag(ref self) -> i64; }\n\
+         struct Concrete { n: i64 }\n\
+         impl Tagged for Concrete { fn tag(ref self) -> i64 { 1 } }\n\
+         type Shown = impl Tagged;\n\
+         fn make() -> Shown { Concrete { n: 0 } }\n\
+         fn use_shown() -> i64 {\n\
+             let s = make();\n\
+             s.tag()\n\
+         }",
+    );
+}
+
+#[test]
+fn impl_trait_slice6_tait_use_with_non_trait_method_emits_stub_diagnostic() {
+    // Spec test: a TAIT use site that calls a method NOT declared
+    // on the trait (but defined on the witness type) fires
+    // `E_TAIT_NOT_IMPLEMENTED_YET` naming the alias and the
+    // missing-from-trait-surface method. The witness might define
+    // the method (here `Concrete::extra`) but resolving against the
+    // witness requires the P1 witness-inference pipeline, so v1
+    // routes through the trait surface only and surfaces the focused
+    // stub.
+    let result = typecheck_desugared_result(
+        "trait Tagged { fn tag(ref self) -> i64; }\n\
+         struct Concrete { n: i64 }\n\
+         impl Tagged for Concrete { fn tag(ref self) -> i64 { 1 } }\n\
+         impl Concrete { fn extra(ref self) -> i64 { 42 } }\n\
+         type Shown = impl Tagged;\n\
+         fn make() -> Shown { Concrete { n: 0 } }\n\
+         fn use_shown() -> i64 {\n\
+             let s = make();\n\
+             s.extra()\n\
+         }",
+    );
+    let found = result.errors.iter().any(|e| {
+        e.message.contains("E_TAIT_NOT_IMPLEMENTED_YET")
+            && e.message.contains("Shown")
+            && e.message.contains("extra")
+            && e.message.contains("Tagged")
+    });
+    assert!(
+        found,
+        "expected E_TAIT_NOT_IMPLEMENTED_YET naming alias `Shown`, method `extra`, and trait `Tagged`; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

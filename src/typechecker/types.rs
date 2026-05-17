@@ -141,10 +141,21 @@ pub enum Type {
     ///   distinct `impl Iterator` declarations (e.g., on two different
     ///   functions) yield distinct origins so the typechecker keeps their
     ///   witnesses separate even when their bounds match structurally.
+    /// - `tait_alias` — `Some(alias_name)` when this existential was minted
+    ///   from a `type X = impl Trait;` declaration (Type Alias `impl
+    ///   Trait`, TAIT — slice 6 of the `impl Trait` epic). The TAIT
+    ///   marker drives the slice-6 `E_TAIT_NOT_IMPLEMENTED_YET`
+    ///   diagnostic at witness-required use sites (e.g., method calls
+    ///   for methods not declared on the trait but defined on the
+    ///   witness type). `None` for return-position existentials
+    ///   (slice 3) — those have no alias name and their witness is
+    ///   computed from the defining function's body, not via TAIT
+    ///   witness-inference.
     Existential {
         trait_name: String,
         trait_args: Vec<Type>,
         origin: crate::resolver::SpanKey,
+        tait_alias: Option<String>,
     },
 
     Error,

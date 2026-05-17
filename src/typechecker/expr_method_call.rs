@@ -212,6 +212,80 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// `impl Trait` slice 6 — `existential.method(args)` dispatch for
+    /// both return-position existentials (slice 3, `tait_alias = None`)
+    /// and TAIT-sourced existentials (`tait_alias = Some(alias)`).
+    /// Looks up `method` on the existential's declared `trait_name`
+    /// via [`Self::find_trait_method`]; on hit, dispatches through
+    /// [`Self::dispatch_trait_assoc_fn`] with `Self → Type::TypeParam(trait_name)`
+    /// — the same lowering used by `Type::TypeParam` receivers, which
+    /// keeps the trait-surface call path uniform with slice 3's
+    /// `type_satisfies_bound` story.
+    ///
+    /// On miss, the diagnostic depends on the existential's origin:
+    /// - **TAIT-sourced** (`tait_alias = Some(alias)`): emit
+    ///   `error[E_TAIT_NOT_IMPLEMENTED_YET]` naming the alias and the
+    ///   missing method — the witness might declare the method but
+    ///   resolving against the witness requires the P1 witness-inference
+    ///   pipeline, so v1 routes through the trait surface only.
+    /// - **Return-position** (`tait_alias = None`): emit the generic
+    ///   `NoMethodFound` naming the trait — slice 3 caller-side opacity
+    ///   already covers the rest of the diagnostic surface.
+    fn dispatch_existential_receiver_method(
+        &mut self,
+        trait_name: &str,
+        tait_alias: Option<&str>,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        // Trait-surface lookup: the existential's only callable methods
+        // are those declared on `trait_name`. `find_trait_method`
+        // walks `program.items` for the trait def and returns the
+        // matching method; receiver-form requires `self_param`.
+        let trait_method = self.find_trait_method(trait_name, method).and_then(|m| {
+            // Only methods (with self_param) are receiver-form
+            // candidates; associated functions reach dispatch only
+            // through type-prefixed `Trait.fn()`.
+            m.self_param.as_ref()?;
+            Some(m.clone())
+        });
+        if let Some(m) = trait_method {
+            return self.dispatch_trait_assoc_fn(trait_name, &m, args, span);
+        }
+        // No trait-surface method — surface the focused diagnostic.
+        for arg in args {
+            self.infer_expr(&arg.value);
+        }
+        match tait_alias {
+            Some(alias) => {
+                self.type_error(
+                    format!(
+                        "error[E_TAIT_NOT_IMPLEMENTED_YET]: TAIT '{alias}' is recognized \
+                         but the witness-inference pipeline lands in P1; method '{method}' \
+                         is not declared on trait '{trait_name}', and dispatching against \
+                         the alias's concrete witness requires the deferred TAIT machinery \
+                         — cast through the trait surface for now"
+                    ),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+            }
+            None => {
+                self.type_error(
+                    format!(
+                        "no method '{method}' on `impl {trait_name}` value; only methods \
+                         declared on trait '{trait_name}' are callable through the \
+                         existential"
+                    ),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+            }
+        }
+        Type::Error
+    }
+
     /// Receiver-form `self.method(args)` dispatch inside a trait default
     /// body. Slice 3.5 of the method-resolution CR — see
     /// `phase-4-interpreter.md` item 8. Closes the explicit `name == "Self"`
@@ -1283,6 +1357,34 @@ impl<'a> super::TypeChecker<'a> {
                 // routes to `dispatch_self_receiver_method` which consults
                 // the enclosing trait being defined, not just bounds.
                 return self.dispatch_typeparam_receiver_method(name, method, args, span);
+            }
+            Type::Existential {
+                trait_name,
+                tait_alias,
+                ..
+            } => {
+                // `impl Trait` slice 6 — TAIT and return-position
+                // existentials dispatch through the declared trait
+                // surface. Find the trait's own method by name; if
+                // missing, emit `E_TAIT_NOT_IMPLEMENTED_YET` (slice 6)
+                // when the existential is TAIT-sourced (the witness's
+                // own non-trait method might exist but resolving it
+                // requires the witness-inference pipeline that lands
+                // in P1), or the generic no-method-on-trait diagnostic
+                // for return-position existentials. Method calls that
+                // hit the trait surface succeed exactly as if the
+                // receiver were a `Type::TypeParam` with the trait as
+                // its only bound — slice 3's `enclosing_bounds` story
+                // already covers the lookup machinery.
+                let trait_name_clone = trait_name.clone();
+                let tait_alias_clone = tait_alias.clone();
+                return self.dispatch_existential_receiver_method(
+                    &trait_name_clone,
+                    tait_alias_clone.as_deref(),
+                    method,
+                    args,
+                    span,
+                );
             }
             _ => {
                 // For non-named types, just type-check args and return Error

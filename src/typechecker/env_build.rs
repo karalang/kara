@@ -1258,7 +1258,23 @@ impl<'a> super::TypeChecker<'a> {
 
     fn env_add_type_alias(&mut self, t: &TypeAliasDef) {
         let gp = Self::generic_param_names(&t.generic_params);
-        let ty = self.lower_type_expr(&t.ty, &gp);
+        let mut ty = self.lower_type_expr(&t.ty, &gp);
+        // `impl Trait` slice 6 — propagate the TAIT alias name into
+        // the lowered `Type::Existential` when the alias RHS is
+        // `type X = impl Trait;`. The marker drives the slice-6
+        // `E_TAIT_NOT_IMPLEMENTED_YET` diagnostic at witness-required
+        // use sites; without it the existential would be
+        // indistinguishable from a return-position one (slice 3) and
+        // the user would get a generic "no method found" / opacity
+        // diagnostic instead of the TAIT-specific stub.
+        if matches!(t.ty.kind, TypeKind::ImplTrait { .. }) {
+            if let Type::Existential {
+                ref mut tait_alias, ..
+            } = ty
+            {
+                *tait_alias = Some(t.name.clone());
+            }
+        }
         self.env.type_aliases.insert(t.name.clone(), ty);
     }
 
