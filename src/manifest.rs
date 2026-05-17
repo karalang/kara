@@ -39,7 +39,14 @@ const KNOWN_EDITIONS: &[&str] = &["2026"];
 /// compilation), `version` and `authors` are accepted silently so that
 /// manifests emitted by `karac init` (which writes the canonical template) do
 /// not warn on first build. Anything outside this set produces a soft warning.
-const KNOWN_PACKAGE_KEYS: &[&str] = &["name", "edition", "version", "authors", "profile"];
+const KNOWN_PACKAGE_KEYS: &[&str] = &[
+    "name",
+    "edition",
+    "version",
+    "authors",
+    "profile",
+    "kara-version",
+];
 
 /// Target execution environment — constrains which effects are legal at
 /// `extern` declaration sites and which stdlib layers are available.
@@ -99,6 +106,15 @@ pub struct Manifest {
     /// `BTreeMap` so iteration order is stable across runs (only matters
     /// when surfaced in diagnostics, but cheap to guarantee).
     pub test_resources: BTreeMap<String, String>,
+    /// `[package].kara-version` — the minimum compiler version this
+    /// package requires (MSRV in Rust parlance). Stored as the raw
+    /// version string the manifest declared; `None` when the field
+    /// is absent. The resolver enforces this against the active
+    /// toolchain version per design.md once the version-comparison
+    /// pipeline lands (separate slice). For now the field is purely
+    /// structural — accepted, surfaced through manifest output, but
+    /// not validated against the running compiler.
+    pub kara_version: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -375,6 +391,32 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     }
     warnings.sort_by(|a, b| a.message.cmp(&b.message));
 
+    // `[package].kara-version` — optional MSRV constraint. Wrong
+    // type is a hard error (typos shouldn't silently disable the
+    // constraint); absent is the common case. Per design.md the
+    // value is a free-form version string surfaced verbatim in
+    // resolution diagnostics; no parsing-time validation today.
+    let kara_version = match package.get("kara-version") {
+        Some(toml::Value::String(s)) => {
+            if s.trim().is_empty() {
+                return Err(ManifestError::InvalidFieldType {
+                    path: path.to_path_buf(),
+                    key: "kara-version".to_string(),
+                    expected: "a non-empty version string (e.g. \"1.0\" or \"1.2.3\")",
+                });
+            }
+            Some(s.clone())
+        }
+        Some(_) => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "kara-version".to_string(),
+                expected: "a string version constraint",
+            });
+        }
+        None => None,
+    };
+
     let test_resources = parse_test_resources(path, &table)?;
 
     Ok(Manifest {
@@ -382,6 +424,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         edition,
         profile,
         test_resources,
+        kara_version,
         warnings,
     })
 }
@@ -626,5 +669,117 @@ name = "hello"
             ManifestError::InvalidTestResource { key, .. } => assert_eq!(key, "db.UserDB"),
             other => panic!("expected InvalidTestResource, got {other:?}"),
         }
+    }
+
+    // ── kara-version MSRV slice 1 (parser-only capture) ────────────
+
+    #[test]
+    fn kara_version_absent_is_none() {
+        let src = r#"[package]
+name = "hello"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.kara_version.is_none());
+    }
+
+    #[test]
+    fn kara_version_captured_when_present() {
+        let src = r#"[package]
+name = "hello"
+kara-version = "1.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.kara_version.as_deref(), Some("1.0"));
+        // No warning — `kara-version` is a recognised key.
+        assert!(m.warnings.is_empty(), "got warnings: {:?}", m.warnings);
+    }
+
+    #[test]
+    fn kara_version_accepts_semver_triple() {
+        let src = r#"[package]
+name = "hello"
+kara-version = "1.2.3"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.kara_version.as_deref(), Some("1.2.3"));
+    }
+
+    #[test]
+    fn kara_version_accepts_caret_constraint() {
+        // Cargo-style constraint strings — the parser stores the raw
+        // string; resolution-time interpretation is a follow-up
+        // slice. Today only the parse-time capture is pinned.
+        let src = r#"[package]
+name = "hello"
+kara-version = "^1.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.kara_version.as_deref(), Some("^1.0"));
+    }
+
+    #[test]
+    fn kara_version_wrong_type_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+kara-version = 1.0
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "kara-version");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kara_version_empty_string_is_hard_error() {
+        // Empty version string is meaningless and is more likely a
+        // mistake than an intentional "no constraint". Hard-error
+        // rather than silently accepting.
+        let src = r#"[package]
+name = "hello"
+kara-version = ""
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "kara-version");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kara_version_whitespace_only_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+kara-version = "   "
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "kara-version");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn kara_version_recognised_key_does_not_warn() {
+        // Regression pin: `kara-version` was added to
+        // KNOWN_PACKAGE_KEYS. If a future refactor drops it, the
+        // unknown-key warning would silently fire and this test
+        // catches that.
+        let src = r#"[package]
+name = "hello"
+kara-version = "1.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(
+            m.warnings.is_empty(),
+            "kara-version should not produce unknown-key warning; got: {:?}",
+            m.warnings
+        );
     }
 }
