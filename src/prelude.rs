@@ -762,6 +762,7 @@ fn stub_function(name: &str, span: &Span) -> Item {
             span: span.clone(),
         },
         stdlib_origin: true,
+        is_track_caller: false,
     })
 }
 

@@ -2232,6 +2232,123 @@ fn non_exhaustive_slice1_rejection_uses_dedicated_error_kind() {
     );
 }
 
+// ── #[track_caller] placement validation (E0240) ──────────────────
+// The attribute is valid only on `fn` declarations. The resolver
+// rejects every other top-level / impl-block target — struct, enum,
+// trait, marker trait, trait alias, impl block, struct field. Per
+// design.md § Error Handling > "Stdlib panic-emitters report the
+// caller's source location". Trait method declarations are *also*
+// legal targets per the spec (last-writer-wins propagation to impls),
+// but `TraitMethod` has no `attributes` field yet — that's a separate
+// enabling change tracked alongside the slice 4–5 codegen work.
+
+fn assert_track_caller_rejected_kind(source: &str, expected_target_kind: &str) {
+    let errs = resolve_errors(source);
+    let matched: Vec<_> = errs
+        .iter()
+        .filter(|e| {
+            e.kind == ResolveErrorKind::TrackCallerInvalidTarget
+                && e.message.contains(expected_target_kind)
+        })
+        .collect();
+    assert!(
+        !matched.is_empty(),
+        "expected TrackCallerInvalidTarget mentioning {:?}, got: {:?}",
+        expected_target_kind,
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_caller_slice1_accepted_on_function() {
+    // Positive pin — no diagnostic on the legal placement.
+    let parsed = parse("#[track_caller]\nfn unwrap_inner() { }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::TrackCallerInvalidTarget),
+        "fn should accept #[track_caller] without diagnostic; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_caller_slice1_accepted_on_impl_method() {
+    let parsed = parse(
+        "pub struct Foo { x: i64, }\n\
+         impl Foo { #[track_caller] fn unwrap_x(ref self) -> i64 { self.x } }",
+    );
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::TrackCallerInvalidTarget),
+        "impl method should accept #[track_caller]; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_struct() {
+    assert_track_caller_rejected_kind("#[track_caller]\nstruct Foo { x: i64, }", "struct");
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_enum() {
+    assert_track_caller_rejected_kind("#[track_caller]\nenum Color { Red, Green, }", "enum");
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_trait() {
+    assert_track_caller_rejected_kind(
+        "#[track_caller]\ntrait Show { fn show(ref self) -> String; }",
+        "trait",
+    );
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_marker_trait() {
+    assert_track_caller_rejected_kind("#[track_caller]\nmarker trait Send;", "marker trait");
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_trait_alias() {
+    assert_track_caller_rejected_kind("#[track_caller]\ntrait Eq2 = Eq;", "trait alias");
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_impl_block() {
+    assert_track_caller_rejected_kind(
+        "pub struct Foo { x: i64, }\n#[track_caller]\nimpl Foo { fn x(ref self) -> i64 { 0 } }",
+        "impl block",
+    );
+}
+
+#[test]
+fn track_caller_slice1_rejected_on_struct_field() {
+    assert_track_caller_rejected_kind("pub struct Foo { #[track_caller] x: i64, }", "struct field");
+}
+
+#[test]
+fn track_caller_slice1_rejection_uses_dedicated_error_kind() {
+    let errs = resolve_errors("#[track_caller]\nstruct Foo { x: i64, }");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::TrackCallerInvalidTarget),
+        "expected TrackCallerInvalidTarget kind; got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::TrackCallerInvalidTarget
+                && e.message.contains("E_TRACK_CALLER_INVALID_TARGET")
+        }),
+        "expected error message to include the symbolic code; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
 
 #[test]

@@ -1811,6 +1811,98 @@ fn non_exhaustive_slice1_coexists_with_other_attributes_on_struct() {
     assert!(s.attributes.iter().any(|a| a.name == "must_use"));
 }
 
+// ── #[track_caller] slice 1 ────────────────────────────────────────
+//
+// `#[track_caller]` is a bare type-level attribute on `fn` items.
+// Parser captures it as `is_track_caller: bool` on `Function` so
+// codegen / runtime slices can consult one bool. The attribute MUST
+// take no arguments; malformed forms produce
+// `E_TRACK_CALLER_ARGS_NOT_PERMITTED`. Placement validation (must be
+// on `fn`, rejected on struct / enum / trait / impl / etc.) lives in
+// the resolver — covered by tests/resolver.rs. Per design.md § Error
+// Handling > "Stdlib panic-emitters report the caller's source
+// location".
+
+#[test]
+fn track_caller_slice1_sets_flag_on_function() {
+    let prog = parse_ok("#[track_caller]\nfn unwrap_inner() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_track_caller);
+    assert_eq!(f.attributes.len(), 1);
+    assert_eq!(f.attributes[0].name, "track_caller");
+    assert!(f.attributes[0].args.is_empty());
+    assert!(f.attributes[0].string_value.is_none());
+}
+
+#[test]
+fn track_caller_slice1_function_without_attribute_has_flag_false() {
+    let prog = parse_ok("fn unwrap_inner() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(!f.is_track_caller);
+}
+
+#[test]
+fn track_caller_slice1_coexists_with_other_attributes() {
+    let prog =
+        parse_ok("#[track_caller]\n#[must_use = \"propagate\"]\nfn unwrap_inner() -> i64 { 0 }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_track_caller);
+    assert_eq!(f.attributes.len(), 2);
+}
+
+#[test]
+fn track_caller_slice1_rejects_paren_args() {
+    let (_prog, errors) = parse_with_errors("#[track_caller(extra)]\nfn unwrap_inner() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TRACK_CALLER_ARGS_NOT_PERMITTED")),
+        "Expected E_TRACK_CALLER_ARGS_NOT_PERMITTED diagnostic; got: {errors:?}"
+    );
+}
+
+#[test]
+fn track_caller_slice1_rejects_string_value() {
+    let (_prog, errors) = parse_with_errors("#[track_caller = \"oops\"]\nfn unwrap_inner() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TRACK_CALLER_ARGS_NOT_PERMITTED")),
+        "Expected E_TRACK_CALLER_ARGS_NOT_PERMITTED diagnostic; got: {errors:?}"
+    );
+}
+
+#[test]
+fn track_caller_slice1_duplicate_attribute_is_idempotent() {
+    // Two copies of the bare attribute: parser is happy, flag stays
+    // true. No "duplicate attribute" diagnostic at this slice — the
+    // attribute is bare and idempotent.
+    let prog = parse_ok("#[track_caller]\n#[track_caller]\nfn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.is_track_caller);
+    assert_eq!(f.attributes.len(), 2);
+}
+
+#[test]
+fn track_caller_slice1_set_on_non_fn_item_parser_does_not_reject() {
+    // Parser captures attributes uniformly; the resolver rejects
+    // placement on non-fn items. The struct still parses cleanly.
+    let prog = parse_ok("#[track_caller]\npub struct Config { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert_eq!(s.attributes.len(), 1);
+    assert_eq!(s.attributes[0].name, "track_caller");
+}
+
 #[test]
 fn test_const_generic_args() {
     let prog = parse_ok("fn dot(a: Array[f64, 3], b: Array[f64, 3]) -> f64 { 0.0 }");

@@ -490,6 +490,14 @@ pub enum ResolveErrorKind {
     /// enum variant is rejected with `E_NON_EXHAUSTIVE_INVALID_TARGET`.
     /// See design.md § `#[non_exhaustive]` for Evolvable Public Types.
     NonExhaustiveInvalidTarget,
+    /// `#[track_caller]` placed on an item that is not a `fn`
+    /// declaration. The attribute redirects the panic-site source
+    /// location and only makes sense on functions (trait method
+    /// declarations also accept it once attribute support on trait
+    /// methods lands — that's a separate enabling change). See
+    /// design.md § Error Handling > "Stdlib panic-emitters report the
+    /// caller's source location". `E0240`.
+    TrackCallerInvalidTarget,
     /// `continue label` where `label` refers to a labeled block (rather
     /// than a loop). `continue` is only valid for loop labels — reject
     /// the use site with `error[E_CONTINUE_LABEL_BLOCK]`. The diagnostic

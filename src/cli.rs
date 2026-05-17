@@ -704,6 +704,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0237",
                 crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0238",
                 crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
+                crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -2708,6 +2709,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::CompilerBuiltinReserved => "E0237",
         ResolveErrorKind::ContinueOnBlockLabel => "E0238",
         ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
+        ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
     }
 }
 

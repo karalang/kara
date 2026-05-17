@@ -301,6 +301,42 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject `#[track_caller]` placed on an item kind that is not a
+    /// `fn` declaration. Per design.md § Error Handling > "Stdlib
+    /// panic-emitters report the caller's source location", the
+    /// attribute redirects the panic-site source location and only
+    /// makes sense on functions. Trait method declarations are *also*
+    /// legal targets per the spec (last-writer-wins propagation to
+    /// impls), but trait-method attribute support is a separate
+    /// enabling change — `TraitMethod` has no `attributes` field
+    /// today, so the attribute cannot attach there and this helper
+    /// covers every other site (struct, enum, trait, marker trait,
+    /// trait alias, impl block, struct field).
+    ///
+    /// `target_kind` is the human-readable role name surfaced in the
+    /// diagnostic message. Function and impl-method callers skip this
+    /// helper entirely — the attribute is legal at those sites.
+    fn reject_track_caller_attr(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if attr.name == "track_caller" {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_TRACK_CALLER_INVALID_TARGET]: \
+                         `#[track_caller]` is not valid on {target_kind}; \
+                         the attribute redirects the panic-site source \
+                         location and only applies to `fn` declarations \
+                         — see design.md § Error Handling > \"Stdlib \
+                         panic-emitters report the caller's source location\"",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::TrackCallerInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
+    }
+
     /// Reject `#[non_exhaustive]` placed on an item kind that does
     /// not support it. Per design.md § `#[non_exhaustive]` for
     /// Evolvable Public Types, the attribute is meaningful only on
@@ -389,6 +425,7 @@ impl<'a> super::Resolver<'a> {
         if s.is_non_exhaustive && !s.is_pub {
             self.reject_non_exhaustive_attr(&s.attributes, "private struct");
         }
+        self.reject_track_caller_attr(&s.attributes, "struct");
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
         // on fields too; we ship type-level only). Reject so users get
         // a focused message instead of a silent acceptance that does
@@ -396,6 +433,7 @@ impl<'a> super::Resolver<'a> {
         // be ignored, which is worse than the diagnostic.
         for field in &s.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "struct field");
+            self.reject_track_caller_attr(&field.attributes, "struct field");
         }
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
         if let Err(e) = self.table.define(
@@ -413,6 +451,7 @@ impl<'a> super::Resolver<'a> {
         if e.is_non_exhaustive && !e.is_pub {
             self.reject_non_exhaustive_attr(&e.attributes, "private enum");
         }
+        self.reject_track_caller_attr(&e.attributes, "enum");
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
         let enum_id = match self.table.define(
             e.name.clone(),
@@ -453,6 +492,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_trait(&mut self, t: &TraitDef) {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         self.reject_non_exhaustive_attr(&t.attributes, "trait");
+        self.reject_track_caller_attr(&t.attributes, "trait");
         let method_names: Vec<String> = t
             .items
             .iter()
@@ -473,6 +513,7 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
+        self.reject_track_caller_attr(&t.attributes, "trait alias");
         if let Err(e) = self.table.define(
             t.name.clone(),
             SymbolKind::TraitAlias,
@@ -485,6 +526,7 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "marker trait");
+        self.reject_track_caller_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
         // traits; no methods to track, so the symbol carries an empty
         // method list. Trait-bound resolution and impl coherence treat
@@ -516,6 +558,7 @@ impl<'a> super::Resolver<'a> {
         // `Function` field) and pass it through for the per-item exemption.
         self.check_compiler_builtin_attr(&imp.attributes, false);
         self.reject_non_exhaustive_attr(&imp.attributes, "impl block");
+        self.reject_track_caller_attr(&imp.attributes, "impl block");
         // Methods are registered in type_methods, not global scope.
         // We need the type name from the target_type.
         let type_name = self.type_expr_name(&imp.target_type);

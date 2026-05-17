@@ -95,6 +95,17 @@ pub struct Function {
     /// `is_stdlib_source` flag is unset (e.g. when the bake AST is
     /// spliced into a user-mode program tree).
     pub stdlib_origin: bool,
+    /// `#[track_caller]` declared on this function — at call sites, the
+    /// codegen pass injects a hidden caller-location argument carrying
+    /// the call site's `(file, line, col)` so the panic runtime
+    /// surfaces the caller's source location rather than this
+    /// function's internal panic line. Slice 1 captures the flag only;
+    /// the codegen + runtime integration (slices 4–5) consumes it.
+    /// See design.md § Error Handling > "Stdlib panic-emitters report
+    /// the caller's source location". Parser rejects arguments — the
+    /// attribute takes none — and the resolver rejects placement on
+    /// items that are not `fn` declarations.
+    pub is_track_caller: bool,
 }
 
 #[derive(Debug, Clone)]

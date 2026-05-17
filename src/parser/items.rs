@@ -227,6 +227,19 @@ impl super::Parser {
         let body = self.parse_block()?;
         self.effect_var_stack.pop();
 
+        // `#[track_caller]` is a bare type-level attribute on `fn`
+        // items. Set the flag at parse so codegen / runtime slices can
+        // consult one bool. The attribute MUST take no arguments —
+        // `#[track_caller(...)]` or `#[track_caller = "..."]` is a
+        // focused diagnostic at parse time so users see the malformed
+        // shape immediately rather than discovering it through silent
+        // ignore. Placement validation (must be on `fn`, rejected on
+        // structs / enums / traits / impl blocks / etc.) lives in the
+        // resolver — mirrors the `#[non_exhaustive]` parser/resolver
+        // split, so downstream tools that re-parse without a resolver
+        // still see the captured attribute.
+        let is_track_caller = self.scan_track_caller_attr(&attributes);
+
         Some(Function {
             span: self.span_from(&start),
             attributes,
@@ -245,7 +258,38 @@ impl super::Parser {
             where_clause,
             body,
             stdlib_origin: false,
+            is_track_caller,
         })
+    }
+
+    /// Scan `attributes` for `#[track_caller]`. Sets the flag when
+    /// the attribute is present (in any number of occurrences — a
+    /// duplicate is not a parser error, it is idempotent). Emits a
+    /// focused `E_TRACK_CALLER_ARGS_NOT_PERMITTED` parse diagnostic
+    /// for every offending occurrence that carries args or a string
+    /// value — the attribute is bare. Diagnostic is anchored at the
+    /// attribute's own span so the user can navigate directly to the
+    /// malformed `#[...]`.
+    fn scan_track_caller_attr(&mut self, attributes: &[Attribute]) -> bool {
+        let mut present = false;
+        for attr in attributes {
+            if attr.name != "track_caller" {
+                continue;
+            }
+            present = true;
+            if !attr.args.is_empty() || attr.string_value.is_some() {
+                self.errors.push(super::ParseError {
+                    message: "error[E_TRACK_CALLER_ARGS_NOT_PERMITTED]: \
+                              `#[track_caller]` takes no arguments — \
+                              the attribute redirects the panic-site \
+                              location and has no configurable shape; \
+                              remove the arguments"
+                        .to_string(),
+                    span: attr.span.clone(),
+                });
+            }
+        }
+        present
     }
 
     pub(super) fn parse_fn_params(&mut self) -> Option<(Option<SelfParam>, Vec<Param>)> {
