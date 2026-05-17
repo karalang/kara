@@ -11595,4 +11595,132 @@ fn main() {
             );
         }
     }
+
+    /// For-loop binding over `Vec[Struct]` + struct-field access regression
+    /// (cond_simple bug, 2026-05-16).
+    ///
+    /// `for x in xs.iter() { ... x.val ... }` where `xs: Vec[N]` (plain
+    /// struct) used to silently produce `i64 0` for every `x.val` read:
+    /// the for-loop's `register_for_loop_bindings` populated
+    /// `vec_elem_types[x]` from the source's element TypeExpr but did
+    /// not populate `var_type_names[x]`, so `field_index_for(x, "val")`
+    /// — which keys off `var_type_names` — returned `None`, and the
+    /// generic `compile_field_access` tail fell through to the
+    /// `Ok(const_int(0))` default.
+    ///
+    /// The same gap caused the surrounding-shape repros (cond_simple /
+    /// with_for / loop_shape) to print only the seed-count: the
+    /// in-for-loop `if x.val > 0 { q.push_back(x) }` compiled to
+    /// `br i1 false, label %then, label %else` so the conditional push
+    /// never ran, and the outer `loop { q.pop_front() }` drained on
+    /// the second iteration. Fix wires `var_type_names` through
+    /// `register_var_from_type_expr` for any bare user-type-named
+    /// TypeExpr path (struct / shared struct / enum).
+    #[test]
+    fn test_e2e_for_iter_struct_field_access_resolves() {
+        let src = r#"
+struct N { val: i64 }
+fn main() {
+    let xs: Vec[N] = Vec.new();
+    xs.push(N { val: 10 });
+    xs.push(N { val: 20 });
+    let mut sum: i64 = 0;
+    for x in xs.iter() {
+        sum = sum + x.val;
+    }
+    println(sum);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "30\n",
+                "for x in Vec[Struct].iter() {{ x.field }} — field access must resolve, \
+                 not silently fold to 0"
+            );
+        }
+    }
+
+    /// Companion to the field-access test above — exercises the
+    /// conditional-push-in-for-in-loop shape that surfaced the bug
+    /// in the clone-graph kata. Mirrors `cond_simple.kara`: a Map
+    /// declared + mutated adjacent to a VecDeque conditional push
+    /// inside a for-in-loop. Pre-fix prints `1` (seed-count only);
+    /// post-fix prints `6` (the outer loop exits via `count > 5`
+    /// after pushing both xs elements each iter).
+    #[test]
+    fn test_e2e_conditional_push_in_for_in_loop_with_map() {
+        let src = r#"
+shared struct Node { val: i64 }
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let mut q: VecDeque[Node] = VecDeque.new();
+    let n1 = Node { val: 1 };
+    let xs: Vec[Node] = Vec.new();
+    xs.push(Node { val: 10 });
+    xs.push(Node { val: 20 });
+    let _ = m.insert(99, n1);
+    q.push_back(n1);
+    let mut count: i64 = 0;
+    loop {
+        if let Some(_curr) = q.pop_front() {
+            count = count + 1;
+            if count > 5 { break; }
+            for x in xs.iter() {
+                if x.val > 0 {
+                    q.push_back(x);
+                }
+            }
+        } else {
+            break;
+        }
+    }
+    println(count);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "6\n",
+                "conditional push in for-in-loop must actually execute the for body — \
+                 pre-fix the `if x.val > 0` lowered to `br i1 false` because \
+                 `var_type_names[x]` (used by `field_index_for`) was unset"
+            );
+        }
+    }
+
+    /// `for x in obj.field.iter()` where `obj` is a known shared struct
+    /// and `field` is a `Vec[T]`. Pre-fix the `FieldAccess` receiver
+    /// fell through `compile_for`'s dispatch match to the `_ =>` arm
+    /// (no recognised iterable shape), so the for-body was silently
+    /// elided — outer mutations of `count` / `q` looked unchanged
+    /// and the outer-loop drained on iteration 2. Closes the
+    /// `for nb in curr.neighbors.iter()` surface used by the
+    /// clone-graph kata (kata-133).
+    #[test]
+    fn test_e2e_for_iter_shared_struct_field_vec() {
+        let src = r#"
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+fn main() {
+    let n1 = Node { val: 1, neighbors: Vec.new() };
+    let n2 = Node { val: 2, neighbors: Vec.new() };
+    let n3 = Node { val: 3, neighbors: Vec.new() };
+    n1.neighbors.push(n2);
+    n1.neighbors.push(n3);
+    let mut sum: i64 = 0;
+    for nb in n1.neighbors.iter() {
+        sum = sum + nb.val;
+    }
+    println(sum);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "5\n",
+                "for x in shared_struct.field.iter() must iterate the embedded Vec, \
+                 not skip the loop body"
+            );
+        }
+    }
 }

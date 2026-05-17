@@ -60,6 +60,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 {
                     return self.compile_for_indexed_iter(label, pattern, outer, idx, body);
                 }
+                // Field receiver (`obj.field.iter()`) where `obj` is a
+                // known struct (shared or plain) and `field` is a
+                // `Vec[T]` / `Slice[T]`: synthesize a temp identifier
+                // pointing at the field's embedded `{ptr,len,cap}`
+                // struct and recurse. Without this, the recursed
+                // `compile_for` sees a FieldAccess expression and falls
+                // through to the `_ =>` arm — the body never executes
+                // and outer-scope mutables look unchanged (the
+                // clone-graph kata's `for nb in curr.neighbors.iter()`
+                // surface, 2026-05-16).
+                if let ExprKind::FieldAccess {
+                    object: outer,
+                    field,
+                } = &object.kind
+                {
+                    if let Some(result) =
+                        self.try_compile_for_field_iter(label, pattern, outer, field, body)?
+                    {
+                        return Ok(result);
+                    }
+                }
                 return self.compile_for(label, pattern, object, body);
             }
             // `for c in s.chars()` — peel `.chars()` off and recurse on
@@ -176,11 +197,238 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // Bare field receiver: `for x in obj.field { }` (no
+            // `.iter()` peel-off). Same synth-identifier pattern as the
+            // `.iter()` arm above — recover the field pointer, mint a
+            // tracked alias, and recurse with the alias as a regular
+            // named-variable iterable.
+            ExprKind::FieldAccess {
+                object: outer,
+                field,
+            } => {
+                if let Some(result) =
+                    self.try_compile_for_field_iter(label, pattern, outer, field, body)?
+                {
+                    return Ok(result);
+                }
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             _ => {
                 // Unknown iterable — skip body, return unit
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
         }
+    }
+
+    /// `for x in obj.field [.iter() / .into_iter()] { body }` driver.
+    /// Recovers the field's pointer (heap-GEP for shared structs,
+    /// slot-GEP for plain structs), mints a synth identifier with the
+    /// field's TypeExpr-derived registries populated through
+    /// `register_var_from_type_expr`, and recurses into `compile_for`
+    /// with the synth as the iterable. Returns `Ok(None)` when the
+    /// shape isn't a known struct-field receiver — caller falls
+    /// through to its own diagnostic. Sibling to
+    /// `compile_for_indexed_iter` (Index-receiver path) and
+    /// `try_compile_field_receiver_method` (method-call FR path).
+    /// Closes the `for nb in curr.neighbors.iter()` surface used by
+    /// the clone-graph kata (kata-133), 2026-05-16.
+    pub(super) fn try_compile_for_field_iter(
+        &mut self,
+        label: Option<&str>,
+        pattern: &Pattern,
+        outer: &Expr,
+        field: &str,
+        body: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        use super::state::VarSlot;
+        // Chained field receivers (`a.b.c.iter()`) — defer to v1.x.
+        // Mirrors `try_compile_field_receiver_method`'s FR4 guard.
+        if matches!(outer.kind, ExprKind::FieldAccess { .. }) {
+            return Err(
+                "codegen: chained field receivers in `for x in a.b.c.iter()` \
+                 are deferred to v1.x; bind the inner field to a temporary first"
+                    .to_string(),
+            );
+        }
+        // Recover the receiver-pointer the field GEP hangs off. Two
+        // recognised inner shapes — Identifier (named variable) and
+        // Index (`outer[i].field`) — same as the method-call FR path.
+        let (type_name, receiver_ptr, is_shared_handle) = match &outer.kind {
+            ExprKind::Identifier(outer_name) => {
+                let type_name = match self.var_type_names.get(outer_name.as_str()).cloned() {
+                    Some(t) => t,
+                    None => return Ok(None),
+                };
+                let slot = match self.variables.get(outer_name.as_str()).copied() {
+                    Some(s) => s,
+                    None => return Ok(None),
+                };
+                let is_shared = self.shared_types.contains_key(&type_name);
+                let recv_ptr = if is_shared {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    self.builder
+                        .build_load(ptr_ty, slot.ptr, "fr.for.shared.handle")
+                        .unwrap()
+                        .into_pointer_value()
+                } else {
+                    slot.ptr
+                };
+                (type_name, recv_ptr, is_shared)
+            }
+            ExprKind::Index {
+                object: container,
+                index,
+            } => {
+                if matches!(container.kind, ExprKind::Index { .. }) {
+                    return Err("codegen: chained indexed field receivers \
+                         (`a[i][j].field.iter()`) are deferred to v1.x; \
+                         bind the intermediate element first"
+                        .to_string());
+                }
+                let outer_name = match &container.kind {
+                    ExprKind::Identifier(n) => n.clone(),
+                    _ => return Ok(None),
+                };
+                let elem_te = match self.var_elem_type_exprs.get(outer_name.as_str()).cloned() {
+                    Some(te) => te,
+                    None => return Ok(None),
+                };
+                let elem_type_name = match &elem_te.kind {
+                    TypeKind::Path(p) => match p.segments.first() {
+                        Some(s) => s.clone(),
+                        None => return Ok(None),
+                    },
+                    _ => return Ok(None),
+                };
+                let (elem_ptr, _elem_ll_ty) =
+                    if self.vec_elem_types.contains_key(outer_name.as_str()) {
+                        self.lower_indexed_elem_ptr_vec(&outer_name, index)?
+                    } else if self.slice_elem_types.contains_key(outer_name.as_str()) {
+                        self.lower_indexed_elem_ptr_slice(&outer_name, index)?
+                    } else {
+                        let slot = match self.variables.get(outer_name.as_str()).copied() {
+                            Some(s) => s,
+                            None => return Ok(None),
+                        };
+                        if let BasicTypeEnum::ArrayType(_) = slot.ty {
+                            self.lower_indexed_elem_ptr_array(slot, index)?
+                        } else {
+                            return Ok(None);
+                        }
+                    };
+                let is_shared = self.shared_types.contains_key(&elem_type_name);
+                let recv_ptr = if is_shared {
+                    let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    self.builder
+                        .build_load(ptr_ty, elem_ptr, "fr.for.idx.shared.handle")
+                        .unwrap()
+                        .into_pointer_value()
+                } else {
+                    elem_ptr
+                };
+                (elem_type_name, recv_ptr, is_shared)
+            }
+            _ => return Ok(None),
+        };
+        // Look up the field's index and TypeExpr.
+        let field_idx = match self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        {
+            Some(i) => i,
+            None => return Ok(None),
+        };
+        let field_te = match self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|tes| tes.get(field_idx).cloned())
+        {
+            Some(te) => te,
+            None => return Ok(None),
+        };
+        // GEP the field pointer. Shared: GEP at (idx + 1) past the
+        // refcount slot using the heap_type. Plain: GEP directly into
+        // the receiver-pointer at idx using the value struct_type.
+        let (field_ptr, field_ll_ty) = if is_shared_handle {
+            let info = match self.shared_types.get(&type_name).cloned() {
+                Some(i) if !i.is_enum => i,
+                _ => return Ok(None),
+            };
+            let fp = self
+                .builder
+                .build_struct_gep(
+                    info.heap_type,
+                    receiver_ptr,
+                    (field_idx + 1) as u32,
+                    &format!("for_sh_{}", field),
+                )
+                .unwrap();
+            let fty = match info
+                .heap_type
+                .get_field_type_at_index((field_idx + 1) as u32)
+            {
+                Some(ty) => ty,
+                None => return Ok(None),
+            };
+            (fp, fty)
+        } else if let Some(st) = self.struct_types.get(&type_name).copied() {
+            let fp = self
+                .builder
+                .build_struct_gep(
+                    st,
+                    receiver_ptr,
+                    field_idx as u32,
+                    &format!("for_pl_{}", field),
+                )
+                .unwrap();
+            let fty = match st.get_field_type_at_index(field_idx as u32) {
+                Some(ty) => ty,
+                None => return Ok(None),
+            };
+            (fp, fty)
+        } else {
+            return Ok(None);
+        };
+        // Mint a synth identifier aliasing the field storage and
+        // populate its registries. `register_var_from_type_expr`
+        // covers Vec/Slice/String/Map/Set element-type tables and
+        // also propagates `var_type_names` for bare user-struct
+        // types (the regression-fix in this same commit).
+        let synth = format!("__for_field_{}", self.indexed_elem_counter);
+        self.indexed_elem_counter += 1;
+        self.variables.insert(
+            synth.clone(),
+            VarSlot {
+                ptr: field_ptr,
+                ty: field_ll_ty,
+            },
+        );
+        self.register_var_from_type_expr(&synth, &field_te);
+
+        let synth_expr = Expr {
+            kind: ExprKind::Identifier(synth.clone()),
+            span: outer.span.clone(),
+        };
+        let result = self.compile_for(label, pattern, &synth_expr, body);
+
+        // Clean up synth registrations so they don't leak across
+        // sibling for-loops at the same nesting depth.
+        self.variables.remove(&synth);
+        self.vec_elem_types.remove(&synth);
+        self.slice_elem_types.remove(&synth);
+        self.var_elem_type_exprs.remove(&synth);
+        self.var_type_names.remove(&synth);
+        self.map_key_types.remove(&synth);
+        self.map_val_types.remove(&synth);
+        self.map_key_type_names.remove(&synth);
+        self.map_key_type_exprs.remove(&synth);
+        self.set_elem_types.remove(&synth);
+        self.set_elem_type_names.remove(&synth);
+        self.set_elem_type_exprs.remove(&synth);
+        self.string_vars.remove(&synth);
+
+        result.map(Some)
     }
 
     pub(super) fn compile_for_range(

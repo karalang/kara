@@ -553,6 +553,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.set_elem_type_exprs
                     .insert(var_name.to_string(), elem_te);
             }
+            return;
+        }
+        // Bare user-type names (struct / shared struct / enum) — register
+        // `var_type_names` so `field_index_for` / `shared_type_for_expr`
+        // can resolve `.field` accesses on the binding. Without this, a
+        // for-loop iterating `Vec[Node] / Vec[N]` binds `x` into the
+        // value/pointer slot but the type is invisible to downstream
+        // field-access codegen, which then silently returns `i64 0` for
+        // every `x.field` read (cond_simple bug, 2026-05-16). Mirrors
+        // `compile_stmt(StmtKind::Let)`'s `type_hint` registration path
+        // (stmts.rs ~line 730) so for-loop bindings see the same
+        // type-name visibility as a `let x: Foo = ...` binding.
+        if let TypeKind::Path(path) = &te.kind {
+            if let Some(seg) = path.segments.last().cloned() {
+                if self.struct_types.contains_key(seg.as_str())
+                    || self.shared_types.contains_key(seg.as_str())
+                    || self.enum_layouts.contains_key(seg.as_str())
+                {
+                    self.var_type_names.insert(var_name.to_string(), seg);
+                }
+            }
         }
     }
 
