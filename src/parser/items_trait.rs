@@ -179,7 +179,7 @@ impl super::Parser {
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
             if self.check(&Token::Type) {
                 let item = self.parse_assoc_type_decl()?;
-                items.push(TraitItem::AssocType(item));
+                items.push(TraitItem::AssocType(Box::new(item)));
             } else {
                 // `unsafe fn` in a trait body mirrors the module-scope
                 // dispatch in `parse_item`: consume an optional `unsafe`
@@ -295,6 +295,14 @@ impl super::Parser {
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "associated type", name_span);
+        // GAT-shaped declaration `type Name[P1, P2, ...]` — optional
+        // generic parameter list. Per design.md § Generic associated
+        // types, effect-polymorphic GATs (`type Mapped[U, with E]`) are
+        // out of v1 scope; the carrying method takes the `with E`
+        // parameter instead. Reject post-parse so the parameter list
+        // itself parses (preserving the rest of the trait body).
+        let generic_params = self.parse_optional_generic_params();
+        self.reject_gat_effect_params(generic_params.as_ref(), "declaration");
         let mut bounds = Vec::new();
         if self.eat(&Token::Colon) {
             loop {
@@ -305,12 +313,39 @@ impl super::Parser {
                 }
             }
         }
+        let where_clause = self.parse_optional_where_clause();
         self.expect(&Token::Semicolon)?;
         Some(AssocTypeDecl {
             span: self.span_from(&start),
             name,
+            generic_params,
             bounds,
+            where_clause,
         })
+    }
+
+    /// Reject effect-parameter clauses on a GAT's generic-parameter
+    /// list. The carrying *method* takes the `with E` parameter, not
+    /// the associated type itself — see design.md § GATs "Out of v1
+    /// scope" bullet. Emits one diagnostic per offending effect
+    /// parameter, anchored at the generic-params span (the parser
+    /// doesn't retain per-effect-param spans). Suggestion text steers
+    /// the author at the carrying-method form.
+    fn reject_gat_effect_params(&mut self, gp: Option<&GenericParams>, role: &str) {
+        let Some(gp) = gp else { return };
+        if gp.effect_params.is_empty() {
+            return;
+        }
+        let joined = gp.effect_params.join(", ");
+        self.errors.push(ParseError {
+            message: format!(
+                "error[E_GAT_EFFECT_PARAM]: effect parameter `with {joined}` is not \
+                 permitted on a generic associated type {role}; GATs are over types \
+                 only — move the `with {joined}` clause to the carrying method's \
+                 generic-parameter list instead",
+            ),
+            span: gp.span.clone(),
+        });
     }
 
     fn parse_trait_method(&mut self, is_unsafe: bool) -> Option<TraitMethod> {
@@ -402,7 +437,7 @@ impl super::Parser {
             let attrs = self.parse_attributes();
             if self.check(&Token::Type) {
                 let binding = self.parse_assoc_type_binding()?;
-                items.push(ImplItem::AssocType(binding));
+                items.push(ImplItem::AssocType(Box::new(binding)));
             } else {
                 let is_pub = self.eat(&Token::Pub);
                 let is_private = if !is_pub {
@@ -452,13 +487,21 @@ impl super::Parser {
         let start = self.current_span();
         self.expect(&Token::Type)?;
         let name = self.expect_identifier()?;
+        // GAT binding `type Name[P1, P2, ...] = TypeExpr` mirrors the
+        // declaration's parameter-list shape. Same effect-polymorphism
+        // rejection rule as the trait-side declaration.
+        let generic_params = self.parse_optional_generic_params();
+        self.reject_gat_effect_params(generic_params.as_ref(), "binding");
         self.expect(&Token::Equal)?;
         let ty = self.parse_type()?;
+        let where_clause = self.parse_optional_where_clause();
         self.expect(&Token::Semicolon)?;
         Some(AssocTypeBinding {
             span: self.span_from(&start),
             name,
+            generic_params,
             ty,
+            where_clause,
         })
     }
 }

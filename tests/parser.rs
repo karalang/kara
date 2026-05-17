@@ -4854,6 +4854,322 @@ fn test_impl_associated_type_binding() {
     }
 }
 
+// ── GAT slice 1 — generic-parameter list on associated types ──────
+//
+// Per design.md § Generic associated types (GATs), an associated type
+// may itself take type parameters (`type Mapped[U]`). Slice 1 lands
+// the parser surface: both the trait-side declaration grammar and the
+// impl-side binding grammar accept an optional `[P1, P2, ...]` after
+// the associated-type name, with optional trait bounds and an optional
+// `where` clause. Effect-polymorphic GATs (`type Mapped[U, with E]`)
+// are out of v1 scope and rejected with the focused diagnostic
+// `E_GAT_EFFECT_PARAM`, which steers the author at the carrying-method
+// form. Slices 2+ wire the AST through the resolver / typechecker.
+
+#[test]
+fn gat_slice1_trait_assoc_type_with_single_generic_param() {
+    let prog = parse_ok(
+        r#"
+        trait Functor {
+            type Mapped[U];
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    assert_eq!(assoc.name, "Mapped");
+    let gp = assoc
+        .generic_params
+        .as_ref()
+        .expect("expected generic params on GAT");
+    assert_eq!(gp.params.len(), 1);
+    assert_eq!(gp.params[0].name, "U");
+    assert!(gp.params[0].bounds.is_empty());
+    assert!(!gp.params[0].is_const);
+    assert!(gp.effect_params.is_empty());
+    assert!(assoc.bounds.is_empty());
+    assert!(assoc.where_clause.is_none());
+}
+
+#[test]
+fn gat_slice1_trait_assoc_type_with_multiple_generic_params() {
+    let prog = parse_ok(
+        r#"
+        trait BiFunctor {
+            type Mapped[L, R];
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    assert_eq!(assoc.name, "Mapped");
+    let gp = assoc
+        .generic_params
+        .as_ref()
+        .expect("expected generic params");
+    assert_eq!(gp.params.len(), 2);
+    assert_eq!(gp.params[0].name, "L");
+    assert_eq!(gp.params[1].name, "R");
+}
+
+#[test]
+fn gat_slice1_trait_assoc_type_with_bound_on_param() {
+    let prog = parse_ok(
+        r#"
+        trait Functor {
+            type Mapped[U: Clone];
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    let gp = assoc
+        .generic_params
+        .as_ref()
+        .expect("expected generic params");
+    assert_eq!(gp.params.len(), 1);
+    assert_eq!(gp.params[0].name, "U");
+    assert_eq!(gp.params[0].bounds.len(), 1);
+    assert_eq!(gp.params[0].bounds[0].path, vec!["Clone"]);
+}
+
+#[test]
+fn gat_slice1_trait_assoc_type_with_outer_bound() {
+    // Bound attached to the GAT declaration itself —
+    // `type Mapped[U]: Trait` — applies to every legal instantiation
+    // of `U` at every impl site (slice 7 enforcement).
+    let prog = parse_ok(
+        r#"
+        trait Functor {
+            type Mapped[U]: Display + Clone;
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    let gp = assoc
+        .generic_params
+        .as_ref()
+        .expect("expected generic params");
+    assert_eq!(gp.params.len(), 1);
+    assert_eq!(assoc.bounds.len(), 2);
+    assert_eq!(assoc.bounds[0].path, vec!["Display"]);
+    assert_eq!(assoc.bounds[1].path, vec!["Clone"]);
+}
+
+#[test]
+fn gat_slice1_trait_assoc_type_with_where_clause() {
+    let prog = parse_ok(
+        r#"
+        trait Functor {
+            type Mapped[U] where U: Clone;
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    let wc = assoc.where_clause.as_ref().expect("expected where clause");
+    assert_eq!(wc.constraints.len(), 1);
+    let (name, bounds) = where_type_bound(&wc.constraints[0]);
+    assert_eq!(name, "U");
+    assert_eq!(bounds.len(), 1);
+    assert_eq!(bounds[0].path, vec!["Clone"]);
+}
+
+#[test]
+fn gat_slice1_trait_non_generic_assoc_type_unchanged() {
+    // Negative pin: the non-generic shape `type Item;` still parses
+    // with `generic_params = None` so existing consumers of the
+    // legacy field set see no surprise.
+    let prog = parse_ok(
+        r#"
+        trait Iterator {
+            type Item;
+        }
+    "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let TraitItem::AssocType(assoc) = &t.items[0] else {
+        panic!("Expected AssocType");
+    };
+    assert_eq!(assoc.name, "Item");
+    assert!(assoc.generic_params.is_none());
+    assert!(assoc.where_clause.is_none());
+}
+
+#[test]
+fn gat_slice1_impl_assoc_type_binding_with_generic_param() {
+    // Mirrors the design.md example:
+    //   impl Functor for Vec[T] {
+    //       type Mapped[U] = Vec[U];
+    //       ...
+    //   }
+    let prog = parse_ok(
+        r#"
+        impl Functor for Vec[T] {
+            type Mapped[U] = Vec[U];
+        }
+    "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("Expected ImplBlock");
+    };
+    let ImplItem::AssocType(binding) = &imp.items[0] else {
+        panic!("Expected AssocType binding");
+    };
+    assert_eq!(binding.name, "Mapped");
+    let gp = binding
+        .generic_params
+        .as_ref()
+        .expect("expected generic params on GAT binding");
+    assert_eq!(gp.params.len(), 1);
+    assert_eq!(gp.params[0].name, "U");
+    // RHS is `Vec[U]`.
+    let TypeKind::Path(p) = &binding.ty.kind else {
+        panic!("Expected Path type");
+    };
+    assert_eq!(p.segments, vec!["Vec"]);
+}
+
+#[test]
+fn gat_slice1_impl_assoc_type_binding_with_where_clause() {
+    let prog = parse_ok(
+        r#"
+        impl Functor for Vec[T] {
+            type Mapped[U] = Vec[U] where U: Clone;
+        }
+    "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("Expected ImplBlock");
+    };
+    let ImplItem::AssocType(binding) = &imp.items[0] else {
+        panic!("Expected AssocType binding");
+    };
+    let wc = binding
+        .where_clause
+        .as_ref()
+        .expect("expected where clause on GAT binding");
+    assert_eq!(wc.constraints.len(), 1);
+    let (name, bounds) = where_type_bound(&wc.constraints[0]);
+    assert_eq!(name, "U");
+    assert_eq!(bounds.len(), 1);
+    assert_eq!(bounds[0].path, vec!["Clone"]);
+}
+
+#[test]
+fn gat_slice1_impl_non_generic_assoc_type_binding_unchanged() {
+    let prog = parse_ok(
+        r#"
+        impl Iterator for Counter {
+            type Item = i64;
+        }
+    "#,
+    );
+    let Item::ImplBlock(imp) = &prog.items[0] else {
+        panic!("Expected ImplBlock");
+    };
+    let ImplItem::AssocType(binding) = &imp.items[0] else {
+        panic!("Expected AssocType binding");
+    };
+    assert_eq!(binding.name, "Item");
+    assert!(binding.generic_params.is_none());
+    assert!(binding.where_clause.is_none());
+}
+
+#[test]
+fn gat_slice1_trait_assoc_type_rejects_effect_param() {
+    // Effect-polymorphic GATs (`type Mapped[U, with E]`) are out of v1
+    // scope per design.md § GATs "Out of v1 scope" bullet. The carrying
+    // method takes the `with E` parameter, not the associated type.
+    // Parser emits `E_GAT_EFFECT_PARAM` and recovers.
+    let (_prog, errors) = parse_with_errors(
+        r#"
+        trait Functor {
+            type Mapped[U, with E];
+        }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_EFFECT_PARAM")
+                && e.message.contains("with E")
+                && e.message.contains("declaration")),
+        "Expected E_GAT_EFFECT_PARAM diagnostic mentioning `with E` on \
+         the declaration; got: {errors:?}"
+    );
+    // The diagnostic must steer the author at the carrying-method form.
+    assert!(
+        errors.iter().any(|e| e.message.contains("carrying method")),
+        "Expected diagnostic to suggest the carrying-method form; got: {errors:?}"
+    );
+}
+
+#[test]
+fn gat_slice1_impl_assoc_type_binding_rejects_effect_param() {
+    // Symmetry pin: the binding-side rejection matches the
+    // declaration-side rejection.
+    let (_prog, errors) = parse_with_errors(
+        r#"
+        impl Functor for Vec[T] {
+            type Mapped[U, with E] = Vec[U];
+        }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_EFFECT_PARAM")
+                && e.message.contains("with E")
+                && e.message.contains("binding")),
+        "Expected E_GAT_EFFECT_PARAM diagnostic mentioning `with E` on \
+         the binding; got: {errors:?}"
+    );
+}
+
+#[test]
+fn gat_slice1_multiple_effect_params_all_named_in_diagnostic() {
+    // When the user writes `[U, with E, F]`, the diagnostic names the
+    // full effect list so the suggested rewrite is unambiguous.
+    let (_prog, errors) = parse_with_errors(
+        r#"
+        trait Functor {
+            type Mapped[U, with E, F];
+        }
+    "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_EFFECT_PARAM") && e.message.contains("with E, F")),
+        "Expected the diagnostic to name the full effect-param list; \
+         got: {errors:?}"
+    );
+}
+
 #[test]
 fn test_trait_method_with_generic_params() {
     let prog = parse_ok(

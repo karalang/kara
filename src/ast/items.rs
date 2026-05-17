@@ -250,7 +250,7 @@ pub struct TraitDef {
 #[derive(Debug, Clone)]
 pub enum TraitItem {
     Method(Box<TraitMethod>),
-    AssocType(AssocTypeDecl),
+    AssocType(Box<AssocTypeDecl>),
 }
 
 /// `trait NAME[GENERICS] = bound1 + bound2 + ... [where ...];`
@@ -298,7 +298,17 @@ pub struct MarkerTraitDef {
 pub struct AssocTypeDecl {
     pub span: Span,
     pub name: String,
+    /// Optional `[P1, P2, ...]` parameter list for generic associated
+    /// types (GATs). `type Mapped[U]` declares a GAT; `type Item`
+    /// without a bracket list is the non-generic form. Effect-
+    /// polymorphic GATs (`type Mapped[U, with E]`) are rejected at
+    /// parse with `E_GAT_EFFECT_PARAM`; the surface stays type-only.
+    pub generic_params: Option<GenericParams>,
     pub bounds: Vec<TraitBound>,
+    /// Optional `where ...` clause attached to the GAT declaration.
+    /// Constraints reference the GAT's own parameters and the
+    /// enclosing trait's parameters.
+    pub where_clause: Option<WhereClause>,
 }
 
 #[derive(Debug, Clone)]
@@ -340,14 +350,24 @@ pub struct ImplBlock {
 #[derive(Debug, Clone)]
 pub enum ImplItem {
     Method(Box<Function>),
-    AssocType(AssocTypeBinding),
+    AssocType(Box<AssocTypeBinding>),
 }
 
 #[derive(Debug, Clone)]
 pub struct AssocTypeBinding {
     pub span: Span,
     pub name: String,
+    /// Optional `[P1, P2, ...]` parameter list mirroring the
+    /// declaration shape. An impl binds the GAT with the same
+    /// parameter list it was declared with: `type Mapped[U] = Vec[U]`.
+    /// Effect-polymorphic forms (`type Mapped[U, with E] = ...`) are
+    /// rejected at parse with `E_GAT_EFFECT_PARAM` for symmetry with
+    /// the trait-side rejection.
+    pub generic_params: Option<GenericParams>,
     pub ty: TypeExpr,
+    /// Optional `where ...` clause attached to the GAT binding's
+    /// right-hand side, mirroring the declaration shape.
+    pub where_clause: Option<WhereClause>,
 }
 
 // ── Effect Declarations ──────────────────────────────────────────
