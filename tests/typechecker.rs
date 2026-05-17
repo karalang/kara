@@ -13690,11 +13690,7 @@ fn typecheck_with_stdlib_origin_on_structs(source: &str) -> Vec<TypeError> {
     assert!(
         resolved.errors.is_empty(),
         "Resolve errors: {:?}",
-        resolved
-            .errors
-            .iter()
-            .map(|e| e.to_string())
-            .collect::<Vec<_>>()
+        resolved.errors
     );
     typecheck(&parsed.program, &resolved).errors
 }
@@ -13887,4 +13883,159 @@ fn non_exhaustive_slice4_cross_package_error_code_is_e0241() {
     assert!(errs
         .iter()
         .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)));
+}
+
+// ── `impl Trait` slice 4: capture-set computation ───────────────
+
+fn typecheck_desugared_result(source: &str) -> TypeCheckResult {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    typecheck(&parsed.program, &resolved)
+}
+
+#[test]
+fn impl_trait_slice4_captures_type_param_appearing_in_return() {
+    // `fn make[T](xs: Vec[T]) -> impl Iter[T]` captures `T` because
+    // `T` textually appears in the existential's trait argument. The
+    // capture set's `type_params` carries `T`; no input ref params
+    // means `input_borrows` stays empty.
+    let result = typecheck_desugared_result(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         fn make[T](xs: Vec[T]) -> impl Iter[T] { todo() }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(
+        captures.len(),
+        1,
+        "expected exactly one impl-trait capture entry; got: {:?}",
+        captures
+    );
+    let c = captures[0];
+    assert_eq!(
+        c.type_params,
+        vec!["T".to_string()],
+        "expected `T` in captured type params; got: {:?}",
+        c.type_params
+    );
+    assert!(
+        c.input_borrows.is_empty(),
+        "no ref-input params, so captured input_borrows should be empty; got: {:?}",
+        c.input_borrows
+    );
+}
+
+#[test]
+fn impl_trait_slice4_does_not_capture_type_param_absent_from_return() {
+    // `fn count[T](xs: Vec[T]) -> impl Iter[i64]` does NOT capture
+    // `T` because `T` does not appear in the existential's trait
+    // args (the `Item` is `i64`, fixed). Critical for the elision
+    // rule's "nothing else is captured" property — surrounding
+    // generics that don't flow through the return are invisible to
+    // the existential's lifetime obligations.
+    let result = typecheck_desugared_result(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         fn count[T](xs: Vec[T]) -> impl Iter[i64] { todo() }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1);
+    let c = captures[0];
+    assert!(
+        c.type_params.is_empty(),
+        "expected no type-param captures (T does not appear in return); got: {:?}",
+        c.type_params
+    );
+    assert!(c.input_borrows.is_empty());
+}
+
+#[test]
+fn impl_trait_slice4_captures_input_borrow_when_ref_appears_in_return() {
+    // `fn first(v: ref Vec[i64]) -> impl Iter[ref i64]` captures
+    // `v`'s borrow region because a `ref` appears inside the
+    // existential's trait args. With a single ref input, the elision
+    // rule resolves the source unambiguously to `v`. Slice 4 records
+    // this so the ownership-checker integration can register an
+    // active borrow on `v` for the lifetime of the returned
+    // existential.
+    let result = typecheck_desugared_result(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         fn first(v: ref Vec[i64]) -> impl Iter[ref i64] { todo() }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1);
+    let c = captures[0];
+    assert_eq!(
+        c.input_borrows,
+        vec!["v".to_string()],
+        "expected `v` in captured input borrows; got: {:?}",
+        c.input_borrows
+    );
+}
+
+#[test]
+fn impl_trait_slice4_does_not_capture_unrelated_ref_input_when_no_ref_in_return() {
+    // `fn count_logged(xs: Vec[i64], log: ref Logger) -> impl Iter[i64]`
+    // does NOT capture `log` — its `ref` does not flow as a `ref` in
+    // the return-type expression (`impl Iter[i64]` has no `ref` in
+    // its trait args). The existential's lifetime is independent of
+    // `log`'s borrow region; callers can drop `log` while keeping
+    // the iterator alive.
+    let result = typecheck_desugared_result(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         struct Logger { n: i64 }\n\
+         fn count_logged(xs: Vec[i64], log: ref Logger) -> impl Iter[i64] {\n\
+             todo()\n\
+         }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1);
+    let c = captures[0];
+    assert!(
+        c.input_borrows.is_empty(),
+        "expected no captured input borrows (no ref in return); got: {:?}",
+        c.input_borrows
+    );
+}
+
+#[test]
+fn impl_trait_slice4_captures_all_ref_inputs_on_ambiguous_elision() {
+    // With multiple ref inputs and a `ref` in the return type, Kāra's
+    // existing single-ref elision rule over-approximates to "all ref
+    // inputs are captured" — matching the same conservative rule
+    // applied to `-> ref T` returns (see safety_design.rs §
+    // multi-source). Slice 4 mirrors that for existentials so a
+    // caller dropping ANY captured input while the existential is
+    // bound surfaces the existing drop-of-borrowed diagnostic.
+    let result = typecheck_desugared_result(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         fn pick(a: ref Vec[i64], b: ref Vec[i64]) -> impl Iter[ref i64] {\n\
+             todo()\n\
+         }",
+    );
+    let captures: Vec<_> = result.impl_trait_captures.values().collect();
+    assert_eq!(captures.len(), 1);
+    let c = captures[0];
+    let mut got = c.input_borrows.clone();
+    got.sort();
+    assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
 }

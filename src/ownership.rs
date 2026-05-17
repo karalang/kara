@@ -693,6 +693,17 @@ pub struct OwnershipChecker<'a> {
     /// implicit coercion creates a slice view that needs source
     /// attribution. Same key convention as `callee_param_modes`.
     pub(crate) callee_param_slice_kind: HashMap<String, Vec<Option<bool>>>,
+    /// `impl Trait` slice 4 — callee name → positional indices of
+    /// parameters whose borrow regions are captured by the callee's
+    /// return-position `impl Trait` existential. Derived from
+    /// `typecheck_result.impl_trait_captures` and the callee's param
+    /// list at OwnershipChecker construction time. The `expr_check.rs`
+    /// `Call` arm consults this map to register a `slice_borrow_sources`
+    /// entry on the call's span for each captured argument so the
+    /// existing let-binding-propagation + drain pipeline flags drops of
+    /// the captured source while the returned existential is still
+    /// bound. Same key convention as `callee_param_modes`.
+    pub(crate) callee_existential_capture_indices: HashMap<String, Vec<usize>>,
     /// Slice creation sites recorded by Slice 1. Surfaced via
     /// `OwnershipCheckResult::slice_borrow_sources`. Populated at
     /// `.as_slice()` / `.as_slice_mut()`, range-indexing, and call-arg
@@ -769,6 +780,10 @@ impl<'a> OwnershipChecker<'a> {
             method_self_modes: collect_method_self_modes(program),
             callee_param_modes: collect_callee_param_modes(program),
             callee_param_slice_kind: collect_callee_param_slice_kind(program),
+            callee_existential_capture_indices: collect_callee_existential_capture_indices(
+                program,
+                typecheck_result,
+            ),
             slice_borrow_sources: HashMap::new(),
             slice_binding_sources: HashMap::new(),
             active_borrows: HashMap::new(),
@@ -1466,6 +1481,138 @@ pub(crate) fn collect_callee_param_modes(program: &Program) -> HashMap<String, V
         }
     }
     map
+}
+
+/// `impl Trait` slice 4 — for each callee that returns a `-> impl Trait`,
+/// return the positional indices of input parameters whose borrow regions
+/// are captured by the returned existential. The callee key matches the
+/// convention used by `collect_callee_param_modes` (bare fn name for free
+/// functions; `"Type.method"` for static methods). Instance methods are
+/// dispatched as `MethodCall` and are not in scope here today; if RPITIT
+/// support extends to `MethodCall` borrow tracking it lands as a separate
+/// follow-up.
+///
+/// Per design.md § "Capture set — what the existential carries", the
+/// captured input names are looked up in `typecheck_result.impl_trait_captures`
+/// (keyed by the impl-trait AST node's `SpanKey`). Each captured name is
+/// resolved to a positional index by matching against the callee's `params`.
+/// Unmatched names (e.g., captured `"self"` on a static fn — shouldn't
+/// happen but is harmless) are silently dropped.
+pub(crate) fn collect_callee_existential_capture_indices(
+    program: &Program,
+    typecheck_result: &TypeCheckResult,
+) -> HashMap<String, Vec<usize>> {
+    let mut map: HashMap<String, Vec<usize>> = HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(f) => {
+                let indices = existential_capture_indices_for_function(f, typecheck_result);
+                if !indices.is_empty() {
+                    map.insert(f.name.clone(), indices);
+                }
+            }
+            Item::ImplBlock(impl_block) => {
+                let Some(target_name) = impl_target_name(&impl_block.target_type) else {
+                    continue;
+                };
+                for impl_item in &impl_block.items {
+                    if let ImplItem::Method(method) = impl_item {
+                        if method.self_param.is_none() {
+                            let indices =
+                                existential_capture_indices_for_function(method, typecheck_result);
+                            if !indices.is_empty() {
+                                map.insert(format!("{target_name}.{}", method.name), indices);
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
+fn existential_capture_indices_for_function(
+    f: &Function,
+    typecheck_result: &TypeCheckResult,
+) -> Vec<usize> {
+    let Some(ref ret_ty) = f.return_type else {
+        return Vec::new();
+    };
+    // Collect every `TypeKind::ImplTrait` span in the return type so
+    // their capture entries can be merged. v1 typically has at most
+    // one return-position existential, but a nested existential
+    // inside a tuple / generic-arg position would surface here too.
+    let mut spans: Vec<&Span> = Vec::new();
+    collect_impl_trait_spans(ret_ty, &mut spans);
+    let mut captured_names: Vec<String> = Vec::new();
+    for span in spans {
+        if let Some(c) = typecheck_result
+            .impl_trait_captures
+            .get(&SpanKey::from_span(span))
+        {
+            captured_names.extend(c.input_borrows.iter().cloned());
+        }
+    }
+    if captured_names.is_empty() {
+        return Vec::new();
+    }
+    let mut indices: Vec<usize> = Vec::new();
+    for (i, param) in f.params.iter().enumerate() {
+        if let Some(name) = param.name() {
+            if captured_names.iter().any(|n| n == name) {
+                indices.push(i);
+            }
+        }
+    }
+    indices
+}
+
+fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
+    match &ty.kind {
+        TypeKind::ImplTrait { span, args, .. } => {
+            out.push(span);
+            for arg in args {
+                if let GenericArg::Type(t) = arg {
+                    collect_impl_trait_spans(t, out);
+                }
+            }
+        }
+        TypeKind::Tuple(types) => {
+            for t in types {
+                collect_impl_trait_spans(t, out);
+            }
+        }
+        TypeKind::Array { element, .. } => collect_impl_trait_spans(element, out),
+        TypeKind::Pointer { inner, .. } => collect_impl_trait_spans(inner, out),
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Weak(inner) => {
+            collect_impl_trait_spans(inner, out)
+        }
+        TypeKind::MutSlice(element) => collect_impl_trait_spans(element, out),
+        TypeKind::FnType {
+            params,
+            return_type,
+            ..
+        } => {
+            for p in params {
+                collect_impl_trait_spans(p, out);
+            }
+            if let Some(ret) = return_type {
+                collect_impl_trait_spans(ret, out);
+            }
+        }
+        TypeKind::Path(p) => {
+            if let Some(ref args) = p.generic_args {
+                for arg in args {
+                    if let GenericArg::Type(t) = arg {
+                        collect_impl_trait_spans(t, out);
+                    }
+                }
+            }
+        }
+        TypeKind::Unit | TypeKind::Error => {}
+    }
 }
 
 /// Map each parameter's syntactic type to its declared ownership mode.

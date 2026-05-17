@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use karac::ownership::*;
 use karac::resolver::SpanKey;
-use karac::{ownershipcheck, parse, resolve, typecheck};
+use karac::{desugar_program, ownershipcheck, parse, resolve, typecheck};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -5646,5 +5646,110 @@ fn match_mut_ref_scrutinee_not_consumed_by_binding_arm() {
              use_val(val)
          }
          fn main() { }",
+    );
+}
+
+// ── `impl Trait` slice 4: borrow-checker integration ────────────
+
+fn ownership_desugared_ok(source: &str) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    let ownership = ownershipcheck(&parsed.program, &typed);
+    assert!(
+        ownership.errors.is_empty(),
+        "Ownership errors: {}",
+        ownership
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+}
+
+fn ownership_desugared_errors(source: &str) -> Vec<OwnershipError> {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    let ownership = ownershipcheck(&parsed.program, &typed);
+    ownership.errors
+}
+
+#[test]
+fn impl_trait_slice4_iterator_unrelated_log_drop_accepted() {
+    // Spec test 1: `fn iter(v: ref Vec[i64], log: ref Logger) -> impl
+    // Iter[i64]` does NOT capture `log`'s borrow region — `log`'s `ref`
+    // doesn't flow as a `ref` in the existential's trait args. The
+    // ownership-checker integration must NOT register a borrow on
+    // `log` for the returned existential, so dropping `log` (here by
+    // letting its inner block scope exit) while the iterator binding
+    // lives elsewhere does not surface any diagnostic.
+    ownership_desugared_ok(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         struct Logger { n: i64 }\n\
+         fn iter(v: ref Vec[i64], log: ref Logger) -> impl Iter[i64] { todo() }\n\
+         fn main() {\n\
+             let v = Vec.with_init([1, 2, 3]);\n\
+             { let log = Logger { n: 0 }; let _ = iter(v, log); }\n\
+         }",
+    );
+}
+
+#[test]
+fn impl_trait_slice4_iterator_outliving_its_vec_source_rejected() {
+    // Spec test 2: `fn iter(v: ref Vec[i64]) -> impl Iter[ref i64]`
+    // DOES capture `v`'s borrow region (the `ref` in `Item = ref i64`
+    // flows from the only ref input). The
+    // `record_existential_capture_borrows` hook pushes an `ImmSlice`
+    // active borrow against `v`'s root at the call site. When a second
+    // borrow that conflicts (here: a `mut Slice[T]` borrow on the same
+    // root) is created against `v` while the iterator borrow is still
+    // live, the existing slice-vs-slice conflict matrix in
+    // `push_active_borrow` fires a `SliceBorrowConflict`. The presence
+    // of the conflict is the proof that the existential's capture
+    // borrow was actively tracked against `v` for the duration of the
+    // call's containing scope.
+    let errors = ownership_desugared_errors(
+        "trait Iter[U] { fn next(mut ref self) -> U; }\n\
+         fn iter(v: ref Vec[i64]) -> impl Iter[ref i64] { todo() }\n\
+         fn main() {\n\
+             let mut v = Vec.with_init([1, 2, 3]);\n\
+             let _it = iter(v);\n\
+             let _s = v.as_slice_mut();\n\
+         }",
+    );
+    let found_conflict = errors
+        .iter()
+        .any(|e| matches!(e.kind, OwnershipErrorKind::SliceBorrowConflict { .. }));
+    assert!(
+        found_conflict,
+        "expected SliceBorrowConflict for the captured `v` borrow vs. a later mutating slice; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
     );
 }

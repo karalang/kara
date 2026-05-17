@@ -175,6 +175,50 @@ impl<'a> super::OwnershipChecker<'a> {
         }
     }
 
+    /// `impl Trait` slice 4 — at a `Call` site whose callee has captured
+    /// input borrows (per `callee_existential_capture_indices`), register
+    /// each captured argument as a slice-borrow source keyed by the
+    /// call's span. The let-binding propagation at `StmtKind::Let` then
+    /// copies the entry to `slice_binding_sources[name]` and records the
+    /// LHS binding's scope depth against the source root, so the
+    /// source-scope-exit drain fires `SliceBorrowConflict::DropOfBorrowed`
+    /// when the captured source's scope ends while the existential
+    /// binding is still alive at a broader scope.
+    ///
+    /// `BorrowKind::ImmSlice` is reused so the existing slice-shape drain
+    /// path applies; the existential is conceptually a "slice into the
+    /// captured input" for borrow-tracking purposes. A future slice may
+    /// introduce a dedicated `Existential` borrow kind if diagnostic
+    /// messaging needs to distinguish.
+    pub(crate) fn record_existential_capture_borrows(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        call_span: &Span,
+    ) {
+        let key = match &callee.kind {
+            ExprKind::Identifier(name) => name.clone(),
+            ExprKind::Path { segments, .. } => segments.join("."),
+            _ => return,
+        };
+        let Some(indices) = self.callee_existential_capture_indices.get(&key).cloned() else {
+            return;
+        };
+        let span_key = SpanKey::from_span(call_span);
+        for i in indices {
+            let Some(arg) = args.get(i) else { continue };
+            let Some(place) = self.place_expr_root(&arg.value) else {
+                continue;
+            };
+            if let std::collections::hash_map::Entry::Vacant(e) =
+                self.slice_borrow_sources.entry(span_key)
+            {
+                e.insert((place.clone(), false));
+            }
+            self.push_active_borrow(BorrowKind::ImmSlice, place, call_span.clone());
+        }
+    }
+
     /// If `expr` is a direct slice creation form (`.as_slice()` /
     /// `.as_slice_mut()` MethodCall, or `Index` with a `Range` index),
     /// return the source expression and the resulting slice's mutability.

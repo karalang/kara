@@ -333,6 +333,10 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                 }
                 self.restore_active_borrows_to_snapshot(&snapshot);
+                // `impl Trait` slice 4 — record the existential's capture
+                // borrows AFTER the snapshot restore so they persist past
+                // the call. See the analogous block in `check_expr_reading`.
+                self.record_existential_capture_borrows(callee, args, &expr.span);
             }
             ExprKind::Return(Some(inner)) => {
                 self.check_expr_consuming(inner, states, param_types, param_usage);
@@ -545,6 +549,16 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                 }
                 self.restore_active_borrows_to_snapshot(&snapshot);
+                // `impl Trait` slice 4 — for callees whose return-position
+                // existential captures one or more input borrows, register
+                // a slice-borrow-source entry keyed by the call's span so
+                // the existing `slice_binding_sources` propagation at let
+                // time and the source-scope-exit drain catch drops of the
+                // captured source while the returned existential is still
+                // bound. Pushed AFTER `restore_active_borrows_to_snapshot`
+                // so the borrow persists past the call's transient
+                // ref-formal pushes.
+                self.record_existential_capture_borrows(callee, args, &expr.span);
             }
             ExprKind::MethodCall {
                 object,

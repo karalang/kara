@@ -772,6 +772,17 @@ impl<'a> super::TypeChecker<'a> {
         let saved_fn_stdlib_origin = self.current_fn_stdlib_origin;
         self.current_fn_stdlib_origin = f.stdlib_origin;
 
+        // `impl Trait` slice 4 — compute the capture set for every
+        // return-position existential declared in this function's
+        // signature. Done after lowering so we know which `impl Trait`
+        // occurrences actually survived to the typed level; the AST
+        // walk inspects the source `TypeExpr` directly because the
+        // lowered `Type::Existential` carries only the trait surface,
+        // not the structural shape needed to apply the elision rule.
+        if let Some(ref ret_ty) = f.return_type {
+            self.record_impl_trait_captures(ret_ty, f, &gp);
+        }
+
         // Type-check body — thread the expected return type through so that
         // a `.into()` in tail position can resolve against it.
         if f.body.final_expr.is_some() {
@@ -1252,6 +1263,203 @@ impl<'a> super::TypeChecker<'a> {
             StmtKind::Expr(expr) => {
                 self.infer_expr(expr);
             }
+        }
+    }
+
+    /// `impl Trait` slice 4 — walk `return_ty` for every `TypeKind::ImplTrait`
+    /// occurrence and record its capture set into
+    /// `self.impl_trait_captures` keyed by the impl-trait node's
+    /// `SpanKey` (the same key used by `Type::Existential::origin`).
+    ///
+    /// Capture-set rule per design.md § "Capture set — what the
+    /// existential carries from the surrounding signature":
+    /// 1. **Type-parameter captures** — every generic-param name in `gp`
+    ///    that textually appears inside the existential's trait args
+    ///    (e.g., `impl Iterator[Item = T]` captures `T`).
+    /// 2. **Input-borrow captures** — when the existential's trait args
+    ///    contain a `Ref`/`MutRef` whose source elides to function inputs,
+    ///    every `ref`/`mut ref` input parameter is captured. Kāra's
+    ///    `-> ref T` elision over-approximates to "all ref inputs" in the
+    ///    multi-input case (see safety_design.rs § multi-source comment);
+    ///    slice 4 mirrors that conservatism for existentials so the
+    ///    borrow-checker integration reuses the existing "drop of
+    ///    borrowed source" diagnostic at every captured input. `ref self`
+    ///    / `mut ref self` count as a ref input under the name `self`.
+    fn record_impl_trait_captures(&mut self, return_ty: &TypeExpr, f: &Function, gp: &[String]) {
+        // Collect ref-input param names. A name-less destructuring
+        // pattern can't be cited at a call-site capture diagnostic, so
+        // we skip such params (they would not be reachable as a borrow
+        // source in any case — the destructuring binds fresh sub-names).
+        let mut ref_inputs: Vec<String> = Vec::new();
+        for param in &f.params {
+            if matches!(&param.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)) {
+                if let Some(name) = param.name() {
+                    ref_inputs.push(name.to_string());
+                }
+            }
+        }
+        if matches!(f.self_param, Some(SelfParam::Ref) | Some(SelfParam::MutRef)) {
+            ref_inputs.push("self".to_string());
+        }
+        let generic_param_names: std::collections::HashSet<String> = gp.iter().cloned().collect();
+
+        Self::walk_for_impl_trait(return_ty, &mut |impl_trait_span, args| {
+            let mut type_params: Vec<String> = Vec::new();
+            let mut found_ref_in_args = false;
+            for arg in args {
+                if let GenericArg::Type(t) = arg {
+                    Self::collect_capture_signals(
+                        t,
+                        &generic_param_names,
+                        &mut type_params,
+                        &mut found_ref_in_args,
+                    );
+                }
+            }
+            type_params.sort();
+            type_params.dedup();
+            let input_borrows = if found_ref_in_args {
+                ref_inputs.clone()
+            } else {
+                Vec::new()
+            };
+            self.impl_trait_captures.insert(
+                SpanKey::from_span(impl_trait_span),
+                crate::typechecker::ImplTraitCaptures {
+                    type_params,
+                    input_borrows,
+                },
+            );
+        });
+    }
+
+    /// Visit every `TypeKind::ImplTrait` node nested inside `ty`,
+    /// invoking the callback with the impl-trait's span + its trait
+    /// args. Argument-position `impl Trait` was already desugared away
+    /// by slice 2, so the only occurrences here are return-position /
+    /// RPITIT-return / TAIT-RHS / structurally-similar shapes.
+    fn walk_for_impl_trait<F: FnMut(&Span, &[GenericArg])>(ty: &TypeExpr, f: &mut F) {
+        match &ty.kind {
+            TypeKind::ImplTrait {
+                args,
+                span: it_span,
+                ..
+            } => {
+                f(it_span, args);
+                for arg in args {
+                    if let GenericArg::Type(t) = arg {
+                        Self::walk_for_impl_trait(t, f);
+                    }
+                }
+            }
+            TypeKind::Tuple(types) => {
+                for t in types {
+                    Self::walk_for_impl_trait(t, f);
+                }
+            }
+            TypeKind::Array { element, .. } => Self::walk_for_impl_trait(element, f),
+            TypeKind::Pointer { inner, .. } => Self::walk_for_impl_trait(inner, f),
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) | TypeKind::Weak(inner) => {
+                Self::walk_for_impl_trait(inner, f)
+            }
+            TypeKind::MutSlice(element) => Self::walk_for_impl_trait(element, f),
+            TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } => {
+                for p in params {
+                    Self::walk_for_impl_trait(p, f);
+                }
+                if let Some(ret) = return_type {
+                    Self::walk_for_impl_trait(ret, f);
+                }
+            }
+            TypeKind::Path(p) => {
+                if let Some(ref args) = p.generic_args {
+                    for arg in args {
+                        if let GenericArg::Type(t) = arg {
+                            Self::walk_for_impl_trait(t, f);
+                        }
+                    }
+                }
+            }
+            TypeKind::Unit | TypeKind::Error => {}
+        }
+    }
+
+    /// Walk a single trait-arg type-expression collecting (a) the
+    /// generic-param names that appear textually (added to
+    /// `type_params`) and (b) whether any `Ref`/`MutRef` occurs (sets
+    /// `found_ref`). The recursion descends through every kind that
+    /// can carry nested type expressions.
+    fn collect_capture_signals(
+        ty: &TypeExpr,
+        generic_param_names: &std::collections::HashSet<String>,
+        type_params: &mut Vec<String>,
+        found_ref: &mut bool,
+    ) {
+        match &ty.kind {
+            TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+                *found_ref = true;
+                Self::collect_capture_signals(inner, generic_param_names, type_params, found_ref);
+            }
+            TypeKind::MutSlice(inner) | TypeKind::Weak(inner) => {
+                Self::collect_capture_signals(inner, generic_param_names, type_params, found_ref);
+            }
+            TypeKind::Path(p) => {
+                if p.segments.len() == 1 && generic_param_names.contains(&p.segments[0]) {
+                    type_params.push(p.segments[0].clone());
+                }
+                if let Some(ref args) = p.generic_args {
+                    for arg in args {
+                        if let GenericArg::Type(t) = arg {
+                            Self::collect_capture_signals(
+                                t,
+                                generic_param_names,
+                                type_params,
+                                found_ref,
+                            );
+                        }
+                    }
+                }
+            }
+            TypeKind::Tuple(types) => {
+                for t in types {
+                    Self::collect_capture_signals(t, generic_param_names, type_params, found_ref);
+                }
+            }
+            TypeKind::Array { element, .. } => {
+                Self::collect_capture_signals(element, generic_param_names, type_params, found_ref);
+            }
+            TypeKind::Pointer { inner, .. } => {
+                Self::collect_capture_signals(inner, generic_param_names, type_params, found_ref);
+            }
+            TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } => {
+                for p in params {
+                    Self::collect_capture_signals(p, generic_param_names, type_params, found_ref);
+                }
+                if let Some(ret) = return_type {
+                    Self::collect_capture_signals(ret, generic_param_names, type_params, found_ref);
+                }
+            }
+            TypeKind::ImplTrait { args, .. } => {
+                for arg in args {
+                    if let GenericArg::Type(t) = arg {
+                        Self::collect_capture_signals(
+                            t,
+                            generic_param_names,
+                            type_params,
+                            found_ref,
+                        );
+                    }
+                }
+            }
+            TypeKind::Unit | TypeKind::Error => {}
         }
     }
 }

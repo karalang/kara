@@ -382,6 +382,30 @@ impl std::fmt::Display for TypeError {
 
 // ── Result ──────────────────────────────────────────────────────
 
+/// Capture set for a single return-position `impl Trait` declaration —
+/// slice 4 of the `impl Trait` epic. See [`TypeCheckResult::impl_trait_captures`]
+/// for how the map is keyed and consumed.
+///
+/// **Type-parameter captures.** A type parameter name appears here when
+/// it textually shows up in the return-type expression's trait args.
+/// `fn make_iter[T](xs: Vec[T]) -> impl Iterator[Item = T]` captures `T`;
+/// `fn count[T](xs: Vec[T]) -> impl Iterator[Item = i64]` does not.
+///
+/// **Input-borrow captures.** A `ref X` / `mut ref X` parameter name
+/// appears here when the return-type expression contains a `ref` whose
+/// elided source flows from that input. Today's elision is a simple
+/// shape match: any `Ref`/`MutRef` occurrence inside the existential's
+/// trait args triggers the capture of every `ref`-typed input parameter
+/// (the design.md "single-ref-input → elide to that input" rule with the
+/// conservative multi-input over-approximation). Bare-owned and shared
+/// parameters never appear in this list — only their borrow regions are
+/// at stake, and they don't have one.
+#[derive(Debug, Clone, Default)]
+pub struct ImplTraitCaptures {
+    pub type_params: Vec<String>,
+    pub input_borrows: Vec<String>,
+}
+
 pub struct TypeCheckResult {
     pub errors: Vec<TypeError>,
     /// Non-fatal diagnostics: typecheck-time signals that don't block
@@ -427,6 +451,18 @@ pub struct TypeCheckResult {
     /// `expr_types` for this purpose — a separate map avoids the
     /// return-type-overwrites-receiver-type race).
     pub method_callee_types: HashMap<SpanKey, String>,
+    /// `impl Trait` slice 4 — per-existential capture set, keyed by the
+    /// `SpanKey` of the `TypeKind::ImplTrait` AST node (same key shape
+    /// used by [`Type::Existential::origin`]). For each return-position
+    /// existential the entry records (a) the captured type-parameter
+    /// names that appear in the return-type expression and (b) the names
+    /// of `ref`/`mut ref` input parameters whose borrow flows into a
+    /// `ref` in the return-type expression per design.md's elision rule.
+    /// The ownership checker consumes this map to bound the existential's
+    /// lifetime at call sites — a drop of any captured input while the
+    /// returned existential is still bound fires the existing
+    /// drop-of-borrowed diagnostic.
+    pub impl_trait_captures: HashMap<SpanKey, ImplTraitCaptures>,
     /// MethodCall span → inner `TypeExpr` for `Option[T].unwrap`/`expect`
     /// and `Result[T, E].unwrap`/`expect` receivers. Populated by
     /// `infer_method_call` when the receiver type is `Option`/`Result` and
@@ -606,6 +642,10 @@ pub struct TypeChecker<'a> {
     /// MethodCall span → `Type.method` canonical callee key. See the
     /// matching field on `TypeCheckResult` for the full rationale.
     pub(super) method_callee_types: HashMap<SpanKey, String>,
+    /// Per-existential capture sets, keyed by the SpanKey of the
+    /// `TypeKind::ImplTrait` AST node. See the public copy on
+    /// `TypeCheckResult` for the full rationale.
+    pub(super) impl_trait_captures: HashMap<SpanKey, ImplTraitCaptures>,
     /// MethodCall span → inner `TypeExpr` for `Option`/`Result` unwrap
     /// dispatch. See the public copy on `TypeCheckResult` for the full
     /// rationale.
@@ -721,6 +761,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: HashMap::new(),
             display_snake_case_enums: HashSet::new(),
             method_callee_types: HashMap::new(),
+            impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
             call_type_subs: HashMap::new(),
@@ -780,6 +821,7 @@ impl<'a> TypeChecker<'a> {
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,
             method_callee_types: self.method_callee_types,
+            impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
             call_type_subs: self.call_type_subs,
