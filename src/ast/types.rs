@@ -140,6 +140,44 @@ pub enum TypeKind {
     /// mutable borrow of a slice value (and is not part of the language).
     MutSlice(Box<TypeExpr>),
     Weak(Box<TypeExpr>),
+    /// `impl Trait[GenericArgs] [with EffectList]` — existential / sugar
+    /// type marker (see design.md § `impl Trait` (Existential Types) and
+    /// the parent epic in phase-5-diagnostics.md line 391).
+    ///
+    /// Slice 1 lands the parser surface + AST node only. Downstream
+    /// semantic handling is split across later slices:
+    ///
+    /// - Slice 2 — resolver desugar of argument-position occurrences
+    ///   into anonymous generic parameters `[T_impl_N: Trait]`.
+    /// - Slice 3 — typechecker semantics for return-position + RPITIT.
+    /// - Slice 4 — capture-set checker.
+    ///
+    /// Until those slices land, downstream passes treat `ImplTrait`
+    /// analogously to a `Path` type referencing the named trait — the
+    /// resolver / typechecker will report the trait name as "type not
+    /// yet supported in this position" via their existing diagnostics
+    /// rather than panicking on the new variant.
+    ///
+    /// Fields:
+    /// - `trait_path` — the trait's path (e.g. `Iterator`,
+    ///   `std.iter.Iterator`). Mirrors the `PathExpr` shape used by
+    ///   regular path types so the resolver can route the lookup
+    ///   through the same surface.
+    /// - `args` — `[GenericArg, ...]` after the trait path
+    ///   (e.g. the `Item = i64` in `impl Iterator[Item = i64]`). Empty
+    ///   when the bound has no generic args.
+    /// - `use_effects` — `with EFFECT_LIST` suffix on the type
+    ///   expression. Distinct from the surrounding function's
+    ///   execution-effect `with` clause — see design.md §
+    ///   "Effect surface — split construction and use".
+    /// - `span` — full source span of the `impl Trait[…] with …`
+    ///   type expression.
+    ImplTrait {
+        trait_path: PathExpr,
+        args: Vec<GenericArg>,
+        use_effects: Option<EffectList>,
+        span: Span,
+    },
     Unit,
     Error,
 }

@@ -127,6 +127,40 @@ impl<'a> super::TypeChecker<'a> {
                 generic_scope,
                 false,
             ))),
+            // `impl Trait` slice 1 stub: parser accepts the surface
+            // form but the typechecker semantics for argument /
+            // return / RPITIT / TAIT positions ship in slices 2-4
+            // (see phase-5-diagnostics.md line 391). Until those
+            // slices land we lower `impl Trait` to `Type::Error` with
+            // a focused "not yet implemented" diagnostic so reaching
+            // this site through user code is loud rather than silent.
+            // The diagnostic names the slice that will land it so a
+            // user encountering the error knows it's a sequencing
+            // pause, not a permanent rejection. We still walk the
+            // generic-arg type-expressions so any nested errors
+            // (e.g., undefined types inside the args) are surfaced.
+            TypeKind::ImplTrait {
+                trait_path, args, ..
+            } => {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        let _ = self.lower_type_expr_inner(t, generic_scope, false);
+                    }
+                }
+                let trait_name = trait_path.segments.join(".");
+                self.type_error(
+                    format!(
+                        "error[E_IMPL_TRAIT_NOT_YET_IMPLEMENTED]: `impl {trait_name}` is \
+                         parsed but the typechecker semantics for `impl Trait` types \
+                         land in slices 2-4 of the impl Trait epic (see \
+                         phase-5-diagnostics.md line 391); use an explicit generic \
+                         parameter `[T: {trait_name}]` for now"
+                    ),
+                    ty.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                Type::Error
+            }
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,
         }

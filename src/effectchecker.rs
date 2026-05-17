@@ -1246,6 +1246,32 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
         | TypeKind::Weak(inner) => {
             collect_effect_var_names_in_type(inner, out);
         }
+        // `impl Trait` slice 1 stub: the type-expression carries an
+        // optional `use_effects` `with` clause (the existential's
+        // method-use ceiling per design.md § Effect surface) and its
+        // generic args may themselves contain nested `FnType`s. Walk
+        // both surfaces so any effect variables they declare flow into
+        // the enclosing function's analysis. Full effect-checker
+        // integration for `impl Trait` ships with Phase 8 (see the
+        // parent epic at phase-5-diagnostics.md line 391).
+        TypeKind::ImplTrait {
+            args, use_effects, ..
+        } => {
+            if let Some(list) = use_effects {
+                for item in &list.items {
+                    if let EffectItem::Variable(name) = item {
+                        if !out.contains(name) {
+                            out.push(name.clone());
+                        }
+                    }
+                }
+            }
+            for arg in args {
+                if let GenericArg::Type(t) = arg {
+                    collect_effect_var_names_in_type(t, out);
+                }
+            }
+        }
         TypeKind::Path(_) | TypeKind::Unit | TypeKind::Error => {}
     }
 }
@@ -1400,6 +1426,30 @@ fn format_type_expr_with_subs(
         TypeKind::Weak(inner) => {
             out.push_str("weak ");
             format_type_expr_with_subs(inner, type_subs, var_bindings, out);
+        }
+        // `impl Trait` slice 1 stub: render the surface form for
+        // diagnostics. Full effect-substitution semantics ship with
+        // Phase 8 (see phase-5-diagnostics.md line 391); for slice 1 we
+        // emit the trait path, generic args, and any `use_effects`
+        // `with` clause verbatim so the diagnostic surface stays
+        // legible.
+        TypeKind::ImplTrait {
+            trait_path,
+            args,
+            use_effects,
+            ..
+        } => {
+            out.push_str("impl ");
+            out.push_str(&trait_path.segments.join("."));
+            if !args.is_empty() {
+                format_generic_args(args, type_subs, var_bindings, out);
+            }
+            if let Some(list) = use_effects {
+                let resolved = resolve_effect_list_for_render(list, var_bindings);
+                out.push_str(" with [");
+                out.push_str(&resolved.join(", "));
+                out.push(']');
+            }
         }
         TypeKind::Unit => out.push_str("()"),
         TypeKind::Error => out.push_str("/* error */"),

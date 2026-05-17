@@ -9,6 +9,7 @@
 //! Lives in a sibling `impl super::Parser` block.
 
 use crate::ast::*;
+use crate::parser::ImplTraitBlockReason;
 use crate::token::Token;
 
 impl super::Parser {
@@ -142,6 +143,124 @@ impl super::Parser {
                     self.expect(&Token::RightParen)?;
                     Some(first)
                 }
+            }
+            // `impl Trait[GenericArgs] [with EFFECT_LIST]` — existential
+            // / argument-sugar type marker (see design.md § `impl Trait`
+            // (Existential Types) and phase-5-diagnostics.md line 391).
+            //
+            // Slice 1: parser surface + AST node only. The four legal
+            // positions (argument-type, return-type, trait-method-
+            // return, RHS of `type` aliases) all reach this arm through
+            // their normal `parse_type` path; the two illegal positions
+            // (`Vec[impl T]`-style nested generic-args, and trait-method
+            // argument-type position) are guarded by the
+            // `impl_trait_block_stack` — see `parse_generic_type_args`
+            // and `parse_param` for the matching push sites.
+            //
+            // Surface form is `impl <TraitPath>[<args>] [with E]`. The
+            // trait path is parsed via `parse_path_type` so multi-
+            // segment paths (`std.iter.Iterator`) and generic args
+            // (`Iterator[Item = i64]`) are handled uniformly with
+            // regular path types.
+            Token::Impl => {
+                let impl_kw_span = self.current_span();
+                self.advance(); // consume `impl`
+
+                // Position rejection. We still parse the body of the
+                // `impl Trait` expression after emitting the
+                // diagnostic — error recovery: producing a
+                // `TypeKind::Error` here would cascade into a noisy
+                // "expected type" downstream, while producing a real
+                // `ImplTrait` lets the rest of the signature parse
+                // cleanly and gives the user one focused diagnostic
+                // rather than a cluster. The diagnostic is anchored
+                // at the `impl` keyword's span.
+                if let Some(reason) = self.current_impl_trait_block() {
+                    let msg = match reason {
+                        ImplTraitBlockReason::NestedGenericArg => {
+                            "error[E_IMPL_TRAIT_IN_NESTED_POSITION]: `impl Trait` is not \
+                             permitted inside a nested generic-argument position at v1; \
+                             introduce an explicit generic parameter on the enclosing \
+                             function (e.g. `fn f[T: Trait](x: Vec[T])`) instead. \
+                             Deep-position `impl Trait` is post-v1 — see design.md \
+                             § `impl Trait` (Existential Types)."
+                                .to_string()
+                        }
+                        ImplTraitBlockReason::TraitMethodArg => {
+                            "error[E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG]: `impl Trait` is not \
+                             permitted in trait-method argument position; use the explicit \
+                             generic form `fn method[T: Trait](x: T)` on the trait method \
+                             declaration instead. The compiler restricts argument-position \
+                             `impl Trait` to free functions and impl-block methods — see \
+                             design.md § `impl Trait` (Existential Types)."
+                                .to_string()
+                        }
+                    };
+                    self.errors.push(crate::parser::ParseError {
+                        message: msg,
+                        span: impl_kw_span.clone(),
+                    });
+                }
+
+                // Trait path + generic args (parsed uniformly with
+                // regular path types).
+                let trait_path = self.parse_path_type()?;
+                let (segments, args_opt) = (trait_path.segments, trait_path.generic_args);
+                let args: Vec<GenericArg> = args_opt.unwrap_or_default();
+
+                // Rebuild a clean PathExpr (without the generic_args
+                // — those live in the ImplTrait variant's `args`
+                // field, not nested under the path).
+                let trait_path_clean = PathExpr {
+                    segments,
+                    generic_args: None,
+                    span: self.span_from(&impl_kw_span),
+                };
+
+                // Optional `with EFFECT_LIST` clause. Mirrors the
+                // `FnType` arm above — `parse_effect_list` itself
+                // consumes the `with` keyword, so we peek-only and
+                // dispatch on the token immediately following `with`.
+                let use_effects = if self.check(&Token::With) {
+                    let saved = self.pos;
+                    if let Some(token) = self.tokens.get(self.pos + 1) {
+                        if matches!(token.token, Token::Underscore) {
+                            // `impl Trait with _` — anonymous-
+                            // polymorphic use-effect ceiling. Same
+                            // shape as `Fn(...) with _`.
+                            self.advance(); // with
+                            self.advance(); // _
+                            Some(EffectList {
+                                items: vec![EffectItem::Polymorphic],
+                                span: self.span_from(&impl_kw_span),
+                            })
+                        } else {
+                            let effect_vars: Vec<String> = self.current_effect_vars().to_vec();
+                            match self.parse_effect_list(&effect_vars) {
+                                Some(effects) => Some(effects),
+                                None => {
+                                    self.pos = saved;
+                                    return None;
+                                }
+                            }
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                let span = self.span_from(&start);
+                Some(TypeExpr {
+                    kind: TypeKind::ImplTrait {
+                        trait_path: trait_path_clean,
+                        args,
+                        use_effects,
+                        span: span.clone(),
+                    },
+                    span,
+                })
             }
             // Fn(T) -> U with _ — and the once-callable variant `OnceFn(...)`
             // (round 12.46, Step 4). Both share the same AST shape; the

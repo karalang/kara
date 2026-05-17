@@ -245,6 +245,38 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_type_expr_visibility(rt, generic_scope, type_vis, context, owner);
                 }
             }
+            // `impl Trait` slice 1 stub: walk the trait-path's last
+            // segment + generic-arg types under the same
+            // private-type-leak rule as `TypeKind::Path`. Full
+            // typechecker semantics for `impl Trait` land in slice 3
+            // (see phase-5-diagnostics.md line 397); the visibility
+            // check is independent of those semantics — a private
+            // trait name in an `impl T` public-signature is just as
+            // much a leak as in a `T` public-signature.
+            TypeKind::ImplTrait {
+                trait_path, args, ..
+            } => {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        self.check_type_expr_visibility(t, generic_scope, type_vis, context, owner);
+                    }
+                }
+                if let Some(last) = trait_path.segments.last() {
+                    if !(trait_path.segments.len() == 1 && generic_scope.iter().any(|g| g == last))
+                    {
+                        if let Some(false) = type_vis.get(last).copied() {
+                            self.type_error(
+                                format!(
+                                    "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
+                                    last, context, owner
+                                ),
+                                ty.span.clone(),
+                                TypeErrorKind::PrivateTypeInPublicSignature,
+                            );
+                        }
+                    }
+                }
+            }
             TypeKind::Unit | TypeKind::Error => {}
         }
     }

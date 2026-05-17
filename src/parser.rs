@@ -102,6 +102,42 @@ pub struct Parser {
     /// effect variables in scope (parser treats all `with X` items as
     /// group references).
     pub(crate) effect_var_stack: Vec<Vec<String>>,
+    /// Stack of `impl Trait` rejection reasons for the current
+    /// type-expression position. `impl Trait` slice 1: parsing a
+    /// `TypeKind::ImplTrait` is only legal in four positions
+    /// (argument types, return types, trait-method return types, RHS
+    /// of `type` aliases — see design.md § `impl Trait` (Existential
+    /// Types)). Every other type-position pushes a `BlockReason` onto
+    /// the stack via [`Parser::push_impl_trait_block`] before
+    /// descending into [`Parser::parse_type`]; the top-of-stack
+    /// reason is consulted in `parse_type` when an `impl` keyword is
+    /// observed and produces the corresponding rejection diagnostic
+    /// (one of `E_IMPL_TRAIT_IN_NESTED_POSITION`,
+    /// `E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG`). Empty stack means the
+    /// current position is legal for `impl Trait`.
+    pub(crate) impl_trait_block_stack: Vec<ImplTraitBlockReason>,
+}
+
+/// Reason an `impl Trait` type expression is rejected at the current
+/// parser position. Encoded as an enum (rather than a single
+/// `disallow_impl_trait: bool` flag) so the rejection diagnostic can
+/// route to the position-specific error code + suggestion text.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ImplTraitBlockReason {
+    /// `impl Trait` inside a nested generic-argument list — e.g.
+    /// `Vec[impl T]`. Rejected with `E_IMPL_TRAIT_IN_NESTED_POSITION`
+    /// per the design.md spec: "`Vec[impl T]` is rejected at v1 with
+    /// a diagnostic suggesting an explicit generic parameter — `impl
+    /// Trait` deep in nested type positions is post-v1".
+    NestedGenericArg,
+    /// `impl Trait` in an argument-type position of a trait method
+    /// declaration. Rejected with `E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG`
+    /// per design.md: "The compiler does not allow argument-position
+    /// `impl Trait` in trait methods (use the explicit generic form
+    /// there instead)." Argument-position `impl Trait` in free
+    /// functions and impl-block methods stays legal (slice 2 desugars
+    /// those to anonymous generic parameters).
+    TraitMethodArg,
 }
 
 impl Parser {
@@ -114,7 +150,25 @@ impl Parser {
             pending_doc: None,
             fn_context_stack: Vec::new(),
             effect_var_stack: Vec::new(),
+            impl_trait_block_stack: Vec::new(),
         }
+    }
+
+    /// Push an `impl Trait` rejection reason — see
+    /// [`ImplTraitBlockReason`]. Caller is responsible for the
+    /// matching [`Parser::pop_impl_trait_block`] after the
+    /// `parse_type` (or `parse_generic_type_args`) call returns.
+    pub(crate) fn push_impl_trait_block(&mut self, reason: ImplTraitBlockReason) {
+        self.impl_trait_block_stack.push(reason);
+    }
+
+    pub(crate) fn pop_impl_trait_block(&mut self) {
+        self.impl_trait_block_stack.pop();
+    }
+
+    /// Returns the current top-of-stack rejection reason, if any.
+    pub(crate) fn current_impl_trait_block(&self) -> Option<ImplTraitBlockReason> {
+        self.impl_trait_block_stack.last().copied()
     }
 
     fn current_effect_vars(&self) -> &[String] {
@@ -598,6 +652,36 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
         TypeKind::Weak(inner) => {
             out.push_str("weak ");
             write_type_for_diagnostic(inner, out);
+        }
+        // `impl Trait` slice 1 stub: render the surface form for the
+        // anonymous-parameter `_: <type>` fix-it suggestion. The full
+        // existential-effect rendering is unimportant for the
+        // diagnostic surface — we use the bare `impl TraitPath[args]`
+        // form (no `with` clause), since the `with` half is rarely
+        // load-bearing in a parameter-type-paste typo.
+        TypeKind::ImplTrait {
+            trait_path, args, ..
+        } => {
+            out.push_str("impl ");
+            for (i, seg) in trait_path.segments.iter().enumerate() {
+                if i > 0 {
+                    out.push('.');
+                }
+                out.push_str(seg);
+            }
+            if !args.is_empty() {
+                out.push('[');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    match arg {
+                        crate::ast::GenericArg::Type(t) => write_type_for_diagnostic(t, out),
+                        crate::ast::GenericArg::Const(_) => out.push('_'),
+                    }
+                }
+                out.push(']');
+            }
         }
         TypeKind::Unit => out.push_str("()"),
         TypeKind::Error => out.push('_'),

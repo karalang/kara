@@ -8024,3 +8024,354 @@ fn gat_slice9_c_effect_param_on_gat_decl_still_rejected() {
          got: {errors:?}"
     );
 }
+
+// ── `impl Trait` slice 1 — parser surface + AST node ────────────────
+//
+// Tests the parent `impl Trait` epic items (2)+(3) at
+// phase-5-diagnostics.md line 391, slice 1 deliverables: parser
+// surface for `impl TRAIT_PATH [GENERIC_ARGS] [with EFFECT_LIST]` in
+// the four legal positions (argument-type, return-type, trait-method
+// return-type, RHS of `type` aliases) and the two parser-level
+// rejection diagnostics (nested generic-arg positions and
+// trait-method-argument positions). Semantic handling lands in
+// slices 2-4; this slice only verifies the surface and AST shape.
+//
+// Note: design.md spells out `impl Iterator[Item = i64]` as the
+// canonical example, but `[Item = i64]` (assoc-type-binding sugar in
+// generic-args position) is not yet a supported parser surface at v1.
+// These tests use `Iterator` (bare path) and `Iterator[i64]`
+// (positional generic arg) instead — the slice-1 surface they
+// exercise is exactly the same `TypeKind::ImplTrait` arm.
+
+/// Helper: extract a `TypeKind::ImplTrait` from the function's
+/// first-parameter type, asserting the kind matches. Returns the
+/// trait-path segments, generic-arg count, and whether
+/// `use_effects` is present, so each test asserts only the surface
+/// shape relevant to the position under test.
+fn impl_trait_from_first_param(f: &Function) -> (Vec<String>, usize, bool) {
+    let ty = &f.params[0].ty;
+    let TypeKind::ImplTrait {
+        trait_path,
+        args,
+        use_effects,
+        ..
+    } = &ty.kind
+    else {
+        panic!(
+            "Expected first-param type to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    (
+        trait_path.segments.clone(),
+        args.len(),
+        use_effects.is_some(),
+    )
+}
+
+/// Helper: extract a `TypeKind::ImplTrait` from the function's
+/// return type. Same shape return as `impl_trait_from_first_param`.
+fn impl_trait_from_return(f: &Function) -> (Vec<String>, usize, bool) {
+    let ty = f
+        .return_type
+        .as_ref()
+        .expect("expected a return type on the function");
+    let TypeKind::ImplTrait {
+        trait_path,
+        args,
+        use_effects,
+        ..
+    } = &ty.kind
+    else {
+        panic!(
+            "Expected return type to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    (
+        trait_path.segments.clone(),
+        args.len(),
+        use_effects.is_some(),
+    )
+}
+
+#[test]
+fn impl_trait_slice1_argument_position_parses() {
+    // `fn f(x: impl Iterator)` — argument-position `impl Trait` in a
+    // free function. Per design.md § `impl Trait`, this is sugar for
+    // `fn f[T: Iterator](x: T)`; the desugar lands in slice 2 (see
+    // phase-5-diagnostics.md line 395). Slice 1 only verifies the
+    // parser produces a `TypeKind::ImplTrait` AST node at the
+    // expected position.
+    let prog = parse_ok("fn f(x: impl Iterator) {}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let (segments, arg_count, has_effects) = impl_trait_from_first_param(f);
+    assert_eq!(segments, vec!["Iterator"]);
+    assert_eq!(arg_count, 0);
+    assert!(!has_effects);
+}
+
+#[test]
+fn impl_trait_slice1_return_position_parses() {
+    // `fn f() -> impl Iterator` — return-position existential. The
+    // typechecker work to verify the body's concrete return type
+    // implements `Iterator` lands in slice 3 (see
+    // phase-5-diagnostics.md line 397); the parser surface stays
+    // the same.
+    let prog = parse_ok("fn f() -> impl Iterator { iter_empty() }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let (segments, arg_count, has_effects) = impl_trait_from_return(f);
+    assert_eq!(segments, vec!["Iterator"]);
+    assert_eq!(arg_count, 0);
+    assert!(!has_effects);
+}
+
+#[test]
+fn impl_trait_slice1_trait_method_return_position_parses() {
+    // `trait T { fn iter(self) -> impl Iterator; }` — RPITIT
+    // (return-position `impl Trait` in trait method). Each impl
+    // chooses its own concrete return type at slice 3; the parser
+    // surface accepts the trait-method declaration without complaint.
+    let prog = parse_ok(
+        r#"
+        trait Source {
+            fn iter(self) -> impl Iterator;
+        }
+        "#,
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(methods.len(), 1);
+    let m = methods[0];
+    let ty = m
+        .return_type
+        .as_ref()
+        .expect("expected trait method return type");
+    let TypeKind::ImplTrait {
+        trait_path, args, ..
+    } = &ty.kind
+    else {
+        panic!(
+            "Expected trait method return type to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    assert_eq!(trait_path.segments, vec!["Iterator"]);
+    assert!(args.is_empty());
+}
+
+#[test]
+fn impl_trait_slice1_type_alias_rhs_parses() {
+    // `type Iter = impl Iterator;` — TAIT (Type Alias `impl Trait`).
+    // The declaration parses at v1; the witness-inference pipeline
+    // is P1 (see phase-5-diagnostics.md line 407 — companion
+    // `[→ P1]` entry). Slice 1's job is to make the type-alias RHS
+    // accept the surface and record the `ImplTrait` kind on the AST.
+    let prog = parse_ok("type Iter = impl Iterator;");
+    let Item::TypeAlias(alias) = &prog.items[0] else {
+        panic!("Expected TypeAlias");
+    };
+    assert_eq!(alias.name, "Iter");
+    let TypeKind::ImplTrait {
+        trait_path, args, ..
+    } = &alias.ty.kind
+    else {
+        panic!(
+            "Expected type-alias RHS to be TypeKind::ImplTrait; got {:?}",
+            alias.ty.kind
+        );
+    };
+    assert_eq!(trait_path.segments, vec!["Iterator"]);
+    assert!(args.is_empty());
+}
+
+#[test]
+fn impl_trait_slice1_with_effect_clause_parses() {
+    // `fn f() -> impl Iterator with reads(World)` — the
+    // existential's method-use effect ceiling per design.md
+    // § "Effect surface — split construction and use". The `with`
+    // clause binds to the `impl Trait` type expression (not to the
+    // surrounding function's execution-effect clause). The parser
+    // records the effect list on the `ImplTrait`'s `use_effects`
+    // field; effect-checker integration is Phase 8 (parent epic
+    // item (9) at phase-5-diagnostics.md line 391).
+    let prog = parse_ok("fn f() -> impl Iterator with reads(World) { iter_empty() }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let ty = f.return_type.as_ref().expect("expected return type");
+    let TypeKind::ImplTrait {
+        trait_path,
+        args,
+        use_effects,
+        ..
+    } = &ty.kind
+    else {
+        panic!(
+            "Expected return type to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    assert_eq!(trait_path.segments, vec!["Iterator"]);
+    assert!(args.is_empty());
+    let list = use_effects
+        .as_ref()
+        .expect("expected use_effects on impl-trait return type");
+    assert_eq!(list.items.len(), 1);
+    let EffectItem::Verb(verb) = &list.items[0] else {
+        panic!(
+            "Expected reads(World) as a Verb effect-item; got {:?}",
+            list.items[0]
+        );
+    };
+    assert_eq!(verb.kind, EffectVerbKind::Reads);
+    assert_eq!(verb.resources.len(), 1);
+    assert_eq!(verb.resources[0].path, vec!["World"]);
+}
+
+#[test]
+fn impl_trait_slice1_with_generic_args_parses() {
+    // `fn f() -> impl Iterator[i64]` — single positional generic arg
+    // on the trait path. The `Iterator[Item = i64]` shape spelled
+    // out in design.md uses an assoc-type-binding sugar that is not
+    // yet a parser surface at v1 (see the section comment above);
+    // the positional arg here exercises the same `args` field on
+    // `TypeKind::ImplTrait` so the slice-1 AST shape is pinned.
+    let prog = parse_ok("fn f() -> impl Iterator[i64] { iter_empty() }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let (segments, arg_count, has_effects) = impl_trait_from_return(f);
+    assert_eq!(segments, vec!["Iterator"]);
+    assert_eq!(arg_count, 1);
+    assert!(!has_effects);
+}
+
+#[test]
+fn impl_trait_slice1_nested_position_rejected() {
+    // `fn f(x: Vec[impl T]) {}` — `impl Trait` in a nested
+    // generic-argument position. design.md § `impl Trait` rejects
+    // this at v1; slice 1 emits `E_IMPL_TRAIT_IN_NESTED_POSITION`
+    // and steers the user to an explicit generic parameter. Deep-
+    // position `impl Trait` is post-v1 — no parser-grammar change
+    // is needed when it lands, only a lift on this rejection.
+    let (_prog, errors) = parse_with_errors("fn f(x: Vec[impl T]) {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_IMPL_TRAIT_IN_NESTED_POSITION")),
+        "Expected E_IMPL_TRAIT_IN_NESTED_POSITION diagnostic; got: {errors:?}"
+    );
+    // Steering surface — the user needs to know the prescribed
+    // shape (explicit generic parameter).
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("explicit generic parameter")),
+        "Expected diagnostic to suggest an explicit generic parameter; got: {errors:?}"
+    );
+}
+
+#[test]
+fn impl_trait_slice1_trait_method_argument_position_rejected() {
+    // `trait T { fn f(x: impl U); }` — argument-position `impl Trait`
+    // inside a trait method declaration. design.md § `impl Trait`
+    // restricts argument-position `impl Trait` to free functions
+    // and impl-block methods; trait method declarations require the
+    // explicit generic form. Slice 1 emits
+    // `E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG` at the parser level; the
+    // resolver-side desugar in slice 2 also enforces this rule, so
+    // the parser rejection is the early-exit.
+    let (_prog, errors) = parse_with_errors(
+        r#"
+        trait Sink {
+            fn write(self, x: impl Display);
+        }
+        "#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG")),
+        "Expected E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG diagnostic; got: {errors:?}"
+    );
+    // Steering surface — the user needs to know v1's prescribed
+    // shape (the explicit `[T: Trait]` form).
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("explicit generic")),
+        "Expected diagnostic to suggest the explicit generic form; got: {errors:?}"
+    );
+}
+
+#[test]
+fn impl_trait_slice1_regular_fn_argument_position_accepted() {
+    // Positive pin: argument-position `impl Trait` in a free
+    // function declaration is accepted at parse-time (slice 2 will
+    // desugar it to an anonymous generic parameter). Only the
+    // trait-method-declaration argument position is rejected.
+    let prog = parse_ok("fn process(value: impl Display) {}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let (segments, _, _) = impl_trait_from_first_param(f);
+    assert_eq!(segments, vec!["Display"]);
+}
+
+#[test]
+fn impl_trait_slice1_impl_method_argument_position_accepted() {
+    // Positive pin: argument-position `impl Trait` inside an
+    // impl-block method (not a trait declaration!) is accepted at
+    // parse time. The desugar applies the same way slice 2 will
+    // handle free-function argument positions.
+    let prog = parse_ok(
+        r#"
+        struct Logger {}
+        impl Logger {
+            fn log(self, value: impl Display) {}
+        }
+        "#,
+    );
+    let Item::ImplBlock(b) = &prog.items[1] else {
+        panic!("Expected ImplBlock");
+    };
+    let methods = impl_methods(b);
+    assert_eq!(methods.len(), 1);
+    let m = methods[0];
+    let ty = &m.params[0].ty;
+    let TypeKind::ImplTrait { trait_path, .. } = &ty.kind else {
+        panic!(
+            "Expected impl-method first-param to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    assert_eq!(trait_path.segments, vec!["Display"]);
+}
+
+#[test]
+fn impl_trait_slice1_multi_segment_trait_path_parses() {
+    // Multi-segment trait path — `std.iter.Iterator`. The
+    // `trait_path` field on `TypeKind::ImplTrait` is a `PathExpr`,
+    // so the resolver routes the lookup through the same machinery
+    // as a regular path type (see the slice-1 stub arm in
+    // `resolve_type_expr` for the resolver-side wiring).
+    let prog = parse_ok("fn f() -> impl std.iter.Iterator { iter_empty() }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    let ty = f.return_type.as_ref().expect("expected return type");
+    let TypeKind::ImplTrait { trait_path, .. } = &ty.kind else {
+        panic!(
+            "Expected return type to be TypeKind::ImplTrait; got {:?}",
+            ty.kind
+        );
+    };
+    assert_eq!(trait_path.segments, vec!["std", "iter", "Iterator"]);
+}

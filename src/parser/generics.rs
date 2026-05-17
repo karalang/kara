@@ -395,7 +395,18 @@ impl super::Parser {
                 let expr = self.parse_expression()?;
                 args.push(GenericArg::Const(expr));
             } else {
-                args.push(GenericArg::Type(self.parse_type()?));
+                // `impl Trait` slice 1: nested generic-arg positions
+                // (e.g., `Vec[impl T]`) are rejected at v1 per
+                // design.md § `impl Trait` — push a
+                // `NestedGenericArg` block reason for the duration
+                // of this argument's `parse_type` call so a top-of-
+                // generic-args `impl Trait` produces
+                // `E_IMPL_TRAIT_IN_NESTED_POSITION` (see the
+                // matching arm in `parse_type`).
+                self.push_impl_trait_block(crate::parser::ImplTraitBlockReason::NestedGenericArg);
+                let ty = self.parse_type();
+                self.pop_impl_trait_block();
+                args.push(GenericArg::Type(ty?));
             }
             if !self.eat(&Token::Comma) {
                 break;

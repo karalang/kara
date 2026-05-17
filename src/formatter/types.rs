@@ -130,6 +130,25 @@ impl super::Formatter {
                 self.write_str("weak ");
                 self.format_type_expr(inner);
             }
+            // `impl Trait` slice 1 stub: render the surface form so
+            // `cargo fmt`-style round-trip of `fn f() -> impl T with E`
+            // reproduces the original surface. Full formatter support
+            // for the existential-effect split lands alongside the
+            // slice 3 typechecker work (see phase-5-diagnostics.md
+            // line 391).
+            TypeKind::ImplTrait {
+                trait_path,
+                args,
+                use_effects,
+                ..
+            } => {
+                self.write_str("impl ");
+                self.write_path(&trait_path.segments);
+                if !args.is_empty() {
+                    self.format_generic_args_opt(&Some(args.clone()));
+                }
+                self.format_effects(use_effects);
+            }
             TypeKind::Unit => self.write_str("()"),
             TypeKind::Error => self.write_str("/* error */"),
         }

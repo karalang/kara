@@ -71,6 +71,30 @@ impl<'a> super::Resolver<'a> {
             TypeKind::MutSlice(element) => {
                 self.resolve_type_expr(element);
             }
+            // `impl Trait` slice 1 stub: resolve the trait path and any
+            // generic args / nested `use_effects` clauses analogously to
+            // a `Path` type plus an effect-list. The argument-position
+            // desugar into an anonymous generic parameter ships in
+            // slice 2 (see phase-5-diagnostics.md line 395); until then
+            // the resolver records the trait path so downstream
+            // typechecker diagnostics can name the trait.
+            TypeKind::ImplTrait {
+                trait_path,
+                args,
+                use_effects,
+                ..
+            } => {
+                self.resolve_path_expr(trait_path);
+                for arg in args {
+                    match arg {
+                        GenericArg::Type(ty) => self.resolve_type_expr(ty),
+                        GenericArg::Const(expr) => self.resolve_expr(expr),
+                    }
+                }
+                if let Some(list) = use_effects {
+                    self.resolve_effect_list(list);
+                }
+            }
             TypeKind::Unit | TypeKind::Error => {}
         }
     }

@@ -398,7 +398,17 @@ impl super::Parser {
 
         self.expect(&Token::LeftParen)?;
         self.fn_context_stack.push(FnContext::TraitMethod);
+        // `impl Trait` slice 1: argument-position `impl Trait` is
+        // rejected in trait method declarations (use the explicit
+        // `[T: Trait]` form there instead — design.md § `impl Trait`).
+        // Push the block reason for the parameter-list parse so a
+        // `fn m(x: impl T)` inside `trait { ... }` produces
+        // `E_IMPL_TRAIT_IN_TRAIT_METHOD_ARG`. Return-type position is
+        // parsed *after* the matching pop below, so RPITIT
+        // (`fn m() -> impl T`) keeps working.
+        self.push_impl_trait_block(crate::parser::ImplTraitBlockReason::TraitMethodArg);
         let (self_param, params) = self.parse_fn_params()?;
+        self.pop_impl_trait_block();
         self.fn_context_stack.pop();
         self.expect(&Token::RightParen)?;
 
