@@ -266,6 +266,15 @@ pub(super) struct Codegen<'ctx> {
     /// Some(elem_ty) if that param is Slice[T] / mut Slice[T], else None).
     /// Used at call sites to emit Array → Slice and Vec → Slice coercions.
     pub(crate) fn_param_slice_elem: HashMap<String, Vec<Option<BasicTypeEnum<'ctx>>>>,
+    /// Function return-type name (function name → user-type name of the
+    /// declared return type, if it is a bare `Path` to a known struct /
+    /// enum). Used by `compile_field_access` to recover the static type
+    /// of a call-chain field-access object (`helper().val`) when the
+    /// callee returns a shared struct — without this, the field path
+    /// falls through to the generic `StructValue` extract and silently
+    /// loads `i64 0`. See bug #8 (call-chain field access on
+    /// shared-struct return).
+    pub(crate) fn_return_type_names: HashMap<String, String>,
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
@@ -1166,6 +1175,7 @@ impl<'ctx> Codegen<'ctx> {
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),
             fn_param_ref: HashMap::new(),
+            fn_return_type_names: HashMap::new(),
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
             pattern_binding_is_borrow: false,

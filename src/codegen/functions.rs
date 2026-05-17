@@ -91,6 +91,19 @@ impl<'ctx> super::Codegen<'ctx> {
         self.fn_param_slice_elem
             .insert(func.name.clone(), slice_elems);
 
+        // Record the return-type name (bare `Path` segment) so call-chain
+        // field access on a call result can recover its static type — see
+        // `compile_field_access` and bug #8 (shared-struct return field
+        // access on an unbound call result).
+        if let Some(ret_ty) = &func.return_type {
+            if let TypeKind::Path(path) = &ret_ty.kind {
+                if let Some(seg) = path.segments.first() {
+                    self.fn_return_type_names
+                        .insert(func.name.clone(), seg.clone());
+                }
+            }
+        }
+
         let fn_val = self.module.add_function(&func.name, fn_type, None);
         self.apply_linker_attrs(fn_val, &func.attributes);
         Ok(fn_val)

@@ -1855,6 +1855,109 @@ fn helper() -> Node {
         );
     }
 
+    // ── Bug #8: call-chain field access on shared-struct return ───
+    //
+    // Sibling of bug #7's move-out aliasing class.  The bug #7 fix made
+    // a tail-return `n` on a shared-struct local emit `rc_inc` so the
+    // returned pointer arrives at the caller with RC ≥ 1.  When the
+    // caller binds the result to a local (`let r = helper(); r.val`),
+    // the `let` registration through `track_rc_var` schedules a
+    // scope-exit `rc_dec` and the field-access path lowers through the
+    // existing `shared_type_for_expr` Identifier arm.  But when the
+    // result is *not* bound — `println(helper().val)` — neither piece
+    // applied: the field access fell through to the generic
+    // `StructValue` extract (the call returns a `PointerValue`, not a
+    // struct value), which silently returns `i64 0` because the
+    // unknown-shape path uses that as its inert default.  The fix adds
+    // a call-shaped `shared_type_for_call_like` recognizer and lowers
+    // the access via GEP + load + `rc_dec` on the temp so the heap
+    // object the callee handed us is released after the field is read.
+    // Symmetric to the cleanup pattern a `let` would attach.
+
+    #[test]
+    fn test_e2e_bug8_call_chain_field_shared_return() {
+        // The minimal repro: `println(helper().val)` where `helper()`
+        // returns a shared struct.  Before the fix this printed 0
+        // (the field-access fall-through default); after the fix it
+        // prints the original 42.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64 }
+fn helper() -> Node {
+    let n = Node { val: 42 };
+    n
+}
+fn main() {
+    println(helper().val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_bug8_call_chain_field_assoc_call() {
+        // Sibling shape: associated-function call (`Node.make()`)
+        // returning a shared struct, then bare `.val` access. The
+        // `Path { segments: [Type, fn] }` callee shape flows through
+        // the same `fn_return_type_names` registration as the free-fn
+        // path, so the call-like recognizer picks it up identically.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64 }
+impl Node {
+    fn make() -> Node {
+        let n = Node { val: 7 };
+        n
+    }
+}
+fn main() {
+    println(Node.make().val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
+    #[test]
+    fn test_ir_bug8_call_chain_field_emits_load_and_dec() {
+        // IR-level gate. The call-chain field-access path must emit a
+        // typed load of the field (not the `i64 0` fall-through) and
+        // an `rc_dec` against the call-result temp so the RC the
+        // callee handed us is released. Before the fix neither was
+        // emitted; after the fix both are present in `@main`.
+        let ir = ir_for(
+            r#"
+shared struct Node { val: i64 }
+fn helper() -> Node {
+    let n = Node { val: 42 };
+    n
+}
+fn main() {
+    println(helper().val);
+}
+"#,
+        );
+        // The fixed lowering names the field load through the
+        // `sh_call_<field>` label and emits an `rc_dec` against the
+        // call-result pointer (`%call`).
+        assert!(
+            ir.contains("sh_call_val"),
+            "main should GEP into the call result's field"
+        );
+        // The `printf` call should be parameterized on the loaded
+        // field, not on a constant `i64 0`.
+        let main_body = ir.split("define i32 @main()").nth(1).expect("main fn body");
+        assert!(
+            main_body.contains("printf") && main_body.contains("i64 %val"),
+            "main's printf should receive the loaded field value"
+        );
+    }
+
     // ── Unit enum variant matching ──────────────────────────────
 
     #[test]

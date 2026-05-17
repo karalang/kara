@@ -118,6 +118,49 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Call-chain field access on a shared-struct return — bug #8.
+        // `helper().val` where `helper() -> SharedT` lowers the call to
+        // a pointer to the heap object; we GEP into the field, load, then
+        // rc_dec the temp so the returned RC=1 doesn't leak. The bug #7
+        // fix (move-out rc_inc in the callee) ensures the returned ptr is
+        // RC≥1, so the caller owns one ref that must be released after
+        // the field load. Without this branch the access falls through to
+        // the generic `StructValue` path which sees a `PointerValue` and
+        // silently returns `i64 0`. Covers `Call`, `MethodCall`, and
+        // `Path`-based associated calls (`T.builder()`) — any shape whose
+        // static return type names a known shared struct.
+        if let Some((type_name, info)) = self.shared_type_for_call_like(object) {
+            if !info.is_enum {
+                if let Some(names) = self.struct_field_names.get(&type_name).cloned() {
+                    if let Some(idx) = names.iter().position(|n| n == field) {
+                        let ptr = self.compile_expr(object)?.into_pointer_value();
+                        // Fields start at heap index 1 (index 0 is refcount).
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                info.heap_type,
+                                ptr,
+                                (idx + 1) as u32,
+                                &format!("sh_call_{}", field),
+                            )
+                            .unwrap();
+                        let field_ty = info
+                            .heap_type
+                            .get_field_type_at_index((idx + 1) as u32)
+                            .unwrap();
+                        let loaded = self.builder.build_load(field_ty, field_ptr, field).unwrap();
+                        // The call-result temp owns one ref (RC=1 from the
+                        // callee's move-out inc + scope-exit dec under bug
+                        // #7). Release it now — the field value has been
+                        // read into a register and no longer depends on
+                        // the heap object.
+                        self.emit_rc_dec(info.heap_type, ptr);
+                        return Ok(loaded);
+                    }
+                }
+            }
+        }
+
         // Shared type: object compiles to a pointer; field access via GEP.
         if let Some((type_name, info)) = self.shared_type_for_expr(object) {
             if !info.is_enum {

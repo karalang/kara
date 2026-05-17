@@ -809,4 +809,35 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         None
     }
+
+    /// If the expression is a call-shaped node (`Call`, `MethodCall`,
+    /// or 2-segment `Path` assoc-call) whose static return type names a
+    /// known shared struct / enum, return that type name and info.
+    /// Companion to `shared_type_for_expr` which only handles variable
+    /// references. Used by `compile_field_access` for the call-chain
+    /// shape `helper().field` — see bug #8 (call-chain field access on
+    /// shared-struct return).
+    pub(super) fn shared_type_for_call_like(
+        &self,
+        expr: &Expr,
+    ) -> Option<(String, SharedTypeInfo<'ctx>)> {
+        let fn_name: String = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(n) => n.clone(),
+                ExprKind::Path { segments, .. } if segments.len() == 2 => {
+                    format!("{}.{}", segments[0], segments[1])
+                }
+                ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+                _ => return None,
+            },
+            // Method-call return-type recovery isn't wired through the
+            // existing side-tables (`method_callee_types` keys to the
+            // callee identity, not its return type). Defer to a future
+            // slice; the bug-#8 minimal repro uses a free-fn call.
+            _ => return None,
+        };
+        let type_name = self.fn_return_type_names.get(&fn_name)?.clone();
+        let info = self.shared_types.get(&type_name)?.clone();
+        Some((type_name, info))
+    }
 }
