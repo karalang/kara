@@ -957,3 +957,188 @@ mod once_fn_container_slot_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod gat_slice4_assoc_projection_args_tests {
+    //! GAT slice 4 — `Type::AssocProjection` now carries `args: Vec<Type>`
+    //! so a generic-associated-type projection like `F.Mapped[i64]` retains
+    //! its instantiation through substitution, free-var search, signature
+    //! fresh-var minting, and `type_display`. Slice 4 is plumbing only —
+    //! the actual lookup of the GAT's binding RHS + parameter substitution
+    //! is slice 5's job. These tests pin the plumbing.
+    use super::super::inference::{
+        find_unbound_type_param, instantiate_signature_with_fresh_vars, substitute_type_params,
+    };
+    use super::super::*;
+    use std::collections::HashMap;
+
+    fn proj(param: &str, assoc: &str, args: Vec<Type>) -> Type {
+        Type::AssocProjection {
+            param: param.to_string(),
+            assoc: assoc.to_string(),
+            args,
+        }
+    }
+
+    #[test]
+    fn type_display_renders_non_generic_projection_unchanged() {
+        // The non-GAT shape `F.Item` (empty args) must keep its pre-slice-4
+        // surface — pins that the brackets only appear when there's something
+        // to put inside.
+        let p = proj("F", "Item", vec![]);
+        assert_eq!(type_display(&p), "F.Item");
+    }
+
+    #[test]
+    fn type_display_renders_generic_projection_with_bracket_args() {
+        // The GAT shape `F.Mapped[i64]` renders with the args inside `[...]`
+        // matching the surface syntax. Multi-arg form uses comma + space
+        // separator (consistent with `Named` / `Tuple` formatting).
+        let single = proj("F", "Mapped", vec![Type::Int(IntSize::I64)]);
+        assert_eq!(type_display(&single), "F.Mapped[i64]");
+
+        let multi = proj("F", "Pair", vec![Type::Int(IntSize::I64), Type::Bool]);
+        assert_eq!(type_display(&multi), "F.Pair[i64, bool]");
+    }
+
+    #[test]
+    fn type_display_renders_nested_projection_args() {
+        // `F.Mapped[G.Inner]` — args carry another projection; pin that
+        // `type_display` recurses through the args slot.
+        let inner = proj("G", "Inner", vec![]);
+        let outer = proj("F", "Mapped", vec![inner]);
+        assert_eq!(type_display(&outer), "F.Mapped[G.Inner]");
+    }
+
+    #[test]
+    fn substitute_type_params_walks_projection_args() {
+        // `F.Mapped[T]` with `T → i64` in the subst map becomes
+        // `F.Mapped[i64]`. `F` itself stays as the textual param name
+        // because no subst entry exists for it.
+        let mut subs: HashMap<String, SubstValue> = HashMap::new();
+        subs.insert("T".to_string(), SubstValue::Type(Type::Int(IntSize::I64)));
+
+        let before = proj("F", "Mapped", vec![Type::TypeParam("T".to_string())]);
+        let after = substitute_type_params(&before, &subs);
+        assert_eq!(
+            after,
+            proj("F", "Mapped", vec![Type::Int(IntSize::I64)]),
+            "T inside projection args must be substituted; got {}",
+            type_display(&after)
+        );
+    }
+
+    #[test]
+    fn substitute_type_params_substitutes_param_and_walks_args_together() {
+        // Compound case: `F.Mapped[T]` with both `F → Vec` and `T → i64`
+        // → `Vec.Mapped[i64]`. The param-name swap routes through
+        // `type_display(concrete)` (the existing pre-slice-4 path); the
+        // args walk is the new slice 4 behaviour. Both must apply in the
+        // same call so a fully-solved projection reaches resolution with
+        // no unresolved pieces.
+        let mut subs: HashMap<String, SubstValue> = HashMap::new();
+        subs.insert(
+            "F".to_string(),
+            SubstValue::Type(Type::Named {
+                name: "Vec".to_string(),
+                args: vec![],
+            }),
+        );
+        subs.insert("T".to_string(), SubstValue::Type(Type::Int(IntSize::I64)));
+
+        let before = proj("F", "Mapped", vec![Type::TypeParam("T".to_string())]);
+        let after = substitute_type_params(&before, &subs);
+        assert_eq!(
+            after,
+            proj("Vec", "Mapped", vec![Type::Int(IntSize::I64)]),
+            "expected fully-solved Vec.Mapped[i64]; got {}",
+            type_display(&after)
+        );
+    }
+
+    #[test]
+    fn find_unbound_type_param_walks_into_projection_args() {
+        // `F.Mapped[Q]` where `F` is in scope and `Q` is not — must
+        // report `Q` as the unbound param. Pre-slice-4 this returned
+        // `None` because the args weren't walked.
+        let in_scope = ["F".to_string()];
+        let in_scope_refs: std::collections::HashSet<&str> =
+            in_scope.iter().map(String::as_str).collect();
+        let ty = proj("F", "Mapped", vec![Type::TypeParam("Q".to_string())]);
+        assert_eq!(find_unbound_type_param(&ty, &in_scope_refs), Some("Q"));
+    }
+
+    #[test]
+    fn find_unbound_type_param_still_reports_outer_param_first() {
+        // Outer param being unbound takes priority over walking args —
+        // the early-return at the projection arm preserves the
+        // pre-slice-4 semantics for the non-generic shape.
+        let in_scope: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        let ty = proj("F", "Mapped", vec![Type::TypeParam("Q".to_string())]);
+        assert_eq!(find_unbound_type_param(&ty, &in_scope), Some("F"));
+    }
+
+    #[test]
+    fn find_unbound_type_param_returns_none_when_outer_and_args_all_in_scope() {
+        // Sanity: everything in scope → None. Confirms the args walk
+        // doesn't accidentally always report an unbound param.
+        let in_scope = ["F".to_string(), "T".to_string()];
+        let in_scope_refs: std::collections::HashSet<&str> =
+            in_scope.iter().map(String::as_str).collect();
+        let ty = proj("F", "Mapped", vec![Type::TypeParam("T".to_string())]);
+        assert_eq!(find_unbound_type_param(&ty, &in_scope_refs), None);
+    }
+
+    #[test]
+    fn instantiate_signature_with_fresh_vars_walks_into_projection_args() {
+        // A signature `fn foo[T]() -> F.Mapped[T]` must mint a fresh
+        // `TypeVarId` for `T` even though `T` only appears inside the
+        // projection's args slot. Pre-slice-4 the `collect` helper
+        // skipped projections entirely (the `_ => {}` arm), so the
+        // resulting `name_to_id` map didn't include `T`.
+        let return_ty = proj("F", "Mapped", vec![Type::TypeParam("T".to_string())]);
+        let mut next_type_var: u32 = 0;
+        let mut next_const_var: u32 = 0;
+        let sig = instantiate_signature_with_fresh_vars(
+            &[],
+            &return_ty,
+            &mut next_type_var,
+            &mut next_const_var,
+        );
+        assert!(
+            sig.name_to_id.contains_key("T"),
+            "expected T in name_to_id; got keys: {:?}",
+            sig.name_to_id.keys().collect::<Vec<_>>()
+        );
+        // Sanity: the return-type after fresh-var minting carries the
+        // TypeVar inside the projection's args (substitute_type_params
+        // already does this — the test is structural, but it pins that
+        // the two-step pipeline composes cleanly).
+        match sig.return_type {
+            Type::AssocProjection { args, .. } => {
+                assert_eq!(args.len(), 1);
+                assert!(
+                    matches!(args[0], Type::TypeVar(_)),
+                    "expected TypeVar inside projection args after instantiation; got {}",
+                    type_display(&args[0])
+                );
+            }
+            other => panic!(
+                "expected AssocProjection return type after instantiation; got {}",
+                type_display(&other)
+            ),
+        }
+    }
+
+    #[test]
+    fn types_compatible_remains_permissive_for_projection_with_args() {
+        // Slice 5 will wire actual GAT-projection unification; today
+        // the projection arm is wildcard-permissive in either position
+        // (matches the pre-slice-4 behaviour). Pin that the args field
+        // doesn't break the permissive arm.
+        let lhs = proj("F", "Mapped", vec![Type::Int(IntSize::I64)]);
+        let rhs = Type::Int(IntSize::I64);
+        assert!(types_compatible(&lhs, &rhs));
+        assert!(types_compatible(&rhs, &lhs));
+    }
+}

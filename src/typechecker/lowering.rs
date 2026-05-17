@@ -232,10 +232,20 @@ impl<'a> super::TypeChecker<'a> {
             // Two-segment path where the first segment is a type parameter:
             // `I.Item` — an associated type projection. Exactly two segments
             // required; deeper paths (`A.B.C`) are module paths, not projections.
+            // Generic-associated-type form `F.Mapped[i64]` (GAT slice 4): the
+            // path's `generic_args` attach to the GAT name (the parser writes
+            // them on the path as a whole; for a 2-segment path that's the
+            // assoc-type segment by convention). Lower them as the
+            // projection's `args` so the type system retains the
+            // instantiation through substitution and resolution.
             if path.segments.len() == 2 && generic_scope.contains(&path.segments[0]) {
+                let assoc = path.segments[1].clone();
+                let args =
+                    self.lower_generic_args_named(&path.generic_args, generic_scope, Some(&assoc));
                 return Type::AssocProjection {
                     param: path.segments[0].clone(),
-                    assoc: path.segments[1].clone(),
+                    assoc,
+                    args,
                 };
             }
             // Multi-segment module path — use last segment as type name
@@ -458,15 +468,25 @@ impl<'a> super::TypeChecker<'a> {
         map
     }
 
-    /// Walk `ty` and resolve any `AssocProjection { param, assoc }` nodes
+    /// Walk `ty` and resolve any `AssocProjection { param, assoc, args }` nodes
     /// whose `param` (after substitution it holds the concrete type name as a
     /// string) has an entry in `impl_assoc_types`. This is called after
     /// `substitute_type_params` so that `T.Item` first gets its `T` replaced
     /// by the concrete type name (stored in `param`), then gets resolved to
-    /// the actual associated type.
+    /// the actual associated type. The projection's own `args` (the `i64` in
+    /// `F.Mapped[i64]`) are walked recursively so any nested projections /
+    /// type params inside the GAT instantiation get resolved too; the actual
+    /// substitution from `args` into the GAT binding's RHS is slice 5's job
+    /// (today's `impl_assoc_types` keys are non-generic-aware, so a generic
+    /// projection still falls through to the no-resolution branch and
+    /// preserves its `args` for the consumer).
     pub(super) fn resolve_assoc_projections(&self, ty: &Type) -> Type {
         match ty {
-            Type::AssocProjection { param, assoc } => {
+            Type::AssocProjection { param, assoc, args } => {
+                let resolved_args: Vec<Type> = args
+                    .iter()
+                    .map(|a| self.resolve_assoc_projections(a))
+                    .collect();
                 if let Some(resolved) = self
                     .env
                     .impl_assoc_types
@@ -474,7 +494,11 @@ impl<'a> super::TypeChecker<'a> {
                 {
                     resolved.clone()
                 } else {
-                    ty.clone()
+                    Type::AssocProjection {
+                        param: param.clone(),
+                        assoc: assoc.clone(),
+                        args: resolved_args,
+                    }
                 }
             }
             Type::Tuple(elems) => Type::Tuple(

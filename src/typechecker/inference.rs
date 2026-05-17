@@ -94,15 +94,27 @@ pub(super) fn substitute_type_params(ty: &Type, subs: &HashMap<String, SubstValu
         },
         // If the param is solved but we can't resolve the assoc type yet
         // (requires impl table lookup), keep as AssocProjection so the
-        // caller can post-resolve via `resolve_assoc_projections`.
-        Type::AssocProjection { param, assoc } => {
+        // caller can post-resolve via `resolve_assoc_projections`. The
+        // projection's own `args` (the `i64` in `F.Mapped[i64]` — GAT
+        // slice 4) are walked too so a `F.Mapped[T]` with `T` solved
+        // becomes `F.Mapped[<concrete>]` before resolution.
+        Type::AssocProjection { param, assoc, args } => {
+            let new_args: Vec<Type> = args
+                .iter()
+                .map(|a| substitute_type_params(a, subs))
+                .collect();
             if let Some(concrete) = subs.get(param).and_then(SubstValue::as_type) {
                 Type::AssocProjection {
                     param: type_display(concrete),
                     assoc: assoc.clone(),
+                    args: new_args,
                 }
             } else {
-                ty.clone()
+                Type::AssocProjection {
+                    param: param.clone(),
+                    assoc: assoc.clone(),
+                    args: new_args,
+                }
             }
         }
         _ => ty.clone(),
@@ -179,6 +191,14 @@ pub(super) fn instantiate_signature_with_fresh_vars(
             }
             // AssocProjection.param is a String holding the resolved
             // concrete type name; not a TypeParam introduction site.
+            // GAT slice 4: the projection's own `args` (the `T` in
+            // `F.Mapped[T]`) IS an introduction site — walk it so the
+            // outer signature gets fresh vars for nested params.
+            Type::AssocProjection { args, .. } => {
+                for a in args {
+                    collect(a, names, seen, const_names, const_seen);
+                }
+            }
             _ => {}
         }
     }
@@ -277,6 +297,21 @@ pub(super) fn instantiate_signature_with_fresh_vars(
                     .map(|p| substitute(p, name_to_id, name_to_const_id))
                     .collect(),
                 return_type: Box::new(substitute(return_type, name_to_id, name_to_const_id)),
+            },
+            // GAT slice 4: walk the projection's own type-args so a
+            // `F.Mapped[T]` in the signature gets `T` swapped for its
+            // fresh `TypeVar`. The outer `param` is a TypeParam name
+            // pre-resolution and stays as a String here; the call-site
+            // solver re-maps it once `F` itself is bound (the
+            // `substitute_type_params` arm in this same file handles
+            // that direction post-call-site solve).
+            Type::AssocProjection { param, assoc, args } => Type::AssocProjection {
+                param: param.clone(),
+                assoc: assoc.clone(),
+                args: args
+                    .iter()
+                    .map(|a| substitute(a, name_to_id, name_to_const_id))
+                    .collect(),
             },
             _ => ty.clone(),
         }
@@ -802,12 +837,15 @@ pub(super) fn find_unbound_type_param<'a>(
             .iter()
             .find_map(|p| find_unbound_type_param(p, in_scope))
             .or_else(|| find_unbound_type_param(return_type, in_scope)),
-        Type::AssocProjection { param, .. } => {
-            if in_scope.contains(param.as_str()) {
-                None
-            } else {
-                Some(param.as_str())
+        Type::AssocProjection { param, args, .. } => {
+            if !in_scope.contains(param.as_str()) {
+                return Some(param.as_str());
             }
+            // GAT slice 4: walk the projection's own type-args
+            // (`F.Mapped[T]` → `T` may be unbound) so the call-site
+            // generic-instantiation check sees nested params.
+            args.iter()
+                .find_map(|a| find_unbound_type_param(a, in_scope))
         }
         _ => None,
     }

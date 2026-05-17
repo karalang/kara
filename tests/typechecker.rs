@@ -12222,3 +12222,83 @@ fn test_vec_get_unchecked_pins_element_typevar() {
          }",
     );
 }
+
+// ── GAT slice 4 — `AssocProjection` carries `args: Vec<Type>` ────
+//
+// Slice 4 is the structural plumbing slice: the type system now retains
+// the type arguments of a generic-associated-type projection like
+// `F.Mapped[i64]` through lowering, substitution, and free-var search.
+// The actual lookup of the GAT binding's RHS + parameter substitution
+// is slice 5 — these integration tests pin that the plumbing accepts
+// the new surface in function signatures without error, and that the
+// pre-slice-4 non-generic form still works unchanged.
+
+#[test]
+fn test_gat_slice4_projection_with_args_in_return_position_lowers() {
+    // The headline GAT shape from design.md § Generic Associated
+    // Types: `F.Mapped[i64]` in a function return type. Today's
+    // resolver (slice 3) sees the projection, the typechecker
+    // (slice 4) lowers and substitutes through it permissively
+    // (the projection arm in `types_compatible` accepts any
+    // counterpart); slice 5 will wire the actual binding-RHS
+    // substitution. Body uses a sibling trait method that returns
+    // the same projection so the body type matches without needing
+    // a `todo!()` macro (which isn't in Kāra).
+    typecheck_ok(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+             fn map_i64(ref self) -> Self.Mapped[i64];\n\
+         }\n\
+         fn double_each[F: Functor](functor: ref F) -> F.Mapped[i64] {\n\
+             functor.map_i64()\n\
+         }",
+    );
+}
+
+#[test]
+fn test_gat_slice4_projection_with_args_in_param_position_lowers() {
+    // Mirror: GAT projection in argument position. The plumbing must
+    // accept it symmetrically.
+    typecheck_ok(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+         }\n\
+         fn consume[F: Functor](_x: F.Mapped[i64]) {\n\
+         }",
+    );
+}
+
+#[test]
+fn test_gat_slice4_projection_with_nested_type_param_in_args() {
+    // `F.Mapped[T]` with `T` itself a fresh generic param on the
+    // outer fn — pins that the `collect` helper in
+    // `instantiate_signature_with_fresh_vars` walks into the
+    // projection's args (otherwise `T` would never get a fresh
+    // TypeVar at call sites and the unification would silently
+    // fail). Param-position keeps the test body trivial — the
+    // structural detail is pinned by the unit test in
+    // `src/typechecker/tests.rs`.
+    typecheck_ok(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+         }\n\
+         fn map_to[F: Functor, T](_f: ref F, _x: F.Mapped[T]) {\n\
+         }",
+    );
+}
+
+#[test]
+fn test_gat_slice4_non_generic_projection_unchanged() {
+    // Regression pin: the pre-slice-4 non-generic shape `F.Item`
+    // must still typecheck identically. The args field is empty in
+    // this case; nothing about the existing path changes.
+    typecheck_ok(
+        "trait Container {\n\
+             type Item;\n\
+             fn get_item(ref self) -> Self.Item;\n\
+         }\n\
+         fn first_item[C: Container](c: ref C) -> C.Item {\n\
+             c.get_item()\n\
+         }",
+    );
+}

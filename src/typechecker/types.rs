@@ -97,11 +97,19 @@ pub enum Type {
 
     /// `T.Item` — an associated type projection. `param` is the generic type
     /// parameter name (e.g. `"I"`); `assoc` is the associated type name
-    /// (e.g. `"Item"`). Resolved to a concrete type when the parameter is
-    /// instantiated via `resolve_assoc_projections`.
+    /// (e.g. `"Item"`). `args` carries the projection's own type arguments
+    /// for a generic associated type (GAT) like `F.Mapped[i64]` (slice 4 of
+    /// the GAT epic) — empty for the non-generic form `F.Item`. Resolved to
+    /// a concrete type when the parameter is instantiated via
+    /// `resolve_assoc_projections`; the `args` are walked through the
+    /// substitution / free-var helpers below so a projection like
+    /// `F.Mapped[T]` inside a function signature still sees its `T` get
+    /// fresh-var'd at call-site instantiation. The substitution from
+    /// `args` into the GAT binding's RHS is slice 5's job.
     AssocProjection {
         param: String,
         assoc: String,
+        args: Vec<Type>,
     },
 
     Error,
@@ -508,7 +516,14 @@ pub fn type_display(ty: &Type) -> String {
         }
         Type::TypeParam(name) => name.clone(),
         Type::TypeVar(id) => format!("?T{}", id.0),
-        Type::AssocProjection { param, assoc } => format!("{}.{}", param, assoc),
+        Type::AssocProjection { param, assoc, args } => {
+            if args.is_empty() {
+                format!("{}.{}", param, assoc)
+            } else {
+                let inner: Vec<String> = args.iter().map(type_display).collect();
+                format!("{}.{}[{}]", param, assoc, inner.join(", "))
+            }
+        }
         Type::Error => "<error>".to_string(),
     }
 }
