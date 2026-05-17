@@ -2237,6 +2237,76 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_bug8_method_call_chain_field_shared_return() {
+        // MethodCall sibling of `test_e2e_bug8_call_chain_field_shared_return`.
+        // `holder.make().val` is a MethodCall on an Identifier
+        // receiver that returns a shared struct, then bare `.val`
+        // access. Before this fix `shared_type_for_call_like`
+        // hard-deferred MethodCall to a None branch — the field
+        // fell through to the generic StructValue extract and
+        // silently loaded `i64 0`. After the fix the same
+        // `fn_return_type_names` lookup as the free-fn / 2-segment
+        // Path paths fires, keyed by the synthesized `Type.method`
+        // name (`Holder.make`), and the field path lowers correctly.
+        let out = run_program(
+            r#"
+shared struct S { val: i64 }
+struct Holder { tag: i64 }
+impl Holder {
+    fn make(self) -> S {
+        let s = S { val: 99 };
+        s
+    }
+}
+fn main() {
+    let h = Holder { tag: 0 };
+    println(h.make().val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "99");
+        }
+    }
+
+    #[test]
+    fn test_ir_bug8_method_call_chain_field_emits_load_and_dec() {
+        // IR-level gate for the MethodCall arm. Same shape as
+        // `test_ir_bug8_call_chain_field_emits_load_and_dec` (the
+        // free-fn version) but with a MethodCall receiver. Pin the
+        // `sh_call_val` GEP label and the typed printf %val operand.
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+struct Holder { tag: i64 }
+impl Holder {
+    fn make(self) -> S {
+        let s = S { val: 99 };
+        s
+    }
+}
+fn main() {
+    let h = Holder { tag: 0 };
+    println(h.make().val);
+}
+"#,
+        );
+        assert!(
+            ir.contains("sh_call_val"),
+            "main should GEP into the method-call result's `val` field; \
+             label `sh_call_val` not found in:\n{}",
+            ir
+        );
+        let main_body = ir.split("define i32 @main()").nth(1).expect("main fn body");
+        assert!(
+            main_body.contains("printf") && main_body.contains("i64 %val"),
+            "main's printf should receive the loaded field value; not \
+             found in main body:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
     fn test_ir_bug8_call_chain_field_emits_load_and_dec() {
         // IR-level gate. The call-chain field-access path must emit a
         // typed load of the field (not the `i64 0` fall-through) and

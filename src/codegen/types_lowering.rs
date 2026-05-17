@@ -832,10 +832,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
                 _ => return None,
             },
-            // Method-call return-type recovery isn't wired through the
-            // existing side-tables (`method_callee_types` keys to the
-            // callee identity, not its return type). Defer to a future
-            // slice; the bug-#8 minimal repro uses a free-fn call.
+            // MethodCall receivers: synthesize the canonical `Type.method`
+            // key from the receiver's static type. `declare_function`
+            // already registers impl methods in `fn_return_type_names`
+            // under their qualified name (`Holder.make`), so the same
+            // lookup as the free-fn / 2-segment Path paths works once
+            // the key is built. Identifier receivers cover the
+            // `holder.make().val` minimal repro from bug #8 (item 5).
+            // Method-chain receivers (`foo().make()`) and field-access
+            // receivers (`obj.holder.make()`) are out of scope for this
+            // slice — they need recursive receiver-type recovery; the
+            // free-fn / 2-segment Path / Identifier-receiver shapes
+            // cover the common case.
+            ExprKind::MethodCall { object, method, .. } => match &object.kind {
+                ExprKind::Identifier(name) => {
+                    let recv_type = self.var_type_names.get(name)?;
+                    format!("{recv_type}.{method}")
+                }
+                _ => return None,
+            },
             _ => return None,
         };
         let type_name = self.fn_return_type_names.get(&fn_name)?.clone();
