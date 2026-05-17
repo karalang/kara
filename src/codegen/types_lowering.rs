@@ -840,4 +840,23 @@ impl<'ctx> super::Codegen<'ctx> {
         let info = self.shared_types.get(&type_name)?.clone();
         Some((type_name, info))
     }
+
+    /// Resolve the heap layout for a Map variable's *value* when V is a
+    /// shared struct / shared enum. Returns `None` when V is anything
+    /// else (primitive, Vec, String, owned struct, …). Used by
+    /// `track_map_var` / cleanup-action wiring to decide whether the
+    /// per-bucket rc_dec walk in `emit_map_shared_val_rc_dec_walk` needs
+    /// to fire at scope exit. Source of truth is the `TypeExpr` stored
+    /// in `var_elem_type_exprs[var_name]` (the value-side TypeExpr
+    /// recorded at let-binding registration) — its head segment is the
+    /// shared type's surface name, looked up in `shared_types`.
+    pub(super) fn map_val_shared_heap_type_for(&self, var_name: &str) -> Option<StructType<'ctx>> {
+        let v_te = self.var_elem_type_exprs.get(var_name)?;
+        let head = match &v_te.kind {
+            TypeKind::Path(p) => p.segments.first()?.as_str(),
+            _ => return None,
+        };
+        let info = self.shared_types.get(head)?;
+        Some(info.heap_type)
+    }
 }

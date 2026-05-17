@@ -262,17 +262,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// false → plain `karac_map_free`. Either true → routes through
     /// `karac_map_free_with_drop_vec(handle, key_is_vec, val_is_vec)`
     /// so the per-entry walk runs.
+    ///
+    /// `val_shared_heap_type = Some(heap_ty)` triggers the codegen-side
+    /// per-bucket rc_dec walk for shared-struct / shared-enum values
+    /// (the runtime helper can't decrement refcounts itself — it's
+    /// type-erased and doesn't know V's heap layout). Closes the
+    /// `Map[K, shared T]` leak (2026-05-16): values previously
+    /// stranded their refcount when the Map went out of scope.
     pub(super) fn track_map_var(
         &mut self,
         map_alloca: PointerValue<'ctx>,
         key_is_vec: bool,
         val_is_vec: bool,
+        val_shared_heap_type: Option<StructType<'ctx>>,
     ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
                 map_alloca,
                 key_is_vec,
                 val_is_vec,
+                val_shared_heap_type,
             });
         }
     }
@@ -673,12 +682,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 map_alloca,
                 key_is_vec,
                 val_is_vec,
+                val_shared_heap_type,
             } => {
                 let handle = self
                     .builder
                     .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
                     .unwrap()
                     .into_pointer_value();
+                // Shared-value rc_dec walk MUST run before the runtime
+                // helper releases the bucket storage — the walk reads
+                // each live slot's value bytes from `kv[]`. Closes the
+                // `Map[K, shared T]` leak (2026-05-16): the type-erased
+                // runtime can't decrement V's refcount because it
+                // doesn't know V's heap layout; codegen does, so the
+                // dec is open-coded here per-instantiation. Mirrors
+                // the structural shape of `karac_map_free_with_drop_vec`'s
+                // bucket walk (`runtime/src/map.rs`).
+                if let Some(heap_ty) = val_shared_heap_type {
+                    self.emit_map_shared_val_rc_dec_walk(handle, *heap_ty);
+                }
                 // When either the key or value type follows the Vec/String
                 // `{ptr, len, cap}` layout, route through the recursive-
                 // drop runtime helper so each live entry's heap content
@@ -726,6 +748,296 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
             }
         }
+    }
+
+    /// Walk every live bucket of `map_handle` and emit `rc_dec` on the
+    /// value-half pointer. Used by `FreeMapHandle` cleanup when V is
+    /// a shared struct / shared enum — the type-erased runtime
+    /// (`karac_map_free_with_drop_vec`) only knows the Vec/String
+    /// `{ptr, len, cap}` layout, so per-V refcount decrements have
+    /// to be open-coded at the cleanup site against the matching
+    /// `SharedTypeInfo.heap_type`. Mirrors the bucket-walk shape in
+    /// `karac_map_free_with_drop_vec` (`runtime/src/map.rs`): for
+    /// each `slot in 0..capacity`, check `status[slot] == OCCUPIED`,
+    /// then load the value pointer from `kv[slot*stride + key_size]`
+    /// and rc_dec it.
+    ///
+    /// **Layout dependence.** Reads `capacity`, `status`, `kv`,
+    /// `key_size`, `val_size` from the runtime's `#[repr(C)]`
+    /// `KaracMap` at the offsets pinned by the runtime-side
+    /// `karac_map_field_offsets_match_codegen` unit test. `key_size`
+    /// and `val_size` are loaded at runtime (not const-folded from
+    /// K/V LLVM widths) so the walk stays agnostic of K's exact
+    /// representation — the `kv` byte array's stride is
+    /// `(key_size + val_size)` bytes, with the val half starting
+    /// at `+key_size`.
+    ///
+    /// **Concurrency.** The walk uses `emit_rc_dec` (non-atomic)
+    /// rather than `emit_arc_dec`. Maps are local to a single thread
+    /// (`unsafe impl Send for KaracMap`), and the cleanup runs on
+    /// the thread that owns the Map, so non-atomic is correct here.
+    /// If a future change shares Maps across threads via Arc, this
+    /// callsite needs the atomic dispatch — same shape as the
+    /// `emit_refcount_dec` decision in `RcDec` cleanup, but the
+    /// map's values aren't named bindings, so the `is_arc_binding`
+    /// check has no anchor; an explicit `is_arc` flag on
+    /// `FreeMapHandle` would be the path then.
+    pub(super) fn emit_map_shared_val_rc_dec_walk(
+        &self,
+        map_handle: PointerValue<'ctx>,
+        heap_type: StructType<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_t = self.context.i8_type();
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        // Runtime layout offsets (pinned by
+        // `karac_map_field_offsets_match_codegen`):
+        //   0..8   status   *u8
+        //   8..16  kv       *u8
+        //   16..24 capacity usize
+        //   24..32 len      usize
+        //   32..40 tombstones usize
+        //   40..48 key_size usize
+        //   48..56 val_size usize
+        const STATUS_OFFSET: u64 = 0;
+        const KV_OFFSET: u64 = 8;
+        const CAPACITY_OFFSET: u64 = 16;
+        const KEY_SIZE_OFFSET: u64 = 40;
+        const VAL_SIZE_OFFSET: u64 = 48;
+        const BUCKET_OCCUPIED: u64 = 1;
+
+        // Null guard — the registration site stores a fresh
+        // `karac_map_new` handle which is non-null, but defensive
+        // null-skip matches the runtime helper's first check
+        // (`if map.is_null() { return; }`) so the cleanup is
+        // robust against any future code path that might leave
+        // the alloca uninitialized.
+        let is_null = self
+            .builder
+            .build_is_null(map_handle, "cleanup.map.shared.is_null")
+            .unwrap();
+        let null_skip_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.null.skip");
+        let walk_entry_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.walk.entry");
+        self.builder
+            .build_conditional_branch(is_null, null_skip_bb, walk_entry_bb)
+            .unwrap();
+
+        // ── walk.entry: load capacity, status, kv, key_size ─────
+        self.builder.position_at_end(walk_entry_bb);
+        let cap_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_handle,
+                    &[i64_t.const_int(CAPACITY_OFFSET, false)],
+                    "cleanup.map.shared.cap.p",
+                )
+                .unwrap()
+        };
+        let capacity = self
+            .builder
+            .build_load(i64_t, cap_p, "cleanup.map.shared.cap")
+            .unwrap()
+            .into_int_value();
+        let status_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_handle,
+                    &[i64_t.const_int(STATUS_OFFSET, false)],
+                    "cleanup.map.shared.status.pp",
+                )
+                .unwrap()
+        };
+        let status_ptr = self
+            .builder
+            .build_load(ptr_ty, status_pp, "cleanup.map.shared.status")
+            .unwrap()
+            .into_pointer_value();
+        let kv_pp = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_handle,
+                    &[i64_t.const_int(KV_OFFSET, false)],
+                    "cleanup.map.shared.kv.pp",
+                )
+                .unwrap()
+        };
+        let kv_ptr = self
+            .builder
+            .build_load(ptr_ty, kv_pp, "cleanup.map.shared.kv")
+            .unwrap()
+            .into_pointer_value();
+        let key_size_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_handle,
+                    &[i64_t.const_int(KEY_SIZE_OFFSET, false)],
+                    "cleanup.map.shared.ks.p",
+                )
+                .unwrap()
+        };
+        let key_size = self
+            .builder
+            .build_load(i64_t, key_size_p, "cleanup.map.shared.ks")
+            .unwrap()
+            .into_int_value();
+        let val_size_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    map_handle,
+                    &[i64_t.const_int(VAL_SIZE_OFFSET, false)],
+                    "cleanup.map.shared.vs.p",
+                )
+                .unwrap()
+        };
+        let val_size = self
+            .builder
+            .build_load(i64_t, val_size_p, "cleanup.map.shared.vs")
+            .unwrap()
+            .into_int_value();
+        let stride = self
+            .builder
+            .build_int_add(key_size, val_size, "cleanup.map.shared.stride")
+            .unwrap();
+
+        // Loop counter alloca'd in entry block.
+        let counter = self.create_entry_alloca(fn_val, "cleanup.map.shared.i", i64_t.into());
+        self.builder
+            .build_store(counter, i64_t.const_zero())
+            .unwrap();
+
+        let cond_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.loop.cond");
+        let body_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.loop.body");
+        let occupied_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.loop.occupied");
+        let next_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.loop.next");
+        let exit_bb = self
+            .context
+            .append_basic_block(fn_val, "cleanup.map.shared.loop.exit");
+
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // ── loop.cond: i < capacity? ──────────────────────────────
+        self.builder.position_at_end(cond_bb);
+        let i_val = self
+            .builder
+            .build_load(i64_t, counter, "cleanup.map.shared.i.cur")
+            .unwrap()
+            .into_int_value();
+        let cont = self
+            .builder
+            .build_int_compare(
+                IntPredicate::ULT,
+                i_val,
+                capacity,
+                "cleanup.map.shared.cont",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cont, body_bb, exit_bb)
+            .unwrap();
+
+        // ── loop.body: load status[i], occupied? ──────────────────
+        self.builder.position_at_end(body_bb);
+        let status_slot_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    status_ptr,
+                    &[i_val],
+                    "cleanup.map.shared.status.slot.p",
+                )
+                .unwrap()
+        };
+        let status_byte = self
+            .builder
+            .build_load(i8_t, status_slot_p, "cleanup.map.shared.status.byte")
+            .unwrap()
+            .into_int_value();
+        let is_occupied = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                status_byte,
+                i8_t.const_int(BUCKET_OCCUPIED, false),
+                "cleanup.map.shared.is_occupied",
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_occupied, occupied_bb, next_bb)
+            .unwrap();
+
+        // ── loop.occupied: rc_dec value pointer ───────────────────
+        self.builder.position_at_end(occupied_bb);
+        let slot_off = self
+            .builder
+            .build_int_mul(i_val, stride, "cleanup.map.shared.slot.off")
+            .unwrap();
+        let slot_kv_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "cleanup.map.shared.slot.kv.p")
+                .unwrap()
+        };
+        let slot_val_p = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    i8_t,
+                    slot_kv_p,
+                    &[key_size],
+                    "cleanup.map.shared.slot.val.p",
+                )
+                .unwrap()
+        };
+        // Value half holds a single ptr (shared types lower to ptr;
+        // val_size == 8 on 64-bit). Load it and pass to emit_rc_dec.
+        let val_ptr = self
+            .builder
+            .build_load(ptr_ty, slot_val_p, "cleanup.map.shared.val.ptr")
+            .unwrap()
+            .into_pointer_value();
+        self.emit_rc_dec(heap_type, val_ptr);
+        self.builder.build_unconditional_branch(next_bb).unwrap();
+
+        // ── loop.next: i++, branch back to cond ──────────────────
+        self.builder.position_at_end(next_bb);
+        let i_next = self
+            .builder
+            .build_int_add(
+                i_val,
+                i64_t.const_int(1, false),
+                "cleanup.map.shared.i.next",
+            )
+            .unwrap();
+        self.builder.build_store(counter, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        // ── loop.exit: fall through to null.skip via uncond jump ─
+        self.builder.position_at_end(exit_bb);
+        self.builder
+            .build_unconditional_branch(null_skip_bb)
+            .unwrap();
+
+        // Continuation point — both the null-guard and the loop
+        // funnel here so the caller can continue emitting the
+        // `karac_map_free*` runtime call after this helper returns.
+        self.builder.position_at_end(null_skip_bb);
     }
 
     // ── F-string helpers ──────────────────────────────────────────

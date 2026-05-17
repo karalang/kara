@@ -195,6 +195,20 @@ pub(crate) enum CleanupAction<'ctx> {
     /// `Set[Vec[T]]` / `Set[String]` codegen sets `key_is_vec = true,
     /// val_is_vec = false`. For `Map[String, Vec[U]]` both flags are
     /// set. Primitive-only maps stay on plain `karac_map_free`.
+    ///
+    /// When `val_shared_heap_type` is `Some(heap_ty)`, the cleanup emits
+    /// a codegen-side bucket walk that calls `emit_rc_dec` on each live
+    /// slot's value-half pointer before invoking the underlying
+    /// `karac_map_free*` runtime. This closes the `Map[K, shared T]`
+    /// leak (2026-05-16): without it, the runtime helper bit-copies
+    /// the value pointer out and never decrements its refcount, so
+    /// the heap object stays alive past the Map's scope exit. The
+    /// shared-val rc_dec must run BEFORE `karac_map_free` releases
+    /// the bucket storage, since the walk reads value-half bytes
+    /// from `kv[]`. Per-instantiation specialization (not a runtime
+    /// extension) so each shared type's heap layout is open-coded
+    /// against the matching `SharedTypeInfo.heap_type` — the runtime
+    /// is type-erased and can't know per-V layouts.
     FreeMapHandle {
         /// Alloca that holds the opaque map ptr.
         map_alloca: PointerValue<'ctx>,
@@ -207,6 +221,14 @@ pub(crate) enum CleanupAction<'ctx> {
         /// triggers per-entry value-buffer free. `Map[K, i64]` /
         /// `Set[T]` (val_size = 0) → `false`.
         val_is_vec: bool,
+        /// LLVM heap-struct type for the VALUE when V is a shared
+        /// struct / shared enum. `Some` triggers the codegen-side
+        /// per-bucket rc_dec walk; `None` means V is not a shared
+        /// type. Mutually exclusive with `val_is_vec` in practice
+        /// (a Vec/String value doesn't carry a shared-type heap
+        /// layout); both can be live alongside `key_is_vec` for
+        /// `Map[Vec[K], shared V]` shapes.
+        val_shared_heap_type: Option<StructType<'ctx>>,
     },
     /// Run a per-enum drop function on a value-type (non-shared) enum
     /// alloca at scope exit. The drop function is synthesized once per

@@ -2060,6 +2060,82 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_map_shared_value_drop_emits_per_bucket_rc_dec_walk() {
+        // Regression for the 2026-05-16 leak: `Map[K, shared T]` values
+        // were never rc_dec'd on map drop. The runtime helper
+        // `karac_map_free_with_drop_vec` only handles Vec/String-shaped
+        // values; shared-struct / shared-enum value types fell through
+        // to plain `karac_map_free`, stranding the refcount and
+        // leaking each live node's heap object. The fix is codegen-
+        // time specialization at the `FreeMapHandle` cleanup site:
+        // emit a per-bucket walk that calls `emit_rc_dec` on the
+        // value-half pointer when V is shared.
+        //
+        // IR-level gates:
+        //   1. The shared-val walk's distinctive block label is
+        //      `cleanup.map.shared.walk.entry` — its presence proves
+        //      the cleanup wired up the shared-val arm rather than
+        //      falling through to plain `karac_map_free`.
+        //   2. The bucket-iteration `loop.body` label proves the
+        //      walk's loop structure was emitted (not just the null-
+        //      guard skeleton).
+        //   3. At least one `sub i64 %rc, 1` inside `main` proves
+        //      `emit_rc_dec` ran on the value pointer. The check is
+        //      a *minimum*-count gate so the test stays stable
+        //      against future inlining / loop-unrolling.
+        let ir = ir_for(
+            r#"
+shared struct Node { val: i64 }
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let _ = m.insert(1, Node { val: 42 });
+    let _ = m.insert(2, Node { val: 7 });
+    let _ = m.insert(3, Node { val: 9 });
+}
+"#,
+        );
+        assert!(
+            ir.contains("cleanup.map.shared.walk.entry"),
+            "Map[K, shared T] cleanup should emit shared-val rc_dec walk \
+             (missing `cleanup.map.shared.walk.entry` block label)"
+        );
+        assert!(
+            ir.contains("cleanup.map.shared.loop.body"),
+            "Map[K, shared T] cleanup walk should include a per-bucket loop body \
+             (missing `cleanup.map.shared.loop.body` block label)"
+        );
+        let dec_count = ir.matches("sub i64 %rc, 1").count();
+        assert!(
+            dec_count >= 1,
+            "Map[K, shared T] cleanup should rc_dec each live value \
+             (found {dec_count} `sub i64 %rc, 1` ops; expected ≥ 1)"
+        );
+    }
+
+    #[test]
+    fn test_e2e_map_shared_value_drops_cleanly() {
+        // End-to-end pairing for the IR test above: a program that
+        // inserts shared-struct values into a Map and lets the map
+        // go out of scope must not crash, must not leak (verified
+        // by ASAN in the `memory_sanitizer` test file), and must
+        // produce the expected stdout.
+        let out = run_program(
+            r#"
+shared struct Node { val: i64 }
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let _ = m.insert(1, Node { val: 42 });
+    let _ = m.insert(2, Node { val: 7 });
+    println(m.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    #[test]
     fn test_ir_bug7_shared_struct_move_out_emits_rc_inc() {
         // IR-level gate so a future regression that drops the inc-on-
         // move-out is caught immediately, not just by the e2e tests.
