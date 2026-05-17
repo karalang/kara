@@ -2432,6 +2432,217 @@ fn deprecated_slice3_accepted_on_struct_enum_trait() {
     );
 }
 
+// ── Slice 3b — Deprecation payload recorded on the symbol table ──
+//
+// The parser captures `#[deprecated]` on each attribute-bearing item
+// kind into `<Item>.deprecation: Option<Deprecation>` (slice 1+2+3a
+// plus the AST enabling change for variants / trait methods /
+// const-decls / type-aliases). Slice 3b records that payload against
+// the freshly-defined symbol's id in
+// `SymbolTable::deprecations: HashMap<SymbolId, Deprecation>`, so
+// slice 4's use-site lint emission can consult it without
+// re-walking the AST. The lookup helper is
+// `SymbolTable::deprecation_for(symbol_id)`.
+
+fn lookup_deprecation<'a>(
+    result: &'a karac::resolver::ResolveResult,
+    name: &str,
+) -> Option<&'a karac::ast::Deprecation> {
+    let sym = result.symbol_table.lookup_in_scope(ScopeId(0), name)?;
+    result.symbol_table.deprecation_for(sym.id)
+}
+
+#[test]
+fn deprecated_slice3b_records_payload_on_function() {
+    let result = resolve_ok("#[deprecated]\nfn old() { }");
+    let dep = lookup_deprecation(&result, "old").expect("deprecation should be recorded on `old`");
+    assert!(dep.since.is_none(), "bare form leaves `since` None");
+    assert!(dep.note.is_none(), "bare form leaves `note` None");
+}
+
+#[test]
+fn deprecated_slice3b_preserves_since_and_note() {
+    let result = resolve_ok(
+        "#[deprecated(since: \"1.2.0\", note: \"use `read_to_string` instead\")]\n\
+         pub fn old_reader() { }",
+    );
+    let dep = lookup_deprecation(&result, "old_reader").expect("recorded");
+    assert_eq!(dep.since.as_deref(), Some("1.2.0"));
+    assert_eq!(dep.note.as_deref(), Some("use `read_to_string` instead"));
+}
+
+#[test]
+fn deprecated_slice3b_shorthand_populates_note() {
+    let result = resolve_ok("#[deprecated = \"replaced by `v2`\"]\npub fn old_api() { }");
+    let dep = lookup_deprecation(&result, "old_api").expect("recorded");
+    assert!(dep.since.is_none());
+    assert_eq!(dep.note.as_deref(), Some("replaced by `v2`"));
+}
+
+#[test]
+fn deprecated_slice3b_undecorated_symbol_has_no_entry() {
+    let result = resolve_ok("fn fresh() { }");
+    let sym = result
+        .symbol_table
+        .lookup_in_scope(ScopeId(0), "fresh")
+        .unwrap();
+    assert!(
+        result.symbol_table.deprecation_for(sym.id).is_none(),
+        "undecorated fn must not appear in the deprecations sidecar"
+    );
+}
+
+#[test]
+fn deprecated_slice3b_per_item_kind_coverage() {
+    // One entry per attribute-bearing item kind that the spec lists
+    // as a legal `#[deprecated]` target. Each gets a distinct note
+    // string so a misrouting (one item's payload landing on another
+    // item's id) would surface as a mismatched assertion.
+    let result = resolve_ok(
+        "#[deprecated = \"fn-note\"]\nfn old_fn() { }\n\
+         #[deprecated = \"struct-note\"]\npub struct OldShape { x: i64, }\n\
+         #[deprecated = \"enum-note\"]\npub enum OldErr { Bad, }\n\
+         #[deprecated = \"trait-note\"]\npub trait OldFmt { fn fmt(ref self); }\n\
+         #[deprecated = \"const-note\"]\npub const OLD_LIMIT: i64 = 0;\n\
+         #[deprecated = \"alias-note\"]\npub type OldAlias = i64;\n\
+         #[deprecated = \"marker-note\"]\npub marker trait OldMarker;\n",
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "old_fn")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("fn-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OldShape")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("struct-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OldErr")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("enum-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OldFmt")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("trait-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OLD_LIMIT")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("const-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OldAlias")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("alias-note")
+    );
+    assert_eq!(
+        lookup_deprecation(&result, "OldMarker")
+            .unwrap()
+            .note
+            .as_deref(),
+        Some("marker-note")
+    );
+}
+
+#[test]
+fn deprecated_slice3b_records_on_enum_variant() {
+    // Variants get their own SymbolId (registered in global scope
+    // beside their parent enum). Slice 3b records the
+    // variant-level payload there, not on the parent enum's id —
+    // misrouting would surface as `Bad` having no entry or the
+    // parent enum holding the note.
+    let result = resolve_ok(
+        "pub enum Op {\n\
+         #[deprecated = \"variant-note\"]\nBad,\nGood,\n\
+         }",
+    );
+    let dep = lookup_deprecation(&result, "Bad").expect("variant payload recorded");
+    assert_eq!(dep.note.as_deref(), Some("variant-note"));
+    // The parent enum carries no top-level `#[deprecated]` — its own
+    // payload entry must be absent.
+    assert!(
+        lookup_deprecation(&result, "Op").is_none(),
+        "parent enum without top-level deprecation must not inherit \
+         the variant's payload"
+    );
+    // The sibling variant `Good` (no attribute) must also be absent.
+    assert!(
+        lookup_deprecation(&result, "Good").is_none(),
+        "undecorated sibling variant must not appear in the sidecar"
+    );
+}
+
+#[test]
+fn deprecated_slice3b_records_on_impl_method() {
+    // Impl-block methods are pushed directly onto the symbol table
+    // (bypassing `table.define` because they live in
+    // `type_methods`, not the global scope). Slice 3b records
+    // their deprecation against the per-method SymbolId. Look-up
+    // walks `type_methods["S"]` and grabs the first matching name.
+    let result = resolve_ok(
+        "pub struct S { x: i64, }\n\
+         impl S {\n\
+             #[deprecated = \"method-note\"]\nfn old_m(ref self) -> i64 { 0 }\n\
+             fn fresh_m(ref self) -> i64 { 0 }\n\
+         }",
+    );
+    let methods = result
+        .symbol_table
+        .type_methods
+        .get("S")
+        .expect("methods registered for S");
+    let old_id = methods
+        .iter()
+        .copied()
+        .find(|id| result.symbol_table.get_symbol(*id).name == "old_m")
+        .expect("old_m method symbol");
+    let fresh_id = methods
+        .iter()
+        .copied()
+        .find(|id| result.symbol_table.get_symbol(*id).name == "fresh_m")
+        .expect("fresh_m method symbol");
+    let dep = result
+        .symbol_table
+        .deprecation_for(old_id)
+        .expect("impl-method payload recorded");
+    assert_eq!(dep.note.as_deref(), Some("method-note"));
+    assert!(
+        result.symbol_table.deprecation_for(fresh_id).is_none(),
+        "sibling undecorated method must not appear in the sidecar"
+    );
+}
+
+#[test]
+fn deprecated_slice3b_lookup_returns_distinct_payloads_for_two_items() {
+    // Two deprecated symbols must hold distinct payloads — pins
+    // that the sidecar is keyed by id, not by name or position.
+    let result = resolve_ok(
+        "#[deprecated = \"first\"]\npub fn one() { }\n\
+         #[deprecated = \"second\"]\npub fn two() { }\n",
+    );
+    let d1 = lookup_deprecation(&result, "one").unwrap();
+    let d2 = lookup_deprecation(&result, "two").unwrap();
+    assert_eq!(d1.note.as_deref(), Some("first"));
+    assert_eq!(d2.note.as_deref(), Some("second"));
+    // Pointer identity would be a stronger pin but the helper
+    // returns `&Deprecation` from two distinct HashMap entries
+    // already — the string compare is the right granularity.
+}
+
 // ── TraitMethod + Variant attribute placement validation ─────────
 //
 // With attribute support landed on `TraitMethod` and `Variant`, the

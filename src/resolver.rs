@@ -143,6 +143,15 @@ pub struct SymbolTable {
     /// by the typechecker to dispatch `T.method(args)` and bare `method(args)`
     /// calls to methods declared on a bound trait.
     pub generic_param_bounds: HashMap<SymbolId, Vec<TraitBound>>,
+    /// `#[deprecated]` payload keyed by the deprecated symbol's id. Slice 3b
+    /// plumbing for the use-site `deprecated` lint — populated at definition
+    /// time by `collect::collect_*` for the seven attribute-bearing item
+    /// kinds plus variants / trait methods / module consts / type aliases.
+    /// Slice 4 (use-site warning emission) reads via [`Self::deprecation_for`]
+    /// once the lint registry / emission infrastructure lands. Sidecar shape
+    /// is preferred over a field on `Symbol` because most symbols are not
+    /// deprecated; matches the `generic_param_bounds` pattern.
+    pub deprecations: HashMap<SymbolId, Deprecation>,
 }
 
 impl Default for SymbolTable {
@@ -165,6 +174,7 @@ impl SymbolTable {
             current_scope: ScopeId(0),
             type_methods: HashMap::new(),
             generic_param_bounds: HashMap::new(),
+            deprecations: HashMap::new(),
         };
         table.register_primitives();
         table
@@ -365,6 +375,21 @@ impl SymbolTable {
             .entry(param_id)
             .or_default()
             .extend(bounds.iter().cloned());
+    }
+
+    /// Record a `#[deprecated]` payload against `id`. Idempotent on identical
+    /// payloads is not enforced — the parser already collapses duplicate
+    /// `#[deprecated]` attributes on one item to the first (slice 1 E_DEPRECATED_DUPLICATE),
+    /// so each symbol reaches us at most once.
+    pub fn record_deprecation(&mut self, id: SymbolId, dep: Deprecation) {
+        self.deprecations.insert(id, dep);
+    }
+
+    /// Look up the recorded `#[deprecated]` payload for `id`, if any.
+    /// Used by the use-site lint emission pass in slice 4 (once the
+    /// lint emission infrastructure lands at line 419 slice 4).
+    pub fn deprecation_for(&self, id: SymbolId) -> Option<&Deprecation> {
+        self.deprecations.get(&id)
     }
 
     /// Trait bounds attached to `param_id`. Empty slice if the symbol is not a

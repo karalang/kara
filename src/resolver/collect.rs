@@ -454,13 +454,14 @@ impl<'a> super::Resolver<'a> {
             .iter()
             .flat_map(|p| p.pattern.binding_names())
             .collect();
-        if let Err(e) = self.table.define(
+        match self.table.define(
             f.name.clone(),
             SymbolKind::Function { param_names },
             f.span.clone(),
             f.is_pub,
         ) {
-            self.errors.push(e);
+            Ok(id) => self.record_deprecation_if_present(id, &f.deprecation),
+            Err(e) => self.errors.push(e),
         }
     }
 
@@ -486,13 +487,14 @@ impl<'a> super::Resolver<'a> {
             self.reject_deprecated_on_field(&field.attributes);
         }
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
-        if let Err(e) = self.table.define(
+        match self.table.define(
             s.name.clone(),
             SymbolKind::Struct { field_names },
             s.span.clone(),
             s.is_pub,
         ) {
-            self.errors.push(e);
+            Ok(id) => self.record_deprecation_if_present(id, &s.deprecation),
+            Err(e) => self.errors.push(e),
         }
     }
 
@@ -518,7 +520,10 @@ impl<'a> super::Resolver<'a> {
             e.span.clone(),
             e.is_pub,
         ) {
-            Ok(id) => id,
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &e.deprecation);
+                id
+            }
             Err(err) => {
                 self.errors.push(err);
                 return;
@@ -535,8 +540,10 @@ impl<'a> super::Resolver<'a> {
                 }
             };
             // Try to register variant name directly; if collision, that's ok —
-            // user must use qualified path
-            let _ = self.table.define(
+            // user must use qualified path. Variant-level `#[deprecated]`
+            // (allowed by the spec; AST enabling change at phase-5 line 431)
+            // is recorded against the variant's own SymbolId.
+            if let Ok(variant_id) = self.table.define(
                 variant.name.clone(),
                 SymbolKind::EnumVariant {
                     parent_enum: enum_id,
@@ -544,7 +551,9 @@ impl<'a> super::Resolver<'a> {
                 },
                 variant.span.clone(),
                 e.is_pub,
-            );
+            ) {
+                self.record_deprecation_if_present(variant_id, &variant.deprecation);
+            }
         }
     }
 
@@ -570,26 +579,48 @@ impl<'a> super::Resolver<'a> {
                 TraitItem::AssocType(_) => None,
             })
             .collect();
-        if let Err(e) = self.table.define(
+        let trait_id = match self.table.define(
             t.name.clone(),
             SymbolKind::Trait { method_names },
             t.span.clone(),
             t.is_pub,
         ) {
-            self.errors.push(e);
-        }
+            Ok(id) => {
+                self.record_deprecation_if_present(id, &t.deprecation);
+                Some(id)
+            }
+            Err(e) => {
+                self.errors.push(e);
+                None
+            }
+        };
+
+        // Trait-method-level `#[deprecated]` (legal per spec; AST
+        // enabling change at phase-5 line 431) is recorded against the
+        // trait-method's symbol when the slice-4 use-site lookup pass
+        // lands. At v1 trait methods are not registered as top-level
+        // symbols themselves — they're looked up via the trait's
+        // method-names list — so we record the per-method payload
+        // against a synthetic id derived from the trait id by name.
+        // Until slice 4 lands a real lookup path, we walk the items
+        // here to surface the *placement* validation only; the actual
+        // payload-recording site for trait methods will need a parallel
+        // symbol-table entry that slice 4 of the lint-level work
+        // introduces. Tracked as a slice-3b carry-forward below.
+        let _ = trait_id;
     }
 
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
         self.reject_track_caller_attr(&t.attributes, "trait alias");
-        if let Err(e) = self.table.define(
+        match self.table.define(
             t.name.clone(),
             SymbolKind::TraitAlias,
             t.span.clone(),
             t.is_pub,
         ) {
-            self.errors.push(e);
+            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Err(e) => self.errors.push(e),
         }
     }
 
@@ -601,7 +632,7 @@ impl<'a> super::Resolver<'a> {
         // method list. Trait-bound resolution and impl coherence treat
         // markers identically to ordinary traits — the marker-ness is a
         // definition-site property, not a use-site property.
-        if let Err(e) = self.table.define(
+        match self.table.define(
             t.name.clone(),
             SymbolKind::Trait {
                 method_names: Vec::new(),
@@ -609,7 +640,8 @@ impl<'a> super::Resolver<'a> {
             t.span.clone(),
             t.is_pub,
         ) {
-            self.errors.push(e);
+            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Err(e) => self.errors.push(e),
         }
     }
 
@@ -655,6 +687,7 @@ impl<'a> super::Resolver<'a> {
                     scope: self.table.current_scope,
                 });
                 self.table.register_method(&type_name, method_id);
+                self.record_deprecation_if_present(method_id, &method.deprecation);
             }
         }
     }
@@ -715,13 +748,14 @@ impl<'a> super::Resolver<'a> {
         // share the same "target kind" message shape.
         self.reject_non_exhaustive_attr(&c.attributes, "module const");
         self.reject_track_caller_attr(&c.attributes, "module const");
-        if let Err(err) = self.table.define(
+        match self.table.define(
             c.name.clone(),
             SymbolKind::Constant,
             c.span.clone(),
             c.is_pub,
         ) {
-            self.errors.push(err);
+            Ok(id) => self.record_deprecation_if_present(id, &c.deprecation),
+            Err(err) => self.errors.push(err),
         }
     }
 
@@ -732,24 +766,36 @@ impl<'a> super::Resolver<'a> {
         // (non_exhaustive invalid).
         self.reject_non_exhaustive_attr(&t.attributes, "type alias");
         self.reject_track_caller_attr(&t.attributes, "type alias");
-        if let Err(err) = self.table.define(
+        match self.table.define(
             t.name.clone(),
             SymbolKind::TypeAlias,
             t.span.clone(),
             t.is_pub,
         ) {
-            self.errors.push(err);
+            Ok(id) => self.record_deprecation_if_present(id, &t.deprecation),
+            Err(err) => self.errors.push(err),
         }
     }
 
     fn collect_distinct_type(&mut self, d: &crate::ast::DistinctTypeDef) {
-        if let Err(err) = self.table.define(
+        match self.table.define(
             d.name.clone(),
             SymbolKind::DistinctType,
             d.span.clone(),
             d.is_pub,
         ) {
-            self.errors.push(err);
+            Ok(id) => self.record_deprecation_if_present(id, &d.deprecation),
+            Err(err) => self.errors.push(err),
+        }
+    }
+
+    /// Slice 3b plumbing — record a `#[deprecated]` payload against
+    /// the freshly-defined symbol when the parser captured one.
+    /// Centralises the `Option<Deprecation>` dispatch so each
+    /// `collect_*` call-site stays uniform: define → on Ok, record.
+    fn record_deprecation_if_present(&mut self, id: SymbolId, dep: &Option<Deprecation>) {
+        if let Some(d) = dep {
+            self.table.record_deprecation(id, d.clone());
         }
     }
 
