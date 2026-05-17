@@ -892,6 +892,12 @@ impl<'a> super::TypeChecker<'a> {
             // Substitute the call's solutions in for the receiver +
             // any type-param args inside the projection's `args` list.
             let substituted = substitute_type_params(&lowered, &subs);
+            // GAT slice 8b: discharge the GAT decl's per-param inline
+            // bounds + where-clause for the substituted projection
+            // BEFORE checking the where-clause bound — a mismatch on
+            // an arg's inline bound is a more focused diagnostic than
+            // a downstream "bound not satisfied" cascade.
+            self.discharge_gat_decl_constraints(&substituted, discharge_span);
             // Resolve the projection through `impl_assoc_types`. If the
             // receiver is now a concrete type registered with the GAT,
             // this yields the binding RHS substituted with the call's
@@ -932,6 +938,129 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// GAT slice 8b carry-forwards (b) + (c): discharge the GAT
+    /// declaration's per-param inline bounds and where-clause for a
+    /// substituted projection. The projection must be in its
+    /// post-substitution shape (`AssocProjection { param: <bare
+    /// receiver name>, args: <concrete projection args>, .. }`) — the
+    /// `param` field's bare name keys the impl-table lookup, and the
+    /// `args` field carries the concrete types substituted for each
+    /// `gat_param`. Anything else (still-`TypeParam` receiver,
+    /// non-projection type, post-resolution non-projection) is a no-op.
+    ///
+    /// For each (gat_param, arg) position, checks the GAT decl's
+    /// inline bounds (`type Mapped[U: Trait]`) via
+    /// `type_satisfies_bound`. Emits `E_GAT_PARAM_BOUND_NOT_SATISFIED`
+    /// on miss.
+    ///
+    /// For the GAT decl's `where`-clause (`type Mapped[U] where U:
+    /// Trait`), substitutes `gat_params → args` and walks each
+    /// `TypeBound` constraint — the substituted RHS type is checked
+    /// via `type_satisfies_bound`. Emits
+    /// `E_GAT_WHERE_CLAUSE_NOT_SATISFIED` on miss. Non-`TypeBound`
+    /// constraints (AssocTypeEq / ConstPredicate / nested
+    /// ProjectionBound) are out of scope for this slice — they're
+    /// uncommon on GAT decls and the existing call-site discharge
+    /// paths cover them when they appear.
+    pub(super) fn discharge_gat_decl_constraints(
+        &mut self,
+        substituted: &Type,
+        discharge_span: &Span,
+    ) {
+        let Type::AssocProjection {
+            param, assoc, args, ..
+        } = substituted
+        else {
+            return;
+        };
+        let key = (param.clone(), assoc.clone());
+        let Some(entry) = self.env.impl_assoc_types.get(&key).cloned() else {
+            return;
+        };
+        // (c) Per-param inline bounds — `type Mapped[U: Trait]` checks
+        // each projection arg against its position-aligned bound trait
+        // list.
+        for ((gat_name, bound_traits), arg) in entry
+            .gat_params
+            .iter()
+            .zip(entry.param_bound_traits.iter())
+            .zip(args.iter())
+        {
+            if matches!(arg, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) {
+                continue;
+            }
+            for trait_name in bound_traits {
+                if self.type_satisfies_bound(arg, trait_name) {
+                    continue;
+                }
+                self.type_error(
+                    format!(
+                        "error[E_GAT_PARAM_BOUND_NOT_SATISFIED]: \
+                         GAT param `{}: {}` on `{}.{}` is not satisfied; \
+                         arg `{}` does not implement `{}`",
+                        gat_name,
+                        trait_name,
+                        param,
+                        assoc,
+                        type_display(arg),
+                        trait_name,
+                    ),
+                    discharge_span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        // (b) GAT decl's where-clause — substitute `gat_params → args`
+        // into each `TypeBound` LHS and discharge via the same
+        // `type_satisfies_bound` engine. Position-aligned with
+        // `gat_params`.
+        if let Some(ref wc) = entry.where_clause {
+            let subs: HashMap<String, Type> = entry
+                .gat_params
+                .iter()
+                .cloned()
+                .zip(args.iter().cloned())
+                .collect();
+            for constraint in &wc.constraints {
+                let WhereConstraint::TypeBound {
+                    type_name, bounds, ..
+                } = constraint
+                else {
+                    continue;
+                };
+                let Some(arg_ty) = subs.get(type_name) else {
+                    continue;
+                };
+                if matches!(arg_ty, Type::TypeParam(_) | Type::TypeVar(_) | Type::Error) {
+                    continue;
+                }
+                for bound in bounds {
+                    let Some(trait_name) = bound.path.last() else {
+                        continue;
+                    };
+                    if self.type_satisfies_bound(arg_ty, trait_name) {
+                        continue;
+                    }
+                    self.type_error(
+                        format!(
+                            "error[E_GAT_WHERE_CLAUSE_NOT_SATISFIED]: \
+                             GAT decl `where {}: {}` on `{}.{}` is not satisfied; \
+                             arg `{}` does not implement `{}`",
+                            type_name,
+                            trait_name,
+                            param,
+                            assoc,
+                            type_display(arg_ty),
+                            trait_name,
+                        ),
+                        discharge_span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+            }
+        }
+    }
+
     /// Check whether `ty` satisfies the named trait. Consults three
     /// sources in order:
     ///
@@ -951,6 +1080,17 @@ impl<'a> super::TypeChecker<'a> {
         // Built-in coverage via the type_supports_* helpers — these
         // recognize primitives implicitly + named types via
         // `#[derive(Trait)]` registration.
+        //
+        // GAT slice 8b carry-forward (a): the derive-only builtins
+        // Clone / Copy / Debug are recognized by the parser
+        // (`DERIVE_ONLY_BUILTINS` in `bounds.rs`) but are not
+        // registered as impl-table entries — so a bound `: Clone` on
+        // a GAT (or a where-clause bound `T: Clone` reaching this
+        // helper through `discharge_type_bounds`) would conservatively
+        // reject every concrete RHS without this switch. The
+        // type_supports_* / is_type_copy helpers consult
+        // `derived_traits` directly, matching the pattern used for
+        // Hash / Display / Eq above.
         match trait_name {
             "Hash" => return self.type_supports_hash(ty),
             "Eq" => return self.type_supports_eq(ty),
@@ -958,6 +1098,9 @@ impl<'a> super::TypeChecker<'a> {
             "Ord" => return self.type_supports_ord(ty),
             "PartialOrd" => return self.type_supports_partial_ord(ty),
             "Display" => return self.type_supports_display(ty),
+            "Clone" => return self.type_supports_clone(ty),
+            "Copy" => return self.is_type_copy(ty),
+            "Debug" => return self.type_supports_debug(ty),
             _ => {}
         }
         // Other traits: explicit impl in the table, with supertrait closure.

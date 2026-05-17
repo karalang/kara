@@ -1391,9 +1391,13 @@ mod gat_slice5_assoc_projection_resolution_tests {
         let entry = ImplAssocTypeEntry {
             ty: Type::Int(IntSize::I64),
             gat_params: vec!["U".to_string()],
+            param_bound_traits: vec![vec!["Show".to_string()]],
+            where_clause: None,
         };
         assert_eq!(entry.ty, Type::Int(IntSize::I64));
         assert_eq!(entry.gat_params, vec!["U".to_string()]);
+        assert_eq!(entry.param_bound_traits, vec![vec!["Show".to_string()]]);
+        assert!(entry.where_clause.is_none());
     }
 
     // ── type_display with receiver_args ──

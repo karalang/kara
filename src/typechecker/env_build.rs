@@ -364,6 +364,8 @@ impl<'a> super::TypeChecker<'a> {
                 ImplAssocTypeEntry {
                     ty: t(),
                     gat_params: vec![],
+                    param_bound_traits: Vec::new(),
+                    where_clause: None,
                 },
             );
         }
@@ -377,6 +379,8 @@ impl<'a> super::TypeChecker<'a> {
                 ImplAssocTypeEntry {
                     ty: t(),
                     gat_params: vec![],
+                    param_bound_traits: Vec::new(),
+                    where_clause: None,
                 },
             );
         }
@@ -385,6 +389,8 @@ impl<'a> super::TypeChecker<'a> {
             ImplAssocTypeEntry {
                 ty: Type::Tuple(vec![k(), v()]),
                 gat_params: vec![],
+                param_bound_traits: Vec::new(),
+                where_clause: None,
             },
         );
 
@@ -414,6 +420,8 @@ impl<'a> super::TypeChecker<'a> {
                 ImplAssocTypeEntry {
                     ty: t(),
                     gat_params: vec![],
+                    param_bound_traits: Vec::new(),
+                    where_clause: None,
                 },
             );
         }

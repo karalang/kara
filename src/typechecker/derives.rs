@@ -315,6 +315,141 @@ impl<'a> super::TypeChecker<'a> {
         false
     }
 
+    /// Check whether a type supports `Clone`. GAT slice 8b
+    /// carry-forward (a). All primitives clone trivially; named
+    /// types require `#[derive(Clone)]` (Copy implies Clone by the
+    /// existing `validate_copy_implies_clone` rule, so this is
+    /// already an invariant in practice). Used by
+    /// `type_satisfies_bound` so a `T: Clone` bound discharges
+    /// against the derive metadata directly — built-in derive-only
+    /// traits aren't registered as impl-table entries, so without
+    /// this path a `: Clone` bound would conservatively reject every
+    /// concrete RHS at slice 7's `gat_rhs_satisfies_bound`. Mirrors
+    /// the field-shape walk in `type_supports_hash` /
+    /// `type_supports_display`.
+    pub(super) fn type_supports_clone(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_clone(e)),
+            Type::Array { element, .. } => self.type_supports_clone(element),
+            // Slices clone (the slice header is `(ptr, len)` — bitwise copy);
+            // the borrowed data is not duplicated.
+            Type::Slice { .. } => true,
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_clone(inner),
+            Type::Named { name, args } => {
+                // Built-in collections clone when their type args clone
+                // (Option / Result / Vec / Map / Set follow the standard
+                // shape). User-defined types require `#[derive(Clone)]`.
+                if matches!(
+                    name.as_str(),
+                    "Option" | "Result" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                ) {
+                    return args.iter().all(|a| self.type_supports_clone(a));
+                }
+                if self.env.has_impl("Clone", name, args) {
+                    return true;
+                }
+                if let Some(info) = self.env.structs.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else if let Some(info) = self.env.enums.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else if let Some(traits) = self.env.distinct_types.get(name) {
+                    traits.contains("Clone")
+                } else {
+                    // Unknown nominal — be permissive to avoid noise on
+                    // unrelated diagnostics. Slice 7's
+                    // gat_rhs_satisfies_bound path tightens to
+                    // false-conservative when reaching here from the
+                    // bounds path; the impl-site discharge surface
+                    // dominates.
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_clone(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.env.structs.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else if let Some(info) = self.env.enums.get(name) {
+                    info.derived_traits.contains("Clone")
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_) => false,
+        }
+    }
+
+    /// Check whether a type supports `Debug`. GAT slice 8b
+    /// carry-forward (a). Mirrors `type_supports_display` (Debug is
+    /// the developer-facing dump trait — same surface coverage as
+    /// Display for slice 7/8 bound-discharge purposes).
+    pub(super) fn type_supports_debug(&self, ty: &Type) -> bool {
+        match ty {
+            Type::Int(_)
+            | Type::UInt(_)
+            | Type::Float(_)
+            | Type::Bool
+            | Type::Char
+            | Type::Str
+            | Type::Unit => true,
+            Type::Tuple(elems) => elems.iter().all(|e| self.type_supports_debug(e)),
+            Type::Array { element, .. } => self.type_supports_debug(element),
+            Type::Slice { element, .. } => self.type_supports_debug(element),
+            Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_debug(inner),
+            Type::Named { name, args } => {
+                if matches!(
+                    name.as_str(),
+                    "Option" | "Result" | "Vec" | "VecDeque" | "Map" | "Set" | "SortedSet"
+                ) {
+                    return args.iter().all(|a| self.type_supports_debug(a));
+                }
+                if self.env.has_impl("Debug", name, args) {
+                    return true;
+                }
+                if let Some(info) = self.env.structs.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(info) = self.env.enums.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(traits) = self.env.distinct_types.get(name) {
+                    traits.contains("Debug")
+                } else {
+                    true
+                }
+            }
+            Type::Rc(inner) | Type::Arc(inner) => self.type_supports_debug(inner),
+            Type::Shared(name) => {
+                if let Some(info) = self.env.structs.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else if let Some(info) = self.env.enums.get(name) {
+                    info.derived_traits.contains("Debug")
+                } else {
+                    true
+                }
+            }
+            Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } | Type::Error => {
+                true
+            }
+            Type::Never => true,
+            Type::Function { .. }
+            | Type::OnceFunction { .. }
+            | Type::Pointer { .. }
+            | Type::Weak(_) => false,
+        }
+    }
+
     /// Check whether a type is Copy (primitive or derives Copy).
     pub(super) fn is_type_copy(&self, ty: &Type) -> bool {
         match ty {

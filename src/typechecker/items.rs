@@ -894,7 +894,12 @@ impl<'a> super::TypeChecker<'a> {
         // the current program's items (e.g., baked stdlib traits, where
         // the bound enforcement is a no-op — slice 7 v1 scope is the
         // user-program surface where program.items carries the decl).
-        let trait_assoc_bounds: HashMap<String, Vec<TraitBound>> = imp
+        //
+        // GAT slice 8b carry-forwards (b) + (c): also cache the GAT
+        // decl's per-param inline-bound list and the GAT decl's
+        // where-clause so `resolve_assoc_projections` can discharge
+        // them at projection-resolution time.
+        let trait_assoc_decls: HashMap<String, &AssocTypeDecl> = imp
             .trait_name
             .as_ref()
             .and_then(|tp| tp.segments.last())
@@ -909,14 +914,16 @@ impl<'a> super::TypeChecker<'a> {
                     .items
                     .iter()
                     .filter_map(|it| match it {
-                        TraitItem::AssocType(decl) => {
-                            Some((decl.name.clone(), decl.bounds.clone()))
-                        }
+                        TraitItem::AssocType(decl) => Some((decl.name.clone(), decl.as_ref())),
                         _ => None,
                     })
                     .collect()
             })
             .unwrap_or_default();
+        let trait_assoc_bounds: HashMap<String, Vec<TraitBound>> = trait_assoc_decls
+            .iter()
+            .map(|(name, decl)| (name.clone(), decl.bounds.clone()))
+            .collect();
 
         for item in &imp.items {
             match item {
@@ -970,11 +977,33 @@ impl<'a> super::TypeChecker<'a> {
                         }
                     }
 
+                    // GAT slice 8b: capture the GAT decl's per-param
+                    // inline bounds + where-clause for projection-time
+                    // discharge.
+                    let trait_decl = trait_assoc_decls.get(&binding.name);
+                    let param_bound_traits: Vec<Vec<String>> =
+                        match trait_decl.and_then(|d| d.generic_params.as_ref()) {
+                            Some(gp) => gp
+                                .params
+                                .iter()
+                                .map(|p| {
+                                    p.bounds
+                                        .iter()
+                                        .filter_map(|tb| tb.path.last().cloned())
+                                        .collect()
+                                })
+                                .collect(),
+                            None => Vec::new(),
+                        };
+                    let where_clause_clone = trait_decl.and_then(|d| d.where_clause.clone());
+
                     self.env.impl_assoc_types.insert(
                         (type_name.clone(), binding.name.clone()),
                         crate::typechecker::env::ImplAssocTypeEntry {
                             ty: bound_ty,
                             gat_params,
+                            param_bound_traits,
+                            where_clause: where_clause_clone,
                         },
                     );
                 }

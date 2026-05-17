@@ -110,10 +110,35 @@ pub struct TraitInfo {
 /// `gat_params` lists the GAT-side names so the resolver can build a
 /// substitution from the projection's own args. Empty for non-generic
 /// bindings (`type Item = i64`). GAT slice 5.
+///
+/// GAT slice 8b carry-forwards (b) + (c): the trait's `AssocTypeDecl`
+/// can attach inline bounds on each GAT param (`type Mapped[U: Trait]`)
+/// and a `where`-clause (`type Mapped[U] where U: Trait`). Both are
+/// constraints on valid projection-arg instantiations. The
+/// `param_bound_traits` vector lists per-positional-param a vector of
+/// bound-trait names (paired position-wise with `gat_params`).
+/// `where_clause` carries the raw AST clause; the discharge engine
+/// substitutes GAT-param names → projection args and walks each
+/// `TypeBound` constraint via `type_satisfies_bound`.
 #[derive(Debug, Clone)]
 pub struct ImplAssocTypeEntry {
     pub ty: Type,
     pub gat_params: Vec<String>,
+    /// Position-aligned with `gat_params`. `param_bound_traits[i]` is the
+    /// list of bound trait names declared on the i-th GAT param at the
+    /// trait's `AssocTypeDecl` (`type Mapped[U: Trait1 + Trait2]`).
+    /// Bound trait names are stored as the last segment of each
+    /// `TraitBound.path` so `type_satisfies_bound` consults the same
+    /// surface as `discharge_type_bounds`. Empty entries for params
+    /// with no inline bounds and for non-generic bindings.
+    pub param_bound_traits: Vec<Vec<String>>,
+    /// The trait's `AssocTypeDecl.where_clause`, cloned at impl-block
+    /// registration. Constraints reference the GAT's params (and may
+    /// reference the enclosing trait's params, although v1 traits
+    /// don't carry generics in the assoc-type decl). Discharged at
+    /// projection-resolution time after substituting
+    /// `gat_params → projection.args`.
+    pub where_clause: Option<crate::ast::WhereClause>,
 }
 
 pub struct TypeEnv {

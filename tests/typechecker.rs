@@ -12894,3 +12894,194 @@ fn test_gat_slice8a_slices_4_through_7_still_pass_regression() {
          }",
     );
 }
+
+// ── GAT slice 8b — slice 7 carry-forwards ──────────────────────────
+//
+// (a) Derive-only builtin trait participation in `type_satisfies_bound`
+//     — Clone / Copy / Debug consult `#[derive(...)]` metadata via
+//     `type_supports_clone` / `is_type_copy` / `type_supports_debug`
+//     so a `: Clone` GAT bound discharges against the derive surface.
+// (b) GAT decl `where`-clause discharge at projection-resolution time
+//     — `type Mapped[U] where U: Trait` is now checked at the
+//     where-clause-discharge call sites.
+// (c) Inline bound on GAT param at projection-resolution time
+//     — `type Mapped[U: Trait]` is now checked.
+// (d) Tightening `types_compatible` on `AssocProjection` deferred to
+//     slice 8c (requires constraint-solver plumbing beyond the slice
+//     8 surface).
+
+#[test]
+fn test_gat_slice8b_a_clone_bound_on_gat_accepted_via_derive() {
+    // Carry-forward (a): a GAT declaring `type Mapped[U]: Clone` is
+    // satisfied at the impl-site by a binding RHS that derives Clone.
+    // Pre-slice-8b, `type_satisfies_bound("Foo", "Clone")` would have
+    // returned false because Clone has no impl-table entry. Now it
+    // consults `info.derived_traits.contains("Clone")` via
+    // `type_supports_clone`.
+    typecheck_ok(
+        "trait Functor { type Mapped[U]: Clone; }\n\
+         #[derive(Clone)] struct Foo { x: i64 }\n\
+         struct Doubler {}\n\
+         impl Functor for Doubler { type Mapped[U] = Foo; }",
+    );
+}
+
+#[test]
+fn test_gat_slice8b_a_clone_bound_rejected_without_derive() {
+    // Negative for (a): no `#[derive(Clone)]` → bound miss fires the
+    // existing slice 7 `E_GAT_BOUND_NOT_SATISFIED` (slice 7's
+    // structural check now routes Clone through type_supports_clone,
+    // which falls back to the named-type derived-traits check; without
+    // the derive, that fails).
+    let errors = typecheck_errors(
+        "trait Functor { type Mapped[U]: Clone; }\n\
+         struct Foo { x: i64 }\n\
+         struct Doubler {}\n\
+         impl Functor for Doubler { type Mapped[U] = Foo; }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_BOUND_NOT_SATISFIED")
+                && e.message.contains("Clone")),
+        "expected E_GAT_BOUND_NOT_SATISFIED naming Clone, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8b_a_copy_bound_on_primitive_accepted() {
+    // Built-in coverage: i64 is Copy without any derive. The slice 8b
+    // switch now routes Copy through `is_type_copy` which treats
+    // primitives as Copy unconditionally.
+    typecheck_ok(
+        "trait Functor { type Mapped[U]: Copy; }\n\
+         struct Doubler {}\n\
+         impl Functor for Doubler { type Mapped[U] = i64; }",
+    );
+}
+
+#[test]
+fn test_gat_slice8b_a_debug_bound_accepted_via_derive() {
+    // Mirror of the Clone test for Debug. `#[derive(Debug)]` satisfies
+    // a `: Debug` GAT bound.
+    typecheck_ok(
+        "trait Functor { type Mapped[U]: Debug; }\n\
+         #[derive(Debug)] struct Foo { x: i64 }\n\
+         struct Doubler {}\n\
+         impl Functor for Doubler { type Mapped[U] = Foo; }",
+    );
+}
+
+#[test]
+fn test_gat_slice8b_c_inline_bound_on_gat_param_rejected_via_where_clause() {
+    // Carry-forward (c): a GAT declares `type Mapped[U: Show]`.
+    // Calling `F.Mapped[NoShow]` (where NoShow does not impl Show)
+    // from inside a `where`-clause projection bound fires
+    // `E_GAT_PARAM_BOUND_NOT_SATISFIED`. The discharge piggybacks on
+    // `discharge_projection_bounds`'s call into
+    // `discharge_gat_decl_constraints` after substituting the args.
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Sink { fn sink(ref self) -> i64; }\n\
+         struct NoShow {}\n\
+         impl Sink for NoShow { fn sink(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = NoShow; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[NoShow]: Sink { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_PARAM_BOUND_NOT_SATISFIED")
+                && e.message.contains("Show")),
+        "expected E_GAT_PARAM_BOUND_NOT_SATISFIED naming Show, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8b_c_inline_bound_on_gat_param_accepted_when_arg_satisfies() {
+    // Positive for (c): the projection arg `Foo` satisfies the
+    // declared inline bound `Show`, so `discharge_gat_decl_constraints`
+    // passes silently.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Sink { fn sink(ref self) -> i64; }\n\
+         struct Foo {}\n\
+         impl Show for Foo { fn show(ref self) -> i64 { 0 } }\n\
+         impl Sink for Foo { fn sink(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Foo; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[Foo]: Sink { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8b_b_where_clause_on_gat_decl_rejected_when_arg_misses() {
+    // Carry-forward (b): a GAT declares `type Mapped[U] where U: Show`.
+    // Calling `F.Mapped[NoShow]: Sink` (with NoShow not impling Show)
+    // fires `E_GAT_WHERE_CLAUSE_NOT_SATISFIED` at the projection-bound
+    // discharge site. The GAT decl's where-clause is substituted
+    // `U → NoShow` and the resulting `NoShow: Show` constraint fails.
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Sink { fn sink(ref self) -> i64; }\n\
+         struct NoShow {}\n\
+         impl Sink for NoShow { fn sink(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U] where U: Show; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = NoShow; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[NoShow]: Sink { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_WHERE_CLAUSE_NOT_SATISFIED")
+                && e.message.contains("Show")),
+        "expected E_GAT_WHERE_CLAUSE_NOT_SATISFIED naming Show, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8b_b_where_clause_on_gat_decl_accepted_when_arg_satisfies() {
+    // Positive for (b): the projection arg satisfies the GAT decl's
+    // where-clause constraint, so `discharge_gat_decl_constraints`
+    // passes.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Sink { fn sink(ref self) -> i64; }\n\
+         struct Foo {}\n\
+         impl Show for Foo { fn show(ref self) -> i64 { 0 } }\n\
+         impl Sink for Foo { fn sink(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U] where U: Show; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Foo; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[Foo]: Sink { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8b_slices_4_through_8a_still_pass_regression() {
+    // Regression pin: slice 8a headline continues to typecheck against
+    // the slice 8b extension. The discharge_gat_decl_constraints
+    // helper is a no-op when the GAT decl has no inline bounds and no
+    // where-clause.
+    typecheck_ok(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] Collector for Vec[T] { fn collect(ref self) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}
