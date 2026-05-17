@@ -38,6 +38,19 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 use crate::typechecker::{Type, TypeCheckResult};
 
+/// Recognise the two slice-1 implicit-must-use types — `Result[T, E]` and
+/// `Option[T]` — by name. Returns `Some((kind, why))` where `kind` is the
+/// rendered type name and `why` is the consequence phrase used in the
+/// diagnostic's `note:` line. Returns `None` for every other named type
+/// (those flow through the slice-4 `type_level_must_use` path).
+fn implicit_must_use_kind(name: &str) -> Option<(&'static str, &'static str)> {
+    match name {
+        "Result" => Some(("Result", "an `Err` branch the caller meant to handle")),
+        "Option" => Some(("Option", "a `None` branch the caller meant to handle")),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LintLevel {
     Warning,
@@ -152,29 +165,131 @@ impl Walker<'_> {
     }
 
     /// At a statement-position expression, look up the expression's
-    /// inferred type and emit a `must_use` warning when it is one of the
-    /// two language-level implicit-must-use types. The match against
-    /// `Type::Named { name, .. }` is intentionally name-based — these
-    /// types live in the prelude (`runtime/stdlib/option.kara`,
-    /// `runtime/stdlib/result.kara`) and the typechecker already
-    /// surfaces them as `Type::Named { name: "Option" / "Result", .. }`
-    /// (see `src/typechecker.rs:4224-4227`). Slice 4 will extend this
-    /// check to honour `#[must_use]` on arbitrary user-defined types
-    /// and on function returns through the registry.
+    /// inferred type and emit a `must_use` warning. The check has three
+    /// layered sources, in priority order — only the highest-priority
+    /// match fires, so a discarded value never produces more than one
+    /// `must_use` diagnostic at the same site:
+    ///
+    /// 1. **Implicit (slice 1).** `Result[T, E]` / `Option[T]` are
+    ///    treated as implicitly must-use; the language-level types
+    ///    carry the recognition in the typechecker rather than as a
+    ///    user-visible `#[must_use]` attribute. Slice 1's wording is
+    ///    preserved verbatim because the diagnostic explains the
+    ///    `Err` / `None` branch hazard specifically.
+    ///
+    /// 2. **Type-level `#[must_use]` (slice 4).** Any other named type
+    ///    whose `StructInfo` / `EnumInfo` carries
+    ///    `must_use_message: Some(_)` — slice 2 annotations on
+    ///    `Peekable[T]` / `PooledConnection[T]`, the Iterator pseudo-
+    ///    struct annotation in `register_compiler_intrinsic_env`, and
+    ///    every future user-authored `#[must_use]` on a struct/enum
+    ///    declaration. The message rendered in `note:` is the
+    ///    author's string from the attribute.
+    ///
+    /// 3. **Function-level `#[must_use]` (slice 4).** If the discarded
+    ///    expression is a call (free function, static method, or
+    ///    instance method) and the callee carries `#[must_use]`, fire
+    ///    against the call site with the author's reason. Looked up
+    ///    via `typed.must_use_functions` keyed by `"name"` (free fn)
+    ///    or `"Type.method"` (impl method, resolved through
+    ///    `method_callee_types` for instance calls or by joining a
+    ///    `Path` callee's segments for static calls).
+    ///
+    /// The slice 4 ordering — type-level before function-level — is
+    /// deliberate: a function returning a `#[must_use]` type with its
+    /// own attribute message gets the type-level message, which is
+    /// more specific to the value being discarded. The function-level
+    /// path is the fallback for cases where the return type itself is
+    /// freely droppable but the function's purpose is to mint a fresh
+    /// value the caller should consume (`String.to_lowercase()` once
+    /// String lands; `Vec.iter()` is already covered by the Iterator
+    /// type-level annotation).
     fn check_discard(&mut self, expr: &Expr) {
         let key = SpanKey::from_span(&expr.span);
         let Some(ty) = self.typed.expr_types.get(&key) else {
             return;
         };
-        let Type::Named { name, .. } = ty else {
+
+        // Source 1: implicit (slice 1) — Result / Option.
+        if let Type::Named { name, .. } = ty {
+            if let Some((kind, why)) = implicit_must_use_kind(name) {
+                self.diags.push(self.make_implicit_diag(expr, kind, why));
+                return;
+            }
+        }
+
+        // Source 2: type-level `#[must_use]` (slice 4).
+        if let Some((name, msg)) = self.type_level_must_use(ty) {
+            self.diags.push(self.make_type_level_diag(expr, name, msg));
             return;
+        }
+
+        // Source 3: function-level `#[must_use]` (slice 4).
+        if let Some((callee_name, msg)) = self.function_level_must_use(expr) {
+            self.diags
+                .push(self.make_function_level_diag(expr, callee_name, msg));
+        }
+    }
+
+    /// Resolve a statement-position expression's type to a
+    /// `(type_name, must_use_message)` pair when the type carries a
+    /// slice-4 `#[must_use]` annotation. The lookup goes through
+    /// `typed.struct_info` (for struct types) and `typed.enum_info`
+    /// (for enum types) — both `HashMap<String, StructInfo|EnumInfo>`
+    /// snapshots of the typechecker env at end-of-check. Result /
+    /// Option are intentionally excluded here because source 1
+    /// catches them with a tighter language-level message.
+    fn type_level_must_use(&self, ty: &Type) -> Option<(String, String)> {
+        let Type::Named { name, .. } = ty else {
+            return None;
         };
-        let (kind, why) = match name.as_str() {
-            "Result" => ("Result", "an `Err` branch the caller meant to handle"),
-            "Option" => ("Option", "a `None` branch the caller meant to handle"),
-            _ => return,
+        if implicit_must_use_kind(name).is_some() {
+            return None;
+        }
+        if let Some(info) = self.typed.struct_info.get(name) {
+            if let Some(msg) = &info.must_use_message {
+                return Some((name.clone(), msg.clone()));
+            }
+        }
+        if let Some(info) = self.typed.enum_info.get(name) {
+            if let Some(msg) = &info.must_use_message {
+                return Some((name.clone(), msg.clone()));
+            }
+        }
+        None
+    }
+
+    /// Resolve a statement-position expression to a function-level
+    /// `#[must_use]` annotation, when the discarded expression is a
+    /// call whose callee is in `typed.must_use_functions`. Three call
+    /// shapes resolve to a registry key:
+    ///
+    /// - `foo()` — `ExprKind::Call` with `callee = Identifier(name)`.
+    ///   Registry key is `"name"`.
+    /// - `Type.method()` — `ExprKind::Call` with
+    ///   `callee = Path { segments: ["Type", "method"] }`. Registry
+    ///   key is `"Type.method"`.
+    /// - `obj.method()` — `ExprKind::MethodCall`. The canonical
+    ///   `"Type.method"` key lives in
+    ///   `typed.method_callee_types[span]` (populated by the
+    ///   typechecker during `infer_method_call`).
+    fn function_level_must_use(&self, expr: &Expr) -> Option<(String, String)> {
+        let key = SpanKey::from_span(&expr.span);
+        let lookup_key = match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Identifier(name) => name.clone(),
+                ExprKind::Path { segments, .. } if segments.len() >= 2 => segments.join("."),
+                _ => return None,
+            },
+            ExprKind::MethodCall { .. } => self.typed.method_callee_types.get(&key)?.clone(),
+            _ => return None,
         };
-        self.diags.push(LintDiagnostic {
+        let entry = self.typed.must_use_functions.get(&lookup_key)?;
+        Some((lookup_key, entry.clone().unwrap_or_default()))
+    }
+
+    fn make_implicit_diag(&self, expr: &Expr, kind: &str, why: &str) -> LintDiagnostic {
+        LintDiagnostic {
             level: LintLevel::Warning,
             span: expr.span.clone(),
             message: format!("discarded `{kind}` value — `{kind}` is implicitly `#[must_use]`",),
@@ -191,7 +306,64 @@ impl Walker<'_> {
                  and `Option[T]` carry this recognition in the typechecker rather than \
                  as a user-visible `#[must_use]` attribute."
             )),
-        });
+        }
+    }
+
+    fn make_type_level_diag(&self, expr: &Expr, type_name: String, msg: String) -> LintDiagnostic {
+        let note = if msg.is_empty() {
+            format!(
+                "`{type_name}` is annotated `#[must_use]` (no author-supplied reason — the bare \
+                 attribute form). Bind the value or consume it explicitly to acknowledge the \
+                 discard."
+            )
+        } else {
+            format!("`{type_name}` is annotated `#[must_use = \"{msg}\"]`. {msg}.")
+        };
+        LintDiagnostic {
+            level: LintLevel::Warning,
+            span: expr.span.clone(),
+            message: format!(
+                "discarded `{type_name}` value — `{type_name}` is annotated `#[must_use]`"
+            ),
+            lint_name: "must_use".to_string(),
+            help: Some(
+                "bind the value with `let _ = ...` to acknowledge the discard \
+                 explicitly, or pass it to the consuming function."
+                    .to_string(),
+            ),
+            note: Some(note),
+        }
+    }
+
+    fn make_function_level_diag(
+        &self,
+        expr: &Expr,
+        callee_name: String,
+        msg: String,
+    ) -> LintDiagnostic {
+        let note = if msg.is_empty() {
+            format!(
+                "`{callee_name}` is annotated `#[must_use]` (no author-supplied reason). The \
+                 return value is meaningful — bind it or pass it to the consuming function."
+            )
+        } else {
+            format!("`{callee_name}` is annotated `#[must_use = \"{msg}\"]`. {msg}.")
+        };
+        LintDiagnostic {
+            level: LintLevel::Warning,
+            span: expr.span.clone(),
+            message: format!(
+                "discarded return value of `{callee_name}` — the function is annotated \
+                 `#[must_use]`"
+            ),
+            lint_name: "must_use".to_string(),
+            help: Some(
+                "bind the value with `let _ = ...` to acknowledge the discard \
+                 explicitly, or pass it to the consuming function."
+                    .to_string(),
+            ),
+            note: Some(note),
+        }
     }
 
     fn walk_expr(&mut self, expr: &Expr) {

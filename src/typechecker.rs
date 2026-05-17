@@ -94,6 +94,29 @@ pub(super) fn extract_derived_traits(attributes: &[Attribute]) -> HashSet<String
     traits
 }
 
+/// Extract the `#[must_use]` message from a declaration's attribute list
+/// (slice 4 of the `#[must_use]` mandate — see
+/// `docs/implementation_checklist/phase-5-diagnostics.md` § `#[must_use]`
+/// mandate, slice 4). Returns:
+///
+/// - `Some(message)` when `#[must_use = "msg"]` is present (string-value
+///   form); `message` is the author's reason string.
+/// - `Some(String::new())` when bare `#[must_use]` is present (no
+///   reason supplied — the discard-site walker falls back to a generic
+///   "value should not be discarded" message).
+/// - `None` when the attribute is absent.
+///
+/// The empty-string-vs-None distinction is what lets the walker
+/// distinguish "author marked must-use but gave no message" from "not
+/// must-use at all". Mirrors the shape of `extract_derived_traits`:
+/// pure attribute reading, no diagnostics emitted, no env mutation.
+pub(super) fn extract_must_use_message(attributes: &[Attribute]) -> Option<String> {
+    attributes
+        .iter()
+        .find(|a| a.name == "must_use")
+        .map(|a| a.string_value.clone().unwrap_or_default())
+}
+
 /// Returns `true` when `attributes` contains `#[derive(Display(snake_case))]`.
 pub(super) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
     for attr in attributes {
@@ -440,6 +463,15 @@ pub struct TypeCheckResult {
     /// Empty in user-only programs (slice 1's resolver gate `E0237`
     /// prevents the attribute outside stdlib source).
     pub compiler_builtins: HashSet<String>,
+    /// `#[must_use]` annotations on free functions and impl methods
+    /// (slice 4 of the `#[must_use]` mandate — see
+    /// `docs/implementation_checklist/phase-5-diagnostics.md`). Snapshot
+    /// of `TypeEnv.must_use_functions` at end-of-typecheck. Keyed by
+    /// `"name"` for free functions and `"TargetType.method"` for impl
+    /// methods (matching the canonical shape produced by
+    /// `method_callee_types` / `bare_assoc_fn_targets`). Consumed by
+    /// the discard-site walker in `src/must_use_lint.rs`.
+    pub must_use_functions: HashMap<String, Option<String>>,
 }
 
 // ── Cross-module visibility helpers (CR-24 slice 6) ─────────────
@@ -691,6 +723,7 @@ impl<'a> TypeChecker<'a> {
             .collect();
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
+        let must_use_functions = self.env.must_use_functions.clone();
         TypeCheckResult {
             errors: self.errors,
             warnings: self.warnings,
@@ -710,6 +743,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_inner_types: self.pattern_binding_inner_types,
             pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,
             compiler_builtins,
+            must_use_functions,
         }
     }
 

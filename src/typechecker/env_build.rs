@@ -18,7 +18,7 @@ use super::types::{
     type_display, type_is_fully_concrete, FloatSize, IntSize, Type, UIntSize, VariantTypeInfo,
 };
 use super::{
-    extract_derived_traits, find_item_visibility, has_display_snake_case,
+    extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
     normalize_bounds_into_where_clause, TypeErrorKind,
 };
 
@@ -57,6 +57,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
                     let derived_traits = extract_derived_traits(&s.attributes);
+                    let must_use_message = extract_must_use_message(&s.attributes);
                     self.env.structs.insert(
                         s.name.clone(),
                         StructInfo {
@@ -65,12 +66,14 @@ impl<'a> super::TypeChecker<'a> {
                             derived_traits,
                             no_rc: s.no_rc,
                             is_shared: s.is_shared,
+                            must_use_message,
                         },
                     );
                 }
                 Item::EnumDef(e) => {
                     let gp = Self::generic_param_names(&e.generic_params);
                     let derived_traits = extract_derived_traits(&e.attributes);
+                    let must_use_message = extract_must_use_message(&e.attributes);
                     self.env.enums.insert(
                         e.name.clone(),
                         EnumInfo {
@@ -78,6 +81,7 @@ impl<'a> super::TypeChecker<'a> {
                             variants: Vec::new(),
                             derived_traits,
                             is_shared: e.is_shared,
+                            must_use_message,
                         },
                     );
                 }
@@ -322,7 +326,28 @@ impl<'a> super::TypeChecker<'a> {
         let v = || Type::TypeParam("V".to_string());
 
         // Iterator / Array parametric pseudo-structs (see fn doc).
+        // The Iterator pseudo-struct carries the `#[must_use]` message
+        // slice 2 of the `#[must_use]` mandate would have written into
+        // baked source if `Iterator` had a syntactic struct declaration
+        // there. Per slice 2's design, the annotation lands here in
+        // `register_compiler_intrinsic_env` alongside the slice 4
+        // `StructInfo.must_use_message` field that consumes it. Every
+        // iterator-adapter return type from `src/typechecker/stdlib_iter.rs`
+        // (`map`, `filter`, `take`, `skip`, `chain`, `zip`, `enumerate`,
+        // `rev`, `flatten`, `flat_map`, `inspect`, `cycle`, `step_by`,
+        // `Vec.iter()`, …) collapses to `Type::Named { name: "Iterator", … }`,
+        // so this single annotation propagates the discard-site warning
+        // across the whole adapter surface.
+        let iterator_must_use_msg = "discarding the iterator drops every \
+             adapter without running it — chain a terminal method or \
+             bind the result"
+            .to_string();
         for name in &["Array", "Iterator"] {
+            let must_use_message = if *name == "Iterator" {
+                Some(iterator_must_use_msg.clone())
+            } else {
+                None
+            };
             self.env
                 .structs
                 .entry(name.to_string())
@@ -332,6 +357,7 @@ impl<'a> super::TypeChecker<'a> {
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
+                    must_use_message,
                 });
             self.env
                 .impl_assoc_types
@@ -370,6 +396,7 @@ impl<'a> super::TypeChecker<'a> {
                     derived_traits: HashSet::new(),
                     no_rc: false,
                     is_shared: false,
+                    must_use_message: None,
                 });
             self.env
                 .impl_assoc_types
@@ -790,6 +817,7 @@ impl<'a> super::TypeChecker<'a> {
             .map(|f| (f.name.clone(), self.lower_type_expr(&f.ty, &gp), f.is_pub))
             .collect();
         let derived_traits = extract_derived_traits(&s.attributes);
+        let must_use_message = extract_must_use_message(&s.attributes);
         self.env.structs.insert(
             s.name.clone(),
             StructInfo {
@@ -798,6 +826,7 @@ impl<'a> super::TypeChecker<'a> {
                 derived_traits,
                 no_rc: s.no_rc,
                 is_shared: s.is_shared,
+                must_use_message,
             },
         );
     }
@@ -827,6 +856,7 @@ impl<'a> super::TypeChecker<'a> {
         if has_display_snake_case(&e.attributes) {
             self.display_snake_case_enums.insert(e.name.clone());
         }
+        let must_use_message = extract_must_use_message(&e.attributes);
         self.env.enums.insert(
             e.name.clone(),
             EnumInfo {
@@ -834,6 +864,7 @@ impl<'a> super::TypeChecker<'a> {
                 variants,
                 derived_traits,
                 is_shared: e.is_shared,
+                must_use_message,
             },
         );
     }
@@ -873,6 +904,16 @@ impl<'a> super::TypeChecker<'a> {
         );
         if f.attributes.iter().any(|a| a.name == "compiler_builtin") {
             self.env.compiler_builtins.insert(f.name.clone());
+        }
+        // Slice 4 of the `#[must_use]` mandate: record the attribute on
+        // the free function so the discard-site walker can flag callers
+        // that drop the return value at statement position. Keyed by
+        // the function's bare name; impl-method must-use is keyed by
+        // `"TargetType.method"` in `env_add_impl` below.
+        if let Some(msg) = extract_must_use_message(&f.attributes) {
+            self.env
+                .must_use_functions
+                .insert(f.name.clone(), Some(msg));
         }
     }
 
@@ -1004,6 +1045,21 @@ impl<'a> super::TypeChecker<'a> {
                     ),
                 },
             );
+            // Slice 4 of the `#[must_use]` mandate: register impl
+            // methods under the `"TargetType.method"` key shape that
+            // `method_callee_types` / `bare_assoc_fn_targets` already
+            // produce at call sites, so the discard-site walker can do
+            // a single lookup. Both inherent impls and trait-impl
+            // methods register; this covers inherent annotations and
+            // impl-side overrides of trait defaults. Trait-declaration
+            // `#[must_use]` registers separately through `env_add_trait`'s
+            // default-body path (where applicable) and via the
+            // future trait-attribute-inheritance follow-up.
+            if let Some(msg) = extract_must_use_message(&method.attributes) {
+                self.env
+                    .must_use_functions
+                    .insert(format!("{}.{}", type_name, method.name), Some(msg));
+            }
         }
 
         // Theme-4 overlap check: reject coexistence of generic-on-name and

@@ -27,6 +27,15 @@ pub struct StructInfo {
     pub derived_traits: HashSet<String>,
     pub no_rc: bool,
     pub is_shared: bool,
+    /// `#[must_use]` annotation carried on the struct declaration
+    /// (slice 4 of the `#[must_use]` mandate — see
+    /// `docs/implementation_checklist/phase-5-diagnostics.md` §
+    /// `#[must_use]` mandate, slice 4). `Some(message)` when the
+    /// declaration has the attribute; `message` is the author's reason
+    /// string (`#[must_use = "..."]` form) or an empty string for the
+    /// bare `#[must_use]` form. `None` when no attribute is present.
+    /// Read at discard-site enforcement in `src/must_use_lint.rs`.
+    pub must_use_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,6 +44,9 @@ pub struct EnumInfo {
     pub variants: Vec<(String, VariantTypeInfo)>,
     pub derived_traits: HashSet<String>,
     pub is_shared: bool,
+    /// See [`StructInfo::must_use_message`]. Same role on enum
+    /// declarations; slice 4 of the `#[must_use]` mandate.
+    pub must_use_message: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -137,6 +149,19 @@ pub struct TypeEnv {
     /// resolver gate (`E0237`) prevents user code from getting entries
     /// into this set.
     pub compiler_builtins: HashSet<String>,
+    /// `#[must_use]` annotations on free functions and impl methods
+    /// (slice 4 of the `#[must_use]` mandate). Keyed by the canonical
+    /// name the discard-site lookup uses: `"name"` for free functions,
+    /// `"TargetType.method"` for inherent / trait-impl methods (the
+    /// same shape produced by `method_callee_types` and
+    /// `bare_assoc_fn_targets`). Value is `Some(message)` when the
+    /// attribute carries an author-supplied reason
+    /// (`#[must_use = "..."]`), `Some("")` for bare `#[must_use]`,
+    /// and the absence of the key means the function carries no
+    /// attribute. Populated by `env_add_function` / `env_add_impl`;
+    /// consumed by `must_use_lint`'s discard-site walker via the
+    /// snapshot on `TypeCheckResult.must_use_functions`.
+    pub must_use_functions: HashMap<String, Option<String>>,
     #[allow(dead_code)]
     pub(super) next_type_var: u32,
     #[allow(dead_code)]
@@ -172,6 +197,7 @@ impl TypeEnv {
             impls_by_trait: HashMap::new(),
             impl_assoc_types: HashMap::new(),
             compiler_builtins: HashSet::new(),
+            must_use_functions: HashMap::new(),
             next_type_var: 0,
             substitutions: HashMap::new(),
             next_const_var: 0,
