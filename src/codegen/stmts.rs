@@ -1577,7 +1577,11 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             PatternKind::Wildcard => Ok(()),
             // Struct destructuring: let Foo { x, y } = val
-            PatternKind::Struct { path: _, fields } => {
+            PatternKind::Struct {
+                path: _,
+                fields,
+                has_rest: _,
+            } => {
                 if let BasicValueEnum::StructValue(sv) = val {
                     for (idx, field_pat) in fields.iter().enumerate() {
                         let field_val = self

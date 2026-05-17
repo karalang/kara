@@ -387,7 +387,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // destructure errored at body compile with
             // `Undefined variable 'x'` — the bind path was missing
             // entirely, the `_ => Ok(())` fall-through silently no-op'd.
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 let struct_name = path.last().cloned().unwrap_or_default();
                 let field_names = self.struct_field_names.get(&struct_name).cloned();
                 if let (BasicValueEnum::StructValue(sv), Some(field_names)) = (scrut, field_names) {
@@ -502,7 +506,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 Ok(Some(()))
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 let struct_name = path.last().cloned().unwrap_or_default();
                 // Plain user struct: GEP into each field by name-resolved
                 // index. Enum struct-variants would also reach here, but
