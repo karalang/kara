@@ -14315,3 +14315,87 @@ fn non_exhaustive_slice5_enum_info_carries_flag() {
     assert!(!b.is_non_exhaustive);
     assert!(!b.defining_stdlib_origin);
 }
+
+// ── `impl Trait` slice 5: RPITIT blocks `dyn Trait` ─────────────
+
+#[test]
+fn impl_trait_slice5_dyn_trait_with_rpitit_method_rejected() {
+    // Spec test: a trait that declares any method with `-> impl T`
+    // (return-position impl trait in trait, RPITIT) cannot appear
+    // as `dyn TraitWithRPITIT` — no fixed vtable slot can be
+    // synthesized for the existential return. Slice 5 emits
+    // `E_RPITIT_INCOMPATIBLE_WITH_DYN` naming the offending method
+    // so the user knows which declaration triggers the rejection.
+    let result = typecheck_desugared_result(
+        "trait Iter { fn next(mut ref self) -> i64; }\n\
+         trait Source { fn iter(self) -> impl Iter; }\n\
+         fn use_source(s: dyn Source) -> i64 { 0 }",
+    );
+    let found = result.errors.iter().any(|e| {
+        e.message.contains("E_RPITIT_INCOMPATIBLE_WITH_DYN")
+            && e.message.contains("Source")
+            && e.message.contains("iter")
+    });
+    assert!(
+        found,
+        "expected E_RPITIT_INCOMPATIBLE_WITH_DYN naming `Source` and offending method `iter`; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn impl_trait_slice5_dyn_trait_without_rpitit_hits_p1_stub() {
+    // Negative complement: a `dyn Trait` use site against a trait
+    // with NO RPITIT methods hits the generic
+    // `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` stub instead of the
+    // RPITIT-specific diagnostic. This pins that slice 5's check
+    // fires ONLY on the RPITIT case — the rest of `dyn Trait` stays
+    // P1-deferred without ambiguity.
+    let result = typecheck_desugared_result(
+        "trait Display { fn show(ref self) -> String; }\n\
+         fn use_display(d: dyn Display) -> i64 { 0 }",
+    );
+    let stub_hits = result.errors.iter().any(|e| {
+        e.message.contains("E_DYN_TRAIT_NOT_IMPLEMENTED_YET") && e.message.contains("Display")
+    });
+    let rpitit_misfire = result
+        .errors
+        .iter()
+        .any(|e| e.message.contains("E_RPITIT_INCOMPATIBLE_WITH_DYN"));
+    assert!(
+        stub_hits,
+        "expected E_DYN_TRAIT_NOT_IMPLEMENTED_YET stub naming `Display`; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        !rpitit_misfire,
+        "RPITIT-incompat diagnostic must NOT fire for a non-RPITIT trait; got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn impl_trait_slice5_dyn_trait_parses_as_type_kind_dyn() {
+    // Surface pin: the slice-5 parser arm produces `TypeKind::Dyn`
+    // (not `Path`) when the user writes `dyn TraitPath`. Verified
+    // by introspecting the parsed AST directly so future parser
+    // refactors don't accidentally route `dyn Trait` through the
+    // bare Path arm and silently lose the slice-5 RPITIT check.
+    use karac::ast::{Item, TypeKind};
+    let parsed = parse(
+        "trait Display { fn show(ref self) -> String; }\n\
+         fn f(d: dyn Display) {}",
+    );
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let Item::Function(f) = &parsed.program.items[1] else {
+        panic!("Expected Function at items[1]");
+    };
+    let TypeKind::Dyn { trait_path, .. } = &f.params[0].ty.kind else {
+        panic!("Expected TypeKind::Dyn; got {:?}", f.params[0].ty.kind);
+    };
+    assert_eq!(trait_path.segments, vec!["Display".to_string()]);
+}

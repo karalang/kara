@@ -277,6 +277,33 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // `dyn Trait` slice 5: same private-type-leak rule as
+            // `Path` / `ImplTrait` — a private trait name surfacing
+            // through a `pub` signature via `dyn Trait` is a leak.
+            TypeKind::Dyn {
+                trait_path, args, ..
+            } => {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        self.check_type_expr_visibility(t, generic_scope, type_vis, context, owner);
+                    }
+                }
+                if let Some(last) = trait_path.segments.last() {
+                    if !(trait_path.segments.len() == 1 && generic_scope.iter().any(|g| g == last))
+                    {
+                        if let Some(false) = type_vis.get(last).copied() {
+                            self.type_error(
+                                format!(
+                                    "private type '{}' leaks through {} of '{}'; mark the type `pub` or remove it from the public surface",
+                                    last, context, owner
+                                ),
+                                ty.span.clone(),
+                                TypeErrorKind::PrivateTypeInPublicSignature,
+                            );
+                        }
+                    }
+                }
+            }
             TypeKind::Unit | TypeKind::Error => {}
         }
     }
@@ -1384,6 +1411,18 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // `dyn Trait` slice 5: `dyn` is the complement of `impl` —
+            // walk generic args for any nested `impl Trait` occurrences
+            // (defensive — current slice 5 surface forbids `impl Trait`
+            // nested under `dyn Trait` via the slice-1 NestedGenericArg
+            // block, but the walk stays uniform with `Path`).
+            TypeKind::Dyn { args, .. } => {
+                for arg in args {
+                    if let GenericArg::Type(t) = arg {
+                        Self::walk_for_impl_trait(t, f);
+                    }
+                }
+            }
             TypeKind::Unit | TypeKind::Error => {}
         }
     }
@@ -1448,6 +1487,22 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
             TypeKind::ImplTrait { args, .. } => {
+                for arg in args {
+                    if let GenericArg::Type(t) = arg {
+                        Self::collect_capture_signals(
+                            t,
+                            generic_param_names,
+                            type_params,
+                            found_ref,
+                        );
+                    }
+                }
+            }
+            // `dyn Trait` slice 5: walk generic args for type-param /
+            // ref-flow signals nested under the `dyn` surface so the
+            // capture-set rule applies uniformly even though slice 5
+            // rejects every `dyn Trait` use site.
+            TypeKind::Dyn { args, .. } => {
                 for arg in args {
                     if let GenericArg::Type(t) = arg {
                         Self::collect_capture_signals(

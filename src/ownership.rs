@@ -1611,6 +1611,18 @@ fn collect_impl_trait_spans<'t>(ty: &'t TypeExpr, out: &mut Vec<&'t Span>) {
                 }
             }
         }
+        // `dyn Trait` slice 5 — `dyn` is the dual of `impl` and never
+        // wraps an existential's capture set; walk generic args for
+        // any nested impl-trait spans (defensive — current slice 5
+        // surface forbids nested impl Trait under dyn, but the walk
+        // stays uniform with the Path arm above).
+        TypeKind::Dyn { args, .. } => {
+            for arg in args {
+                if let GenericArg::Type(t) = arg {
+                    collect_impl_trait_spans(t, out);
+                }
+            }
+        }
         TypeKind::Unit | TypeKind::Error => {}
     }
 }

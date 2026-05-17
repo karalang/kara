@@ -162,6 +162,37 @@ impl super::Parser {
             // segment paths (`std.iter.Iterator`) and generic args
             // (`Iterator[Item = i64]`) are handled uniformly with
             // regular path types.
+            // `dyn TraitPath[GENERIC_ARGS]` — trait-object type marker.
+            // The general `dyn Trait` feature is P1-deferred per
+            // design.md § Polymorphism; the parser surface lands today
+            // only so the `impl Trait` epic's slice-5 check
+            // (RPITIT-blocks-dyn) has a syntactic target. The
+            // typechecker emits one of two focused diagnostics on
+            // lowering (`E_RPITIT_INCOMPATIBLE_WITH_DYN` /
+            // `E_DYN_TRAIT_NOT_IMPLEMENTED_YET`); the parser builds the
+            // `TypeKind::Dyn` node regardless so error recovery stays
+            // clean.
+            Token::Dyn => {
+                let dyn_kw_span = self.current_span();
+                self.advance(); // consume `dyn`
+                let trait_path = self.parse_path_type()?;
+                let (segments, args_opt) = (trait_path.segments, trait_path.generic_args);
+                let args: Vec<GenericArg> = args_opt.unwrap_or_default();
+                let trait_path_clean = PathExpr {
+                    segments,
+                    generic_args: None,
+                    span: self.span_from(&dyn_kw_span),
+                };
+                let span = self.span_from(&start);
+                Some(TypeExpr {
+                    kind: TypeKind::Dyn {
+                        trait_path: trait_path_clean,
+                        args,
+                        span: span.clone(),
+                    },
+                    span,
+                })
+            }
             Token::Impl => {
                 let impl_kw_span = self.current_span();
                 self.advance(); // consume `impl`

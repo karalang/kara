@@ -683,6 +683,33 @@ fn write_type_for_diagnostic(ty: &TypeExpr, out: &mut String) {
                 out.push(']');
             }
         }
+        // `dyn Trait` slice 5 stub: render the surface form so the
+        // anonymous-parameter `_: <type>` fix-it covers `dyn Trait`
+        // signatures uniformly with the `impl Trait` shape above.
+        TypeKind::Dyn {
+            trait_path, args, ..
+        } => {
+            out.push_str("dyn ");
+            for (i, seg) in trait_path.segments.iter().enumerate() {
+                if i > 0 {
+                    out.push('.');
+                }
+                out.push_str(seg);
+            }
+            if !args.is_empty() {
+                out.push('[');
+                for (i, arg) in args.iter().enumerate() {
+                    if i > 0 {
+                        out.push_str(", ");
+                    }
+                    match arg {
+                        crate::ast::GenericArg::Type(t) => write_type_for_diagnostic(t, out),
+                        crate::ast::GenericArg::Const(_) => out.push('_'),
+                    }
+                }
+                out.push(']');
+            }
+        }
         TypeKind::Unit => out.push_str("()"),
         TypeKind::Error => out.push('_'),
     }

@@ -161,9 +161,93 @@ impl<'a> super::TypeChecker<'a> {
                     origin: crate::resolver::SpanKey::from_span(&ty.span),
                 }
             }
+            // `dyn Trait` slice 5 — the dual of `impl Trait`. Slice 5
+            // ships the RPITIT-incompatibility check: when the named
+            // trait has any method declared with `-> impl Trait`
+            // (return-position impl trait in trait), `dyn Trait`
+            // cannot synthesize a fixed vtable slot for that method.
+            // Lower to `Type::Error` with `E_RPITIT_INCOMPATIBLE_WITH_DYN`
+            // naming the first offending method. When the trait has no
+            // RPITIT methods, emit the generic `E_DYN_TRAIT_NOT_IMPLEMENTED_YET`
+            // P1-deferred stub (general `dyn Trait` value/type
+            // semantics, vtable layout, and effect checking are P1 per
+            // design.md § Polymorphism). Walking generic args before
+            // emitting surfaces any nested type errors.
+            TypeKind::Dyn {
+                trait_path, args, ..
+            } => {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        let _ = self.lower_type_expr_inner(t, generic_scope, false);
+                    }
+                }
+                let trait_name = trait_path.segments.join(".");
+                if let Some(offending) = Self::trait_first_rpitit_method(self.program, &trait_name)
+                {
+                    self.type_error(
+                        format!(
+                            "error[E_RPITIT_INCOMPATIBLE_WITH_DYN]: cannot use \
+                             `dyn {trait_name}` because method `{offending}` returns \
+                             `impl Trait` — return-position `impl Trait` in trait \
+                             methods (RPITIT) has no fixed vtable slot, so `dyn`-dispatched \
+                             callers cannot synthesize a thunk; route through a generic \
+                             parameter `[T: {trait_name}]` instead"
+                        ),
+                        ty.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                } else {
+                    self.type_error(
+                        format!(
+                            "error[E_DYN_TRAIT_NOT_IMPLEMENTED_YET]: `dyn {trait_name}` is \
+                             parsed but the trait-object machinery (vtable construction, \
+                             dynamic dispatch, effect-opacity story) is P1-deferred per \
+                             design.md § Polymorphism; route through a generic parameter \
+                             `[T: {trait_name}]` for now"
+                        ),
+                        ty.span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
+                Type::Error
+            }
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,
         }
+    }
+
+    /// `impl Trait` slice 5 — return `Some(method_name)` for the first
+    /// method of `trait_name` whose return type is `TypeKind::ImplTrait`,
+    /// i.e. the trait declares an RPITIT method. Walks the AST trait
+    /// declaration directly (the typed env doesn't carry per-method
+    /// return-shape information in a queryable form). Returns `None`
+    /// when the trait is not defined in the current program (e.g.,
+    /// baked stdlib trait), when no methods return `impl Trait`, or
+    /// when the name resolves to a non-trait item — slice 5's check
+    /// fires only on positively-identified RPITIT traits; the generic
+    /// `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` stub covers the rest.
+    fn trait_first_rpitit_method(
+        program: &crate::ast::Program,
+        trait_name: &str,
+    ) -> Option<String> {
+        for item in &program.items {
+            if let Item::TraitDef(t) = item {
+                if t.name != trait_name {
+                    continue;
+                }
+                for trait_item in &t.items {
+                    if let TraitItem::Method(method) = trait_item {
+                        if let Some(ref ret) = method.return_type {
+                            if matches!(ret.kind, TypeKind::ImplTrait { .. }) {
+                                return Some(method.name.clone());
+                            }
+                        }
+                    }
+                }
+                return None;
+            }
+        }
+        None
     }
 
     /// Const generics slice 3d: deferred-F regression-pin diagnostic.

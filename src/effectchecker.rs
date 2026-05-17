@@ -1272,6 +1272,17 @@ fn collect_effect_var_names_in_type(ty: &TypeExpr, out: &mut Vec<String>) {
                 }
             }
         }
+        // `dyn Trait` slice 5: no `with` clause is parsed on the
+        // surface today (per-method effect contracts live on the
+        // trait declaration, Phase 8). Walk generic args for nested
+        // `FnType` effect vars.
+        TypeKind::Dyn { args, .. } => {
+            for arg in args {
+                if let GenericArg::Type(t) = arg {
+                    collect_effect_var_names_in_type(t, out);
+                }
+            }
+        }
         TypeKind::Path(_) | TypeKind::Unit | TypeKind::Error => {}
     }
 }
@@ -1449,6 +1460,18 @@ fn format_type_expr_with_subs(
                 out.push_str(" with [");
                 out.push_str(&resolved.join(", "));
                 out.push(']');
+            }
+        }
+        // `dyn Trait` slice 5 — render the surface form for diagnostics
+        // (mirrors the `impl Trait` arm above). Per-method effect
+        // substitution lands with Phase 8's dyn-Trait effect checking.
+        TypeKind::Dyn {
+            trait_path, args, ..
+        } => {
+            out.push_str("dyn ");
+            out.push_str(&trait_path.segments.join("."));
+            if !args.is_empty() {
+                format_generic_args(args, type_subs, var_bindings, out);
             }
         }
         TypeKind::Unit => out.push_str("()"),

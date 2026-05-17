@@ -95,6 +95,21 @@ impl<'a> super::Resolver<'a> {
                     self.resolve_effect_list(list);
                 }
             }
+            // `dyn Trait` slice 5: resolve the trait path + nested
+            // generic args so downstream typechecker diagnostics (the
+            // RPITIT-conflict check and the P1-deferred stub) can name
+            // the trait and any malformed nested types are surfaced.
+            TypeKind::Dyn {
+                trait_path, args, ..
+            } => {
+                self.resolve_path_expr(trait_path);
+                for arg in args {
+                    match arg {
+                        GenericArg::Type(ty) => self.resolve_type_expr(ty),
+                        GenericArg::Const(expr) => self.resolve_expr(expr),
+                    }
+                }
+            }
             TypeKind::Unit | TypeKind::Error => {}
         }
     }

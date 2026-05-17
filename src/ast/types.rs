@@ -178,6 +178,33 @@ pub enum TypeKind {
         use_effects: Option<EffectList>,
         span: Span,
     },
+    /// `dyn TRAIT_PATH[GENERIC_ARGS]` — trait-object type marker. The
+    /// general `dyn Trait` feature (vtable construction, dynamic
+    /// dispatch, effect-opacity story) is **P1-deferred** per design.md
+    /// § Polymorphism. The parser accepts the surface today only so
+    /// the `impl Trait` epic's slice-5 check (RPITIT blocks `dyn Trait`)
+    /// has a syntactic target. The typechecker lowers `TypeKind::Dyn`
+    /// to `Type::Error` with one of two focused diagnostics:
+    ///
+    /// 1. `E_RPITIT_INCOMPATIBLE_WITH_DYN` — when the named trait has
+    ///    one or more methods that return `impl Trait` (no fixed
+    ///    vtable slot can be synthesized for those methods); the
+    ///    diagnostic names the offending method so the user can
+    ///    refactor.
+    /// 2. `E_DYN_TRAIT_NOT_IMPLEMENTED_YET` — otherwise, the generic
+    ///    P1-deferred stub; the trait is not RPITIT but `dyn Trait`
+    ///    as a value/type form is not yet wired through the type
+    ///    system / codegen / effect checker.
+    ///
+    /// Fields mirror `ImplTrait` — `trait_path` is the trait's path
+    /// (e.g. `Display`, `std.io.Read`); `args` carries positional
+    /// generic args on the trait; `span` is the full source span of
+    /// the `dyn Trait[…]` type expression.
+    Dyn {
+        trait_path: PathExpr,
+        args: Vec<GenericArg>,
+        span: Span,
+    },
     Unit,
     Error,
 }

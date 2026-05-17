@@ -149,6 +149,20 @@ impl super::Formatter {
                 }
                 self.format_effects(use_effects);
             }
+            // `dyn Trait` slice 5 stub: round-trip the surface so
+            // `karac fmt` preserves the user's `dyn Trait` annotation
+            // even though the typechecker rejects every use site
+            // (RPITIT-conflict or P1-deferred stub). See
+            // phase-5-diagnostics.md line 401.
+            TypeKind::Dyn {
+                trait_path, args, ..
+            } => {
+                self.write_str("dyn ");
+                self.write_path(&trait_path.segments);
+                if !args.is_empty() {
+                    self.format_generic_args_opt(&Some(args.clone()));
+                }
+            }
             TypeKind::Unit => self.write_str("()"),
             TypeKind::Error => self.write_str("/* error */"),
         }
