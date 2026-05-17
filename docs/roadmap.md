@@ -274,7 +274,7 @@ Note: Basic diagnostics (`--output=json`, source spans, error suggestions) are b
 - [x] Labeled loops: `label: for/while/loop`, `break label`, `continue label`, `break label expr`
 - [x] Named/labeled function arguments: `name: expr` at call sites, declaration-order enforcement, contiguity validation
 - [x] `seq {}` block: suppress auto-parallelism, block expression semantics
-- [ ] Const generics — full surface: `[T, const N: i64]` declarations; `i64` / `i8`–`i128` / `bool` / `char` / fieldless-`enum` permitted param types; const-expression instantiation (`Array[T, N + 1]`); const-expression bounds in `where` clauses (`where N >= 0`); call-site inference for const params in argument positions; explicit-only solving for return-type-only and bounds-only const params; checked-arithmetic evaluation at type-check time. Spec in `design.md` § Type Inference > *Const generic parameters*. Const-`fn` and user-code calls in const-arg position remain deferred to comptime.
+- [x] Const generics — full surface: `[T, const N: i64]` declarations; `i64` / `i8`–`i128` / `bool` / `char` / fieldless-`enum` permitted param types; const-expression instantiation (`Array[T, N + 1]`); const-expression bounds in `where` clauses (`where N >= 0`); call-site inference for const params in argument positions; explicit-only solving for return-type-only and bounds-only const params; checked-arithmetic evaluation at type-check time. Spec in `design.md` § Type Inference > *Const generic parameters*. Const-`fn` and user-code calls in const-arg position remain deferred to comptime.
 
 ### 5.3: Advanced Diagnostics
 
