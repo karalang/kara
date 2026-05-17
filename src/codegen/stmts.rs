@@ -759,7 +759,35 @@ impl<'ctx> super::Codegen<'ctx> {
                         None
                     });
                 self.pending_closure_fn_type = None;
-                let is_fresh_construction = matches!(&value.kind, ExprKind::StructLiteral { .. });
+                // Skip receive-side `rc_inc` when the RHS already delivers
+                // a freshly-owned ref:
+                //   * `StructLiteral` — `emit_rc_alloc` initializes rc=1.
+                //   * `Call` / `MethodCall` (free fn, assoc fn, method,
+                //     shared-enum variant constructor) — the callee
+                //     transfers +1 to the caller via the return value.
+                //     The function-return handshake is: any callee
+                //     returning a `shared` type hands the caller a ref
+                //     that is already +1 above what the caller previously
+                //     held. The bug #7 fix at
+                //     `call_dispatch.rs::suppress_source_vec_cleanup_for_arg`
+                //     emits the inc inside the callee at each move-out
+                //     site; the source's queued scope-exit `rc_dec` then
+                //     decrements its own slot back to construction-time,
+                //     leaving a net +1 attached to the returned pointer.
+                //     The caller therefore must NOT inc again on receive
+                //     — doing so doubles the refcount and leaks one ref
+                //     on every shared-struct return crossing (the
+                //     receiver's scope-exit dec drops rc to 1, never 0,
+                //     so `free` never fires).
+                //
+                // `Identifier`, `FieldAccess`, `Index`, … RHS shapes
+                // still alias an existing tracked ref and need the inc.
+                let is_fresh_construction = matches!(
+                    &value.kind,
+                    ExprKind::StructLiteral { .. }
+                        | ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                );
                 let val = self.compile_expr(value)?;
                 // Track variable → type name for field resolution.
                 let mut shared_info: Option<(String, SharedTypeInfo<'ctx>)> = None;
@@ -1000,9 +1028,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
+                // Mirror the let-site convention: when the RHS is a
+                // `StructLiteral` (`emit_rc_alloc` returns rc=1) or a
+                // `Call` / `MethodCall` (callee transfers +1 via the
+                // return value — see the let-site comment), the value
+                // already carries a fresh ref. Skip the receive-side
+                // `rc_inc` to avoid doubling the refcount on
+                // `x = make()` / `x = obj.make()` / shared-enum-variant
+                // reassignment.
+                let rhs_is_fresh = matches!(
+                    &value.kind,
+                    ExprKind::StructLiteral { .. }
+                        | ExprKind::Call { .. }
+                        | ExprKind::MethodCall { .. }
+                );
                 let val = self.compile_expr(value)?;
                 if let ExprKind::Identifier(name) = &target.kind {
-                    // For shared types: rc_dec old value, rc_inc new value.
+                    // For shared types: rc_dec old value, rc_inc new value
+                    // (only when the RHS is not itself a fresh-ref source).
                     if let Some(type_name) = self.var_type_names.get(name).cloned() {
                         if let Some(info) = self.shared_types.get(&type_name).cloned() {
                             if let Some(slot) = self.variables.get(name).copied() {
@@ -1017,9 +1060,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .unwrap()
                                     .into_pointer_value();
                                 self.emit_refcount_dec(name, info.heap_type, old_ptr);
-                                // rc_inc new pointer
-                                let new_ptr = val.into_pointer_value();
-                                self.emit_refcount_inc(name, info.heap_type, new_ptr);
+                                // rc_inc new pointer — only when the RHS
+                                // is an alias of an existing tracked ref.
+                                if !rhs_is_fresh {
+                                    let new_ptr = val.into_pointer_value();
+                                    self.emit_refcount_inc(name, info.heap_type, new_ptr);
+                                }
                                 self.builder.build_store(slot.ptr, val).unwrap();
                                 return Ok(());
                             }

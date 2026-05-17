@@ -2271,6 +2271,174 @@ fn main() {
         );
     }
 
+    // ── Bug #8 regression: receive-side double-inc on function return ──
+    //
+    // After bug #7's fix added a callee-side `rc_inc` at each move-out
+    // site, the callee transferred +1 to the caller via the return
+    // value (its scope-exit `rc_dec` balanced its own move-out inc, so
+    // the returned pointer carries a net +1 over what the caller held
+    // before the call). The receive site in `compile_stmt` —
+    // `let x = make()` — kept incrementing on receive, doubling the
+    // refcount: the receiver's scope-exit dec then dropped rc from 2
+    // to 1 instead of 1 to 0, so the heap object was never freed.
+    // Symmetric one-ref leak on every shared-struct function-return
+    // crossing.
+    //
+    // Convention after the fix: the function-return path owns the +1.
+    // The caller does NOT emit `rc_inc` on receive when the RHS of a
+    // let-binding (or an Assign target's RHS) is itself a `Call` — the
+    // value already carries a freshly-transferred ref. Identifier /
+    // FieldAccess / Index RHS shapes still alias an existing ref and
+    // need the inc.
+
+    #[test]
+    fn test_ir_bug8_shared_struct_return_receive_no_double_inc() {
+        // The IR-level gate: across `make()` + `let x = make()`, the
+        // module must contain exactly one `add i64 %rc` (the callee-
+        // side move-out inc inside `make`) and exactly two `sub i64
+        // %rc` (callee's scope-exit dec on `s` + caller's scope-exit
+        // dec on `x`). Before the fix `add` appeared twice — once
+        // inside `make` and once at the `let x = make()` receive site
+        // — which leaked one ref per crossing.
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+fn make() -> S {
+    let s = S { val: 42 };
+    s
+}
+fn use_it() {
+    let x = make();
+}
+"#,
+        );
+        let inc_count = ir.matches("add i64 %rc").count();
+        let dec_count = ir.matches("sub i64 %rc").count();
+        assert_eq!(
+            inc_count, 1,
+            "make+receive should emit exactly one rc_inc (callee move-out only; \
+             receiver must not inc on a Call RHS — that doubles the refcount and leaks)\n\
+             found {} `add i64 %rc` ops in:\n{}",
+            inc_count, ir
+        );
+        assert_eq!(
+            dec_count, 2,
+            "make+receive should emit two rc_decs (callee scope-exit + caller scope-exit); \
+             found {} `sub i64 %rc` ops in:\n{}",
+            dec_count, ir
+        );
+    }
+
+    #[test]
+    fn test_ir_bug8_assign_from_call_no_double_inc() {
+        // Same convention applies to `Assign` targeting a shared local:
+        // `x = make()` is rc_dec(old) + store(new), without a receive-
+        // side inc on the freshly-transferred ref.  The `mut` rebinding
+        // path must emit the dec for the previous value but skip the
+        // inc on the new one (whose +1 is delivered by the call return).
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+fn make() -> S {
+    let s = S { val: 42 };
+    s
+}
+fn rebind() {
+    let mut x = make();
+    x = make();
+}
+"#,
+        );
+        // make() body (defined once in the module, called twice from
+        // rebind()): 1 `add i64 %rc` (move-out inc) + 1 `sub i64 %rc`
+        // (scope-exit dec).
+        // rebind() body: 0 receive incs across both call sites +
+        // 1 dec on old `x` at the reassign + 1 scope-exit dec on
+        // the final `x` = 2 decs.
+        // Module total: inc=1, dec=3.
+        let inc_count = ir.matches("add i64 %rc").count();
+        let dec_count = ir.matches("sub i64 %rc").count();
+        assert_eq!(
+            inc_count, 1,
+            "Assign-from-Call must not emit a receive-side rc_inc; the only \
+             expected inc is the callee-side move-out inside `make`. Found {} \
+             `add i64 %rc` ops in:\n{}",
+            inc_count, ir
+        );
+        assert_eq!(
+            dec_count, 3,
+            "expected 3 rc_decs (callee scope-exit in make + reassign-old + \
+             caller scope-exit); found {} in:\n{}",
+            dec_count, ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_bug8_shared_struct_return_no_leak() {
+        // E2E guard for the asymmetric move-out/receive-cross convention.
+        // The repro itself prints `42` (the value side was correct
+        // before this fix too — refcount=2 vs refcount=1 doesn't change
+        // the pointee's bytes); locking the e2e here documents the
+        // intended program behavior and pairs with the IR-level gates
+        // above so a future regression that flips back to double-incing
+        // is caught at both surfaces.
+        let out = run_program(
+            r#"
+shared struct S { val: i64 }
+fn make() -> S {
+    let s = S { val: 42 };
+    s
+}
+fn main() {
+    let x = make();
+    println(x.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42");
+        }
+    }
+
+    #[test]
+    fn test_ir_bug8_method_call_receive_no_double_inc() {
+        // `MethodCall` RHS shape — `let x = h.make()` — must follow
+        // the same convention as `Call`: the method's return delivers
+        // +1, the caller does not inc again on receive.  Without
+        // covering this variant, every shared-struct return crossing
+        // through a method call (the common case for any user type
+        // with a `pub fn new() -> Self` style constructor) would
+        // re-introduce the same leak.
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+struct Holder { tag: i64 }
+impl Holder {
+    fn make(self) -> S { let s = S { val: 99 }; s }
+}
+fn use_it() {
+    let h = Holder { tag: 0 };
+    let x = h.make();
+}
+"#,
+        );
+        let inc_count = ir.matches("add i64 %rc").count();
+        let dec_count = ir.matches("sub i64 %rc").count();
+        assert_eq!(
+            inc_count, 1,
+            "method-call RHS must not emit a receive-side rc_inc; only \
+             the callee-side move-out inc inside `make` should appear. \
+             Found {} `add i64 %rc` ops in:\n{}",
+            inc_count, ir
+        );
+        assert_eq!(
+            dec_count, 2,
+            "expected 2 rc_decs (callee scope-exit + caller scope-exit); \
+             found {} in:\n{}",
+            dec_count, ir
+        );
+    }
+
     // ── Unit enum variant matching ──────────────────────────────
 
     #[test]
