@@ -357,6 +357,17 @@ pub enum TypeErrorKind {
     /// specialization is post-v1). Theme-4 slice — see
     /// `phase-4-interpreter.md` § `impl Option[Ordering]` deferred entry.
     ConflictingImpl,
+    /// `#[non_exhaustive]` slice 4 — a cross-package consumer wrote a
+    /// struct literal `Foo { ... }` (or an exhaustive struct pattern
+    /// without `..`) against a `pub struct` defined in another package
+    /// that carries the `#[non_exhaustive]` attribute. The defining
+    /// package can add fields without breaking source compatibility,
+    /// so consumers must construct via a public constructor (commonly
+    /// `Foo.new(...)`) and pattern-match with `..` rest-binding.
+    /// Same-package construction is unaffected — the diagnostic only
+    /// fires at the cross-package boundary. See design.md
+    /// § `#[non_exhaustive]` for Evolvable Public Types.
+    NonExhaustiveCrossPackageLiteral,
 }
 
 impl std::fmt::Display for TypeError {
@@ -660,6 +671,17 @@ pub struct TypeChecker<'a> {
     /// `E_ONCE_FN_INTO_FN_SLOT` can name the consumed binding when a closure
     /// literal is rejected at a `Fn` slot. Round 12.45 (Step 3).
     pub(super) closure_once_reasons: HashMap<SpanKey, OnceReason>,
+    /// `stdlib_origin` of the function whose body we're currently
+    /// checking. Saved/restored across `check_function` so nested
+    /// item-checks (e.g. impl method bodies inside a stdlib-origin
+    /// impl block) see the right value. Consumed by
+    /// `#[non_exhaustive]` slice 4's cross-package check at struct
+    /// literal sites — a stdlib-defined `#[non_exhaustive]` struct
+    /// constructed from a user-origin fn body fires
+    /// `E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL`. Defaults to `false`
+    /// (the safer assumption — fires the check uniformly when we're
+    /// outside any function context, e.g. at module-const init exprs).
+    pub(super) current_fn_stdlib_origin: bool,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -709,6 +731,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_bounds: HashMap::new(),
             enclosing_trait: None,
             closure_once_reasons: HashMap::new(),
+            current_fn_stdlib_origin: false,
         }
     }
 

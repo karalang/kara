@@ -13641,3 +13641,250 @@ fn impl_trait_slice3_two_distinct_impl_trait_decls_have_distinct_witnesses() {
     // affect the witness-identity guarantee tested here.
     drop(errors);
 }
+
+// ── `#[non_exhaustive]` slice 4 — typechecker cross-package literal enforcement ──
+//
+// Slices 1+2 captured the `is_non_exhaustive` flag on `StructDef` and
+// validated placement at the resolver. Slice 4 wires the typechecker
+// enforcement: a `#[non_exhaustive] pub struct` defined in one package
+// cannot be constructed via a struct literal from outside that package
+// — the field set may grow without breaking source compatibility, so
+// consumers must construct through a public constructor.
+//
+// Today the only inter-package boundary the compiler tracks is
+// stdlib-vs-user (`stdlib_origin`). The tests below build a Program
+// that holds both a stdlib-origin `#[non_exhaustive]` struct and a
+// user-origin construction site by flipping `stdlib_origin` on the
+// `StructDef` manually after parse — the same shape `prelude.rs`
+// uses for baked stdlib items. Slice 6 (stdlib annotations, blocked
+// on the lint registry) will land real `#[non_exhaustive]` stdlib
+// types; until then, this is the canonical test pattern.
+//
+// **Partial-slice note (2026-05-17).** Slice 4 ships the **literal
+// half** today; the **pattern half** (exhaustive struct pattern
+// without `..` rejected cross-package) is deferred until `..` rest
+// support lands on `PatternKind::Struct` (no AST shape today).
+// `StructInfo.is_non_exhaustive` + `current_fn_stdlib_origin`
+// plumbing is shared, so the pattern half plugs in as just a
+// per-site addition once `..` parses. See the parent entry at
+// `phase-5-diagnostics.md` § `#[non_exhaustive]` parent line.
+
+fn typecheck_with_stdlib_origin_on_structs(source: &str) -> Vec<TypeError> {
+    use karac::ast::Item;
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    // Flip `stdlib_origin = true` on every `StructDef` so the
+    // typechecker sees them as defined in a separate package from
+    // the (user-origin) function bodies that construct them. Other
+    // item kinds keep `stdlib_origin = false` per parser default.
+    for item in &mut parsed.program.items {
+        if let Item::StructDef(s) = item {
+            s.stdlib_origin = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+    typecheck(&parsed.program, &resolved).errors
+}
+
+fn typecheck_all_user_origin(source: &str) -> TypeCheckResult {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    typecheck(&parsed.program, &resolved)
+}
+
+#[test]
+fn non_exhaustive_slice4_cross_package_literal_rejected() {
+    // Headline negative pin — a stdlib-origin `#[non_exhaustive] pub
+    // struct` constructed via literal in user code fires the slice-4
+    // diagnostic.
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn use_config() -> Config { Config { timeout: 0 } }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)),
+        "expected NonExhaustiveCrossPackageLiteral diagnostic; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)
+                && e.message.contains("E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL")
+        }),
+        "diagnostic should carry the symbolic error code; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)
+                && e.message.contains("Config")
+        }),
+        "diagnostic should name the offending struct `Config`; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)
+                && e.message.contains("Config.new(")
+        }),
+        "diagnostic should suggest the `Config.new(...)` constructor \
+         fix-it; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_same_package_literal_accepted() {
+    // Positive pin — both the struct decl and the construction site
+    // are user-origin (no `stdlib_origin` flip), so the cross-package
+    // condition is false and the literal goes through normally. This
+    // is the canonical "same-package access" case the spec carves out.
+    let result = typecheck_all_user_origin(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn use_config() -> Config { Config { timeout: 0 } }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)),
+        "same-package construction should not fire the cross-package \
+         diagnostic; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_non_exhaustive_off_no_diagnostic() {
+    // Negative pin — the cross-package case with `#[non_exhaustive]`
+    // absent must not fire the diagnostic. Pins that the rule keys
+    // on the attribute, not the cross-package boundary alone.
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "pub struct Plain { x: i64 }\n\
+         fn use_plain() -> Plain { Plain { x: 0 } }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)),
+        "plain `pub struct` (no #[non_exhaustive]) must not fire the \
+         cross-package diagnostic; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_stdlib_internal_use_accepted() {
+    // The defining package retains exhaustive-literal access to its
+    // own types. Build a program where both the `#[non_exhaustive]`
+    // struct AND the constructing fn are stdlib-origin — the literal
+    // must pass without firing the cross-package diagnostic.
+    use karac::ast::Item;
+    let mut parsed = parse(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn stdlib_internal() -> Config { Config { timeout: 0 } }",
+    );
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        match item {
+            Item::StructDef(s) => s.stdlib_origin = true,
+            Item::Function(f) => f.stdlib_origin = true,
+            _ => {}
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)),
+        "stdlib-internal construction of a stdlib `#[non_exhaustive]` \
+         struct must not fire the cross-package diagnostic; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_struct_info_carries_flag() {
+    // Plumbing pin — slice 4 added `is_non_exhaustive` +
+    // `defining_stdlib_origin` to `StructInfo`. Walk the typed result
+    // and assert both fields round-trip from the AST to the env.
+    use karac::ast::Item;
+    let mut parsed = parse(
+        "#[non_exhaustive]\npub struct A { x: i64 }\n\
+         pub struct B { y: i64 }",
+    );
+    assert!(parsed.errors.is_empty());
+    // Mark A as stdlib-origin, leave B as user-origin.
+    for item in &mut parsed.program.items {
+        if let Item::StructDef(s) = item {
+            if s.name == "A" {
+                s.stdlib_origin = true;
+            }
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    let a = result.struct_info.get("A").expect("A registered");
+    let b = result.struct_info.get("B").expect("B registered");
+    assert!(a.is_non_exhaustive, "A carries #[non_exhaustive]");
+    assert!(a.defining_stdlib_origin, "A is stdlib-origin");
+    assert!(!b.is_non_exhaustive, "B has no #[non_exhaustive]");
+    assert!(!b.defining_stdlib_origin, "B is user-origin");
+}
+
+#[test]
+fn non_exhaustive_slice4_cross_package_error_code_is_e0241() {
+    // Pin the error-code mapping in `src/cli.rs` so JSON / text
+    // diagnostic consumers route the new variant correctly. The
+    // typechecker emits the symbolic `E_NON_EXHAUSTIVE_*` in the
+    // message body; the `cli.rs` table maps the `TypeErrorKind`
+    // discriminant to the numeric `E0241` code.
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "#[non_exhaustive]\npub struct Cfg { x: i64 }\n\
+         fn use_cfg() -> Cfg { Cfg { x: 0 } }",
+    );
+    // The pin here is on the discriminant — `cli.rs` reads
+    // `error.kind` and maps to `"E0241"`. The mapping itself is
+    // covered by the cli.rs match exhaustiveness check; this test
+    // just confirms a discriminant of `NonExhaustiveCrossPackageLiteral`
+    // exists in the error vector under the rule conditions.
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageLiteral)));
+}

@@ -763,6 +763,15 @@ impl<'a> super::TypeChecker<'a> {
             .unwrap_or(Type::Unit);
         self.current_return_type = Some(return_type.clone());
 
+        // `#[non_exhaustive]` slice 4 — track the current function's
+        // origin so struct-literal sites can detect the cross-package
+        // case (stdlib-defined non-exhaustive struct constructed from
+        // user-origin code). Save / restore so nested item walks
+        // (impl methods, trait default bodies) propagate the inner
+        // function's origin while their bodies are checked.
+        let saved_fn_stdlib_origin = self.current_fn_stdlib_origin;
+        self.current_fn_stdlib_origin = f.stdlib_origin;
+
         // Type-check body — thread the expected return type through so that
         // a `.into()` in tail position can resolve against it.
         if f.body.final_expr.is_some() {
@@ -774,6 +783,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_return_type = None;
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;
+        self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
     }
 
     /// Like `infer_block`, but type-checks the block's final expression

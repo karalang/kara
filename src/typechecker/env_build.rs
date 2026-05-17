@@ -67,6 +67,8 @@ impl<'a> super::TypeChecker<'a> {
                             no_rc: s.no_rc,
                             is_shared: s.is_shared,
                             must_use_message,
+                            is_non_exhaustive: s.is_non_exhaustive,
+                            defining_stdlib_origin: s.stdlib_origin,
                         },
                     );
                 }
@@ -358,6 +360,8 @@ impl<'a> super::TypeChecker<'a> {
                     no_rc: false,
                     is_shared: false,
                     must_use_message,
+                    is_non_exhaustive: false,
+                    defining_stdlib_origin: true,
                 });
             self.env.impl_assoc_types.insert(
                 (name.to_string(), "Item".to_string()),
@@ -414,6 +418,8 @@ impl<'a> super::TypeChecker<'a> {
                     no_rc: false,
                     is_shared: false,
                     must_use_message: None,
+                    is_non_exhaustive: false,
+                    defining_stdlib_origin: true,
                 });
             self.env.impl_assoc_types.insert(
                 (name.to_string(), "Item".to_string()),
@@ -850,6 +856,8 @@ impl<'a> super::TypeChecker<'a> {
                 no_rc: s.no_rc,
                 is_shared: s.is_shared,
                 must_use_message,
+                is_non_exhaustive: s.is_non_exhaustive,
+                defining_stdlib_origin: s.stdlib_origin,
             },
         );
     }

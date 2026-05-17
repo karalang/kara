@@ -773,6 +773,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::CannotInferTypeParam => "E0238",
                 crate::typechecker::TypeErrorKind::AmbiguousMethod => "E0239",
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
+                crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

@@ -36,6 +36,21 @@ pub struct StructInfo {
     /// bare `#[must_use]` form. `None` when no attribute is present.
     /// Read at discard-site enforcement in `src/must_use_lint.rs`.
     pub must_use_message: Option<String>,
+    /// `#[non_exhaustive]` flag carried on the `pub struct` declaration
+    /// (slice 1+2 parser captured this on `StructDef.is_non_exhaustive`).
+    /// Read at struct-literal / struct-pattern check sites to enforce
+    /// the cross-package wildcard / constructor-call rule
+    /// (`E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL`).
+    pub is_non_exhaustive: bool,
+    /// `stdlib_origin` of the defining `StructDef`. Paired with
+    /// `is_non_exhaustive` to detect the cross-package case at literal
+    /// / pattern sites: a stdlib-defined `#[non_exhaustive]` struct
+    /// constructed from a user-origin fn body is the diagnostic-firing
+    /// path. Today "stdlib vs user" is the only inter-package boundary
+    /// the compiler tracks; when richer per-package boundaries land,
+    /// this widens to a `defining_package_id` and the comparison shifts
+    /// at the use site without re-flowing through `env_add_struct`.
+    pub defining_stdlib_origin: bool,
 }
 
 #[derive(Debug, Clone)]

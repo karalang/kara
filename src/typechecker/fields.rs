@@ -242,6 +242,37 @@ impl<'a> super::TypeChecker<'a> {
             }
         };
 
+        // `#[non_exhaustive]` slice 4 — cross-package struct-literal
+        // enforcement. A `pub struct` marked `#[non_exhaustive]` may
+        // grow additional fields without breaking source compatibility;
+        // outside-package consumers therefore cannot enumerate the
+        // current field set in a literal (an added field would silently
+        // become a missing-field error at the consumer). The defining
+        // package retains exhaustive literal use because it owns the
+        // shape. Today the only inter-package boundary the compiler
+        // tracks is stdlib-vs-user (`stdlib_origin`); when richer
+        // per-package boundaries land, the comparison below shifts at
+        // this site without touching the `is_non_exhaustive` plumbing.
+        if struct_info.is_non_exhaustive
+            && struct_info.defining_stdlib_origin
+            && !self.current_fn_stdlib_origin
+        {
+            self.type_error(
+                format!(
+                    "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_LITERAL]: \
+                     cannot construct `{name}` with a struct literal — \
+                     `{name}` is `#[non_exhaustive]` and defined in another \
+                     package, so its field set may grow. Construct through \
+                     the type's public constructor (commonly `{name}.new(...)`) \
+                     instead. See design.md § `#[non_exhaustive]` for \
+                     Evolvable Public Types.",
+                    name = struct_name
+                ),
+                span.clone(),
+                TypeErrorKind::NonExhaustiveCrossPackageLiteral,
+            );
+        }
+
         let expected_fields: HashSet<&str> = struct_info
             .fields
             .iter()
