@@ -782,12 +782,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 //
                 // `Identifier`, `FieldAccess`, `Index`, … RHS shapes
                 // still alias an existing tracked ref and need the inc.
-                let is_fresh_construction = matches!(
-                    &value.kind,
-                    ExprKind::StructLiteral { .. }
-                        | ExprKind::Call { .. }
-                        | ExprKind::MethodCall { .. }
-                );
+                // Recurses into `If` / `Match` / `IfLet` / `Block` /
+                // `LabeledBlock` / `Unsafe` tails — `rhs_yields_fresh_ref`
+                // returns true only when every branch tail is itself a
+                // fresh-ref source. Plain `Call` / `MethodCall` /
+                // `StructLiteral` match the base case directly.
+                let is_fresh_construction = rhs_yields_fresh_ref(value);
                 let val = self.compile_expr(value)?;
                 // Track variable → type name for field resolution.
                 let mut shared_info: Option<(String, SharedTypeInfo<'ctx>)> = None;
@@ -1036,12 +1036,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `rc_inc` to avoid doubling the refcount on
                 // `x = make()` / `x = obj.make()` / shared-enum-variant
                 // reassignment.
-                let rhs_is_fresh = matches!(
-                    &value.kind,
-                    ExprKind::StructLiteral { .. }
-                        | ExprKind::Call { .. }
-                        | ExprKind::MethodCall { .. }
-                );
+                // Same recursive tail-shape walk as the Let arm — covers
+                // `x = if cond { make_a() } else { make_b() };` and the
+                // `Match` / `IfLet` / `Block` equivalents.
+                let rhs_is_fresh = rhs_yields_fresh_ref(value);
                 let val = self.compile_expr(value)?;
                 if let ExprKind::Identifier(name) = &target.kind {
                     // For shared types: rc_dec old value, rc_inc new value
@@ -1200,5 +1198,56 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => Ok(()),
         }
+    }
+}
+
+/// Recurse into branching tail expressions to decide whether the RHS of a
+/// shared-type `let` / `Assign` already delivers a freshly-owned ref
+/// (callee move-out for `Call` / `MethodCall`, or `emit_rc_alloc` for
+/// `StructLiteral`). The receive-site `rc_inc` must be skipped exactly
+/// when this returns `true`; otherwise the refcount lands at 2 for a
+/// genuinely fresh value and leaks one ref per crossing (same shape as
+/// bug #8 receive-side, but for `If` / `Match` / `IfLet` / `Block` /
+/// `LabeledBlock` / `Unsafe` tails that nest the fresh-ref source one
+/// level deeper than the outer `ExprKind` reveals).
+///
+/// Conservative on mixed-shape branches: returns `false` when ANY branch
+/// tail aliases an existing ref (`Identifier` / `FieldAccess` / `Index`
+/// / etc.), so the receive site still incs. The fresh-tail branches in
+/// that mix will double-inc (leaking +1 on those paths) — same behavior
+/// as before this helper — but the aliasing branch is preserved
+/// correctly. Per-branch inc emission would require lowering the
+/// receive-inc into each tail block; deferred to a future slice.
+pub(super) fn rhs_yields_fresh_ref(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::StructLiteral { .. } | ExprKind::Call { .. } | ExprKind::MethodCall { .. } => {
+            true
+        }
+        ExprKind::Block(block)
+        | ExprKind::Unsafe(block)
+        | ExprKind::LabeledBlock { body: block, .. } => block
+            .final_expr
+            .as_deref()
+            .is_some_and(rhs_yields_fresh_ref),
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => {
+            then_block
+                .final_expr
+                .as_deref()
+                .is_some_and(rhs_yields_fresh_ref)
+                && else_branch.as_deref().is_some_and(rhs_yields_fresh_ref)
+        }
+        ExprKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| rhs_yields_fresh_ref(&arm.body))
+        }
+        _ => false,
     }
 }

@@ -2439,6 +2439,107 @@ fn use_it() {
         );
     }
 
+    #[test]
+    fn test_ir_bug8_if_tail_call_rhs_no_double_inc() {
+        // Branch-shape extension of the bug #8 receive-side fix
+        // (5323d5d). The outer `ExprKind` of the RHS is `If`, not
+        // `Call`, but every branch tail IS a `Call` returning a
+        // freshly-transferred +1. Before this fix `is_fresh_construction`
+        // only matched the outer kind, so the receive site emitted
+        // an extra `add i64 %rc` and the refcount on the bound `x`
+        // landed at 2 — leaking one ref per crossing on whichever
+        // branch executed at runtime.
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+fn make_a() -> S { let s = S { val: 1 }; s }
+fn make_b() -> S { let s = S { val: 2 }; s }
+fn use_it(cond: bool) {
+    let x = if cond { make_a() } else { make_b() };
+}
+"#,
+        );
+        let inc_count = ir.matches("add i64 %rc").count();
+        let dec_count = ir.matches("sub i64 %rc").count();
+        // Expected incs: one move-out in each of `make_a` / `make_b` = 2.
+        // Expected decs: scope-exit in each of `make_a` / `make_b` (2)
+        // + caller scope-exit on `x` (1) = 3. The receive site must
+        // emit zero incs on the if-tail.
+        assert_eq!(
+            inc_count, 2,
+            "if-tail Call RHS must not emit a receive-side rc_inc; \
+             expected 2 callee-side move-out incs only. Found {} \
+             `add i64 %rc` ops in:\n{}",
+            inc_count, ir
+        );
+        assert_eq!(
+            dec_count, 3,
+            "expected 3 rc_decs (2 callee scope-exit + 1 caller \
+             scope-exit on x); found {} in:\n{}",
+            dec_count, ir
+        );
+    }
+
+    #[test]
+    fn test_ir_bug8_match_tail_call_rhs_no_double_inc() {
+        // Parallel coverage for the `Match` tail-shape case. Every
+        // arm body is a `Call` returning +1 — the receive site must
+        // recurse into the arms and suppress the inc when ALL arms
+        // are fresh-ref sources. Same expected counts as the if-case.
+        let ir = ir_for(
+            r#"
+shared struct S { val: i64 }
+fn make_a() -> S { let s = S { val: 1 }; s }
+fn make_b() -> S { let s = S { val: 2 }; s }
+fn use_it(tag: i64) {
+    let x = match tag {
+        0 => make_a(),
+        _ => make_b(),
+    };
+}
+"#,
+        );
+        let inc_count = ir.matches("add i64 %rc").count();
+        let dec_count = ir.matches("sub i64 %rc").count();
+        assert_eq!(
+            inc_count, 2,
+            "match-tail Call RHS must not double-inc; expected 2 \
+             callee-side move-out incs only. Found {} in:\n{}",
+            inc_count, ir
+        );
+        assert_eq!(
+            dec_count, 3,
+            "expected 3 rc_decs; found {} in:\n{}",
+            dec_count, ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_bug8_if_tail_call_no_leak() {
+        // E2E guard for the branch-shape fix — the value side was
+        // correct before the fix too (rc=2 vs rc=1 doesn't change
+        // the pointee bytes), but locking the program behavior here
+        // documents the intended semantics and pairs with the
+        // IR-level gates above for a layered regression net.
+        let out = run_program(
+            r#"
+shared struct S { val: i64 }
+fn make_a() -> S { let s = S { val: 10 }; s }
+fn make_b() -> S { let s = S { val: 20 }; s }
+fn main() {
+    let x = if true { make_a() } else { make_b() };
+    println(x.val);
+    let y = if false { make_a() } else { make_b() };
+    println(y.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20"]);
+        }
+    }
+
     // ── Unit enum variant matching ──────────────────────────────
 
     #[test]
