@@ -2667,3 +2667,140 @@ fn test_slice_pattern_unbound_rest_does_not_introduce_name() {
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── GAT slice 3: resolver wiring for assoc-type generic params ──
+// `type Mapped[U]` (trait side) and `type Mapped[U] = Vec[U]` (impl
+// side) open a fresh generic scope. Inside that scope, the GAT's
+// parameters are bound so the bound expression, where-clause, and
+// (impl side) RHS type resolve against them. Outside the assoc-type
+// node, the params are not visible — sibling methods that try to
+// reference them produce an unresolved-name diagnostic.
+
+#[test]
+fn gat_slice3_trait_assoc_type_generic_param_registered_as_typeparam() {
+    let result = resolve_ok("trait Functor { type Mapped[U]; }");
+    let u_kind = result
+        .symbol_table
+        .all_symbols()
+        .iter()
+        .find(|s| s.name == "U")
+        .map(|s| &s.kind)
+        .expect("expected a symbol named 'U' from the GAT parameter list");
+    assert!(
+        matches!(u_kind, SymbolKind::TypeParam),
+        "expected SymbolKind::TypeParam for GAT param 'U', got {:?}",
+        u_kind
+    );
+}
+
+#[test]
+fn gat_slice3_trait_assoc_type_non_generic_form_registers_no_param() {
+    // Regression pin: `type Item;` is the legacy non-generic shape.
+    // It must NOT register any extra symbol — the resolver's scope
+    // push runs only when `generic_params` is `Some(...)`.
+    let result = resolve_ok("trait It { type Item; }");
+    let extra = result
+        .symbol_table
+        .all_symbols()
+        .iter()
+        .find(|s| s.name == "Item" && matches!(s.kind, SymbolKind::TypeParam));
+    assert!(
+        extra.is_none(),
+        "non-generic assoc type should not register Item as a TypeParam symbol"
+    );
+}
+
+#[test]
+fn gat_slice3_trait_assoc_type_param_not_visible_in_sibling_method() {
+    // The GAT param `U` lives only inside the assoc-type declaration's
+    // own scope. A sibling method that references `U` in its return
+    // type must see an undefined-type diagnostic.
+    let errs = resolve_errors(
+        "trait Functor { \
+         type Mapped[U]; \
+         fn other(self) -> U; \
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("U")),
+        "expected unresolved 'U' diagnostic in sibling method, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gat_slice3_impl_assoc_type_binding_rhs_resolves_param() {
+    // Headline: the impl-side `type Mapped[U] = Vec[U]` binding must
+    // see `U` when resolving the RHS `Vec[U]`. With slice 3 wiring,
+    // this passes with zero resolve errors.
+    resolve_ok(
+        "trait Functor { type Mapped[U]; } \
+         struct Wrapper[T] { value: T } \
+         impl[T] Functor for Wrapper[T] { type Mapped[U] = Wrapper[U]; }",
+    );
+}
+
+#[test]
+fn gat_slice3_impl_assoc_type_binding_rhs_errors_on_undefined_param() {
+    // Negative pin: a name that's neither the GAT param nor an
+    // enclosing trait/impl param produces an unresolved-name
+    // diagnostic. Confirms the new scope doesn't accidentally swallow
+    // all names.
+    let errs = resolve_errors(
+        "trait Functor { type Mapped[U]; } \
+         struct Wrapper[T] { value: T } \
+         impl[T] Functor for Wrapper[T] { type Mapped[U] = Wrapper[Q]; }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("Q")),
+        "expected unresolved 'Q' diagnostic in GAT binding RHS, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gat_slice3_impl_assoc_type_binding_param_not_visible_in_sibling_method() {
+    // The impl-side GAT param `U` is scoped to the assoc-type binding
+    // only. A sibling method that references `U` in its return type
+    // must see an undefined-type diagnostic — the scope was popped
+    // before sibling-item resolution.
+    let errs = resolve_errors(
+        "trait Functor { type Mapped[U]; fn other(self) -> i64; } \
+         struct Wrapper[T] { value: T } \
+         impl[T] Functor for Wrapper[T] { \
+         type Mapped[U] = Wrapper[U]; \
+         fn other(self) -> U { self.value } \
+         }",
+    );
+    assert!(
+        errs.iter().any(|e| e.message.contains("U")),
+        "expected unresolved 'U' diagnostic in sibling impl method, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn gat_slice3_trait_assoc_type_with_where_clause_resolves() {
+    // The where-clause on a GAT declaration must see the GAT's own
+    // generic params. `where U: Clone` references `U` — slice 3
+    // ensures `U` is in scope when the where-clause runs through
+    // `resolve_where_clause`.
+    resolve_ok(
+        "trait Clone { fn clone(self) -> Self; } \
+         trait Functor { type Mapped[U] where U: Clone; }",
+    );
+}
+
+#[test]
+fn gat_slice3_impl_assoc_type_binding_with_where_clause_resolves() {
+    // Impl-side mirror: `where U: Clone` on the binding sees the
+    // binding's own `U`.
+    resolve_ok(
+        "trait Clone { fn clone(self) -> Self; } \
+         trait Functor { type Mapped[U]; } \
+         struct Wrapper[T] { value: T } \
+         impl[T] Functor for Wrapper[T] { \
+         type Mapped[U] = Wrapper[U] where U: Clone; \
+         }",
+    );
+}

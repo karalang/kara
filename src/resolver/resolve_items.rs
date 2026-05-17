@@ -229,9 +229,31 @@ impl<'a> super::Resolver<'a> {
 
                     self.table.pop_scope();
                 }
-                TraitItem::AssocType(_assoc) => {
-                    // Associated type declarations are collected but not resolved here.
-                    // Bounds on associated types are checked during type checking.
+                TraitItem::AssocType(assoc) => {
+                    // GAT slice 3: bind the assoc-type's own generic parameters
+                    // in the scope where the bound and where-clause are resolved.
+                    // Non-generic assoc types still resolve their bounds and
+                    // where-clauses (so trait paths in `type Item: Clone;` land
+                    // in the resolution map) — the scope push is the GAT-only
+                    // delta.
+                    let has_generics = assoc.generic_params.is_some();
+                    if has_generics {
+                        self.table.push_scope(ScopeKind::Block);
+                    }
+                    let assoc_params = if let Some(ref gp) = assoc.generic_params {
+                        self.define_generic_params(gp)
+                    } else {
+                        HashMap::new()
+                    };
+                    for bound in &assoc.bounds {
+                        self.resolve_trait_bound(bound);
+                    }
+                    if let Some(ref wc) = assoc.where_clause {
+                        self.resolve_where_clause(wc, &assoc_params);
+                    }
+                    if has_generics {
+                        self.table.pop_scope();
+                    }
                 }
             }
         }
@@ -404,7 +426,26 @@ impl<'a> super::Resolver<'a> {
             match item {
                 ImplItem::Method(method) => self.resolve_function(method),
                 ImplItem::AssocType(binding) => {
+                    // GAT slice 3: bind the binding's own generic parameters
+                    // in the scope where the RHS type and where-clause are
+                    // resolved. `type Mapped[U] = Vec[U]` binds `U` so the
+                    // RHS `Vec[U]` resolves against it.
+                    let has_generics = binding.generic_params.is_some();
+                    if has_generics {
+                        self.table.push_scope(ScopeKind::Block);
+                    }
+                    let binding_params = if let Some(ref gp) = binding.generic_params {
+                        self.define_generic_params(gp)
+                    } else {
+                        HashMap::new()
+                    };
+                    if let Some(ref wc) = binding.where_clause {
+                        self.resolve_where_clause(wc, &binding_params);
+                    }
                     self.resolve_type_expr(&binding.ty);
+                    if has_generics {
+                        self.table.pop_scope();
+                    }
                 }
             }
         }
