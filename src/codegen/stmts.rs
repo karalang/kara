@@ -879,6 +879,56 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
+                        // (c) Untyped let with a FieldAccess RHS where
+                        //     the object is a call-like (or
+                        //     Identifier-bound) shared struct and the
+                        //     accessed field's declared type is
+                        //     `Option[shared T]`. Covers
+                        //     `let v = get_node().next;` (call-chain
+                        //     FieldAccess) and `let v = obj.next;`
+                        //     where `obj` is a tracked shared-struct
+                        //     binding and `next` is the Option-shared
+                        //     field. Recovers the inner heap type by
+                        //     walking from the object's static
+                        //     struct name through
+                        //     `struct_field_type_exprs` to the field's
+                        //     full TypeExpr, then dispatching through
+                        //     `option_inner_shared_type_for_type_expr`.
+                        //     Without this, the field-access's
+                        //     `compile_field_access` call-chain branch
+                        //     inc's the inner ref to balance the temp
+                        //     drop (slice 3's other half), but the
+                        //     let-binding never queues an RcDecOption
+                        //     cleanup — the chain stays live
+                        //     forever, one per iteration leak.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::FieldAccess { object, field } = &value.kind {
+                                let obj_type_name: Option<String> = self
+                                    .shared_type_for_call_like(object)
+                                    .map(|(n, _)| n)
+                                    .or_else(|| self.shared_type_for_expr(object).map(|(n, _)| n));
+                                if let Some(type_name) = obj_type_name {
+                                    if let Some(idx) = self
+                                        .struct_field_names
+                                        .get(&type_name)
+                                        .and_then(|names| names.iter().position(|n| n == field))
+                                    {
+                                        if let Some(field_te) = self
+                                            .struct_field_type_exprs
+                                            .get(&type_name)
+                                            .and_then(|v| v.get(idx))
+                                            .cloned()
+                                        {
+                                            if let Some((_, info)) = self
+                                                .option_inner_shared_type_for_type_expr(&field_te)
+                                            {
+                                                shared_option_info = Some((var_name.clone(), info));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 // Fallback: when there is no type annotation and the RHS is a

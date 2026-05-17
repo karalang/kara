@@ -149,6 +149,42 @@ impl<'ctx> super::Codegen<'ctx> {
                             .get_field_type_at_index((idx + 1) as u32)
                             .unwrap();
                         let loaded = self.builder.build_load(field_ty, field_ptr, field).unwrap();
+                        // `Option[shared T]` field: the upcoming
+                        // `emit_rc_dec(ptr)` runs the outer Node's
+                        // recursive drop fn, which walks the
+                        // `next: Option[shared T]` field and dec's
+                        // its inner ptr. The loaded SSA register
+                        // would then alias freed memory — a
+                        // use-after-free for any subsequent access
+                        // through the returned value
+                        // (`match v { Some(n) => n.val }`, `v.next.val`,
+                        // etc.). Bump the inner ptr's RC here so the
+                        // recursive drop's dec brings it back to the
+                        // original count; the caller (let-stmt
+                        // path's `shared_option_info` detection, the
+                        // match-scrutinee binding, or the next
+                        // FieldAccess hop in a chain) takes ownership
+                        // of the +1 with its own RcDecOption.
+                        // Mirrors how the let-stmt's
+                        // `shared_option_info` arm doesn't inc for
+                        // an aliasing source — the +1 emitted here
+                        // *is* the alias source's transfer of one
+                        // owned ref into the field-access result.
+                        if let Some(field_te) = self
+                            .struct_field_type_exprs
+                            .get(&type_name)
+                            .and_then(|v| v.get(idx))
+                            .cloned()
+                        {
+                            if let Some((_, inner_info)) =
+                                self.option_inner_shared_type_for_type_expr(&field_te)
+                            {
+                                self.emit_option_inner_rc_inc_for_loaded(
+                                    loaded,
+                                    inner_info.heap_type,
+                                );
+                            }
+                        }
                         // The call-result temp owns one ref (RC=1 from the
                         // callee's move-out inc + scope-exit dec under bug
                         // #7). Release it now — the field value has been
@@ -390,6 +426,90 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// Inc the inner shared-T ref of a just-loaded `Option[shared T]`
+    /// SSA value, when its tag is Some and its inner ptr is non-null.
+    /// Used by `compile_field_access`'s call-chain branch to balance
+    /// the upcoming `emit_rc_dec` on the outer call temp — the outer
+    /// temp's recursive drop walks the Option field and dec's the
+    /// inner ptr, which would free the chain before the caller can
+    /// read it. The inc emitted here brings the net effect to "the
+    /// caller owns the inner ref"; the caller's let-stmt / match-arm
+    /// binding registration takes ownership of the +1.
+    ///
+    /// Operates on a struct-valued SSA register rather than a slot
+    /// pointer — the parent's `RcDecOption`-style cleanup paths read
+    /// from a slot, but here the field value lives only in a register
+    /// at the time the temp's RC is released, so the tag / w0 come
+    /// from `build_extract_value`. Same Some-tag + null-guard
+    /// structure as `emit_option_shared_field_store`'s old-side
+    /// path, just consuming a register rather than a GEP slot.
+    pub(super) fn emit_option_inner_rc_inc_for_loaded(
+        &self,
+        loaded: BasicValueEnum<'ctx>,
+        inner_heap_type: StructType<'ctx>,
+    ) {
+        let sv = match loaded {
+            BasicValueEnum::StructValue(sv) => sv,
+            _ => return,
+        };
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let some_tag_const = i64_t.const_int(some_tag, false);
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        // Tag is field 0 of the Option layout; w0 (inner ptr as i64)
+        // is field 1. Anything else (w1 / w2) is unused for the
+        // shared-ref payload — Option[shared T]'s payload is the
+        // single ptr-as-i64 in w0 per `coerce_to_payload_words`'s
+        // primitive fast path.
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "opt.chain.tag")
+            .unwrap()
+            .into_int_value();
+        let is_some = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, tag, some_tag_const, "opt.chain.is_some")
+            .unwrap();
+        let do_bb = self.context.append_basic_block(fn_val, "opt.chain.inc.do");
+        let skip_bb = self
+            .context
+            .append_basic_block(fn_val, "opt.chain.inc.skip");
+        self.builder
+            .build_conditional_branch(is_some, do_bb, skip_bb)
+            .unwrap();
+        self.builder.position_at_end(do_bb);
+        let w0 = self
+            .builder
+            .build_extract_value(sv, 1, "opt.chain.w0")
+            .unwrap()
+            .into_int_value();
+        let inner = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "opt.chain.inner")
+            .unwrap();
+        let inner_is_null = self
+            .builder
+            .build_is_null(inner, "opt.chain.inner.is_null")
+            .unwrap();
+        let real_do_bb = self
+            .context
+            .append_basic_block(fn_val, "opt.chain.inc.real");
+        self.builder
+            .build_conditional_branch(inner_is_null, skip_bb, real_do_bb)
+            .unwrap();
+        self.builder.position_at_end(real_do_bb);
+        self.emit_rc_inc(inner_heap_type, inner);
+        self.builder.build_unconditional_branch(skip_bb).unwrap();
+        self.builder.position_at_end(skip_bb);
     }
 
     /// Refcount-aware store into an `Option[shared T]` struct field.
