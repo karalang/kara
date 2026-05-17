@@ -1099,6 +1099,39 @@ fn render_must_use_lint_diag(diag: &crate::must_use_lint::LintDiagnostic, filena
     }
 }
 
+/// Render a `crate::missing_must_use_lint::LintDiagnostic` in the same
+/// rustc-style three-piece shape. Structurally identical to
+/// `render_must_use_lint_diag` — the two `LintDiagnostic` types share
+/// shape but live in separate modules to keep each lint self-contained
+/// (the established pattern across `unsafe_lint`, `must_use_lint`,
+/// `logical_lint`, `ffi_lint`). A future lint-registry refactor (per
+/// the deferred "Lint level attributes" entry in
+/// `phase-5-diagnostics.md`) would unify these renderers.
+fn render_missing_must_use_lint_diag(
+    diag: &crate::missing_must_use_lint::LintDiagnostic,
+    filename: &str,
+) {
+    eprintln!(
+        "{}[{}]: {}:{}:{}: {}",
+        if diag.level == crate::missing_must_use_lint::LintLevel::Error {
+            "error"
+        } else {
+            "warning"
+        },
+        diag.lint_name,
+        filename,
+        diag.span.line,
+        diag.span.column,
+        diag.message
+    );
+    if let Some(note) = &diag.note {
+        eprintln!("   = note: {note}");
+    }
+    if let Some(help) = &diag.help {
+        eprintln!("   = help: {help}");
+    }
+}
+
 fn emit_json_output(pipeline: &Pipeline) {
     let diags = collect_diagnostics(pipeline);
     let effects = program_effects_json(pipeline);
@@ -1404,6 +1437,18 @@ fn cmd_run(filename: &str, output: OutputMode, sequential: bool) {
             pipeline.typed.as_ref(),
         ) {
             render_must_use_lint_diag(&diag, filename);
+        }
+        // Lint: missing_must_use (slice 3 — stdlib-hygiene). Warns on
+        // baked stdlib `pub fn` returning iterator-shaped or
+        // new-value-from-self values that lack `#[must_use]`. Silent
+        // on user code by design (the lint walks `stdlib_origin == true`
+        // items only). Today end-user compiles see no output from this
+        // pass because baked stdlib items aren't spliced into the user
+        // program AST; the lint surfaces during karac's own stdlib-
+        // hygiene tests (`tests/missing_must_use_lint.rs`) and during
+        // any future bundled-stdlib-source compile mode.
+        for diag in crate::missing_must_use_lint::check_missing_must_use(&pipeline.parsed.program) {
+            render_missing_must_use_lint_diag(&diag, filename);
         }
         // Lint: ffi_float_eq
         for diag in crate::ffi_lint::check_ffi_float_eq(&pipeline.parsed.program) {
