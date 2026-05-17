@@ -18,11 +18,13 @@ use std::collections::HashMap;
 use super::env::{FunctionSig, ImplInfo};
 use super::inference::{
     const_value_from_literal, instantiate_signature_with_fresh_vars, resolve_const_arg,
-    resolve_type_vars, substitute_const_idents_in_expr, unify_types, InstantiatedSignature,
+    resolve_type_vars, substitute_const_idents_in_expr, substitute_type_params, unify_types,
+    InstantiatedSignature,
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_to_concrete_or_param_name, types_compatible, ConstArg, IntSize, ScrutineeMode, Type,
+    type_to_concrete_or_param_name, types_compatible, ConstArg, IntSize, ScrutineeMode, SubstValue,
+    Type,
 };
 use super::TypeErrorKind;
 
@@ -557,11 +559,22 @@ impl<'a> super::TypeChecker<'a> {
         // reference const-params that don't appear in the signature's
         // types (`fn f[const N: i64]() where N >= 0`). Without this
         // override the early-return below skips discharge entirely.
+        //
+        // GAT slice 8a: the same override applies to
+        // `ProjectionBound` predicates. A function with no generic
+        // params/return but a `where F.Mapped[i64]: Trait` clause
+        // (where F is a type-param) needs the full discharge path so
+        // `discharge_projection_bounds` runs against the call's
+        // explicit type-args.
         let has_where_const_predicate = where_clause
             .map(|wc| {
-                wc.constraints
-                    .iter()
-                    .any(|c| matches!(c, WhereConstraint::ConstPredicate { .. }))
+                wc.constraints.iter().any(|c| {
+                    matches!(
+                        c,
+                        WhereConstraint::ConstPredicate { .. }
+                            | WhereConstraint::ProjectionBound { .. }
+                    )
+                })
             })
             .unwrap_or(false);
         let has_generic = params.iter().any(contains_type_param)
@@ -822,6 +835,94 @@ impl<'a> super::TypeChecker<'a> {
                         type_name,
                         trait_name,
                         type_display(concrete_ty),
+                        trait_name
+                    ),
+                    discharge_span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        self.discharge_projection_bounds(where_clause, solutions, discharge_span);
+    }
+
+    /// GAT slice 8a — discharge `WhereConstraint::ProjectionBound`
+    /// predicates at call sites. For each `<receiver>.Assoc[args]: Trait`
+    /// constraint, the resolver lowers the projection type-expression
+    /// against the function's generic scope, then substitutes the
+    /// call's resolved `solutions` map into the projection (filling in
+    /// the receiver's `TypeParam` head and any `TypeParam` args), then
+    /// resolves it via `resolve_assoc_projections`. The resolved type
+    /// is checked against each bound via `type_satisfies_bound`. On a
+    /// miss, emits `E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED`.
+    ///
+    /// Receiver-unsolved (no entry in `solutions`) and post-substitution
+    /// projections that remain unresolved (the projection's `param`
+    /// stays an unmatched `TypeParam` or the impl table has no entry)
+    /// are skipped silently — those cases fall out of slice 8a's
+    /// "discharge only when fully resolvable" rule. Tightening to
+    /// reject unresolvable projections lands with the slice 8b
+    /// `types_compatible` work or the slice-8c constraint solver.
+    fn discharge_projection_bounds(
+        &mut self,
+        where_clause: &WhereClause,
+        solutions: &HashMap<String, Type>,
+        discharge_span: &Span,
+    ) {
+        // Build a substitution map for the call's solutions. Wrapped in
+        // `SubstValue::Type` to feed `substitute_type_params`.
+        let subs: HashMap<String, SubstValue> = solutions
+            .iter()
+            .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+            .collect();
+        for constraint in &where_clause.constraints {
+            let WhereConstraint::ProjectionBound {
+                projection, bounds, ..
+            } = constraint
+            else {
+                continue;
+            };
+            // Lower the projection type-expression against the
+            // function's generic scope. The scope is the union of every
+            // formal type-param name that appears in `solutions` (the
+            // call-site discharge already has these in hand). Lowering
+            // produces a `Type::AssocProjection { param, args, .. }`
+            // with `param` as the receiver's type-param name.
+            let scope: Vec<String> = solutions.keys().cloned().collect();
+            let lowered = self.lower_type_expr(projection, &scope);
+            // Substitute the call's solutions in for the receiver +
+            // any type-param args inside the projection's `args` list.
+            let substituted = substitute_type_params(&lowered, &subs);
+            // Resolve the projection through `impl_assoc_types`. If the
+            // receiver is now a concrete type registered with the GAT,
+            // this yields the binding RHS substituted with the call's
+            // args (e.g., `F.Mapped[i64]` with `F=Vec` and binding
+            // `type Mapped[U] = Vec[U]` → `Vec[i64]`).
+            let resolved = self.resolve_assoc_projections(&substituted);
+            // Skip if the projection didn't resolve (receiver still a
+            // TypeParam, impl table miss, or any unresolved metavar
+            // shape). The unsolved-T diagnostic + upstream errors
+            // surface those.
+            if matches!(
+                resolved,
+                Type::AssocProjection { .. } | Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
+            ) {
+                continue;
+            }
+            for bound in bounds {
+                let Some(trait_name) = bound.path.last() else {
+                    continue;
+                };
+                if self.type_satisfies_bound(&resolved, trait_name) {
+                    continue;
+                }
+                self.type_error(
+                    format!(
+                        "error[E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED]: \
+                         projection bound `{}: {}` is not satisfied; \
+                         resolved projection type `{}` does not implement `{}`",
+                        type_display(&substituted),
+                        trait_name,
+                        type_display(&resolved),
                         trait_name
                     ),
                     discharge_span.clone(),

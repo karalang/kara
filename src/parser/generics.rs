@@ -152,17 +152,64 @@ impl super::Parser {
                 None => break,
             };
 
-            // Check for associated type equality: `T.Assoc = Type`
+            // Check for projection-based constraints: `T.Assoc[...]` either
+            // followed by `=` (associated type equality) or `:` (projection
+            // bound, GAT slice 8a — `F.Mapped[i64]: FromIterator[i64]`).
             if self.eat(&Token::Dot) {
                 let assoc_name = self.expect_identifier()?;
-                self.expect(&Token::Equal)?;
-                let ty = self.parse_type()?;
-                constraints.push(WhereConstraint::AssocTypeEq {
-                    type_name,
-                    assoc_name,
-                    ty,
-                    span: self.span_from(&cstart),
-                });
+                let projection_generic_args = if self.check(&Token::LeftBracket) {
+                    Some(self.parse_generic_type_args()?)
+                } else {
+                    None
+                };
+                if self.eat(&Token::Equal) {
+                    if projection_generic_args.is_some() {
+                        // `T.Assoc[args] = Type` is not a supported surface
+                        // (associated-type-equality binds non-generic
+                        // assocs); diagnose and skip.
+                        self.error(
+                            "associated-type equality (`T.Assoc = Type`) does not \
+                             accept generic args on the LHS; use a projection bound \
+                             (`T.Assoc[...]: Trait`) instead",
+                        );
+                        return None;
+                    }
+                    let ty = self.parse_type()?;
+                    constraints.push(WhereConstraint::AssocTypeEq {
+                        type_name,
+                        assoc_name,
+                        ty,
+                        span: self.span_from(&cstart),
+                    });
+                } else if self.eat(&Token::Colon) {
+                    // `T.Assoc[...]: Trait + ...` — projection bound.
+                    let projection = TypeExpr {
+                        kind: TypeKind::Path(PathExpr {
+                            segments: vec![type_name, assoc_name],
+                            generic_args: projection_generic_args,
+                            span: self.span_from(&cstart),
+                        }),
+                        span: self.span_from(&cstart),
+                    };
+                    let mut bounds = Vec::new();
+                    while let Some(bound) = self.parse_trait_bound() {
+                        bounds.push(bound);
+                        if !self.eat(&Token::Plus) {
+                            break;
+                        }
+                    }
+                    constraints.push(WhereConstraint::ProjectionBound {
+                        projection,
+                        bounds,
+                        span: self.span_from(&cstart),
+                    });
+                } else {
+                    self.error(
+                        "expected `=` or `:` after associated-type projection \
+                         in where clause",
+                    );
+                    return None;
+                }
             } else if self.eat(&Token::Colon) {
                 let mut bounds = Vec::new();
                 while let Some(bound) = self.parse_trait_bound() {

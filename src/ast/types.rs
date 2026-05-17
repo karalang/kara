@@ -85,6 +85,18 @@ pub enum WhereConstraint {
         ty: TypeExpr,
         span: Span,
     },
+    /// `F.Mapped[i64]: FromIterator[i64]` — bound on an associated-type
+    /// projection. Distinct from `TypeBound` because the LHS is a full
+    /// projection type-expression rather than a bare type-parameter
+    /// name. GAT slice 8a: discharged at call sites in
+    /// `discharge_projection_bounds` after substituting the call's
+    /// type-arg solutions into the projection and resolving via
+    /// `resolve_assoc_projections`.
+    ProjectionBound {
+        projection: TypeExpr,
+        bounds: Vec<TraitBound>,
+        span: Span,
+    },
     /// `N >= 0`, `M < 4096`, etc. — const-expression predicate over
     /// const-generic params. Parsed at slice 1; evaluated by slice 2's
     /// const-expression evaluator and discharged at call sites by slice 3.

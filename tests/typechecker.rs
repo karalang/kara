@@ -12705,3 +12705,192 @@ fn test_gat_slice7_supertrait_satisfies_bound() {
          }",
     );
 }
+
+// ── GAT slice 8a — where-clause projection bound discharge ─────────
+//
+// `where F.Mapped[i64]: FromIterator[i64]` parses as a new
+// `WhereConstraint::ProjectionBound` variant. At call sites the
+// discharge engine substitutes the resolved type-arg solutions into
+// the projection, resolves it via `resolve_assoc_projections`, and
+// checks each bound via `type_satisfies_bound`. Miss emits
+// `E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED`.
+
+#[test]
+fn test_gat_slice8a_projection_bound_accepted_when_resolved_rhs_satisfies() {
+    // Headline: `F.Mapped[i64]: Collector` is checked at the call
+    // site by inferring `F = V` from the argument, resolving
+    // `V.Mapped[i64]` to `Vec[i64]` (via the binding
+    // `type Mapped[U] = Vec[U]`), then discharging `Vec[i64]:
+    // Collector` against the impl table. The `impl[T] Collector for
+    // Vec[T]` is generic-on-name so discharges for any T.
+    typecheck_ok(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] Collector for Vec[T] { fn collect(ref self) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8a_projection_bound_rejected_when_resolved_rhs_misses() {
+    // Negative pin: the binding resolves `V.Mapped[i64]` to `Bar`
+    // (no `Collector` impl). Call-site discharge emits
+    // E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED.
+    let errors = typecheck_errors(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Bar {}\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Bar; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED")
+            && e.message.contains("Collector")),
+        "expected E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED naming Collector, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8a_projection_bound_unbound_receiver_skipped() {
+    // When the receiver F is itself a generic param at the call site
+    // (the caller doesn't bind F to a concrete type), the projection
+    // can't resolve — slice 8a skips silently rather than firing a
+    // false positive. The discharge engine guards `TypeParam` /
+    // `AssocProjection` / `Error` post-substitution outputs.
+    typecheck_ok(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
+         fn forward[G: Functor](g: G) -> i64 { use_it(g) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8a_projection_bound_validates_trait_name_at_decl() {
+    // Decl-time validation pin: the bound trait name on the projection
+    // must be a known trait. An unknown trait emits the standard
+    // unknown-trait diagnostic from `validate_where_clause` (the
+    // projection-bound arm mirrors the TypeBound arm's error shape).
+    let errors = typecheck_errors(
+        "trait Functor { type Mapped[U]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: NoSuchTrait { 0 }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("NoSuchTrait") && e.message.contains("unknown trait")),
+        "expected unknown-trait diagnostic naming NoSuchTrait, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8a_projection_bound_with_generic_args_on_trait() {
+    // The bound's trait carries its own generic args
+    // (`FromIterator[i64]`). `type_satisfies_bound` keys off the
+    // trait name (the args are recognition-only today, mirroring
+    // `discharge_type_bounds`). Accepted via the impl-table impl of
+    // the named trait on the resolved RHS.
+    typecheck_ok(
+        "trait FromIterator[T] { fn from_iter(x: T) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] FromIterator[T] for Vec[T] { fn from_iter(x: T) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn collect[F: Functor](_f: F) -> i64 where F.Mapped[i64]: FromIterator[i64] { 0 }\n\
+         fn main() -> i64 { collect(V {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8a_non_generic_projection_bound_accepted() {
+    // The non-generic projection shape `F.Item: Collector` (degenerate
+    // GAT with empty arg list) composes uniformly with the slice 8a
+    // discharge path. Receiver resolves and the inner type satisfies
+    // the bound.
+    typecheck_ok(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Container { type Item; }\n\
+         struct Foo {}\n\
+         impl Collector for Foo { fn collect(ref self) -> i64 { 0 } }\n\
+         struct C {}\n\
+         impl Container for C { type Item = Foo; }\n\
+         fn use_it[T: Container](_t: T) -> i64 where T.Item: Collector { 0 }\n\
+         fn main() -> i64 { use_it(C {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8a_multiple_projection_bounds_all_discharge() {
+    // Multi-bound surface: `F.Mapped[i64]: Collector + Show`. Both
+    // bounds must be satisfied; the discharge loop walks them in
+    // order. Both accepted via separate impls on `Vec[T]`.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] Show for Vec[T] { fn show(ref self) -> i64 { 0 } }\n\
+         impl[T] Collector for Vec[T] { fn collect(ref self) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector + Show { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8a_multiple_projection_bounds_one_misses() {
+    // Negative: only Show impl exists for Vec[T]; the Collector
+    // bound misses and fires.
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] Show for Vec[T] { fn show(ref self) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector + Show { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED")
+            && e.message.contains("Collector")),
+        "expected E_WHERE_CLAUSE_PROJECTION_BOUND_NOT_SATISFIED on Collector, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8a_slices_4_through_7_still_pass_regression() {
+    // Regression pin: a slice 7 example continues to typecheck after
+    // slice 8a wires the new where-clause arm. Mirrors
+    // `test_gat_slice7_concrete_rhs_satisfies_bound_accepted`.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct Foo {}\n\
+         impl Show for Foo { fn show(ref self) -> i64 { 1 } }\n\
+         trait Functor {\n\
+             type Mapped[U]: Show;\n\
+         }\n\
+         struct Doubler {}\n\
+         impl Functor for Doubler {\n\
+             type Mapped[U] = Foo;\n\
+         }",
+    );
+}

@@ -182,6 +182,19 @@ impl<'a> super::Resolver<'a> {
                 WhereConstraint::AssocTypeEq { ty, .. } => {
                     self.resolve_type_expr(ty);
                 }
+                WhereConstraint::ProjectionBound {
+                    projection, bounds, ..
+                } => {
+                    // Resolve the projection's receiver-and-assoc path so
+                    // the receiver type-param lands in the resolution map.
+                    // GAT slice 8a: bounds carry the trait-bound paths
+                    // (e.g., `FromIterator[i64]`); they also resolve so
+                    // the trait reference is recorded.
+                    self.resolve_type_expr(projection);
+                    for bound in bounds {
+                        self.resolve_trait_bound(bound);
+                    }
+                }
                 WhereConstraint::ConstPredicate { expr, .. } => {
                     self.resolve_expr(expr);
                 }

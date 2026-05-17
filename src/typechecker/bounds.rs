@@ -218,6 +218,34 @@ impl<'a> super::TypeChecker<'a> {
                     // Resolve the associated type expression
                     self.lower_type_expr(ty, generic_scope);
                 }
+                WhereConstraint::ProjectionBound {
+                    projection, bounds, ..
+                } => {
+                    // GAT slice 8a — declaration-site validation. Lower the
+                    // projection type-expr (which also verifies the receiver
+                    // type-param is in scope via the standard lowering
+                    // diagnostics) and check each bound trait is known.
+                    // The actual discharge (substituting solutions in for
+                    // the receiver and proving the resolved type satisfies
+                    // the bounds) runs at call sites in
+                    // `discharge_projection_bounds`.
+                    self.lower_type_expr(projection, generic_scope);
+                    for bound in bounds {
+                        let trait_name = bound.path.last().cloned().unwrap_or_default();
+                        if self.is_trait_alias(&trait_name) {
+                            self.report_trait_alias_use(&trait_name, &bound.span);
+                        } else if !self.is_known_trait(&trait_name) {
+                            self.type_error(
+                                format!(
+                                    "unknown trait '{}' in where clause projection bound",
+                                    trait_name
+                                ),
+                                bound.span.clone(),
+                                TypeErrorKind::TypeMismatch,
+                            );
+                        }
+                    }
+                }
                 WhereConstraint::ConstPredicate { .. } => {
                     // TODO(const generics slice 3): bound-discharge engine.
                     // Slice 2 builds `eval_const_expr` (above); slice 3

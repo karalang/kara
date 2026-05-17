@@ -273,6 +273,19 @@ impl super::Formatter {
                     self.write_str(" = ");
                     self.format_type_expr(ty);
                 }
+                WhereConstraint::ProjectionBound {
+                    projection, bounds, ..
+                } => {
+                    self.format_type_expr(projection);
+                    self.write_str(": ");
+                    for (j, b) in bounds.iter().enumerate() {
+                        if j > 0 {
+                            self.write_str(" + ");
+                        }
+                        self.write_path(&b.path);
+                        self.format_generic_args_opt(&b.generic_args);
+                    }
+                }
                 WhereConstraint::ConstPredicate { expr, .. } => {
                     self.format_expr(expr);
                 }
