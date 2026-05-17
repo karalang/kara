@@ -269,12 +269,16 @@ impl<'ctx> super::Codegen<'ctx> {
     /// type-erased and doesn't know V's heap layout). Closes the
     /// `Map[K, shared T]` leak (2026-05-16): values previously
     /// stranded their refcount when the Map went out of scope.
+    /// `key_shared_heap_type` is the symmetric K-side gate — fires
+    /// the same walk against the key half of each occupied bucket
+    /// (`Map[shared K, V]` / `Set[shared T]`).
     pub(super) fn track_map_var(
         &mut self,
         map_alloca: PointerValue<'ctx>,
         key_is_vec: bool,
         val_is_vec: bool,
         val_shared_heap_type: Option<StructType<'ctx>>,
+        key_shared_heap_type: Option<StructType<'ctx>>,
     ) {
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::FreeMapHandle {
@@ -282,6 +286,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 key_is_vec,
                 val_is_vec,
                 val_shared_heap_type,
+                key_shared_heap_type,
             });
         }
     }
@@ -683,23 +688,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 key_is_vec,
                 val_is_vec,
                 val_shared_heap_type,
+                key_shared_heap_type,
             } => {
                 let handle = self
                     .builder
                     .build_load(ptr_ty, *map_alloca, "cleanup.map.handle")
                     .unwrap()
                     .into_pointer_value();
-                // Shared-value rc_dec walk MUST run before the runtime
-                // helper releases the bucket storage — the walk reads
-                // each live slot's value bytes from `kv[]`. Closes the
-                // `Map[K, shared T]` leak (2026-05-16): the type-erased
-                // runtime can't decrement V's refcount because it
-                // doesn't know V's heap layout; codegen does, so the
-                // dec is open-coded here per-instantiation. Mirrors
-                // the structural shape of `karac_map_free_with_drop_vec`'s
-                // bucket walk (`runtime/src/map.rs`).
+                // Shared-half rc_dec walks MUST run before the runtime
+                // helper releases the bucket storage — they read each
+                // live slot's bytes from `kv[]`. Closes the `Map[K,
+                // shared T]` leak (2026-05-16) on the value side, and
+                // the `Map[shared K, V]` / `Set[shared T]` leak on the
+                // key side. Both fire when both K and V are shared.
+                // Type-erased runtime can't decrement refcounts itself
+                // because it doesn't know each half's heap layout;
+                // codegen does, so the dec is open-coded per-
+                // instantiation against the matching
+                // `SharedTypeInfo.heap_type`.
                 if let Some(heap_ty) = val_shared_heap_type {
-                    self.emit_map_shared_val_rc_dec_walk(handle, *heap_ty);
+                    self.emit_map_shared_half_rc_dec_walk(handle, *heap_ty, true);
+                }
+                if let Some(heap_ty) = key_shared_heap_type {
+                    self.emit_map_shared_half_rc_dec_walk(handle, *heap_ty, false);
                 }
                 // When either the key or value type follows the Vec/String
                 // `{ptr, len, cap}` layout, route through the recursive-
@@ -750,27 +761,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
-    /// Walk every live bucket of `map_handle` and emit `rc_dec` on the
-    /// value-half pointer. Used by `FreeMapHandle` cleanup when V is
-    /// a shared struct / shared enum — the type-erased runtime
-    /// (`karac_map_free_with_drop_vec`) only knows the Vec/String
-    /// `{ptr, len, cap}` layout, so per-V refcount decrements have
-    /// to be open-coded at the cleanup site against the matching
-    /// `SharedTypeInfo.heap_type`. Mirrors the bucket-walk shape in
-    /// `karac_map_free_with_drop_vec` (`runtime/src/map.rs`): for
-    /// each `slot in 0..capacity`, check `status[slot] == OCCUPIED`,
-    /// then load the value pointer from `kv[slot*stride + key_size]`
-    /// and rc_dec it.
+    /// Walk every live bucket of `map_handle` and emit `rc_dec` on
+    /// one half of the slot — value when `is_val == true`, key when
+    /// `is_val == false`. Used by `FreeMapHandle` cleanup when the
+    /// corresponding side is a shared struct / shared enum — the
+    /// type-erased runtime (`karac_map_free_with_drop_vec`) only
+    /// knows the Vec/String `{ptr, len, cap}` layout, so per-K / per-V
+    /// refcount decrements have to be open-coded at the cleanup site
+    /// against the matching `SharedTypeInfo.heap_type`. Mirrors the
+    /// bucket-walk shape in `karac_map_free_with_drop_vec`
+    /// (`runtime/src/map.rs`): for each `slot in 0..capacity`, check
+    /// `status[slot] == OCCUPIED`, then load the half's pointer from
+    /// `kv[slot*stride + offset]` (`offset = 0` for key, `key_size`
+    /// for val) and rc_dec it.
     ///
     /// **Layout dependence.** Reads `capacity`, `status`, `kv`,
     /// `key_size`, `val_size` from the runtime's `#[repr(C)]`
     /// `KaracMap` at the offsets pinned by the runtime-side
     /// `karac_map_field_offsets_match_codegen` unit test. `key_size`
     /// and `val_size` are loaded at runtime (not const-folded from
-    /// K/V LLVM widths) so the walk stays agnostic of K's exact
-    /// representation — the `kv` byte array's stride is
+    /// K/V LLVM widths) so the walk stays agnostic of K's / V's
+    /// exact representation — the `kv` byte array's stride is
     /// `(key_size + val_size)` bytes, with the val half starting
-    /// at `+key_size`.
+    /// at `+key_size` and the key half at `+0`.
     ///
     /// **Concurrency.** The walk uses `emit_rc_dec` (non-atomic)
     /// rather than `emit_arc_dec`. Maps are local to a single thread
@@ -779,13 +792,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// If a future change shares Maps across threads via Arc, this
     /// callsite needs the atomic dispatch — same shape as the
     /// `emit_refcount_dec` decision in `RcDec` cleanup, but the
-    /// map's values aren't named bindings, so the `is_arc_binding`
-    /// check has no anchor; an explicit `is_arc` flag on
-    /// `FreeMapHandle` would be the path then.
-    pub(super) fn emit_map_shared_val_rc_dec_walk(
+    /// map's keys / values aren't named bindings, so the
+    /// `is_arc_binding` check has no anchor; an explicit `is_arc`
+    /// flag on `FreeMapHandle` would be the path then.
+    pub(super) fn emit_map_shared_half_rc_dec_walk(
         &self,
         map_handle: PointerValue<'ctx>,
         heap_type: StructType<'ctx>,
+        is_val: bool,
     ) {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i8_t = self.context.i8_type();
@@ -995,24 +1009,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_in_bounds_gep(i8_t, kv_ptr, &[slot_off], "cleanup.map.shared.slot.kv.p")
                 .unwrap()
         };
-        let slot_val_p = unsafe {
-            self.builder
-                .build_in_bounds_gep(
-                    i8_t,
-                    slot_kv_p,
-                    &[key_size],
-                    "cleanup.map.shared.slot.val.p",
-                )
-                .unwrap()
+        // Key half lives at offset 0 within the bucket (`slot_kv_p`);
+        // value half lives at `+key_size`. Both are pointer-sized on
+        // shared types (rc-managed heap-pointer values are 8 bytes
+        // on 64-bit).
+        let half_ptr_p = if is_val {
+            unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        i8_t,
+                        slot_kv_p,
+                        &[key_size],
+                        "cleanup.map.shared.slot.val.p",
+                    )
+                    .unwrap()
+            }
+        } else {
+            slot_kv_p
         };
-        // Value half holds a single ptr (shared types lower to ptr;
-        // val_size == 8 on 64-bit). Load it and pass to emit_rc_dec.
-        let val_ptr = self
+        let half_ptr = self
             .builder
-            .build_load(ptr_ty, slot_val_p, "cleanup.map.shared.val.ptr")
+            .build_load(
+                ptr_ty,
+                half_ptr_p,
+                if is_val {
+                    "cleanup.map.shared.val.ptr"
+                } else {
+                    "cleanup.map.shared.key.ptr"
+                },
+            )
             .unwrap()
             .into_pointer_value();
-        self.emit_rc_dec(heap_type, val_ptr);
+        self.emit_rc_dec(heap_type, half_ptr);
         self.builder.build_unconditional_branch(next_bb).unwrap();
 
         // ── loop.next: i++, branch back to cond ──────────────────

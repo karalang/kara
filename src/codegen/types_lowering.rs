@@ -845,7 +845,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// shared struct / shared enum. Returns `None` when V is anything
     /// else (primitive, Vec, String, owned struct, …). Used by
     /// `track_map_var` / cleanup-action wiring to decide whether the
-    /// per-bucket rc_dec walk in `emit_map_shared_val_rc_dec_walk` needs
+    /// per-bucket rc_dec walk in `emit_map_shared_half_rc_dec_walk` needs
     /// to fire at scope exit. Source of truth is the `TypeExpr` stored
     /// in `var_elem_type_exprs[var_name]` (the value-side TypeExpr
     /// recorded at let-binding registration) — its head segment is the
@@ -853,6 +853,28 @@ impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn map_val_shared_heap_type_for(&self, var_name: &str) -> Option<StructType<'ctx>> {
         let v_te = self.var_elem_type_exprs.get(var_name)?;
         let head = match &v_te.kind {
+            TypeKind::Path(p) => p.segments.first()?.as_str(),
+            _ => return None,
+        };
+        let info = self.shared_types.get(head)?;
+        Some(info.heap_type)
+    }
+
+    /// Resolve the heap layout for a Map / Set variable's *key* when
+    /// K is a shared struct / shared enum. Mirrors
+    /// `map_val_shared_heap_type_for` on the K side. For `Set[shared
+    /// T]`, the element T occupies the key half of the underlying
+    /// `Map[T, ()]` bucket — `set_elem_type_exprs` provides the
+    /// TypeExpr, parallel to `map_key_type_exprs` for Maps. Returns
+    /// `None` when K is anything else (primitive, Vec, String, owned
+    /// struct, …); the `FreeMapHandle` cleanup then skips the
+    /// key-side rc_dec walk.
+    pub(super) fn map_key_shared_heap_type_for(&self, var_name: &str) -> Option<StructType<'ctx>> {
+        let k_te = self
+            .map_key_type_exprs
+            .get(var_name)
+            .or_else(|| self.set_elem_type_exprs.get(var_name))?;
+        let head = match &k_te.kind {
             TypeKind::Path(p) => p.segments.first()?.as_str(),
             _ => return None,
         };

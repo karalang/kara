@@ -229,6 +229,16 @@ pub(crate) enum CleanupAction<'ctx> {
         /// layout); both can be live alongside `key_is_vec` for
         /// `Map[Vec[K], shared V]` shapes.
         val_shared_heap_type: Option<StructType<'ctx>>,
+        /// LLVM heap-struct type for the KEY when K is a shared
+        /// struct / shared enum (or, for `Set[shared T]`, the
+        /// element type — Set lowers to `Map[T, ()]` and the
+        /// element is the key half of the bucket). Mirrors
+        /// `val_shared_heap_type` on the K side. Both fire on drop
+        /// when both K and V are shared. Mutually exclusive with
+        /// `key_is_vec` in practice (a Vec/String key doesn't carry
+        /// a shared-type heap layout). Closes the `Map[shared K, V]`
+        /// / `Set[shared T]` leak (2026-05-16).
+        key_shared_heap_type: Option<StructType<'ctx>>,
     },
     /// Run a per-enum drop function on a value-type (non-shared) enum
     /// alloca at scope exit. The drop function is synthesized once per

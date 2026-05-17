@@ -2608,6 +2608,72 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_ir_map_shared_key_drop_emits_per_bucket_rc_dec_walk() {
+        // `Map[shared K, V]` scope-exit cleanup must emit a key-side
+        // bucket walk parallel to the value-side walk from 9d878ae.
+        // Without it, every key handle bit-copied into a bucket
+        // strands its refcount when the Map drops.
+        //
+        // IR gate: the cleanup site emits the canonical "load slot
+        // key pointer + rc_dec" sequence inside the bucket walk
+        // loop. We pin both: the `cleanup.map.shared.key.ptr` load
+        // (only emitted on the key path) and the presence of at
+        // least one `sub i64 %rc` op (which the walk fires per
+        // occupied bucket at runtime).
+        let ir = ir_for(
+            r#"
+#[derive(Hash, Eq)]
+shared struct K { id: i64 }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let k = K { id: 1 };
+    let _ = m.insert(k, 42);
+}
+"#,
+        );
+        assert!(
+            ir.contains("cleanup.map.shared.key.ptr"),
+            "expected key-side walk label `cleanup.map.shared.key.ptr` \
+             in IR (gates the new `is_val == false` half-walk path); \
+             not found in:\n{}",
+            ir
+        );
+        let dec_count = ir.matches("sub i64 %rc").count();
+        assert!(
+            dec_count >= 1,
+            "expected at least one `sub i64 %rc` op for the key-side \
+             walk; found {} in:\n{}",
+            dec_count,
+            ir
+        );
+    }
+
+    #[test]
+    fn test_e2e_map_shared_key_drops_cleanly() {
+        // E2E: build a Map[shared K, i64], insert several entries,
+        // let it drop. Pre-fix the program would leak K's refcounts
+        // (stdout still correct — the leaked memory's bytes are
+        // valid — but the heap would balloon). The test pins the
+        // program runs cleanly and prints the expected len.
+        let out = run_program(
+            r#"
+#[derive(Hash, Eq)]
+shared struct K { id: i64 }
+fn main() {
+    let mut m: Map[K, i64] = Map.new();
+    let _ = m.insert(K { id: 1 }, 10);
+    let _ = m.insert(K { id: 2 }, 20);
+    let _ = m.insert(K { id: 3 }, 30);
+    println(m.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3");
+        }
+    }
+
     // ── Unit enum variant matching ──────────────────────────────
 
     #[test]

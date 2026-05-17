@@ -98,7 +98,14 @@ impl<'ctx> super::Codegen<'ctx> {
         let key_is_vec = self.llvm_ty_is_vec_struct(key_ty);
         let val_is_vec = self.llvm_ty_is_vec_struct(val_ty);
         let val_shared_heap = self.map_val_shared_heap_type_for(var_name);
-        self.track_map_var(slot_ptr, key_is_vec, val_is_vec, val_shared_heap);
+        let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
+        self.track_map_var(
+            slot_ptr,
+            key_is_vec,
+            val_is_vec,
+            val_shared_heap,
+            key_shared_heap,
+        );
         Ok(())
     }
 
@@ -181,12 +188,14 @@ impl<'ctx> super::Codegen<'ctx> {
         // work, 2026-05-14). Primitive-element sets (`Set[i64]`) keep
         // `key_is_vec = false` and stay on plain `karac_map_free`.
         let key_is_vec = self.llvm_ty_is_vec_struct(elem_ty);
-        // Sets have no value slot, so `Set[shared T]` does not exist as
-        // a leak shape — pass `None` unconditionally for the shared-val
-        // heap type. (The element T is the *key*, which is bit-copied
-        // into the slot just like Vec keys — shared-key handling is a
-        // separate follow-up; see the report for details.)
-        self.track_map_var(slot_ptr, key_is_vec, false, None);
+        // Sets have no value slot, so `Set[shared T]`'s shared-val
+        // half is unreachable — pass `None` for the val-shared heap
+        // type. The element T is the *key* of the underlying
+        // `Map[T, ()]` bucket; `Set[shared T]` therefore lights up
+        // the key-side walk via `map_key_shared_heap_type_for`
+        // (which consults `set_elem_type_exprs` for Set bindings).
+        let key_shared_heap = self.map_key_shared_heap_type_for(var_name);
+        self.track_map_var(slot_ptr, key_is_vec, false, None, key_shared_heap);
         Ok(())
     }
 

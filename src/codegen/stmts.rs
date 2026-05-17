@@ -1026,7 +1026,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .is_some_and(|t| self.llvm_ty_is_vec_struct(t));
                             let val_shared_heap =
                                 self.map_val_shared_heap_type_for(var_name.as_str());
-                            self.track_map_var(slot.ptr, key_is_vec, val_is_vec, val_shared_heap);
+                            let key_shared_heap =
+                                self.map_key_shared_heap_type_for(var_name.as_str());
+                            self.track_map_var(
+                                slot.ptr,
+                                key_is_vec,
+                                val_is_vec,
+                                val_shared_heap,
+                                key_shared_heap,
+                            );
                         }
                     }
                 }
