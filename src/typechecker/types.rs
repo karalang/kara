@@ -827,6 +827,31 @@ pub(super) fn lub_block_type(tail: Type, breaks: &[Type]) -> Type {
     candidate.unwrap_or(tail)
 }
 
+/// GAT slice 8c — detect the "one-sided projection vs concrete with
+/// the projection still unresolvable" shape after both sides have
+/// been routed through `resolve_assoc_projections`. The
+/// `types_compatible_with_projections` /
+/// `is_subtype_with_projections` wrappers use this as a permissive
+/// short-circuit: if either side is still a projection AND the other
+/// is anything else (including a structurally-different projection),
+/// the wrapper returns `true` rather than firing a spurious
+/// diagnostic on a generic function body's return / arg position
+/// where the projection's eventual binding depends on the caller's
+/// type-param choice. Two structurally identical projections fall
+/// through to the regular structural check below (which accepts
+/// them) — the unresolvable-fallback only triggers on the mixed
+/// shape. The strict negative path fires at the call site where the
+/// projection's receiver is bound to a concrete type and the
+/// impl-table lookup succeeds; the resolved RHS then unifies via
+/// the regular structural arm.
+pub(super) fn projection_unresolvable_with(a: &Type, b: &Type) -> bool {
+    match (a, b) {
+        (Type::AssocProjection { .. }, Type::AssocProjection { .. }) => false,
+        (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
+        _ => false,
+    }
+}
+
 pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
     if a == b {
         return true;
@@ -840,7 +865,53 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         // — the `None` arm has no value from which to solve `T`). Equivalent
         // to the `TypeVar` handling below.
         (Type::TypeParam(_), _) | (_, Type::TypeParam(_)) => true,
-        (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => true,
+        // GAT slice 8c — `AssocProjection` arm tightened to structural
+        // equality only. Pre-slice-8c the arm was wildcard-permissive
+        // (`(AssocProjection, _) | (_, AssocProjection) => true`), so
+        // an unresolved projection would unify with any RHS — masking
+        // legitimate mismatches whenever a projection survived the
+        // resolution step. The slice 8c rule:
+        //   - Two `AssocProjection` nodes match iff their `param`,
+        //     `assoc`, `args`, and `receiver_args` all structurally
+        //     match (component-wise `types_compatible`).
+        //   - A one-sided projection against any non-projection /
+        //     non-error / non-never type falls through to `false`.
+        // Callers with access to `&TypeChecker` should route through
+        // `types_compatible_with_projections` (in `typechecker.rs`) to
+        // get the projection-aware resolution behaviour before this
+        // structural check fires — that wrapper resolves projections
+        // through `impl_assoc_types` first, then falls through here.
+        // This function stays pure (no `&TypeChecker`) so it can be
+        // called from `inference.rs::unify_types`, `lub_block_type`,
+        // and the slice/array coercion arms below.
+        (
+            Type::AssocProjection {
+                param: ap,
+                assoc: aa,
+                args: aas,
+                receiver_args: ar,
+            },
+            Type::AssocProjection {
+                param: bp,
+                assoc: ba,
+                args: bas,
+                receiver_args: br,
+            },
+        ) => {
+            ap == bp
+                && aa == ba
+                && aas.len() == bas.len()
+                && aas
+                    .iter()
+                    .zip(bas.iter())
+                    .all(|(x, y)| types_compatible(x, y))
+                && ar.len() == br.len()
+                && ar
+                    .iter()
+                    .zip(br.iter())
+                    .all(|(x, y)| types_compatible(x, y))
+        }
+        (Type::AssocProjection { .. }, _) | (_, Type::AssocProjection { .. }) => false,
         // Pragmatic: integer literals (i64) compatible with any int/uint
         (Type::Int(_), Type::Int(_)) => true,
         (Type::UInt(_), Type::UInt(_)) => true,

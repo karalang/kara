@@ -16,8 +16,8 @@ use std::collections::HashMap;
 
 use super::inference::{resolve_type_vars, substitute_type_params};
 use super::types::{
-    type_display, types_compatible, ConstArg, ConstVarId, FloatSize, IntSize, ScrutineeMode,
-    SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
+    type_display, ConstArg, ConstVarId, FloatSize, IntSize, ScrutineeMode, SubstValue, Type,
+    TypeVarId, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -200,7 +200,7 @@ impl<'a> super::TypeChecker<'a> {
             if *arm_ty != Type::Never
                 && *arm_ty != Type::Error
                 && result_ty != Type::Error
-                && !types_compatible(&result_ty, arm_ty)
+                && !self.types_compatible_with_projections(&result_ty, arm_ty)
             {
                 self.type_error(
                     format!(

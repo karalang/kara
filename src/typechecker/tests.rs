@@ -1132,15 +1132,30 @@ mod gat_slice4_assoc_projection_args_tests {
     }
 
     #[test]
-    fn types_compatible_remains_permissive_for_projection_with_args() {
-        // Slice 5 will wire actual GAT-projection unification; today
-        // the projection arm is wildcard-permissive in either position
-        // (matches the pre-slice-4 behaviour). Pin that the args field
-        // doesn't break the permissive arm.
-        let lhs = proj("F", "Mapped", vec![Type::Int(IntSize::I64)]);
-        let rhs = Type::Int(IntSize::I64);
-        assert!(types_compatible(&lhs, &rhs));
-        assert!(types_compatible(&rhs, &lhs));
+    fn types_compatible_structural_match_on_projection_with_args() {
+        // GAT slice 8c — `types_compatible`'s `AssocProjection` arm
+        // was wildcard-permissive pre-slice-8c (the previous name was
+        // `types_compatible_remains_permissive_for_projection_with_args`).
+        // Slice 8c tightened the arm to structural equality only:
+        //   - Two `AssocProjection` nodes match iff `param` / `assoc`
+        //     / `args` / `receiver_args` all structurally match.
+        //   - A one-sided projection vs concrete type returns `false`.
+        // This test pins the new structural behaviour at both arms.
+        let proj_i64 = proj("F", "Mapped", vec![Type::Int(IntSize::I64)]);
+        let proj_i64_alt = proj("F", "Mapped", vec![Type::Int(IntSize::I64)]);
+        // Two structurally identical projections compatible.
+        assert!(types_compatible(&proj_i64, &proj_i64_alt));
+        // One-sided projection vs concrete `i64` no longer permissive.
+        let concrete = Type::Int(IntSize::I64);
+        assert!(!types_compatible(&proj_i64, &concrete));
+        assert!(!types_compatible(&concrete, &proj_i64));
+        // Structurally different projections (different assoc name)
+        // also fail to match.
+        let proj_other = proj("F", "Item", vec![Type::Int(IntSize::I64)]);
+        assert!(!types_compatible(&proj_i64, &proj_other));
+        // Different args also fail.
+        let proj_str = proj("F", "Mapped", vec![Type::Str]);
+        assert!(!types_compatible(&proj_i64, &proj_str));
     }
 }
 

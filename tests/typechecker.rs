@@ -13085,3 +13085,238 @@ fn test_gat_slice8b_slices_4_through_8a_still_pass_regression() {
          fn main() -> i64 { use_it(V {}) }",
     );
 }
+
+// ── GAT slice 8c — `types_compatible` tightening + implicit-trigger ───
+//
+// Slice 8c lands the fourth slice-7 carry-forward (d) plus the
+// implicit-trigger walker for `discharge_gat_decl_constraints`. The
+// `types_compatible` projection arm was wildcard-permissive
+// pre-slice-8c (`(AssocProjection, _) | (_, AssocProjection) => true`).
+// Slice 8c tightens the bare function to structural equality only and
+// adds a checker-aware wrapper (`types_compatible_with_projections` /
+// `is_subtype_with_projections`) that resolves projections through
+// `impl_assoc_types` before the structural check — so a projection
+// that resolves to a concrete type still unifies with that type, but
+// an unresolvable one-sided projection vs concrete fails.
+//
+// The implicit-trigger walker (`discharge_gat_decl_constraints_in`)
+// scans a call's substituted param + return types for AssocProjection
+// nodes and discharges each one's GAT-decl per-param inline bounds +
+// where-clause. Pre-slice-8c the discharge only fired from explicit
+// where-clause projection bounds (slice 8a); slice 8c widens the
+// trigger so `fn f[F: Functor](x: F.Mapped[NoShow])` without a
+// where-clause bound also fires the inline-bound / where-clause
+// checks.
+
+#[test]
+fn test_gat_slice8c_types_compatible_one_sided_projection_vs_concrete_rejected() {
+    // Headline negative for (d): a function whose return type
+    // mentions `F.Mapped[i64]` and whose impl binds
+    // `type Mapped[U] = Bar` returns a resolved `Bar`. If the
+    // caller tries to assign that return into a `Vec[i64]` slot,
+    // pre-slice-8c the permissive arm let the assignment pass at
+    // `check_assignable`. Post-slice-8c the projection resolves
+    // to `Bar`, fails the assignment, and surfaces the standard
+    // `expected '...', found '...'` diagnostic.
+    let errors = typecheck_errors(
+        "trait Functor { type Mapped[U]; }\n\
+         struct Bar {}\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Bar; }\n\
+         fn produce[F: Functor](_f: F) -> F.Mapped[i64] { Bar {} }\n\
+         fn main() -> i64 {\n\
+             let x: i64 = produce(V {});\n\
+             0\n\
+         }",
+    );
+    // Expect a TypeMismatch / "expected '...'" on the let-binding.
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("expected") && e.message.contains("i64")),
+        "expected an assignment mismatch naming i64; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8c_types_compatible_projection_resolves_through_impl_table() {
+    // Headline positive for (d): the projection-aware wrapper resolves
+    // `V.Mapped[i64]` through the impl table to `Vec[i64]`, so the
+    // assignment into a `Vec[i64]` slot succeeds. Pre-slice-8c the
+    // permissive arm accepted this trivially; slice 8c keeps the case
+    // green via projection-aware resolution at `check_assignable`.
+    typecheck_ok(
+        "trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn produce[F: Functor](_f: F) -> F.Mapped[i64] { Vec { x: 0 } }\n\
+         fn main() -> i64 {\n\
+             let _x: Vec[i64] = produce(V {});\n\
+             0\n\
+         }",
+    );
+}
+
+#[test]
+fn test_gat_slice8c_types_compatible_structurally_identical_projections_match() {
+    // Two structurally identical projections (same param, assoc,
+    // args, receiver_args) must still be compatible — this is the
+    // structural arm of the slice 8c tightening. The shape arises
+    // when both branches of an `if`/`match` carry an unresolved
+    // `F.Mapped[i64]` (e.g., the receiver is still generic).
+    typecheck_ok(
+        "trait Functor { type Mapped[U]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn pick[F: Functor](f: F, cond: bool) -> F.Mapped[i64] {\n\
+             if cond { produce(f) } else { produce(f) }\n\
+         }\n\
+         fn produce[F: Functor](_f: F) -> F.Mapped[i64] { 0 }\n\
+         fn main() -> i64 { pick(V {}, true) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8c_implicit_param_position_projection_fires_inline_bound() {
+    // Headline for the implicit-trigger walker: a function
+    // `fn use_it[F: Functor](receiver: F, x: F.Mapped[NoShow])` has
+    // no where-clause bound. Pre-slice-8c the inline bound
+    // `type Mapped[U: Show]` was silently skipped because the
+    // GAT-decl-constraints discharge only fired from explicit
+    // where-clause projection bounds. Slice 8c's implicit walker
+    // scans the substituted params for `AssocProjection` nodes and
+    // discharges each one, so the inline-bound miss now fires
+    // `E_GAT_PARAM_BOUND_NOT_SATISFIED`. F is solved via the
+    // receiver-position argument `V {}` (argument-position inference
+    // — same shape slice 8a uses, the single-arg explicit-generics
+    // path doesn't disambiguate per slice 8a's parser note).
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct NoShow {}\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn use_it[F: Functor](_f: F, _x: F.Mapped[NoShow]) -> i64 { 0 }\n\
+         fn main() -> i64 { use_it(V {}, 0) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_PARAM_BOUND_NOT_SATISFIED")
+                && e.message.contains("Show")),
+        "expected E_GAT_PARAM_BOUND_NOT_SATISFIED naming Show, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8c_implicit_param_position_projection_accepted_when_arg_satisfies() {
+    // Positive twin for the implicit-trigger walker. The projection
+    // arg `Foo` satisfies the GAT decl's inline bound `Show`, so the
+    // implicit discharge passes silently.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct Foo {}\n\
+         impl Show for Foo { fn show(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn use_it[F: Functor](_f: F, _x: F.Mapped[Foo]) -> i64 { 0 }\n\
+         fn main() -> i64 { use_it(V {}, 0) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8c_implicit_return_position_projection_fires_where_clause() {
+    // The implicit walker also fires on the substituted return type.
+    // GAT decl `type Mapped[U] where U: Show` — calling `produce(V
+    // {})` where produce returns `F.Mapped[NoShow]` instantiates
+    // `Mapped[NoShow]` in the return slot, the walker scans the
+    // return type for `AssocProjection`, discharges the GAT-decl
+    // where-clause, and fires `E_GAT_WHERE_CLAUSE_NOT_SATISFIED`
+    // because `NoShow` does not impl `Show`. F is solved from the
+    // receiver argument.
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct NoShow {}\n\
+         trait Functor { type Mapped[U] where U: Show; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn produce[F: Functor](_f: F) -> F.Mapped[NoShow] { 0 }\n\
+         fn main() -> i64 { produce(V {}) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_WHERE_CLAUSE_NOT_SATISFIED")
+                && e.message.contains("Show")),
+        "expected E_GAT_WHERE_CLAUSE_NOT_SATISFIED naming Show, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8c_implicit_walker_recurses_into_nested_projections() {
+    // The walker recurses into compound type shapes — a projection
+    // nested inside `Vec[F.Mapped[NoShow]]` at the param position
+    // still gets discharged. The walker's `Type::Named.args` arm
+    // walks the inner type. F is solved via the receiver argument.
+    let errors = typecheck_errors(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct NoShow {}\n\
+         struct Vec[T] { x: T }\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = i64; }\n\
+         fn use_it[F: Functor](_f: F, _x: Vec[F.Mapped[NoShow]]) -> i64 { 0 }\n\
+         fn main() -> i64 { use_it(V {}, Vec { x: 0 }) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_GAT_PARAM_BOUND_NOT_SATISFIED")
+                && e.message.contains("Show")),
+        "expected E_GAT_PARAM_BOUND_NOT_SATISFIED on nested projection; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice8c_unresolvable_projection_skips_discharge_silently() {
+    // When the receiver F is itself a generic param at the call site
+    // (the caller hasn't bound F to a concrete type), the projection
+    // can't resolve through `impl_assoc_types`. The implicit walker
+    // calls `discharge_gat_decl_constraints` which short-circuits at
+    // the impl-table miss, so this case stays silent — matching slice
+    // 8a's "unresolvable projection skipped" rule.
+    typecheck_ok(
+        "trait Show { fn show(ref self) -> i64; }\n\
+         struct Foo {}\n\
+         impl Show for Foo { fn show(ref self) -> i64 { 0 } }\n\
+         trait Functor { type Mapped[U: Show]; }\n\
+         fn use_it[F: Functor](_f: F, _x: F.Mapped[Foo]) -> i64 { 0 }\n\
+         fn forward[G: Functor](g: G) -> i64 { use_it(g, 0) }",
+    );
+}
+
+#[test]
+fn test_gat_slice8c_slices_4_through_8b_still_pass_regression() {
+    // Regression pin: slice 8b headline continues to typecheck against
+    // the slice 8c tightening + implicit walker. The discharge surface
+    // is additive — the explicit-where-clause discharge from 8a/8b
+    // still fires the same diagnostics, and the projection-aware
+    // wrapper preserves all assignment compatibility cases that
+    // pre-slice-8c relied on through the permissive arm.
+    typecheck_ok(
+        "trait Collector { fn collect(ref self) -> i64; }\n\
+         trait Functor { type Mapped[U]; }\n\
+         struct Vec[T] { x: T }\n\
+         impl[T] Collector for Vec[T] { fn collect(ref self) -> i64 { 0 } }\n\
+         struct V {}\n\
+         impl Functor for V { type Mapped[U] = Vec[U]; }\n\
+         fn use_it[F: Functor](_f: F) -> i64 where F.Mapped[i64]: Collector { 0 }\n\
+         fn main() -> i64 { use_it(V {}) }",
+    );
+}

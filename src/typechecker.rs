@@ -52,8 +52,11 @@ pub use types::{
     FloatSize, IntSize, SubstValue, Type, TypeVarId, UIntSize, VariantTypeInfo,
 };
 #[cfg(test)]
-use types::{contains_type_param, receiver_for_method_lookup, types_compatible};
-use types::{integer_width_bits, is_integer, is_numeric, is_subtype};
+use types::{contains_type_param, receiver_for_method_lookup};
+use types::{
+    integer_width_bits, is_integer, is_numeric, is_subtype, projection_unresolvable_with,
+    types_compatible,
+};
 
 // ── Attribute Helpers ───────────────────────────────────────────
 
@@ -1150,8 +1153,68 @@ impl<'a> TypeChecker<'a> {
         }
     }
 
+    /// Checker-aware projection-resolving wrapper around the pure
+    /// `types_compatible`. GAT slice 8c carry-forward (d).
+    ///
+    /// The pure `types_compatible` in `types.rs` is structural-only on
+    /// `AssocProjection`: two projections must match component-wise, and
+    /// a one-sided projection vs concrete type returns `false`. That
+    /// strictness needed projection-aware resolution at the
+    /// `if`/`if-let`/`match`/`range` branch-compat checks and at
+    /// `check_assignable` that today see substituted-but-unresolved
+    /// projections (`F.Mapped[i64]` against `Vec[i64]` before the
+    /// impl-table lookup). This wrapper resolves both sides through
+    /// `resolve_assoc_projections` (the same engine
+    /// `discharge_projection_bounds` uses) before delegating to the
+    /// pure structural check — so a projection that resolves to a
+    /// concrete `Vec[i64]` matches a slot of `Vec[i64]`.
+    ///
+    /// **Conservative fallback for unresolvable projections.** If a
+    /// projection survives resolution (receiver still a `TypeParam`,
+    /// no impl-table entry), the wrapper falls back to permissive
+    /// (returns `true`). This preserves the pre-slice-8c "we don't
+    /// know what this will become at monomorphization time, so don't
+    /// fire a false-positive diagnostic" semantics for in-body checks
+    /// inside a generic function — at the call site the projection
+    /// resolves through `solutions` and the strict structural check
+    /// catches a genuine mismatch. The slice 8c tightening targets
+    /// the **resolved** path; the unresolved path remains permissive
+    /// (which is observationally equivalent to the pre-slice-8c
+    /// wildcard arm for that subset of inputs).
+    ///
+    /// Pure-context callers (`unify_types`, `lub_block_type`, the
+    /// slice/array element-compat sub-calls inside `types_compatible`
+    /// itself) keep using the bare `types_compatible` — those sites
+    /// don't have `&self` and the pure structural rule is the right
+    /// semantics for them.
+    pub(super) fn types_compatible_with_projections(&self, a: &Type, b: &Type) -> bool {
+        let a_resolved = self.resolve_assoc_projections(a);
+        let b_resolved = self.resolve_assoc_projections(b);
+        if projection_unresolvable_with(&a_resolved, &b_resolved) {
+            return true;
+        }
+        types_compatible(&a_resolved, &b_resolved)
+    }
+
+    /// Subtyping counterpart to `types_compatible_with_projections`.
+    /// Routes through `is_subtype` (which carries function-type
+    /// variance + owned-to-ref coercion) after resolving projections
+    /// on both sides. Used by `check_assignable` so an expected slot
+    /// of `Vec[i64]` accepts an inferred `F.Mapped[i64]` that
+    /// resolves to `Vec[i64]` through the impl table. Falls back to
+    /// permissive when the projection remains unresolvable (see the
+    /// rationale on `types_compatible_with_projections`).
+    pub(super) fn is_subtype_with_projections(&self, super_ty: &Type, sub_ty: &Type) -> bool {
+        let super_resolved = self.resolve_assoc_projections(super_ty);
+        let sub_resolved = self.resolve_assoc_projections(sub_ty);
+        if projection_unresolvable_with(&super_resolved, &sub_resolved) {
+            return true;
+        }
+        is_subtype(&super_resolved, &sub_resolved)
+    }
+
     pub(super) fn check_assignable(&mut self, expected: &Type, found: &Type, span: Span) -> bool {
-        if is_subtype(expected, found) {
+        if self.is_subtype_with_projections(expected, found) {
             return true;
         }
         if Self::is_once_into_fn_shape(expected, found) {

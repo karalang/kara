@@ -23,8 +23,7 @@ use super::inference::{
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_to_concrete_or_param_name, types_compatible, ConstArg, IntSize, ScrutineeMode, SubstValue,
-    Type,
+    type_to_concrete_or_param_name, ConstArg, IntSize, ScrutineeMode, SubstValue, Type,
 };
 use super::TypeErrorKind;
 
@@ -728,6 +727,30 @@ impl<'a> super::TypeChecker<'a> {
             &self.env.const_substitutions,
             &const_id_to_name,
         );
+        // GAT slice 8c — apply `substitute_type_params` against the
+        // `solutions` map before `resolve_assoc_projections`.
+        // `resolve_type_vars` walks `TypeVar` ids but doesn't touch
+        // `AssocProjection.param` (which is a `String` carrying the
+        // receiver's type-param name like `"F"`). Without this extra
+        // pass, a return type `F.Mapped[i64]` keeps `param="F"`
+        // after the TypeVar resolution, and the subsequent
+        // `resolve_assoc_projections` lookup against `impl_assoc_types`
+        // (keyed on concrete type names like `"V"`) misses — leaving
+        // the call's return type as an unresolved projection at the
+        // assignment site. `substitute_type_params` is the same
+        // helper `discharge_projection_bounds` uses for the explicit-
+        // where-clause projection path; routing the call's return
+        // type through it keeps the projection resolution surface
+        // consistent.
+        let ret = if solutions.is_empty() {
+            ret
+        } else {
+            let solutions_as_subs: HashMap<String, SubstValue> = solutions
+                .iter()
+                .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+                .collect();
+            substitute_type_params(&ret, &solutions_as_subs)
+        };
         let ret = self.resolve_assoc_projections(&ret);
 
         // Const generics slice 3c: discharge `WhereConstraint::ConstPredicate`
@@ -776,6 +799,68 @@ impl<'a> super::TypeChecker<'a> {
             // discharge call covers both inline and where-clause surfaces.
             self.discharge_type_bounds(wc, &solutions, discharge_span);
         }
+
+        // GAT slice 8c — implicit-trigger walker for
+        // `discharge_gat_decl_constraints`. Scan the substituted
+        // signature's param + return types for `AssocProjection`
+        // nodes and discharge each one's GAT-decl per-param inline
+        // bounds + where-clause. This is the sibling trigger to the
+        // explicit `where F.Mapped[i64]: Trait` discharge inside
+        // `discharge_projection_bounds` — slice 8b shipped that
+        // explicit trigger but a function like
+        // `fn f[F: Functor](x: F.Mapped[NoShow])` (with `type
+        // Mapped[U: Show]`) never reaches the where-clause discharge,
+        // so the inline bound on `U` was silently skipped. The
+        // walker fires on the **substituted-but-not-yet-resolved**
+        // projection (receiver string rewritten via
+        // `substitute_type_params`, type-args resolved through
+        // `resolve_type_vars`, but the impl-table lookup deferred).
+        // This is the shape `discharge_gat_decl_constraints` expects
+        // — its impl-table lookup is what proves the GAT-decl entry
+        // exists and exposes the `param_bound_traits` /
+        // `where_clause` fields to discharge. Calling
+        // `resolve_assoc_projections` first would erase the
+        // projection (replacing it with the substituted RHS), losing
+        // the discharge opportunity entirely.
+        let solutions_as_subs: HashMap<String, SubstValue> = solutions
+            .iter()
+            .map(|(k, v)| (k.clone(), SubstValue::Type(v.clone())))
+            .collect();
+        for sub_param_ty in &sub_params {
+            let resolved = resolve_type_vars(
+                sub_param_ty,
+                &self.env.substitutions,
+                &id_to_name,
+                &self.env.const_substitutions,
+                &const_id_to_name,
+            );
+            let substituted = if solutions_as_subs.is_empty() {
+                resolved
+            } else {
+                substitute_type_params(&resolved, &solutions_as_subs)
+            };
+            self.discharge_gat_decl_constraints_in(&substituted, discharge_span);
+        }
+        // For the return type, fire the walker against the
+        // substituted-but-not-yet-resolved shape so projections that
+        // survive substitution can discharge their GAT-decl
+        // constraints. `ret` above is the fully-resolved value (used
+        // as the call's return). Rebuild the pre-resolution shape
+        // for the walker so projections that get erased by
+        // resolution still get their GAT-decl constraints checked.
+        let pre_resolve_ret = resolve_type_vars(
+            &sub_ret,
+            &self.env.substitutions,
+            &id_to_name,
+            &self.env.const_substitutions,
+            &const_id_to_name,
+        );
+        let pre_resolve_ret = if solutions_as_subs.is_empty() {
+            pre_resolve_ret
+        } else {
+            substitute_type_params(&pre_resolve_ret, &solutions_as_subs)
+        };
+        self.discharge_gat_decl_constraints_in(&pre_resolve_ret, discharge_span);
 
         ret
     }
@@ -1058,6 +1143,83 @@ impl<'a> super::TypeChecker<'a> {
                     );
                 }
             }
+        }
+    }
+
+    /// GAT slice 8c — recursive walker that finds every
+    /// `AssocProjection` node inside `ty` and dispatches each to
+    /// `discharge_gat_decl_constraints`. The walker is the sibling
+    /// trigger to the explicit-where-clause-bound discharge inside
+    /// `discharge_projection_bounds`: signatures like
+    /// `fn f[F: Functor](x: F.Mapped[NoShow])` (with `type Mapped[U:
+    /// Show]`) reach the projection through the param-type position
+    /// rather than a where-clause bound, so the implicit walk is
+    /// what fires the GAT-decl per-param inline bound check.
+    ///
+    /// Walks every compound type shape (`Named.args`, `Tuple`,
+    /// `Array.element`, `Slice.element`, `Ref` / `MutRef` / `Weak` /
+    /// `Pointer.inner`, `Function.params` / `Function.return_type`,
+    /// `OnceFunction.params` / `OnceFunction.return_type`) so a
+    /// projection nested inside e.g. `Vec[F.Mapped[NoShow]]` or
+    /// `(F.Mapped[NoShow], i64)` still gets discharged. The receiver
+    /// `AssocProjection { receiver_args, args, .. }` walks both arg
+    /// lists in case nested projections appear there too.
+    ///
+    /// Terminal types (`Int` / `UInt` / `Float` / `Bool` / `Char` /
+    /// `String` / `Unit` / `Never` / `Error` / `TypeVar` / `TypeParam`
+    /// / `Shared`) carry no projections and short-circuit. Idempotent:
+    /// re-running on the same type re-issues the same diagnostics, so
+    /// callers should call it exactly once per call-site discharge.
+    pub(super) fn discharge_gat_decl_constraints_in(&mut self, ty: &Type, discharge_span: &Span) {
+        match ty {
+            Type::AssocProjection {
+                args,
+                receiver_args,
+                ..
+            } => {
+                self.discharge_gat_decl_constraints(ty, discharge_span);
+                for arg in args {
+                    self.discharge_gat_decl_constraints_in(arg, discharge_span);
+                }
+                for arg in receiver_args {
+                    self.discharge_gat_decl_constraints_in(arg, discharge_span);
+                }
+            }
+            Type::Tuple(elems) => {
+                for elem in elems {
+                    self.discharge_gat_decl_constraints_in(elem, discharge_span);
+                }
+            }
+            Type::Named { args, .. } => {
+                for arg in args {
+                    self.discharge_gat_decl_constraints_in(arg, discharge_span);
+                }
+            }
+            Type::Array { element, .. } | Type::Slice { element, .. } => {
+                self.discharge_gat_decl_constraints_in(element, discharge_span);
+            }
+            Type::Ref(inner)
+            | Type::MutRef(inner)
+            | Type::Weak(inner)
+            | Type::Rc(inner)
+            | Type::Arc(inner)
+            | Type::Pointer { inner, .. } => {
+                self.discharge_gat_decl_constraints_in(inner, discharge_span);
+            }
+            Type::Function {
+                params,
+                return_type,
+            }
+            | Type::OnceFunction {
+                params,
+                return_type,
+            } => {
+                for param in params {
+                    self.discharge_gat_decl_constraints_in(param, discharge_span);
+                }
+                self.discharge_gat_decl_constraints_in(return_type, discharge_span);
+            }
+            _ => {}
         }
     }
 
@@ -1524,7 +1686,7 @@ impl<'a> super::TypeChecker<'a> {
                     if else_ty == Type::Never {
                         return then_ty;
                     }
-                    if !types_compatible(&then_ty, &else_ty)
+                    if !self.types_compatible_with_projections(&then_ty, &else_ty)
                         && then_ty != Type::Error
                         && else_ty != Type::Error
                     {
@@ -1573,7 +1735,7 @@ impl<'a> super::TypeChecker<'a> {
                     if else_ty == Type::Never {
                         return then_ty;
                     }
-                    if !types_compatible(&then_ty, &else_ty)
+                    if !self.types_compatible_with_projections(&then_ty, &else_ty)
                         && then_ty != Type::Error
                         && else_ty != Type::Error
                     {
@@ -1791,7 +1953,10 @@ impl<'a> super::TypeChecker<'a> {
                 let end_ty = end.as_deref().map(|e| self.infer_expr(e));
                 // When both bounds are present, verify they share a type.
                 if let (Some(ref s), Some(ref e)) = (&start_ty, &end_ty) {
-                    if !types_compatible(s, e) && *s != Type::Error && *e != Type::Error {
+                    if !self.types_compatible_with_projections(s, e)
+                        && *s != Type::Error
+                        && *e != Type::Error
+                    {
                         self.type_error(
                             format!(
                                 "range bounds must have same type: '{}' and '{}'",
