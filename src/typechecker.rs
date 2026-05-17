@@ -393,6 +393,17 @@ pub enum TypeErrorKind {
     /// the literal-half rule (`NonExhaustiveCrossPackageLiteral`),
     /// applied at the pattern check site.
     NonExhaustiveCrossPackagePattern,
+    /// Lint-level slice 4b follow-up — a `#[allow]` / `#[warn]` /
+    /// `#[deny]` / `#[expect]` attribute named a lint that is not in
+    /// the central registry (`crate::lints::STARTER_LINTS`). Routed
+    /// through `type_lint_warning` with `lint_name = "unknown_lint"`
+    /// so the same cascade walker that handles every other lint can
+    /// suppress (`#[allow(unknown_lint, removed_lint)]`) or promote
+    /// (`#[deny(unknown_lint)]`) it uniformly. Per design.md
+    /// § Lint Level Attributes > Naming, *"code with
+    /// `#[allow(removed_lint)]` continues to compile"* — the
+    /// unknown name itself surfaces as a (suppressible) warning.
+    UnknownLint,
 }
 
 impl std::fmt::Display for TypeError {
@@ -835,6 +846,12 @@ impl<'a> TypeChecker<'a> {
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();
+        // Lint-level slice 4b follow-up — synthesize `unknown_lint`
+        // warnings for every override naming a lint not in the
+        // central registry. Runs as a pre-pass so the per-item
+        // cascade-aware emission path is already wired (see
+        // `emit_unknown_lint_warnings`).
+        self.emit_unknown_lint_warnings();
         self.check_items();
         self.finalize_pattern_binding_inner_types();
         let trait_impls: std::collections::HashSet<(String, String)> = self
@@ -868,6 +885,78 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,
             compiler_builtins,
             must_use_functions,
+        }
+    }
+
+    /// Walk every top-level item's `lint_overrides` (and impl-block
+    /// methods' overrides) and emit `unknown_lint` warnings for any
+    /// lint name not in the central registry. Each emission pushes
+    /// the originating item's frame (and the surrounding impl-block
+    /// frame for methods) onto `lint_override_stack` first, so the
+    /// generic `type_lint_warning` cascade lookup sees the item's
+    /// own overrides as the innermost scope — that's how
+    /// `#[allow(unknown_lint, removed_lint)]` self-suppresses (the
+    /// synthesized warning's span lives inside the attribute slot,
+    /// which sits outside the item's body-span, so a span-based
+    /// cascade walker would otherwise fail to find the item).
+    ///
+    /// Slice 4b follow-up — slice 4b core left this on the
+    /// deferred-polish list; this method ships it.
+    fn emit_unknown_lint_warnings(&mut self) {
+        // Collect (outer_frame, inner_frame) pairs to emit against.
+        // `outer_frame` is the surrounding impl block's overrides for
+        // an impl-method; empty otherwise. `inner_frame` is the item's
+        // own overrides, which become the innermost cascade frame at
+        // emission time (so `#[allow(unknown_lint, ...)]` on the same
+        // item self-suppresses).
+        let mut emissions: Vec<(
+            Vec<crate::lints::LintLevelOverride>,
+            Vec<crate::lints::LintLevelOverride>,
+        )> = Vec::new();
+        for item in &self.program.items {
+            if let Some(overs) = item_own_lint_overrides(item) {
+                if has_unknown_lint(overs) {
+                    emissions.push((Vec::new(), overs.to_vec()));
+                }
+            }
+            if let Item::ImplBlock(imp) = item {
+                for impl_item in &imp.items {
+                    if let ImplItem::Method(f) = impl_item {
+                        if has_unknown_lint(&f.lint_overrides) {
+                            emissions.push((imp.lint_overrides.clone(), f.lint_overrides.clone()));
+                        }
+                    }
+                }
+            }
+        }
+        for (outer, inner) in emissions {
+            // Push the cascade frames (impl block first, then item /
+            // method) so the innermost frame is the item's own
+            // overrides and `#[allow(unknown_lint)]` self-suppresses.
+            let pushed_outer = !outer.is_empty();
+            if pushed_outer {
+                self.lint_override_stack.push(outer);
+            }
+            self.lint_override_stack.push(inner.clone());
+            for ov in &inner {
+                if crate::lints::lint_by_name(&ov.lint).is_none() {
+                    let message = format!(
+                        "error[E_UNKNOWN_LINT]: unknown lint name `{}` in lint-level attribute; \
+                         remove the attribute or check the lint registry",
+                        ov.lint,
+                    );
+                    self.type_lint_warning(
+                        message,
+                        ov.span.clone(),
+                        TypeErrorKind::UnknownLint,
+                        "unknown_lint",
+                    );
+                }
+            }
+            self.lint_override_stack.pop();
+            if pushed_outer {
+                self.lint_override_stack.pop();
+            }
         }
     }
 
@@ -1018,11 +1107,17 @@ impl<'a> TypeChecker<'a> {
                 // Suppressed by an `#[allow(...)]` in the enclosing
                 // scope chain (or by CLI `-A NAME` once that lands).
             }
-            LintLevel::Warn | LintLevel::Expect => {
-                // `Expect` behaves like `Warn` today; slice 5 will
-                // record fulfilment so an `#[expect]` whose lint never
-                // fires emits `unfulfilled_lint_expectation`.
+            LintLevel::Warn => {
                 self.warnings.push(entry);
+            }
+            LintLevel::Expect => {
+                // `#[expect(NAME)]` on a scope whose lint fires is
+                // silent per design.md § Lint Level Attributes (the
+                // user told the compiler they expect the lint to
+                // fire, so its firing is acknowledged not surfaced).
+                // Slice 5 will additionally track fulfilment and
+                // emit `unfulfilled_lint_expectation` when the lint
+                // did NOT fire in the attributed scope.
             }
             LintLevel::Deny => {
                 self.errors.push(entry);
@@ -1495,4 +1590,31 @@ impl<'a> TypeChecker<'a> {
     // ── Check Items (Pass 2) ────────────────────────────────────
 
     // ── Match ───────────────────────────────────────────────────
+}
+
+fn has_unknown_lint(overrides: &[crate::lints::LintLevelOverride]) -> bool {
+    overrides
+        .iter()
+        .any(|ov| crate::lints::lint_by_name(&ov.lint).is_none())
+}
+
+/// The item's own lint overrides (the attached `#[allow]` / `#[warn]`
+/// / `#[deny]` / `#[expect]` slice from slice 4a). `None` for item
+/// kinds that don't carry attributes (`UseDecl`, `Import`, etc.) —
+/// callers skip them. `ImplBlock` returns the *block's* overrides;
+/// per-method overrides are walked separately at the call site.
+fn item_own_lint_overrides(item: &Item) -> Option<&[crate::lints::LintLevelOverride]> {
+    match item {
+        Item::Function(f) => Some(&f.lint_overrides),
+        Item::StructDef(s) => Some(&s.lint_overrides),
+        Item::EnumDef(e) => Some(&e.lint_overrides),
+        Item::TraitDef(t) => Some(&t.lint_overrides),
+        Item::TraitAlias(t) => Some(&t.lint_overrides),
+        Item::MarkerTrait(t) => Some(&t.lint_overrides),
+        Item::ImplBlock(i) => Some(&i.lint_overrides),
+        Item::ConstDecl(c) => Some(&c.lint_overrides),
+        Item::TypeAlias(t) => Some(&t.lint_overrides),
+        Item::DistinctType(d) => Some(&d.lint_overrides),
+        _ => None,
+    }
 }

@@ -788,6 +788,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackagePattern => "E0243",
+                crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
@@ -800,13 +801,14 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 span: &err.span,
                 suggestion: None,
                 extra_json: None,
-                lint_name: None,
+                lint_name: err.lint_name.as_deref(),
             });
         }
         for warn in &t.warnings {
             id_counter += 1;
             let code = match warn.kind {
                 crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
+                crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };
