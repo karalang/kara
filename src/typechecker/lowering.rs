@@ -127,39 +127,39 @@ impl<'a> super::TypeChecker<'a> {
                 generic_scope,
                 false,
             ))),
-            // `impl Trait` slice 1 stub: parser accepts the surface
-            // form but the typechecker semantics for argument /
-            // return / RPITIT / TAIT positions ship in slices 2-4
-            // (see phase-5-diagnostics.md line 391). Until those
-            // slices land we lower `impl Trait` to `Type::Error` with
-            // a focused "not yet implemented" diagnostic so reaching
-            // this site through user code is loud rather than silent.
-            // The diagnostic names the slice that will land it so a
-            // user encountering the error knows it's a sequencing
-            // pause, not a permanent rejection. We still walk the
-            // generic-arg type-expressions so any nested errors
-            // (e.g., undefined types inside the args) are surfaced.
+            // `impl Trait` slice 3: return-position / RPITIT / TAIT-RHS
+            // lower to `Type::Existential` carrying the named trait bound
+            // and a `SpanKey` origin that identifies the declaration site
+            // (so two `impl Iterator` declarations on different fns stay
+            // distinct even with structurally identical bounds).
+            // Argument-position was already eliminated by the slice-2
+            // resolver desugar, so any `TypeKind::ImplTrait` reaching this
+            // site is in a return / TAIT / non-arg position. Caller-side
+            // opacity, body-return checking, and trait-surface method
+            // dispatch are handled at `check_assignable` /
+            // `is_subtype_with_projections` / `type_satisfies_bound` and
+            // the receiver-dispatch path. See phase-5-diagnostics.md line
+            // 397 for the slice 3 entry.
             TypeKind::ImplTrait {
                 trait_path, args, ..
             } => {
-                for a in args {
-                    if let GenericArg::Type(t) = a {
-                        let _ = self.lower_type_expr_inner(t, generic_scope, false);
-                    }
+                let trait_args: Vec<Type> = args
+                    .iter()
+                    .filter_map(|a| match a {
+                        GenericArg::Type(t) => {
+                            Some(self.lower_type_expr_inner(t, generic_scope, false))
+                        }
+                        // Const-args on trait paths aren't part of slice 3
+                        // — the parser accepts them but `Type::Existential`
+                        // has no representation for const arguments today.
+                        GenericArg::Const(_) => None,
+                    })
+                    .collect();
+                Type::Existential {
+                    trait_name: trait_path.segments.join("."),
+                    trait_args,
+                    origin: crate::resolver::SpanKey::from_span(&ty.span),
                 }
-                let trait_name = trait_path.segments.join(".");
-                self.type_error(
-                    format!(
-                        "error[E_IMPL_TRAIT_NOT_YET_IMPLEMENTED]: `impl {trait_name}` is \
-                         parsed but the typechecker semantics for `impl Trait` types \
-                         land in slices 2-4 of the impl Trait epic (see \
-                         phase-5-diagnostics.md line 391); use an explicit generic \
-                         parameter `[T: {trait_name}]` for now"
-                    ),
-                    ty.span.clone(),
-                    TypeErrorKind::TypeMismatch,
-                );
-                Type::Error
             }
             TypeKind::Unit => Type::Unit,
             TypeKind::Error => Type::Error,

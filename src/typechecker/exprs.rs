@@ -1239,6 +1239,20 @@ impl<'a> super::TypeChecker<'a> {
     /// engine guards `TypeVar` / `TypeParam` / `Error` upstream so those
     /// don't reach here in practice.
     pub(super) fn type_satisfies_bound(&self, ty: &Type, trait_name: &str) -> bool {
+        // `impl Trait` slice 3: an existential whose declared bound
+        // matches the queried trait satisfies it by construction. The
+        // existential's value type IS the trait surface — slice 3 does
+        // not yet walk supertrait closures here (slice 5 + Phase 8 may
+        // extend), so only an exact trait-name match qualifies.
+        if let Type::Existential {
+            trait_name: existential_trait,
+            ..
+        } = ty
+        {
+            if existential_trait == trait_name {
+                return true;
+            }
+        }
         // Built-in coverage via the type_supports_* helpers — these
         // recognize primitives implicitly + named types via
         // `#[derive(Trait)]` registration.

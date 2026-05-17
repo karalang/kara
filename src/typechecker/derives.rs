@@ -66,7 +66,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -110,7 +115,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -150,7 +160,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -189,7 +204,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -250,7 +270,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -298,7 +323,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
     /// Returns `true` when `ty` is a distinct type that derives `Arithmetic`.
@@ -388,7 +418,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 
@@ -446,7 +481,12 @@ impl<'a> super::TypeChecker<'a> {
             Type::Function { .. }
             | Type::OnceFunction { .. }
             | Type::Pointer { .. }
-            | Type::Weak(_) => false,
+            | Type::Weak(_)
+            // `impl Trait` existentials only carry the trait surface,
+            // not the witness's derive metadata; the derive-matches-bound
+            // path is handled directly in `type_satisfies_bound` by the
+            // existential-trait-name comparison, not via these helpers.
+            | Type::Existential { .. } => false,
         }
     }
 

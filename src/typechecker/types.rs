@@ -118,6 +118,35 @@ pub enum Type {
         receiver_args: Vec<Type>,
     },
 
+    /// Return-position `impl Trait` — an opaque existential whose witness
+    /// type is computed from the function body (slice 3 of the `impl Trait`
+    /// epic; see `phase-5-diagnostics.md` line 397 and `design.md § `impl
+    /// Trait` (Existential Types)`).
+    ///
+    /// Caller-side opacity: a value of `Type::Existential` is callable only
+    /// through methods declared on `trait_name`; the typechecker rejects
+    /// attempts to assign it into a slot expecting the witness's concrete
+    /// type, to pattern-match past the trait surface, or otherwise to use
+    /// it in a position that requires the concrete representation.
+    ///
+    /// Callee-side check: the function body's tail-expr type must implement
+    /// `trait_name`; failure emits `error[E_IMPL_TRAIT_MISSING_BOUND]`.
+    ///
+    /// Fields:
+    /// - `trait_name` — joined trait path (`Iterator`, `std.iter.Iterator`).
+    /// - `trait_args` — positional generic args on the trait. Associated-
+    ///   type bindings (`Iterator[Item = i64]`) are not yet parseable so
+    ///   only positional args reach this field.
+    /// - `origin` — `SpanKey` of the `TypeKind::ImplTrait` AST node. Two
+    ///   distinct `impl Iterator` declarations (e.g., on two different
+    ///   functions) yield distinct origins so the typechecker keeps their
+    ///   witnesses separate even when their bounds match structurally.
+    Existential {
+        trait_name: String,
+        trait_args: Vec<Type>,
+        origin: crate::resolver::SpanKey,
+    },
+
     Error,
 }
 
@@ -407,6 +436,10 @@ pub(super) fn receiver_for_method_lookup(obj_ty: &Type) -> Type {
 pub(super) fn type_is_fully_concrete(ty: &Type) -> bool {
     match ty {
         Type::TypeParam(_) | Type::TypeVar(_) | Type::AssocProjection { .. } => false,
+        // `impl Trait` existentials are opaque to impl-table specialization
+        // — an impl block can never name an existential as its target, so
+        // treat as non-concrete to keep them out of the specialized lane.
+        Type::Existential { .. } => false,
         Type::Named { args, .. } => args.iter().all(type_is_fully_concrete),
         Type::Tuple(types) => types.iter().all(type_is_fully_concrete),
         Type::Array { element, .. } => type_is_fully_concrete(element),
@@ -539,6 +572,18 @@ pub fn type_display(ty: &Type) -> String {
             } else {
                 let inner: Vec<String> = args.iter().map(type_display).collect();
                 format!("{}.{}[{}]", recv_str, assoc, inner.join(", "))
+            }
+        }
+        Type::Existential {
+            trait_name,
+            trait_args,
+            ..
+        } => {
+            if trait_args.is_empty() {
+                format!("impl {}", trait_name)
+            } else {
+                let inner: Vec<String> = trait_args.iter().map(type_display).collect();
+                format!("impl {}[{}]", trait_name, inner.join(", "))
             }
         }
         Type::Error => "<error>".to_string(),
@@ -859,6 +904,24 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
     match (a, b) {
         (Type::Error, _) | (_, Type::Error) => true,
         (Type::Never, _) | (_, Type::Never) => true,
+        // `impl Trait` slice 3 — two existentials unify only when they
+        // come from the same declaration site (matched `origin` SpanKey).
+        // Same-origin guarantees same witness; different origins are two
+        // independent existentials even when the named trait matches. A
+        // one-sided existential against a non-existential is rejected
+        // here as the structural rule — the trait-surface compatibility
+        // (concrete witness satisfies the trait bound) lives in
+        // `check_assignable` / `type_satisfies_bound`, where the impl
+        // table is reachable through `&TypeChecker`.
+        (
+            Type::Existential {
+                origin: a_origin, ..
+            },
+            Type::Existential {
+                origin: b_origin, ..
+            },
+        ) => a_origin == b_origin,
+        (Type::Existential { .. }, _) | (_, Type::Existential { .. }) => false,
         // Unresolved type parameters and associated type projections are
         // treated as permissive — they appear when a generic enum constructor
         // leaves an argument unconstrained (e.g. `let x: Option[i64] = None`

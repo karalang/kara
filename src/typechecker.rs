@@ -1210,6 +1210,31 @@ impl<'a> TypeChecker<'a> {
         if projection_unresolvable_with(&super_resolved, &sub_resolved) {
             return true;
         }
+        // `impl Trait` slice 3 — caller-side opacity for return-position
+        // existentials. An `expected: impl Trait, found: ConcreteWitness`
+        // assignment is accepted when the witness implements the trait;
+        // this is the "body's return-expr type satisfies the declared
+        // trait" check at the body-tail position and the "call site
+        // accepting an existential into an `impl Trait`-typed slot" path.
+        // The reverse direction (`expected: Concrete, found: impl Trait`)
+        // falls through to the structural rule below, which now rejects
+        // the existential→concrete cross thanks to the existential arms
+        // in `types_compatible`. Same-origin existentials are unified by
+        // `types_compatible` directly.
+        if let Type::Existential {
+            trait_name,
+            origin: super_origin,
+            ..
+        } = &super_resolved
+        {
+            if let Type::Existential {
+                origin: sub_origin, ..
+            } = &sub_resolved
+            {
+                return super_origin == sub_origin;
+            }
+            return self.type_satisfies_bound(&sub_resolved, trait_name);
+        }
         is_subtype(&super_resolved, &sub_resolved)
     }
 
@@ -1242,6 +1267,31 @@ impl<'a> TypeChecker<'a> {
             );
             self.type_error(msg, span, TypeErrorKind::OnceFnIntoFnSlot);
             return false;
+        }
+        // `impl Trait` slice 3 — focused diagnostic for the body-return-
+        // doesn't-satisfy-trait case. When the expected slot is a return-
+        // position `impl Trait` (or any other existential-typed slot) and
+        // the found type is a concrete witness that does not implement
+        // the declared trait, surface `E_IMPL_TRAIT_MISSING_BOUND` rather
+        // than the generic "expected X, found Y" so the user sees the
+        // missing trait by name. The opaque cross-direction (expected:
+        // Concrete, found: Existential) falls through to the generic
+        // diagnostic — that case is "caller named the witness", and the
+        // expected / found type names are already informative.
+        if let Type::Existential { trait_name, .. } = expected {
+            if !matches!(found, Type::Existential { .. }) {
+                self.type_error(
+                    format!(
+                        "error[E_IMPL_TRAIT_MISSING_BOUND]: function returns \
+                         `impl {trait_name}` but body type `{}` does not \
+                         implement `{trait_name}`",
+                        type_display(found),
+                    ),
+                    span,
+                    TypeErrorKind::TypeMismatch,
+                );
+                return false;
+            }
         }
         self.type_error(
             format!(
