@@ -33,7 +33,11 @@ impl super::Formatter {
                 self.write_str(" @ ");
                 self.format_pattern(pattern);
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest,
+            } => {
                 self.write_path(path);
                 self.write_str(" { ");
                 for (i, f) in fields.iter().enumerate() {
@@ -45,6 +49,12 @@ impl super::Formatter {
                         self.write_str(": ");
                         self.format_pattern(p);
                     }
+                }
+                if *has_rest {
+                    if !fields.is_empty() {
+                        self.write_str(", ");
+                    }
+                    self.write_str("..");
                 }
                 self.write_str(" }");
             }

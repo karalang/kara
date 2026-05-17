@@ -273,7 +273,13 @@ fn lower_pattern(p: &Pattern, scrut_type: &Type, env: &TypeEnv) -> Pat {
                 args,
             }
         }
-        PatternKind::Struct { path, fields } => {
+        PatternKind::Struct {
+            path,
+            fields,
+            has_rest: _, // `lower_struct_fields` treats missing fields as
+                         // wildcards, so an explicit `..` already collapses
+                         // to the same lowered shape; nothing to do here.
+        } => {
             let name = path.last().cloned().unwrap_or_default();
             // Two cases: enum struct-variant under an enum scrutinee, or a
             // plain struct.

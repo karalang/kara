@@ -91,7 +91,15 @@ impl<'a> super::Interpreter<'a> {
                     _ => false,
                 }
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _, // The runtime matcher checks each named field's
+                             // sub-pattern. Unlisted fields are unconstrained
+                             // whether `..` is present or not — the matcher
+                             // never required all fields to be enumerated —
+                             // so `has_rest` is a typechecker concern only.
+            } => {
                 let name = path.last().cloned().unwrap_or_default();
                 match value {
                     Value::Struct {

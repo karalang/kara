@@ -377,6 +377,14 @@ pub enum TypeErrorKind {
     /// here is unconditional regardless of which variants are covered;
     /// same-package matches keep the strict rule.
     NonExhaustiveCrossPackageMatch,
+    /// `#[non_exhaustive]` slice 4 pattern half — a cross-package
+    /// consumer destructured a `#[non_exhaustive] pub struct` without
+    /// a `..` rest-pattern. The defining package may add fields without
+    /// breaking source compatibility, so the destructure must allow
+    /// for them. Fix-it: insert `..` before the closing brace. Mirrors
+    /// the literal-half rule (`NonExhaustiveCrossPackageLiteral`),
+    /// applied at the pattern check site.
+    NonExhaustiveCrossPackagePattern,
 }
 
 impl std::fmt::Display for TypeError {

@@ -775,6 +775,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::ConflictingImpl => "E0240",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageLiteral => "E0241",
                 crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackageMatch => "E0242",
+                crate::typechecker::TypeErrorKind::NonExhaustiveCrossPackagePattern => "E0243",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

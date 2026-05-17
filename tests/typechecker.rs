@@ -14399,3 +14399,148 @@ fn impl_trait_slice5_dyn_trait_parses_as_type_kind_dyn() {
     };
     assert_eq!(trait_path.segments, vec!["Display".to_string()]);
 }
+
+// ── `#[non_exhaustive]` slice 4 pattern half — cross-package struct pattern ──
+//
+// Mirror of the slice-4 literal half, applied to exhaustive struct
+// patterns. A cross-package consumer destructuring a
+// `#[non_exhaustive] pub struct` without `..` rest is rejected:
+// the defining package may add fields without breaking source
+// compatibility, so the destructure must leave room for them.
+// Enabling change: `PatternKind::Struct` now carries a `has_rest`
+// flag set by the parser when `..` appears in the field list.
+
+#[test]
+fn non_exhaustive_slice4_pattern_cross_package_without_rest_rejected() {
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn read_it(c: Config) -> i64 { let Config { timeout } = c; timeout }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "expected NonExhaustiveCrossPackagePattern; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)
+                && e.message.contains("E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN")
+                && e.message.contains("Config")
+                && e.message.contains("..")
+        }),
+        "diagnostic must carry symbolic code, name the struct, and \
+         suggest `..`; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_pattern_cross_package_with_rest_accepted() {
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn read_it(c: Config) -> i64 { let Config { timeout, .. } = c; timeout }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "`..` should silence the slice-4 pattern rule; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_pattern_same_package_accepted() {
+    // Defining-package destructure without `..` is fine — only the
+    // cross-package case is restricted.
+    let parsed = parse(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn read_it(c: Config) -> i64 { let Config { timeout } = c; timeout }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "same-package pattern is fine; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_pattern_no_attribute_no_diagnostic() {
+    // Plain `pub struct` cross-package without `..` continues to work
+    // — the rule keys on `#[non_exhaustive]`.
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "pub struct Plain { x: i64 }\n\
+         fn read_it(p: Plain) -> i64 { let Plain { x } = p; x }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "no #[non_exhaustive] means no slice-4 pattern rule; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_pattern_cross_package_match_arm_without_rest_rejected() {
+    // The check fires on match arms too, not just `let` destructures.
+    // `let` is structurally a one-armed irrefutable match; both route
+    // through `check_pattern_against`.
+    let errs = typecheck_with_stdlib_origin_on_structs(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn timeout_of(c: Config) -> i64 { \
+             match c { Config { timeout } => timeout } \
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "match-arm struct pattern should fire the rule; got: {:?}",
+        errs.iter().map(|e| e.to_string()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice4_pattern_stdlib_internal_use_accepted() {
+    use karac::ast::Item;
+    let mut parsed = parse(
+        "#[non_exhaustive]\npub struct Config { timeout: i64 }\n\
+         fn stdlib_internal(c: Config) -> i64 { let Config { timeout } = c; timeout }",
+    );
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        match item {
+            Item::StructDef(s) => s.stdlib_origin = true,
+            Item::Function(f) => f.stdlib_origin = true,
+            _ => {}
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern)),
+        "stdlib-internal pattern on stdlib #[non_exhaustive] struct is \
+         fine; got: {:?}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+    );
+}

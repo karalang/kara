@@ -435,8 +435,47 @@ impl<'a> super::TypeChecker<'a> {
                     self.check_pattern_against(pat, &Type::Error, mode);
                 }
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest,
+            } => {
                 let struct_name = path.last().cloned().unwrap_or_default();
+
+                // `#[non_exhaustive]` slice 4 pattern half — cross-package
+                // exhaustive struct pattern (no `..`) on a `#[non_exhaustive]`
+                // struct is rejected with the `..`-insertion fix-it. Mirrors
+                // the slice-4 literal half in `infer_struct_literal`: same
+                // `is_non_exhaustive && defining_stdlib_origin && !current_fn_stdlib_origin`
+                // condition, applied at the pattern check site. The fix-it
+                // points at inserting `..` before the closing brace so the
+                // pattern keeps matching when the defining package adds
+                // fields.
+                if let Some(info) = self.env.structs.get(&struct_name) {
+                    if info.is_non_exhaustive
+                        && info.defining_stdlib_origin
+                        && !self.current_fn_stdlib_origin
+                        && !*has_rest
+                    {
+                        self.type_error(
+                            format!(
+                                "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN]: \
+                                 cannot exhaustively destructure `{name}` — \
+                                 `{name}` is `#[non_exhaustive]` and defined \
+                                 in another package, so its field set may \
+                                 grow. Add `..` before the closing `}}` to \
+                                 leave room for future fields (e.g. \
+                                 `{name} {{ ..your_fields.., .. }}`). See \
+                                 design.md § `#[non_exhaustive]` for \
+                                 Evolvable Public Types.",
+                                name = struct_name
+                            ),
+                            pattern.span.clone(),
+                            TypeErrorKind::NonExhaustiveCrossPackagePattern,
+                        );
+                    }
+                }
+
                 // Look up struct or enum variant
                 let field_types: Option<Vec<(String, Type)>> =
                     if let Some(info) = self.env.structs.get(&struct_name) {
@@ -932,8 +971,44 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest,
+            } => {
                 let struct_name = path.last().map(String::as_str).unwrap_or("");
+
+                // `#[non_exhaustive]` slice 4 pattern half (let-binding
+                // route) — same check as the match-arm site in
+                // `check_pattern_against`. `let X { ... } = e;` goes
+                // through `bind_pattern_types`, not `check_pattern_against`,
+                // so the slice-4 rule must fire here too. Without this,
+                // exhaustive let-destructures of cross-package
+                // non-exhaustive structs would silently slip through.
+                if let Some(info) = self.env.structs.get(struct_name) {
+                    if info.is_non_exhaustive
+                        && info.defining_stdlib_origin
+                        && !self.current_fn_stdlib_origin
+                        && !*has_rest
+                    {
+                        self.type_error(
+                            format!(
+                                "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN]: \
+                                 cannot exhaustively destructure `{name}` — \
+                                 `{name}` is `#[non_exhaustive]` and defined \
+                                 in another package, so its field set may \
+                                 grow. Add `..` before the closing `}}` to \
+                                 leave room for future fields. See design.md \
+                                 § `#[non_exhaustive]` for Evolvable Public \
+                                 Types.",
+                                name = struct_name
+                            ),
+                            pattern.span.clone(),
+                            TypeErrorKind::NonExhaustiveCrossPackagePattern,
+                        );
+                    }
+                }
+
                 let field_source_ty = if let Type::Named { name, .. } = ty {
                     if name == struct_name || ty == &Type::Error {
                         Some(name.clone())
@@ -1052,7 +1127,11 @@ impl<'a> super::TypeChecker<'a> {
             PatternKind::Tuple(patterns) => patterns
                 .iter()
                 .all(|p| self.is_irrefutable_param_pattern(p)),
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 // A struct pattern is irrefutable only if the name refers to a
                 // struct type (not an enum variant). Enum variant names are
                 // refutable — they only match one branch.

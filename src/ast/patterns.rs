@@ -93,6 +93,16 @@ pub enum PatternKind {
     Struct {
         path: Vec<String>,
         fields: Vec<FieldPattern>,
+        /// `..` rest-binding marker — `true` when the pattern ends with
+        /// `..` after the (possibly empty) field list, signalling
+        /// "match any remaining fields without binding them". The
+        /// presence of `..` flips the pattern from exhaustive to
+        /// open: missing-field checking is suppressed in the
+        /// typechecker, and `#[non_exhaustive]` cross-package struct
+        /// patterns require `..` (slice 4 pattern half — see
+        /// `phase-5-diagnostics.md` § `#[non_exhaustive]` for
+        /// Evolvable Public Types).
+        has_rest: bool,
     },
     TupleVariant {
         path: Vec<String>,

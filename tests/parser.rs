@@ -4898,7 +4898,11 @@ fn test_struct_destructuring_param() {
     if let Item::Function(f) = &prog.items[0] {
         assert_eq!(f.params.len(), 1);
         match &f.params[0].pattern.kind {
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 assert_eq!(path, &vec!["Point".to_string()]);
                 assert_eq!(fields.len(), 2);
                 assert_eq!(fields[0].name, "x");
@@ -4920,7 +4924,11 @@ fn test_struct_destructuring_param_with_rename() {
         assert_eq!(f.params.len(), 2);
         for param in &f.params {
             match &param.pattern.kind {
-                PatternKind::Struct { path, fields } => {
+                PatternKind::Struct {
+                    path,
+                    fields,
+                    has_rest: _,
+                } => {
                     assert_eq!(path, &vec!["Point".to_string()]);
                     assert_eq!(fields.len(), 2);
                     // Each field has a sub-pattern renaming it
@@ -8477,4 +8485,146 @@ fn impl_trait_slice1_multi_segment_trait_path_parses() {
         );
     };
     assert_eq!(trait_path.segments, vec!["std", "iter", "Iterator"]);
+}
+
+// ── `..` rest-pattern in struct patterns ─────────────────────────
+//
+// The `has_rest: bool` field on `PatternKind::Struct` tracks whether
+// the pattern ends with `..` after a (possibly empty) field list.
+// Enables `#[non_exhaustive]` slice 4's pattern-half cross-package
+// rule (`tests/typechecker.rs::non_exhaustive_slice4_pattern_*`).
+// Grammar: `{ field (, field)* (, ..)? ,? }` | `{ .. }` | `{}`.
+
+fn first_match_arm_struct_pattern(src: &str) -> (Vec<FieldPattern>, bool) {
+    let prog = parse_ok(src);
+    let f = prog
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("expected a function in the program");
+    let body = &f.body;
+    let mtch = body
+        .final_expr
+        .as_ref()
+        .expect("final expr (match) present");
+    let arms = match &mtch.kind {
+        ExprKind::Match { arms, .. } => arms,
+        _ => panic!("expected Match"),
+    };
+    match &arms[0].pattern.kind {
+        PatternKind::Struct {
+            fields, has_rest, ..
+        } => (fields.clone(), *has_rest),
+        _ => panic!("expected struct pattern"),
+    }
+}
+
+#[test]
+fn rest_pattern_struct_bare_rest_in_match_arm() {
+    let (fields, has_rest) = first_match_arm_struct_pattern(
+        "struct Point { x: i64, y: i64 }\n\
+         fn classify(p: Point) -> i64 { match p { Point { .. } => 1 } }",
+    );
+    assert!(fields.is_empty());
+    assert!(has_rest, "bare `..` should set has_rest");
+}
+
+#[test]
+fn rest_pattern_struct_field_then_rest_in_match_arm() {
+    let (fields, has_rest) = first_match_arm_struct_pattern(
+        "struct Point { x: i64, y: i64 }\n\
+         fn first(p: Point) -> i64 { match p { Point { x, .. } => x } }",
+    );
+    assert_eq!(fields.len(), 1);
+    assert_eq!(fields[0].name, "x");
+    assert!(has_rest);
+}
+
+#[test]
+fn rest_pattern_struct_field_then_rest_with_trailing_comma() {
+    let (fields, has_rest) = first_match_arm_struct_pattern(
+        "struct Point { x: i64, y: i64 }\n\
+         fn first(p: Point) -> i64 { match p { Point { x, .., } => x } }",
+    );
+    assert_eq!(fields.len(), 1);
+    assert!(has_rest);
+}
+
+#[test]
+fn rest_pattern_struct_without_rest_sets_flag_false() {
+    let (fields, has_rest) = first_match_arm_struct_pattern(
+        "struct Point { x: i64, y: i64 }\n\
+         fn dup(p: Point) -> i64 { match p { Point { x, y } => x + y } }",
+    );
+    assert_eq!(fields.len(), 2);
+    assert!(!has_rest, "no `..` means has_rest stays false");
+}
+
+#[test]
+fn rest_pattern_struct_field_after_rest_rejected() {
+    let (_, errors) = parse_with_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn bad(p: Point) -> i64 { match p { Point { .., y } => y } }",
+    );
+    assert!(!errors.is_empty(), "expected rejection of field after `..`");
+    assert!(
+        errors_contain(&errors, "E_REST_PATTERN_NOT_LAST"),
+        "diagnostic should name the symbolic code; got {errors:?}"
+    );
+}
+
+#[test]
+fn rest_pattern_struct_duplicate_rest_rejected() {
+    let (_, errors) = parse_with_errors(
+        "struct Point { x: i64, y: i64 }\n\
+         fn bad(p: Point) -> i64 { match p { Point { .., .. } => 1 } }",
+    );
+    assert!(!errors.is_empty(), "expected rejection of duplicate `..`");
+    assert!(
+        errors_contain(&errors, "E_REST_PATTERN_DUPLICATE")
+            || errors_contain(&errors, "E_REST_PATTERN_NOT_LAST"),
+        "diagnostic should name the duplicate-rest or not-last code; \
+         got {errors:?}"
+    );
+}
+
+#[test]
+fn rest_pattern_struct_with_qualified_path() {
+    // `Container.Field { x, .. }` — qualified-path struct pattern
+    // form (enum struct variant or nested namespace). The same
+    // helper parses fields, so `..` should work uniformly.
+    let prog = parse_ok(
+        "enum Container { Field { x: i64, y: i64 } }\n\
+         fn first(c: Container) -> i64 { \
+             match c { Container.Field { x, .. } => x } \
+         }",
+    );
+    let f = prog
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::Function(f) => Some(f),
+            _ => None,
+        })
+        .expect("expected a function in the program");
+    let mtch = f.body.final_expr.as_ref().expect("final expr present");
+    let arms = match &mtch.kind {
+        ExprKind::Match { arms, .. } => arms,
+        _ => panic!("expected Match"),
+    };
+    match &arms[0].pattern.kind {
+        PatternKind::Struct {
+            path,
+            fields,
+            has_rest,
+        } => {
+            assert_eq!(path, &vec!["Container".to_string(), "Field".to_string()]);
+            assert_eq!(fields.len(), 1);
+            assert!(has_rest);
+        }
+        _ => panic!("expected struct pattern"),
+    }
 }

@@ -274,29 +274,13 @@ impl super::Parser {
                 // Check for struct destructure: Name { ... }
                 if self.check(&Token::LeftBrace) {
                     self.advance();
-                    let mut fields = Vec::new();
-                    while !self.check(&Token::RightBrace) && !self.is_at_end() {
-                        let fs = self.current_span();
-                        let field_name = self.expect_identifier()?;
-                        let pattern = if self.eat(&Token::Colon) {
-                            Some(self.parse_pattern()?)
-                        } else {
-                            None
-                        };
-                        fields.push(FieldPattern {
-                            name: field_name,
-                            pattern,
-                            span: self.span_from(&fs),
-                        });
-                        if !self.eat(&Token::Comma) {
-                            break;
-                        }
-                    }
+                    let (fields, has_rest) = self.parse_struct_pattern_fields()?;
                     self.expect(&Token::RightBrace)?;
                     Some(Pattern {
                         kind: PatternKind::Struct {
                             path: vec![name],
                             fields,
+                            has_rest,
                         },
                         span: self.span_from(&start),
                     })
@@ -331,27 +315,14 @@ impl super::Parser {
                     // Check for struct or tuple variant
                     if self.check(&Token::LeftBrace) {
                         self.advance();
-                        let mut fields = Vec::new();
-                        while !self.check(&Token::RightBrace) && !self.is_at_end() {
-                            let fs = self.current_span();
-                            let field_name = self.expect_identifier()?;
-                            let pattern = if self.eat(&Token::Colon) {
-                                Some(self.parse_pattern()?)
-                            } else {
-                                None
-                            };
-                            fields.push(FieldPattern {
-                                name: field_name,
-                                pattern,
-                                span: self.span_from(&fs),
-                            });
-                            if !self.eat(&Token::Comma) {
-                                break;
-                            }
-                        }
+                        let (fields, has_rest) = self.parse_struct_pattern_fields()?;
                         self.expect(&Token::RightBrace)?;
                         Some(Pattern {
-                            kind: PatternKind::Struct { path, fields },
+                            kind: PatternKind::Struct {
+                                path,
+                                fields,
+                                has_rest,
+                            },
                             span: self.span_from(&start),
                         })
                     } else if self.check(&Token::LeftParen) {
@@ -400,6 +371,76 @@ impl super::Parser {
     /// has a literal in end position.
     fn starts_literal_pattern(tok: &Token) -> bool {
         matches!(tok, Token::Integer(..) | Token::CharLiteral(_))
+    }
+
+    /// Parse the field list of a struct pattern between `{` and `}`.
+    /// The caller consumes the opening `{`; this helper stops at the
+    /// closing `}` without consuming it. Returns the field patterns
+    /// plus a `has_rest` flag set to `true` when a `..` rest marker
+    /// appears in the field list.
+    ///
+    /// Grammar accepted:
+    ///   `{ field (, field)* (, ..)? ,? }`
+    ///   `{ .. }`
+    ///   `{ }`
+    ///
+    /// The `..` may only appear once and must be the last item before
+    /// `}` (Rust's rule; the spec follows). A bare `..` in struct
+    /// pattern is the canonical "I don't care about other fields"
+    /// shape; combined with field patterns it means "match these
+    /// fields, ignore the rest". A `..` followed by another field
+    /// emits `E_REST_PATTERN_NOT_LAST`.
+    fn parse_struct_pattern_fields(&mut self) -> Option<(Vec<FieldPattern>, bool)> {
+        let mut fields = Vec::new();
+        let mut has_rest = false;
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            if self.check(&Token::DotDot) {
+                let dotdot_span = self.current_span();
+                self.advance();
+                if has_rest {
+                    self.errors.push(super::ParseError {
+                        message: "error[E_REST_PATTERN_DUPLICATE]: \
+                                  `..` rest-pattern appears more than once in \
+                                  the same struct pattern — only one is permitted"
+                            .to_string(),
+                        span: dotdot_span,
+                    });
+                }
+                has_rest = true;
+                // Optional trailing comma is fine; another field after
+                // the `..` is not.
+                if self.eat(&Token::Comma) && !self.check(&Token::RightBrace) {
+                    self.errors.push(super::ParseError {
+                        message: "error[E_REST_PATTERN_NOT_LAST]: \
+                                  `..` rest-pattern must appear last in the \
+                                  struct pattern's field list — move it after \
+                                  every named field, or drop the named fields \
+                                  that follow it"
+                            .to_string(),
+                        span: self.current_span(),
+                    });
+                    // Continue parsing to surface follow-on errors
+                    // rather than bailing immediately.
+                }
+                continue;
+            }
+            let fs = self.current_span();
+            let field_name = self.expect_identifier()?;
+            let pattern = if self.eat(&Token::Colon) {
+                Some(self.parse_pattern()?)
+            } else {
+                None
+            };
+            fields.push(FieldPattern {
+                name: field_name,
+                pattern,
+                span: self.span_from(&fs),
+            });
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        Some((fields, has_rest))
     }
 
     pub(crate) fn parse_literal_pattern(&mut self) -> Option<LiteralPattern> {

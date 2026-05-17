@@ -255,7 +255,12 @@ impl<'a> super::Resolver<'a> {
                 );
             }
             PatternKind::Literal(_) => {}
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _, // `..` rest binds nothing — the resolver only
+                             // needs to walk named-field sub-patterns.
+            } => {
                 // Resolve the struct/variant path
                 if let Some(first) = path.first() {
                     if let Some(sym) = self.table.lookup(first) {
@@ -352,7 +357,11 @@ impl<'a> super::Resolver<'a> {
                     self.errors.push(e);
                 }
             }
-            PatternKind::Struct { path, fields } => {
+            PatternKind::Struct {
+                path,
+                fields,
+                has_rest: _,
+            } => {
                 // Resolve the struct name
                 if let Some(first) = path.first() {
                     if let Some(sym) = self.table.lookup(first) {

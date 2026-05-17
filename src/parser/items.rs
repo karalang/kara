@@ -799,6 +799,10 @@ impl super::Parser {
                         kind: PatternKind::Struct {
                             path: vec![name],
                             fields,
+                            // `..` rest-binding is not accepted in parameter
+                            // patterns — params are irrefutable and a rest
+                            // there would carry no behavioural meaning.
+                            has_rest: false,
                         },
                         span: self.span_from(&start),
                     })
