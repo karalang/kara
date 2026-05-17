@@ -6,6 +6,7 @@ pub mod codegen;
 pub mod concurrency;
 pub mod concurrency_report;
 pub mod cost_summary;
+pub mod desugar;
 pub mod doc;
 pub mod dominator;
 pub mod edit_distance;
@@ -100,6 +101,15 @@ pub fn parse(source: &str) -> ParseResult {
 pub fn resolve(program: &Program) -> ResolveResult {
     let resolver = Resolver::new(program);
     resolver.resolve()
+}
+
+/// Run every pre-resolve AST-rewriting pass over `program` in place.
+/// Today this elides argument-position `impl Trait` into anonymous generic
+/// parameters (slice 2 of the `impl Trait` epic). Drivers in `lib.rs` and
+/// `cli.rs` call this between [`parse`] and [`resolve`]; the formatter
+/// path deliberately skips it so `impl Trait` round-trips verbatim.
+pub fn desugar_program(program: &mut Program) {
+    crate::desugar::desugar_program(program);
 }
 
 /// Type-check a parsed and resolved program.
@@ -296,6 +306,7 @@ pub fn run_program_with_drops(source: &str) -> (Vec<String>, Vec<String>) {
             "Parse errors: {:?}",
             parsed.errors
         );
+        desugar_program(&mut parsed.program);
         let resolved = resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),
@@ -331,6 +342,7 @@ pub fn run_program_with_dbg(
             "Parse errors: {:?}",
             parsed.errors
         );
+        desugar_program(&mut parsed.program);
         let resolved = resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),
@@ -371,6 +383,7 @@ pub fn run_program_full(
             "Parse errors: {:?}",
             parsed.errors
         );
+        desugar_program(&mut parsed.program);
         let resolved = resolve(&parsed.program);
         assert!(
             resolved.errors.is_empty(),

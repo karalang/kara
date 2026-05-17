@@ -309,6 +309,7 @@ impl Pipeline {
         if self.has_parse_errors() {
             return;
         }
+        crate::desugar_program(&mut self.parsed.program);
         self.resolved = Some(crate::resolve(&self.parsed.program));
     }
 

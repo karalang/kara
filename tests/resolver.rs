@@ -2,7 +2,7 @@
 
 use karac::ast::TraitBound;
 use karac::resolver::*;
-use karac::{parse, resolve};
+use karac::{desugar_program, parse, resolve};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -2803,4 +2803,194 @@ fn gat_slice3_impl_assoc_type_binding_with_where_clause_resolves() {
          type Mapped[U] = Wrapper[U] where U: Clone; \
          }",
     );
+}
+
+// ── `impl Trait` slice 2: resolver desugar (argument-position) ──
+
+/// Helper: run [`karac::desugar_program`] over the parsed program and then
+/// resolve it. Asserts both parse and resolve are clean. Returns the
+/// `(post-desugar program, resolve result)` pair so the per-test
+/// assertions can introspect the rewritten AST.
+fn desugar_and_resolve_ok(source: &str) -> (karac::ast::Program, ResolveResult) {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    desugar_program(&mut parsed.program);
+    let result = resolve(&parsed.program);
+    assert!(
+        result.errors.is_empty(),
+        "Resolve errors: {}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    (parsed.program, result)
+}
+
+#[test]
+fn impl_trait_slice2_argument_position_desugars_to_synthetic_generic_param() {
+    // `fn f(x: impl Display)` desugars to
+    // `fn f[T_impl_arg_0: Display](x: T_impl_arg_0)`. The argument-
+    // position `impl Trait` is replaced with a `TypeKind::Path`
+    // reference to the freshly synthesized anonymous generic param,
+    // and the param is appended to `f.generic_params` carrying the
+    // trait as its bound. The post-desugar resolver registers the
+    // synthetic param like any other generic and routes the param's
+    // type lookup through it without complaint.
+    let (program, _resolved) = desugar_and_resolve_ok(
+        "trait Display { fn show(ref self) -> String; } fn f(x: impl Display) {}",
+    );
+    let karac::ast::Item::Function(f) = &program.items[1] else {
+        panic!("Expected Function at items[1]");
+    };
+    let gp = f.generic_params.as_ref().expect("expected generic_params");
+    assert_eq!(gp.params.len(), 1);
+    let synth = &gp.params[0];
+    assert_eq!(synth.name, "T_impl_arg_0");
+    assert_eq!(synth.bounds.len(), 1);
+    assert_eq!(synth.bounds[0].path, vec!["Display".to_string()]);
+    let param_ty = &f.params[0].ty;
+    let karac::ast::TypeKind::Path(path) = &param_ty.kind else {
+        panic!(
+            "Expected param ty to be Path after desugar; got {:?}",
+            param_ty.kind
+        );
+    };
+    assert_eq!(path.segments, vec!["T_impl_arg_0".to_string()]);
+}
+
+#[test]
+fn impl_trait_slice2_pair_args_produce_two_distinct_synthetic_params() {
+    // `fn pair(x: impl Display, y: impl Display)` desugars to
+    // `fn pair[T_impl_arg_0: Display, T_impl_arg_1: Display](x: T_impl_arg_0, y: T_impl_arg_1)`.
+    // The two `impl Display` parameters get distinct synthetic names
+    // — verifying the per-occurrence desugar rule. Without this the
+    // typechecker would unify the two args at every call site, which
+    // is the wrong semantics for argument-position `impl Trait`.
+    let (program, _resolved) = desugar_and_resolve_ok(
+        "trait Display { fn show(ref self) -> String; } \
+         fn pair(x: impl Display, y: impl Display) {}",
+    );
+    let karac::ast::Item::Function(f) = &program.items[1] else {
+        panic!("Expected Function at items[1]");
+    };
+    let gp = f.generic_params.as_ref().expect("expected generic_params");
+    assert_eq!(gp.params.len(), 2);
+    assert_eq!(gp.params[0].name, "T_impl_arg_0");
+    assert_eq!(gp.params[1].name, "T_impl_arg_1");
+    let karac::ast::TypeKind::Path(p0) = &f.params[0].ty.kind else {
+        panic!("Expected first param ty to be Path");
+    };
+    let karac::ast::TypeKind::Path(p1) = &f.params[1].ty.kind else {
+        panic!("Expected second param ty to be Path");
+    };
+    assert_eq!(p0.segments, vec!["T_impl_arg_0".to_string()]);
+    assert_eq!(p1.segments, vec!["T_impl_arg_1".to_string()]);
+}
+
+#[test]
+fn impl_trait_slice2_explicit_generic_form_continues_to_work_alongside_impl_trait() {
+    // Pre-existing explicit `[T: Display]` form keeps working — the
+    // synthetic params from `impl Trait` arguments append to whatever
+    // the user already declared rather than replacing it. Here
+    // `fn mixed[T: Display](x: T, y: impl Display)` desugars to a
+    // two-param generics list: the user's `T` followed by the
+    // synthetic `T_impl_arg_0`.
+    let (program, _resolved) = desugar_and_resolve_ok(
+        "trait Display { fn show(ref self) -> String; } \
+         fn mixed[T: Display](x: T, y: impl Display) {}",
+    );
+    let karac::ast::Item::Function(f) = &program.items[1] else {
+        panic!("Expected Function at items[1]");
+    };
+    let gp = f.generic_params.as_ref().expect("expected generic_params");
+    assert_eq!(gp.params.len(), 2);
+    assert_eq!(gp.params[0].name, "T");
+    assert_eq!(gp.params[1].name, "T_impl_arg_0");
+}
+
+#[test]
+fn impl_trait_slice2_return_position_kept_as_impl_trait() {
+    // Return-position `impl Trait` is slice 3's job — slice 2 only
+    // touches argument-position. The desugar must leave
+    // `fn iter() -> impl Iterator` with its `TypeKind::ImplTrait`
+    // return type intact so the slice-3 typechecker pipeline sees
+    // the unchanged sugar.
+    let (program, _resolved) = desugar_and_resolve_ok(
+        "trait Iterator { fn next(mut ref self); } \
+         fn iter() -> impl Iterator { todo() }",
+    );
+    let karac::ast::Item::Function(f) = &program.items[1] else {
+        panic!("Expected Function at items[1]");
+    };
+    assert!(
+        f.generic_params.is_none(),
+        "return-position `impl Trait` must not add synthetic generic params"
+    );
+    let ret = f.return_type.as_ref().expect("expected return type");
+    assert!(
+        matches!(ret.kind, karac::ast::TypeKind::ImplTrait { .. }),
+        "return type must remain TypeKind::ImplTrait after desugar; got {:?}",
+        ret.kind
+    );
+}
+
+#[test]
+fn impl_trait_slice2_impl_method_argument_position_desugars() {
+    // Inherent-impl methods are `Function`s carried inside
+    // `ImplItem::Method`; the desugar runs over them as well so
+    // `impl Display { fn echo(ref self, x: impl Display) {} }`
+    // gets the same per-method synthetic generic param treatment as
+    // free functions.
+    let (program, _resolved) = desugar_and_resolve_ok(
+        "trait Display { fn show(ref self) -> String; } \
+         struct Thing { v: i64 } \
+         impl Thing { fn echo(ref self, x: impl Display) {} }",
+    );
+    let karac::ast::Item::ImplBlock(imp) = &program.items[2] else {
+        panic!("Expected ImplBlock at items[2]");
+    };
+    let karac::ast::ImplItem::Method(method) = &imp.items[0] else {
+        panic!("Expected ImplItem::Method at imp.items[0]");
+    };
+    let gp = method
+        .generic_params
+        .as_ref()
+        .expect("expected method generic_params");
+    assert_eq!(gp.params.len(), 1);
+    assert_eq!(gp.params[0].name, "T_impl_arg_0");
+    assert_eq!(gp.params[0].bounds[0].path, vec!["Display".to_string()]);
+}
+
+#[test]
+fn impl_trait_slice2_synthetic_param_bounds_recorded_in_symbol_table() {
+    // The post-desugar resolver treats the synthetic param like any
+    // other declared generic — defining it in the function scope and
+    // recording its trait bounds via `record_generic_bounds`. This
+    // pins that pipeline (slice 3's typechecker dispatches trait
+    // methods on synthetic params via these bound records).
+    let (_program, resolved) = desugar_and_resolve_ok(
+        "trait Display { fn show(ref self) -> String; } fn f(x: impl Display) {}",
+    );
+    let sym = resolved
+        .symbol_table
+        .all_symbols()
+        .iter()
+        .find(|s| s.name == "T_impl_arg_0")
+        .expect("synthetic param symbol must be registered");
+    assert!(matches!(sym.kind, SymbolKind::TypeParam));
+    let bounds: &[TraitBound] = resolved.symbol_table.get_generic_bounds(sym.id);
+    assert_eq!(bounds.len(), 1);
+    assert_eq!(bounds[0].path, vec!["Display".to_string()]);
 }

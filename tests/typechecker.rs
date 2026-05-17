@@ -1,7 +1,7 @@
 // tests/typechecker.rs
 
 use karac::typechecker::*;
-use karac::{parse, resolve, typecheck};
+use karac::{desugar_program, parse, resolve, typecheck};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -13364,5 +13364,89 @@ fn test_gat_slice9_a_coherence_rejects_duplicate_impls_with_distinct_gat_binding
         "expected ConflictingImpl for duplicate impls with distinct GAT \
          bindings; got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ── `impl Trait` slice 2: typechecker end-to-end ────────────────
+
+/// Helper that mirrors [`typecheck_ok`] but runs [`desugar_program`]
+/// between parse and resolve so argument-position `impl Trait` is
+/// elided into anonymous generic parameters before any downstream
+/// pass sees the AST. The compilation pipeline drivers (`lib.rs`
+/// `run_program_*`, `cli.rs` pipeline) call desugar the same way.
+fn typecheck_desugared_ok(source: &str) -> TypeCheckResult {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    desugar_program(&mut parsed.program);
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        result.errors.is_empty(),
+        "Type errors: {}",
+        result
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    result
+}
+
+#[test]
+fn impl_trait_slice2_argument_position_typechecks_with_distinct_call_site_types() {
+    // After the resolver desugar each call site of `show(impl Tagged)`
+    // infers an independent concrete type for the synthetic generic
+    // param `T_impl_arg_0`. The two call sites here drive `Alpha`
+    // and `Beta` through the same function — the typechecker must
+    // see the desugared `fn show[T_impl_arg_0: Tagged](x: T_impl_arg_0)`
+    // and accept both monomorphizations without complaint.
+    typecheck_desugared_ok(
+        "trait Tagged { fn tag(ref self) -> i64; }\n\
+         struct Alpha { n: i64 }\n\
+         struct Beta { flag: bool }\n\
+         impl Tagged for Alpha { fn tag(ref self) -> i64 { 1 } }\n\
+         impl Tagged for Beta { fn tag(ref self) -> i64 { 2 } }\n\
+         fn show(x: impl Tagged) {}\n\
+         fn main() { show(Alpha { n: 0 }); show(Beta { flag: true }); }",
+    );
+}
+
+#[test]
+fn impl_trait_slice2_pair_arguments_dont_unify() {
+    // `fn pair(x: impl Tagged, y: impl Tagged)` must produce two
+    // independent generic parameters so the two arguments do NOT
+    // unify at the call site. Calling `pair(Alpha, Beta)` passes
+    // two distinct concrete types with the same `Tagged` bound.
+    // Per-occurrence desugar is what makes this work; a single
+    // shared synthetic param would force the call site to unify
+    // both args to one type and reject this program.
+    typecheck_desugared_ok(
+        "trait Tagged { fn tag(ref self) -> i64; }\n\
+         struct Alpha { n: i64 }\n\
+         struct Beta { flag: bool }\n\
+         impl Tagged for Alpha { fn tag(ref self) -> i64 { 1 } }\n\
+         impl Tagged for Beta { fn tag(ref self) -> i64 { 2 } }\n\
+         fn pair(x: impl Tagged, y: impl Tagged) {}\n\
+         fn main() { pair(Alpha { n: 0 }, Beta { flag: true }); }",
     );
 }
