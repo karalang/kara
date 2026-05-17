@@ -2516,6 +2516,130 @@ fn lint_attrs_slice1_attribute_coexists_with_other_attributes() {
     assert!(f.deprecation.is_some());
 }
 
+// ── Lint-level slice 4a — broader `lint_overrides` attachment ──
+//
+// Slices 1+2+3a captured `lint_overrides` only on `Function`. Slice 4a
+// broadens attachment to every attribute-bearing item kind so the
+// scope cascade (slice 4b) can walk outward through struct / enum /
+// trait / impl scopes and find the nearest override. Each item kind
+// gets a parser-wired round-trip pin below — the field carries the
+// recognized lint-name lists today; the cascade reads them when it
+// lands.
+
+#[test]
+fn lint_attrs_slice4a_struct_captures_overrides() {
+    let prog = parse_ok("#[allow(deprecated)]\npub struct OldShape { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert_eq!(s.lint_overrides.len(), 1);
+    assert_eq!(s.lint_overrides[0].lint, "deprecated");
+}
+
+#[test]
+fn lint_attrs_slice4a_struct_without_attribute_has_empty_overrides() {
+    let prog = parse_ok("pub struct Fresh { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(s.lint_overrides.is_empty());
+}
+
+#[test]
+fn lint_attrs_slice4a_enum_captures_overrides() {
+    let prog = parse_ok("#[warn(rc_fallback)]\npub enum OldErr { Bad, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert_eq!(e.lint_overrides.len(), 1);
+    assert_eq!(e.lint_overrides[0].lint, "rc_fallback");
+}
+
+#[test]
+fn lint_attrs_slice4a_trait_captures_overrides() {
+    let prog = parse_ok("#[deny(implicit_clone)]\npub trait OldFmt { fn fmt(ref self); }");
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    assert_eq!(t.lint_overrides.len(), 1);
+    assert_eq!(t.lint_overrides[0].lint, "implicit_clone");
+}
+
+#[test]
+fn lint_attrs_slice4a_trait_alias_captures_overrides() {
+    let prog = parse_ok("#[allow(deprecated)]\npub trait OldBound = Send + Sync;");
+    let Item::TraitAlias(t) = &prog.items[0] else {
+        panic!("Expected TraitAliasDef");
+    };
+    assert_eq!(t.lint_overrides.len(), 1);
+}
+
+#[test]
+fn lint_attrs_slice4a_marker_trait_captures_overrides() {
+    let prog = parse_ok("#[allow(unknown_lint)]\npub marker trait Tag;");
+    let Item::MarkerTrait(m) = &prog.items[0] else {
+        panic!("Expected MarkerTraitDef");
+    };
+    assert_eq!(m.lint_overrides.len(), 1);
+}
+
+#[test]
+fn lint_attrs_slice4a_distinct_type_captures_overrides() {
+    let prog = parse_ok("#[allow(deprecated)]\npub distinct type UserId = i64;");
+    let Item::DistinctType(d) = &prog.items[0] else {
+        panic!("Expected DistinctTypeDef");
+    };
+    assert_eq!(d.lint_overrides.len(), 1);
+}
+
+#[test]
+fn lint_attrs_slice4a_const_captures_overrides() {
+    let prog = parse_ok("#[allow(deprecated)]\npub const MAX: i64 = 100;");
+    let Item::ConstDecl(c) = &prog.items[0] else {
+        panic!("Expected ConstDecl");
+    };
+    assert_eq!(c.lint_overrides.len(), 1);
+}
+
+#[test]
+fn lint_attrs_slice4a_type_alias_captures_overrides() {
+    let prog = parse_ok("#[allow(deprecated)]\npub type Old = i64;");
+    let Item::TypeAlias(t) = &prog.items[0] else {
+        panic!("Expected TypeAliasDef");
+    };
+    assert_eq!(t.lint_overrides.len(), 1);
+}
+
+#[test]
+fn lint_attrs_slice4a_impl_block_captures_overrides() {
+    let prog = parse_ok(
+        "pub struct S { x: i64 }\n\
+         #[allow(deprecated)]\nimpl S { fn m(ref self) -> i64 { 0 } }",
+    );
+    let Item::ImplBlock(imp) = &prog.items[1] else {
+        panic!("Expected ImplBlock");
+    };
+    assert_eq!(imp.lint_overrides.len(), 1);
+    assert_eq!(imp.lint_overrides[0].lint, "deprecated");
+}
+
+#[test]
+fn lint_attrs_slice4a_multi_lint_list_on_struct() {
+    // The same multi-lint-in-one-attribute machinery slice 1
+    // pinned on `Function` works uniformly on every attribute-
+    // bearing item — `scan_lint_level_attrs` is the single helper.
+    let prog =
+        parse_ok("#[allow(deprecated, rc_fallback, implicit_clone)]\npub struct S { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert_eq!(s.lint_overrides.len(), 3);
+    let names: Vec<&str> = s.lint_overrides.iter().map(|o| o.lint.as_str()).collect();
+    assert!(names.contains(&"deprecated"));
+    assert!(names.contains(&"rc_fallback"));
+    assert!(names.contains(&"implicit_clone"));
+}
+
 // ── TypeAliasDef + ConstDecl attributes enabling change ──────────
 //
 // `ConstDecl` and `TypeAliasDef` AST nodes now carry `attributes`

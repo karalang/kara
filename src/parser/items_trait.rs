@@ -88,6 +88,7 @@ impl super::Parser {
         };
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(MarkerTraitDef {
             span: self.span_from(&start),
             attributes,
@@ -100,6 +101,7 @@ impl super::Parser {
             where_clause,
             body_brace,
             deprecation,
+            lint_overrides,
         })
     }
 
@@ -232,6 +234,7 @@ impl super::Parser {
         self.expect(&Token::RightBrace)?;
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(TraitDef {
             span: self.span_from(start),
             attributes,
@@ -246,6 +249,7 @@ impl super::Parser {
             items,
             stdlib_origin: false,
             deprecation,
+            lint_overrides,
         })
     }
 
@@ -303,6 +307,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
 
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(TraitAliasDef {
             span: self.span_from(start),
             attributes,
@@ -314,6 +319,7 @@ impl super::Parser {
             bounds,
             where_clause,
             deprecation,
+            lint_overrides,
         })
     }
 
@@ -530,6 +536,7 @@ impl super::Parser {
         }
         self.expect(&Token::RightBrace)?;
 
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(ImplBlock {
             span: self.span_from(&start),
             attributes,
@@ -538,6 +545,7 @@ impl super::Parser {
             target_type,
             where_clause,
             items,
+            lint_overrides,
         })
     }
 

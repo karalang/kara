@@ -690,6 +690,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         stdlib_origin: true,
         deprecation: None,
         is_non_exhaustive: false,
+        lint_overrides: Vec::new(),
     })
 }
 
@@ -738,6 +739,7 @@ fn stub_trait(name: &str, span: &Span) -> Item {
         items: Vec::new(),
         stdlib_origin: true,
         deprecation: None,
+        lint_overrides: Vec::new(),
     })
 }
 

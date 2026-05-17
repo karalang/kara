@@ -236,6 +236,11 @@ pub struct StructDef {
     /// Evolvable Public Types. Resolver rejects the attribute on
     /// non-`pub` structs (meaningless without a cross-package boundary).
     pub is_non_exhaustive: bool,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens lint-level
+    /// attribute attachment beyond `Function` so the eventual scope
+    /// cascade (slice 4b) can walk outward through struct / enum /
+    /// trait / impl scopes and find the nearest override.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 #[derive(Debug, Clone)]
@@ -279,6 +284,8 @@ pub struct EnumDef {
     /// See design.md § `#[non_exhaustive]` for Evolvable Public Types.
     /// Resolver rejects the attribute on non-`pub` enums.
     pub is_non_exhaustive: bool,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +336,8 @@ pub struct TraitDef {
     pub stdlib_origin: bool,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 #[derive(Debug, Clone)]
@@ -354,6 +363,8 @@ pub struct TraitAliasDef {
     pub where_clause: Option<WhereClause>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 /// `marker trait NAME[GENERICS] [: SUPERTRAITS] [where ...] (";" | "{" "}")`
@@ -380,6 +391,8 @@ pub struct MarkerTraitDef {
     pub body_brace: bool,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +464,8 @@ pub struct ImplBlock {
     pub target_type: TypeExpr,
     pub where_clause: Option<WhereClause>,
     pub items: Vec<ImplItem>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 #[derive(Debug, Clone)]
@@ -643,6 +658,8 @@ pub struct ConstDecl {
     pub value: Expr,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 // ── Alias & Independent ──────────────────────────────────────────
@@ -747,6 +764,8 @@ pub struct TypeAliasDef {
     pub refinement: Option<Expr>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
 // ── Distinct Types (Newtypes) ────────────────────────────────────
@@ -765,4 +784,6 @@ pub struct DistinctTypeDef {
     pub refinement: Option<Expr>,
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }

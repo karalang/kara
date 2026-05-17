@@ -861,6 +861,7 @@ impl super::Parser {
         // captures-flag and resolver-validates-placement.
         let is_non_exhaustive = attributes.iter().any(|a| a.name == "non_exhaustive");
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
         Some(StructDef {
             span: self.span_from(&start),
@@ -878,6 +879,7 @@ impl super::Parser {
             stdlib_origin: false,
             deprecation,
             is_non_exhaustive,
+            lint_overrides,
         })
     }
 
@@ -945,6 +947,7 @@ impl super::Parser {
 
         let is_non_exhaustive = attributes.iter().any(|a| a.name == "non_exhaustive");
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
 
         Some(EnumDef {
             span: self.span_from(&start),
@@ -960,6 +963,7 @@ impl super::Parser {
             stdlib_origin: false,
             deprecation,
             is_non_exhaustive,
+            lint_overrides,
         })
     }
 
@@ -1286,6 +1290,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(ConstDecl {
             span: self.span_from(&start),
             attributes,
@@ -1296,6 +1301,7 @@ impl super::Parser {
             ty,
             value,
             deprecation,
+            lint_overrides,
         })
     }
 
@@ -1353,6 +1359,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(TypeAliasDef {
             span: self.span_from(&start),
             attributes,
@@ -1364,6 +1371,7 @@ impl super::Parser {
             ty,
             refinement,
             deprecation,
+            lint_overrides,
         })
     }
 
@@ -1395,6 +1403,7 @@ impl super::Parser {
         self.expect(&Token::Semicolon)?;
         let doc_comment = self.take_pending_doc();
         let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
         Some(DistinctTypeDef {
             span: self.span_from(&start),
             attributes,
@@ -1406,6 +1415,7 @@ impl super::Parser {
             base_type,
             refinement,
             deprecation,
+            lint_overrides,
         })
     }
 }
