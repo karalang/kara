@@ -1731,6 +1731,86 @@ fn test_compiler_builtin_on_trait() {
     }
 }
 
+// ── #[non_exhaustive] slice 1 ────────────────────────────────────
+//
+// The attribute is a bare `#[non_exhaustive]` form (no args). Parser
+// captures it as an `is_non_exhaustive: bool` flag on `StructDef` and
+// `EnumDef` so downstream passes can consult the flag without
+// re-walking attributes. Placement validation (rejection on private
+// types, traits, fns, impl blocks, etc.) lives in the resolver —
+// covered by tests/resolver.rs. Per design.md § `#[non_exhaustive]`
+// for Evolvable Public Types.
+
+#[test]
+fn non_exhaustive_slice1_struct_sets_flag() {
+    let prog = parse_ok("#[non_exhaustive]\npub struct Config { timeout: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(s.is_non_exhaustive);
+    assert_eq!(s.attributes.len(), 1);
+    assert_eq!(s.attributes[0].name, "non_exhaustive");
+    assert!(s.attributes[0].args.is_empty());
+    assert!(s.attributes[0].string_value.is_none());
+}
+
+#[test]
+fn non_exhaustive_slice1_enum_sets_flag() {
+    let prog = parse_ok("#[non_exhaustive]\npub enum Error { NotFound, Conflict, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert!(e.is_non_exhaustive);
+    assert_eq!(e.attributes.len(), 1);
+    assert_eq!(e.attributes[0].name, "non_exhaustive");
+}
+
+#[test]
+fn non_exhaustive_slice1_struct_without_attribute_has_flag_false() {
+    let prog = parse_ok("pub struct Config { timeout: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(!s.is_non_exhaustive);
+}
+
+#[test]
+fn non_exhaustive_slice1_enum_without_attribute_has_flag_false() {
+    let prog = parse_ok("pub enum Error { NotFound, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert!(!e.is_non_exhaustive);
+}
+
+#[test]
+fn non_exhaustive_slice1_flag_set_on_private_struct_parser_does_not_reject() {
+    // Parser captures the attribute uniformly; resolver decides
+    // whether the placement is legal. This is a pure parser-side
+    // pin — `private struct` rejection is in tests/resolver.rs.
+    let prog = parse_ok("#[non_exhaustive]\nprivate struct Internal { x: i64, }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(s.is_non_exhaustive);
+    assert!(s.is_private);
+    assert!(!s.is_pub);
+}
+
+#[test]
+fn non_exhaustive_slice1_coexists_with_other_attributes_on_struct() {
+    let prog = parse_ok(
+        "#[non_exhaustive]\n#[must_use = \"build with .new()\"]\npub struct Config { x: i64, }",
+    );
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert!(s.is_non_exhaustive);
+    assert_eq!(s.attributes.len(), 2);
+    assert!(s.attributes.iter().any(|a| a.name == "non_exhaustive"));
+    assert!(s.attributes.iter().any(|a| a.name == "must_use"));
+}
+
 #[test]
 fn test_const_generic_args() {
     let prog = parse_ok("fn dot(a: Array[f64, 3], b: Array[f64, 3]) -> f64 { 0.0 }");

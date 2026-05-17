@@ -301,6 +301,41 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject `#[non_exhaustive]` placed on an item kind that does
+    /// not support it. Per design.md § `#[non_exhaustive]` for
+    /// Evolvable Public Types, the attribute is meaningful only on
+    /// `pub struct` and `pub enum` declarations — no cross-package
+    /// boundary exists for private types, traits / fns / impls have
+    /// no field or variant surface to evolve, and individual enum
+    /// variants are v1-out-of-scope (Rust accepts variant-level; we
+    /// ship type-level only, additive later if real use surfaces).
+    ///
+    /// `target_kind` is the human-readable role name surfaced in the
+    /// diagnostic message — `"trait"`, `"function"`, `"impl block"`,
+    /// `"private struct"`, etc. The two callers that *do* accept the
+    /// attribute (`collect_struct` / `collect_enum` on `pub` types)
+    /// skip this helper entirely; everyone else calls through with
+    /// the kind name that fits their item.
+    fn reject_non_exhaustive_attr(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if attr.name == "non_exhaustive" {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_NON_EXHAUSTIVE_INVALID_TARGET]: \
+                         `#[non_exhaustive]` is not valid on {target_kind}; \
+                         the attribute applies only to `pub struct` and \
+                         `pub enum` declarations — see design.md § \
+                         `#[non_exhaustive]` for Evolvable Public Types",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::NonExhaustiveInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
+    }
+
     fn check_compiler_builtin_attr(&mut self, attrs: &[Attribute], item_stdlib_origin: bool) {
         // The gate bypasses (a) when the whole resolver session is in
         // stdlib-source mode (CR-202 slice 1's `with_stdlib_source(true)`
@@ -328,6 +363,7 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_function(&mut self, f: &Function) {
         self.check_compiler_builtin_attr(&f.attributes, f.stdlib_origin);
+        self.reject_non_exhaustive_attr(&f.attributes, "function");
         let param_names: Vec<String> = f
             .params
             .iter()
@@ -345,6 +381,22 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_struct(&mut self, s: &StructDef) {
         self.check_compiler_builtin_attr(&s.attributes, s.stdlib_origin);
+        // `#[non_exhaustive]` is only meaningful at the cross-package
+        // boundary — a private struct has no consumers outside its own
+        // package, so the attribute is rejected with the kind-named
+        // diagnostic. `pub struct` consumes the attribute via the
+        // parser-set `is_non_exhaustive` flag and no rejection fires.
+        if s.is_non_exhaustive && !s.is_pub {
+            self.reject_non_exhaustive_attr(&s.attributes, "private struct");
+        }
+        // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
+        // on fields too; we ship type-level only). Reject so users get
+        // a focused message instead of a silent acceptance that does
+        // nothing — the attribute presence on a field would otherwise
+        // be ignored, which is worse than the diagnostic.
+        for field in &s.fields {
+            self.reject_non_exhaustive_attr(&field.attributes, "struct field");
+        }
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
         if let Err(e) = self.table.define(
             s.name.clone(),
@@ -358,6 +410,9 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_enum(&mut self, e: &EnumDef) {
         self.check_compiler_builtin_attr(&e.attributes, e.stdlib_origin);
+        if e.is_non_exhaustive && !e.is_pub {
+            self.reject_non_exhaustive_attr(&e.attributes, "private enum");
+        }
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
         let enum_id = match self.table.define(
             e.name.clone(),
@@ -397,6 +452,7 @@ impl<'a> super::Resolver<'a> {
 
     fn collect_trait(&mut self, t: &TraitDef) {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
+        self.reject_non_exhaustive_attr(&t.attributes, "trait");
         let method_names: Vec<String> = t
             .items
             .iter()
@@ -416,6 +472,7 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
+        self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
         if let Err(e) = self.table.define(
             t.name.clone(),
             SymbolKind::TraitAlias,
@@ -427,6 +484,7 @@ impl<'a> super::Resolver<'a> {
     }
 
     fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
+        self.reject_non_exhaustive_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
         // traits; no methods to track, so the symbol carries an empty
         // method list. Trait-bound resolution and impl coherence treat
@@ -457,6 +515,7 @@ impl<'a> super::Resolver<'a> {
         // Methods carry their own `stdlib_origin` (inherited from the
         // `Function` field) and pass it through for the per-item exemption.
         self.check_compiler_builtin_attr(&imp.attributes, false);
+        self.reject_non_exhaustive_attr(&imp.attributes, "impl block");
         // Methods are registered in type_methods, not global scope.
         // We need the type name from the target_type.
         let type_name = self.type_expr_name(&imp.target_type);
@@ -467,6 +526,7 @@ impl<'a> super::Resolver<'a> {
                     ImplItem::AssocType(_) => continue,
                 };
                 self.check_compiler_builtin_attr(&method.attributes, method.stdlib_origin);
+                self.reject_non_exhaustive_attr(&method.attributes, "impl method");
                 let param_names: Vec<String> = method
                     .params
                     .iter()

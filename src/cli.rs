@@ -703,6 +703,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::ReservedEffectResource => "E0228",
                 crate::resolver::ResolveErrorKind::CompilerBuiltinReserved => "E0237",
                 crate::resolver::ResolveErrorKind::ContinueOnBlockLabel => "E0238",
+                crate::resolver::ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -2706,6 +2707,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::ReservedEffectResource => "E0228",
         ResolveErrorKind::CompilerBuiltinReserved => "E0237",
         ResolveErrorKind::ContinueOnBlockLabel => "E0238",
+        ResolveErrorKind::NonExhaustiveInvalidTarget => "E0239",
     }
 }
 

@@ -173,6 +173,14 @@ pub struct StructDef {
     pub invariants: Vec<Expr>,
     /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
     pub stdlib_origin: bool,
+    /// `#[non_exhaustive]` declared on this struct — the type may grow
+    /// new public fields in future versions, and cross-package
+    /// consumers must use `..` in exhaustive struct patterns and a
+    /// `Struct.new(...)` constructor instead of a struct literal that
+    /// names every field. See design.md § `#[non_exhaustive]` for
+    /// Evolvable Public Types. Resolver rejects the attribute on
+    /// non-`pub` structs (meaningless without a cross-package boundary).
+    pub is_non_exhaustive: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -206,6 +214,14 @@ pub struct EnumDef {
     pub variants: Vec<Variant>,
     /// See [`Function::stdlib_origin`]. CR-202 slice 3b.
     pub stdlib_origin: bool,
+    /// `#[non_exhaustive]` declared on this enum — the type may grow
+    /// new variants in future versions, and cross-package consumers'
+    /// `match` expressions must include a wildcard arm regardless of
+    /// which variants are covered today. Same-package matches still
+    /// flag missing variants via the normal exhaustiveness rule.
+    /// See design.md § `#[non_exhaustive]` for Evolvable Public Types.
+    /// Resolver rejects the attribute on non-`pub` enums.
+    pub is_non_exhaustive: bool,
 }
 
 #[derive(Debug, Clone)]

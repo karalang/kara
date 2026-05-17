@@ -552,6 +552,14 @@ impl super::Parser {
         self.expect(&Token::RightBrace)?;
 
         let no_rc = attributes.iter().any(|a| a.name == "no_rc");
+        // `#[non_exhaustive]` is a bare type-level attribute. Set the
+        // flag at parse so the resolver / typechecker / exhaustiveness
+        // pass can consult it without re-walking attributes. Placement
+        // validation (must be on `pub`, rejected on traits / fns /
+        // variants / impl blocks / type aliases) lives in the resolver
+        // — mirrors the `#[compiler_builtin]` split between parser-
+        // captures-flag and resolver-validates-placement.
+        let is_non_exhaustive = attributes.iter().any(|a| a.name == "non_exhaustive");
 
         Some(StructDef {
             span: self.span_from(&start),
@@ -567,6 +575,7 @@ impl super::Parser {
             fields,
             invariants,
             stdlib_origin: false,
+            is_non_exhaustive,
         })
     }
 
@@ -632,6 +641,8 @@ impl super::Parser {
         }
         self.expect(&Token::RightBrace)?;
 
+        let is_non_exhaustive = attributes.iter().any(|a| a.name == "non_exhaustive");
+
         Some(EnumDef {
             span: self.span_from(&start),
             attributes,
@@ -644,6 +655,7 @@ impl super::Parser {
             where_clause,
             variants,
             stdlib_origin: false,
+            is_non_exhaustive,
         })
     }
 

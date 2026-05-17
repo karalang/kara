@@ -688,6 +688,7 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         fields: Vec::new(),
         invariants: Vec::new(),
         stdlib_origin: true,
+        is_non_exhaustive: false,
     })
 }
 

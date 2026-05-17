@@ -2091,6 +2091,147 @@ fn test_compiler_builtin_per_method_origin_bypasses_gate_on_impl_method() {
     );
 }
 
+// ── #[non_exhaustive] placement validation (E0239) ────────────────
+// The attribute is valid only on `pub struct` and `pub enum`. The
+// resolver rejects every other target — private types (no
+// cross-package boundary, so the attribute is meaningless), traits /
+// fns / impl blocks (no field-or-variant evolution surface), and
+// individual struct fields (field-level non-exhaustive is post-v1).
+// Per design.md § `#[non_exhaustive]` for Evolvable Public Types.
+
+fn assert_non_exhaustive_rejected_kind(source: &str, expected_target_kind: &str) {
+    let errs = resolve_errors(source);
+    let matched: Vec<_> = errs
+        .iter()
+        .filter(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains(expected_target_kind)
+        })
+        .collect();
+    assert!(
+        !matched.is_empty(),
+        "expected NonExhaustiveInvalidTarget mentioning {:?}, got: {:?}",
+        expected_target_kind,
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_accepted_on_pub_struct() {
+    // Positive pin — no diagnostic on the legal placement.
+    let parsed = parse("#[non_exhaustive]\npub struct Config { timeout: i64, }");
+    assert!(parsed.errors.is_empty());
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::NonExhaustiveInvalidTarget),
+        "pub struct should accept #[non_exhaustive] without diagnostic; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_accepted_on_pub_enum() {
+    let parsed = parse("#[non_exhaustive]\npub enum Error { NotFound, Conflict, }");
+    assert!(parsed.errors.is_empty());
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::NonExhaustiveInvalidTarget),
+        "pub enum should accept #[non_exhaustive] without diagnostic; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_private_struct() {
+    assert_non_exhaustive_rejected_kind(
+        "#[non_exhaustive]\nprivate struct Internal { x: i64, }",
+        "private struct",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_private_enum() {
+    assert_non_exhaustive_rejected_kind(
+        "#[non_exhaustive]\nprivate enum Internal { A, B, }",
+        "private enum",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_non_pub_struct() {
+    // Bare struct (no `pub`, no `private`) is module-private by default.
+    // The attribute is still meaningless without `pub` and so rejected.
+    assert_non_exhaustive_rejected_kind(
+        "#[non_exhaustive]\nstruct Module { x: i64, }",
+        "private struct",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_function() {
+    assert_non_exhaustive_rejected_kind("#[non_exhaustive]\nfn frob() { }", "function");
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_trait() {
+    assert_non_exhaustive_rejected_kind(
+        "#[non_exhaustive]\ntrait Display { fn fmt(ref self) -> String; }",
+        "trait",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_marker_trait() {
+    assert_non_exhaustive_rejected_kind("#[non_exhaustive]\nmarker trait Send;", "marker trait");
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_trait_alias() {
+    assert_non_exhaustive_rejected_kind("#[non_exhaustive]\ntrait Eq2 = Eq;", "trait alias");
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_impl_block() {
+    assert_non_exhaustive_rejected_kind(
+        "pub struct Foo { x: i64, }\n#[non_exhaustive]\nimpl Foo { fn x(ref self) -> i64 { 0 } }",
+        "impl block",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejected_on_struct_field() {
+    // Field-level non-exhaustive is post-v1; reject so the silent
+    // ignore doesn't masquerade as acceptance.
+    assert_non_exhaustive_rejected_kind(
+        "pub struct Foo { #[non_exhaustive] x: i64, }",
+        "struct field",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice1_rejection_uses_dedicated_error_kind() {
+    // Pin that the diagnostic uses the new ResolveErrorKind variant
+    // (not the catch-all "compiler builtin reserved" or similar) so
+    // CLI / IDE consumers can map it to the typed `E0239` code.
+    let errs = resolve_errors("#[non_exhaustive]\nfn frob() { }");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget),
+        "expected NonExhaustiveInvalidTarget kind; got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("E_NON_EXHAUSTIVE_INVALID_TARGET")
+        }),
+        "expected error message to include the symbolic code; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
 
 #[test]

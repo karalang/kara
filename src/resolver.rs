@@ -483,6 +483,13 @@ pub enum ResolveErrorKind {
     /// reserved for stdlib source baked into the compiler binary
     /// (CR-202 slice 1). `E0237`.
     CompilerBuiltinReserved,
+    /// `#[non_exhaustive]` placed on an item that does not support it.
+    /// The attribute is valid only on `pub struct` and `pub enum`
+    /// declarations — placing it on a private type, a trait, a
+    /// function, an impl block, a type alias, or an individual
+    /// enum variant is rejected with `E_NON_EXHAUSTIVE_INVALID_TARGET`.
+    /// See design.md § `#[non_exhaustive]` for Evolvable Public Types.
+    NonExhaustiveInvalidTarget,
     /// `continue label` where `label` refers to a labeled block (rather
     /// than a loop). `continue` is only valid for loop labels — reject
     /// the use site with `error[E_CONTINUE_LABEL_BLOCK]`. The diagnostic
