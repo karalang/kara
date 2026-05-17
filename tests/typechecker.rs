@@ -1064,6 +1064,226 @@ fn lint_attrs_slice7_error_kinds_have_lint_name_none() {
     );
 }
 
+// ── Lint-level slice 4b — scope cascade + emission integration ──
+//
+// `lint_override_stack` is pushed/popped at every item-walk
+// boundary (`check_function`, `check_impl_block`, `check_trait_def`).
+// `effective_lint_level(name)` walks innermost-first and returns the
+// first matching override's level, falling through to the lint's
+// registered default. `type_lint_warning` consults the effective
+// level: `Allow` → suppressed, `Warn` / `Expect` → warnings,
+// `Deny` → errors. The slice-7 `unreachable_arm` warning is the
+// canonical example; the same channel will carry future warnings
+// once they migrate to `type_lint_warning`.
+
+#[test]
+fn lint_attrs_slice4b_allow_suppresses_unreachable_arm_warning() {
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         #[allow(unreachable_arm)]\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "expected #[allow(unreachable_arm)] to suppress the warning; \
+         got: {:?}",
+        result.warnings
+    );
+    assert!(
+        result.errors.is_empty(),
+        "suppression should not produce errors; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_deny_promotes_unreachable_arm_to_error() {
+    let parsed = parse(
+        "enum Color { Red, Green, Blue }\n\
+         #[deny(unreachable_arm)]\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::UnreachableArm),
+        "expected #[deny(unreachable_arm)] to promote the warning to an \
+         error; got errors: {:?}, warnings: {:?}",
+        result.errors,
+        result.warnings
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "denied lint should NOT also appear in warnings; got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_warn_explicit_keeps_warning_behavior() {
+    // `#[warn]` is the default level for `unreachable_arm`; an
+    // explicit `#[warn]` is a no-op but should still produce the
+    // warning, not silently suppress it.
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         #[warn(unreachable_arm)]\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "explicit #[warn] should still emit the warning; got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_unrelated_allow_does_not_suppress() {
+    // Pin that the cascade matches on lint name — `#[allow(deprecated)]`
+    // must not silence `unreachable_arm`.
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         #[allow(deprecated)]\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "#[allow] on an unrelated lint must not suppress \
+         unreachable_arm; got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_default_behavior_unchanged_without_override() {
+    // Regression — code without any lint-level attribute keeps the
+    // existing `Warn`-emitting behavior.
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+    );
+    let unreachable = result
+        .warnings
+        .iter()
+        .find(|w| w.kind == TypeErrorKind::UnreachableArm)
+        .expect("expected UnreachableArm warning by default");
+    assert_eq!(unreachable.lint_name.as_deref(), Some("unreachable_arm"));
+}
+
+#[test]
+fn lint_attrs_slice4b_impl_block_allow_propagates_to_methods() {
+    // An `#[allow]` on the impl block silences a warning fired
+    // inside a method body — exercises the cascade walking outward
+    // from check_function's frame to check_impl_block's frame.
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         pub struct S { x: i64 }\n\
+         #[allow(unreachable_arm)]\n\
+         impl S {\n\
+             fn classify(ref self, c: Color) -> i64 {\n\
+                 match c {\n\
+                     Red   => 1,\n\
+                     Red   => 2,\n\
+                     Green => 3,\n\
+                     Blue  => 4,\n\
+                 }\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "impl-block-level #[allow] should suppress warnings fired \
+         inside method bodies; got: {:?}",
+        result.warnings
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_inner_warn_overrides_outer_allow() {
+    // Cascade rule: innermost override wins. An outer `#[allow]` on
+    // the impl block is overridden by an inner `#[warn]` on the
+    // method — the warning fires.
+    let result = typecheck_ok(
+        "enum Color { Red, Green, Blue }\n\
+         pub struct S { x: i64 }\n\
+         #[allow(unreachable_arm)]\n\
+         impl S {\n\
+             #[warn(unreachable_arm)]\n\
+             fn classify(ref self, c: Color) -> i64 {\n\
+                 match c {\n\
+                     Red   => 1,\n\
+                     Red   => 2,\n\
+                     Green => 3,\n\
+                     Blue  => 4,\n\
+                 }\n\
+             }\n\
+         }",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.kind == TypeErrorKind::UnreachableArm),
+        "inner #[warn] should override outer #[allow] per the \
+         cascade rule (innermost wins); got: {:?}",
+        result.warnings
+    );
+}
+
 // ── Maranget witness construction (exhaustiveness slice 4) ──────
 
 #[test]

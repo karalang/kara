@@ -747,6 +747,18 @@ pub struct TypeChecker<'a> {
     /// (the safer assumption — fires the check uniformly when we're
     /// outside any function context, e.g. at module-const init exprs).
     pub(super) current_fn_stdlib_origin: bool,
+    /// Stack of `lint_overrides` frames for the items currently being
+    /// type-checked (slice 4b of the lint-level entry). Frame
+    /// pushed at every item-walk entry (`check_function`,
+    /// `check_impl_block`, `check_trait_def`); popped on exit. The
+    /// cascade reader [`Self::effective_lint_level`] walks the stack
+    /// innermost-first and returns the first matching override's
+    /// level, falling through to the lint's registered default. The
+    /// emission site [`Self::type_lint_warning`] consults the
+    /// effective level: `Allow` → skip, `Warn` → push to `warnings`,
+    /// `Deny` → push to `errors`, `Expect` → push to `warnings`
+    /// (fulfilment tracking lands in slice 5).
+    pub(super) lint_override_stack: Vec<Vec<crate::lints::LintLevelOverride>>,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -798,6 +810,7 @@ impl<'a> TypeChecker<'a> {
             enclosing_trait: None,
             closure_once_reasons: HashMap::new(),
             current_fn_stdlib_origin: false,
+            lint_override_stack: Vec::new(),
         }
     }
 
@@ -977,9 +990,14 @@ impl<'a> TypeChecker<'a> {
     /// helper — bare lint-less warnings are rejected by the spec
     /// ("every warning emitted by the compiler must record the lint
     /// name in the structured diagnostic"). Caller names a lint that
-    /// exists in `crate::lints::STARTER_LINTS`; an unknown name parses
-    /// fine but future cascade lookups (slice 4b) will fall through to
-    /// the default level.
+    /// exists in `crate::lints::STARTER_LINTS`; an unknown name routes
+    /// through the cascade (slice 4b) with the default `Warn` level.
+    ///
+    /// **Slice 4b cascade integration.** Consults
+    /// [`Self::effective_lint_level`] before deciding where to route
+    /// the entry: `Allow` → suppressed silently; `Warn` / `Expect` →
+    /// pushed to `warnings`; `Deny` → pushed to `errors` (the message
+    /// is reused unchanged — the cascade only changes the severity).
     pub(super) fn type_lint_warning(
         &mut self,
         message: String,
@@ -987,12 +1005,49 @@ impl<'a> TypeChecker<'a> {
         kind: TypeErrorKind,
         lint_name: &'static str,
     ) {
-        self.warnings.push(TypeError {
+        use crate::lints::LintLevel;
+        let level = self.effective_lint_level(lint_name);
+        let entry = TypeError {
             message,
             span,
             kind,
             lint_name: Some(lint_name.to_string()),
-        });
+        };
+        match level {
+            LintLevel::Allow => {
+                // Suppressed by an `#[allow(...)]` in the enclosing
+                // scope chain (or by CLI `-A NAME` once that lands).
+            }
+            LintLevel::Warn | LintLevel::Expect => {
+                // `Expect` behaves like `Warn` today; slice 5 will
+                // record fulfilment so an `#[expect]` whose lint never
+                // fires emits `unfulfilled_lint_expectation`.
+                self.warnings.push(entry);
+            }
+            LintLevel::Deny => {
+                self.errors.push(entry);
+            }
+        }
+    }
+
+    /// Walk the `lint_override_stack` innermost-first looking for a
+    /// matching override on `lint_name`. Returns the override's level
+    /// when found, falling through to the lint's registered default
+    /// (`Warn` when the name is unknown to the registry — matching the
+    /// design.md "Naming" rule of "unknown lint names continue to
+    /// compile"). Slice 4b cascade reader. CLI build-wide defaults
+    /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME`) are a follow-up.
+    pub(super) fn effective_lint_level(&self, lint_name: &str) -> crate::lints::LintLevel {
+        for frame in self.lint_override_stack.iter().rev() {
+            for ov in frame.iter().rev() {
+                if ov.lint == lint_name {
+                    return ov.level;
+                }
+            }
+        }
+        crate::lints::lint_by_name(lint_name)
+            .map(|info| info.default_level)
+            .unwrap_or(crate::lints::LintLevel::Warn)
     }
 
     /// Validate an `as` cast (`from as to`) and emit a focused diagnostic

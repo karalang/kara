@@ -88,6 +88,10 @@ impl<'a> super::TypeChecker<'a> {
         // own methods + supertrait closure rather than silently falling
         // through.
         let saved_enclosing_trait = self.enclosing_trait.take();
+
+        // Lint-level slice 4b — push the trait declaration's lint
+        // overrides for the duration of its default-body checking.
+        self.lint_override_stack.push(t.lint_overrides.clone());
         self.enclosing_trait = Some(t.name.clone());
 
         let self_type = Type::TypeParam("Self".to_string());
@@ -123,6 +127,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.enclosing_bounds = saved_bounds;
         self.enclosing_trait = saved_enclosing_trait;
+        self.lint_override_stack.pop();
     }
 
     /// Build a map of user-defined type names → `is_pub`. Types absent from the
@@ -799,6 +804,11 @@ impl<'a> super::TypeChecker<'a> {
         let saved_fn_stdlib_origin = self.current_fn_stdlib_origin;
         self.current_fn_stdlib_origin = f.stdlib_origin;
 
+        // Lint-level slice 4b — push this function's lint overrides
+        // as the innermost cascade frame. Popped on exit so sibling
+        // / outer items don't inherit it.
+        self.lint_override_stack.push(f.lint_overrides.clone());
+
         // `impl Trait` slice 4 — compute the capture set for every
         // return-position existential declared in this function's
         // signature. Done after lowering so we know which `impl Trait`
@@ -822,6 +832,7 @@ impl<'a> super::TypeChecker<'a> {
         self.current_self_type = None;
         self.enclosing_bounds = saved_bounds;
         self.current_fn_stdlib_origin = saved_fn_stdlib_origin;
+        self.lint_override_stack.pop();
     }
 
     /// Like `infer_block`, but type-checks the block's final expression
@@ -967,6 +978,11 @@ impl<'a> super::TypeChecker<'a> {
             self.enclosing_bounds.insert(name, bounds);
         }
 
+        // Lint-level slice 4b — push the impl block's lint overrides
+        // so per-method `check_function` calls inherit the impl's
+        // overrides via the cascade. Popped at the end of the impl.
+        self.lint_override_stack.push(imp.lint_overrides.clone());
+
         // GAT slice 7: cache the trait's AssocTypeDecl bounds keyed by
         // assoc-type name so the binding loop can enforce them at impl
         // site without re-walking program.items per binding. Empty when
@@ -1091,6 +1107,7 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         self.enclosing_bounds = saved_bounds;
+        self.lint_override_stack.pop();
     }
 
     fn check_const_decl(&mut self, c: &ConstDecl) {
