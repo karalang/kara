@@ -300,6 +300,27 @@ pub(super) struct Codegen<'ctx> {
     /// loads `i64 0`. See bug #8 (call-chain field access on
     /// shared-struct return).
     pub(crate) fn_return_type_names: HashMap<String, String>,
+    /// Function-name → inner-shared-name when the function returns
+    /// `Option[shared T]`. Populated by `declare_function` from the
+    /// return type's `Option[T]` generic arg when T is a known shared
+    /// type. Read by the let-stmt handler's `Option[shared T]`
+    /// detection to register an `RcDecOption` cleanup for untyped
+    /// bindings whose RHS is a call (`let out = add_two_numbers(...)`).
+    /// Closes the kata-bench retention gap (2026-05-17) for the
+    /// inferred-annotation shape; the explicit-annotation shape
+    /// (`let out: Option[ListNode] = ...`) reads the inner directly
+    /// off the surface `TypeExpr`.
+    pub(crate) fn_return_option_inner_shared: HashMap<String, String>,
+    /// Per-binding inner-shared-heap layout for `Option[shared T]`
+    /// variables. Populated by `track_rc_option_var` at let-binding
+    /// time; read by the `Assign` arm so reassignment of a tracked
+    /// Option[shared T] binding adjusts refcounts symmetrically to
+    /// the plain shared-T arm (dec old inner pointer, inc new inner
+    /// pointer unless RHS is a fresh `Some(...)` literal). Without
+    /// this, `next_a = n.next;` (LeetCode #2 recursive variant)
+    /// stranded the old inner ref and over-decremented at scope
+    /// exit, freeing a still-aliased chain.
+    pub(crate) var_option_shared_heap: HashMap<String, StructType<'ctx>>,
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
@@ -325,6 +346,33 @@ pub(super) struct Codegen<'ctx> {
     /// with no heap-owning fields don't get an entry (the synthesis fn returns
     /// `None`) and don't reach `CleanupAction::StructDrop`.
     pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// Per-shared-struct lazy drop-fn cache (shared-struct name →
+    /// `__karac_rc_drop_<Name>` `FunctionValue`, or `None` when the
+    /// struct has no heap-owning fields and `emit_rc_dec` can fall
+    /// through to plain `free(ptr)`). Lazily populated by
+    /// `emit_shared_struct_rc_drop_fn` on first registration of a
+    /// shared-struct binding via `track_rc_var` / `track_rc_option_var`,
+    /// or recursively from another struct's drop body when it
+    /// encounters a shared-typed field. The drop fn walks each field
+    /// of the shared struct's heap layout and, before `free(ptr)`,
+    /// dispatches the appropriate cleanup per field type:
+    ///   - Shared struct field → recursive `__karac_rc_drop_<Name>`
+    ///     call (dec inner refcount; if it hits zero, transitively
+    ///     drop the inner's chain).
+    ///   - `Option[shared T]` field → tag-switch; on Some, dec the
+    ///     inner shared pointer.
+    ///   - Vec / String field → `cap > 0 ? free(data)` (same shape
+    ///     as `CleanupAction::FreeVecBuffer`).
+    ///   - Map / Set handle field → `karac_map_free*` (mirrors
+    ///     `StructDrop`'s field walk).
+    ///
+    /// `None`-cached entries mean "no walk needed" — the drop fn isn't
+    /// emitted and `emit_rc_dec` proceeds with the legacy plain-`free`
+    /// path. Closes the recursive-drop gap for shared-struct chains
+    /// (LeetCode #2 kata bench, 2026-05-17): without this, freeing
+    /// the chain's head leaked every transitive `next: Option[ListNode]`
+    /// because the dec→free path ignored field-bound shared refs.
+    pub(crate) rc_drop_fns: HashMap<String, Option<FunctionValue<'ctx>>>,
     /// Cross-error-type conversion targets at `?` sites — populated from
     /// `Program.question_conversions` (set by the lowering pass from the
     /// typechecker's `question_conversions` map). Key: `(span.offset,
@@ -1215,11 +1263,14 @@ impl<'ctx> Codegen<'ctx> {
             ref_params: HashMap::new(),
             fn_param_ref: HashMap::new(),
             fn_return_type_names: HashMap::new(),
+            fn_return_option_inner_shared: HashMap::new(),
+            var_option_shared_heap: HashMap::new(),
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
             pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
+            rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),

@@ -282,6 +282,49 @@ pub(crate) enum CleanupAction<'ctx> {
         /// Cached `__karac_drop_struct_<Name>` function.
         drop_fn: FunctionValue<'ctx>,
     },
+    /// Decrement the refcount of the inner shared pointer carried by an
+    /// `Option[shared T]` binding (`let x: Option[ListNode] = ...;` or
+    /// any binding whose RHS yields an Option-wrapped shared ref). The
+    /// slot holds the full Option struct (`{i64 tag, i64 w0, i64 w1, i64
+    /// w2}` — see `seed_builtin_enum_layouts` for the layout): on
+    /// cleanup, load the tag from field 0, branch on `tag == 1`
+    /// (Some), and when Some load the i64 word at field 1 and
+    /// `int_to_ptr` it to recover the inner heap pointer. Dispatch
+    /// through `emit_refcount_dec` so Arc-promoted bindings take the
+    /// atomic path. The None side is a no-op (no inner allocation to
+    /// release).
+    ///
+    /// Closes the LeetCode #2 kata's heap-retention bug (2026-05-17):
+    /// `let out = add_two_numbers(...)` produced a leak of one 100-node
+    /// chain per iteration at K=500_000 because the let-stmt handler's
+    /// `shared_info` resolution matched plain `ListNode` only, not
+    /// `Option[ListNode]`. With this variant queued at let-stmt time,
+    /// every Option-of-shared binding tracks its inner refcount the
+    /// same way a plain shared-struct binding does.
+    RcDecOption {
+        /// Variable name — used for the `is_arc_binding` dispatch in
+        /// `emit_refcount_dec` (same convention as `RcDec`).
+        name: String,
+        /// Alloca holding the full `{tag, w0, w1, w2}` Option struct
+        /// value. Cleanup reloads the slot rather than capturing the
+        /// pointer at registration time, so reassignment of the binding
+        /// is observed at scope exit (mirrors how `RcDec` walks
+        /// `variables[name]`).
+        option_slot: PointerValue<'ctx>,
+        /// LLVM struct type for the Option payload — almost always the
+        /// 4-i64 shape pinned by `seed_builtin_enum_layouts`. Stored on
+        /// the action so the GEP at cleanup uses the matching type
+        /// even when future layout-widening changes the shape.
+        option_ty: StructType<'ctx>,
+        /// LLVM struct type of the inner shared T's heap layout
+        /// (`{i64 refcount, fields...}`) — passed to `emit_refcount_dec`
+        /// so the dec lands on the correct heap shape.
+        heap_type: StructType<'ctx>,
+        /// Discriminant value for the `Some` variant. Captured from
+        /// `enum_layouts["Option"].tags["Some"]` at registration time
+        /// so cleanup is robust against a future seed-table renumber.
+        some_tag: u64,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

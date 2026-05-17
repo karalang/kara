@@ -15,6 +15,7 @@ use crate::concurrency::ParallelGroup;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
+use inkwell::IntPredicate;
 
 use super::helpers::{
     map_kv_type_exprs, set_inner_type_expr, slice_inner_type_expr, vec_inner_type_expr,
@@ -824,6 +825,62 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // `Option[shared T]` detection — peer to `shared_info`,
+                // but for an Option-wrapped shared ref. Populated from:
+                //   (a) explicit `let x: Option[ShareT] = ...;` annotation;
+                //   (b) untyped lets whose RHS is a free-fn call returning
+                //       `Option[shared T]` (recorded by `declare_function`
+                //       in `fn_return_option_inner_shared`).
+                // Methods / 2-segment Path calls / nested control-flow
+                // tails are out of scope for this slice — the kata's
+                // bench shape uses the bare-Identifier call form. When
+                // populated, queues an `RcDecOption` cleanup below so the
+                // inner shared ref drops on scope exit. Closes the
+                // 2026-05-17 kata-bench retention bug (`let out =
+                // add_two_numbers(...)` leaked one 100-node chain per
+                // iter at K=500_000).
+                let mut shared_option_info: Option<(String, SharedTypeInfo<'ctx>)> = None;
+                if shared_info.is_none() {
+                    if let PatternKind::Binding(var_name) = &pattern.kind {
+                        // (a) Explicit annotation.
+                        if let Some(te) = ty.as_ref() {
+                            if let Some((inner_name, info)) =
+                                self.option_inner_shared_type_for_type_expr(te)
+                            {
+                                shared_option_info = Some((var_name.clone(), info));
+                                // Mirror `shared_info`'s var-type-names
+                                // contract: record the OUTER name ("Option")
+                                // so downstream resolvers see this binding
+                                // as an Option; the inner shared name
+                                // travels through `shared_option_info`
+                                // alone (not surfaced via var_type_names
+                                // to avoid masking the Option-ness).
+                                let _ = inner_name;
+                            }
+                        }
+                        // (b) Untyped let with a free-fn call RHS whose
+                        //     return type is `Option[shared T]`. The
+                        //     declare_function pass recorded the inner
+                        //     shared name in `fn_return_option_inner_shared`.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::Call { callee, .. } = &value.kind {
+                                if let ExprKind::Identifier(fn_name) = &callee.kind {
+                                    if let Some(inner_name) = self
+                                        .fn_return_option_inner_shared
+                                        .get(fn_name.as_str())
+                                        .cloned()
+                                    {
+                                        if let Some(info) =
+                                            self.shared_types.get(inner_name.as_str()).cloned()
+                                        {
+                                            shared_option_info = Some((var_name.clone(), info));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 // Fallback: when there is no type annotation and the RHS is a
                 // call (or any expression `type_name_of` can't classify), but
                 // the compiled value is a struct, recover the user-type name
@@ -973,6 +1030,34 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.null_init_slot_in_entry_block(slot.ptr);
                             }
                         }
+                    }
+                }
+                // `Option[shared T]` cleanup registration. Must run
+                // AFTER `bind_pattern` so the slot exists in
+                // `self.variables`; same site as the plain shared
+                // `track_rc_var` above. Also null-init the slot's tag
+                // word when the let lives in a nested block — without
+                // this, a never-executed body leaves the slot at
+                // `undef` and the cleanup loads garbage as the tag,
+                // potentially matching `Some` and dereferencing a
+                // garbage pointer. The tag-zero sentinel maps to
+                // `None`, which the cleanup arm skips. Stores zero
+                // across the WHOLE Option struct rather than just tag,
+                // for defense in depth — the w0/w1/w2 fields are
+                // ignored on the None side anyway.
+                if let Some((ref var_name, ref info)) = shared_option_info {
+                    if let Some(slot) = self.variables.get(var_name.as_str()).copied() {
+                        let option_ty = self.enum_layouts["Option"].llvm_type;
+                        let is_nested = self
+                            .current_fn
+                            .and_then(|f| f.get_first_basic_block())
+                            .zip(self.builder.get_insert_block())
+                            .map(|(entry, cur)| entry != cur)
+                            .unwrap_or(false);
+                        if is_nested {
+                            self.zero_init_option_slot_in_entry_block(slot.ptr, option_ty);
+                        }
+                        self.track_rc_option_var(var_name, slot.ptr, option_ty, info.heap_type);
                     }
                 }
                 // Track Vec variables for scope cleanup.
@@ -1156,6 +1241,172 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder.build_store(slot.ptr, val).unwrap();
                                 return Ok(());
                             }
+                        }
+                    }
+                    // `Option[shared T]` Assign — symmetric to the
+                    // plain shared-T arm above, but operating on the
+                    // Option struct's tag + w0 inner pointer:
+                    //   1. Load the old slot, branch on tag; if Some,
+                    //      dec the old inner pointer.
+                    //   2. Store the new Option value.
+                    //   3. If the RHS is not a fresh-ref source
+                    //      (i.e., not a `Some(...)` literal or other
+                    //      Call/MethodCall — those already carry a
+                    //      +1 transfer; see the let-stmt comment for
+                    //      the +1 handshake), branch on the new
+                    //      tag; if Some, inc the new inner pointer.
+                    // Without this, `mut next_a: Option[Node]` styled
+                    // reassignments (recursive kata: `next_a = n.next;`)
+                    // strand the old ref and over-decrement at scope
+                    // exit, hanging the program on chain access.
+                    if let Some(heap_type) = self.var_option_shared_heap.get(name.as_str()).copied()
+                    {
+                        if let Some(slot) = self.variables.get(name.as_str()).copied() {
+                            let option_ty = self.enum_layouts["Option"].llvm_type;
+                            let i64_t = self.context.i64_type();
+                            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                            let some_tag = self
+                                .enum_layouts
+                                .get("Option")
+                                .and_then(|l| l.tags.get("Some").copied())
+                                .unwrap_or(1);
+                            let some_tag_const = i64_t.const_int(some_tag, false);
+                            let fn_val = self.current_fn.unwrap();
+                            // ── Step 1: dec old inner if old is Some. ──
+                            let old_tag_ptr = self
+                                .builder
+                                .build_struct_gep(option_ty, slot.ptr, 0, "opt.assign.old.tag.p")
+                                .unwrap();
+                            let old_tag = self
+                                .builder
+                                .build_load(i64_t, old_tag_ptr, "opt.assign.old.tag")
+                                .unwrap()
+                                .into_int_value();
+                            let old_is_some = self
+                                .builder
+                                .build_int_compare(
+                                    IntPredicate::EQ,
+                                    old_tag,
+                                    some_tag_const,
+                                    "opt.assign.old.is_some",
+                                )
+                                .unwrap();
+                            let old_do_bb =
+                                self.context.append_basic_block(fn_val, "opt.assign.old.do");
+                            let old_skip_bb = self
+                                .context
+                                .append_basic_block(fn_val, "opt.assign.old.skip");
+                            self.builder
+                                .build_conditional_branch(old_is_some, old_do_bb, old_skip_bb)
+                                .unwrap();
+                            self.builder.position_at_end(old_do_bb);
+                            let old_w0_ptr = self
+                                .builder
+                                .build_struct_gep(option_ty, slot.ptr, 1, "opt.assign.old.w0.p")
+                                .unwrap();
+                            let old_w0 = self
+                                .builder
+                                .build_load(i64_t, old_w0_ptr, "opt.assign.old.w0")
+                                .unwrap()
+                                .into_int_value();
+                            let old_inner = self
+                                .builder
+                                .build_int_to_ptr(old_w0, ptr_ty, "opt.assign.old.inner")
+                                .unwrap();
+                            let old_is_null = self
+                                .builder
+                                .build_is_null(old_inner, "opt.assign.old.is_null")
+                                .unwrap();
+                            let old_real_do_bb = self
+                                .context
+                                .append_basic_block(fn_val, "opt.assign.old.real_do");
+                            self.builder
+                                .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
+                                .unwrap();
+                            self.builder.position_at_end(old_real_do_bb);
+                            self.emit_refcount_dec(name, heap_type, old_inner);
+                            self.builder
+                                .build_unconditional_branch(old_skip_bb)
+                                .unwrap();
+                            self.builder.position_at_end(old_skip_bb);
+                            // ── Step 2: store the new Option value. ──
+                            self.builder.build_store(slot.ptr, val).unwrap();
+                            // ── Step 3: inc new inner if RHS is an
+                            //           aliasing source (not a fresh
+                            //           Some/None/Call/MethodCall).
+                            //           Read the just-stored Option
+                            //           back rather than re-extracting
+                            //           from `val` so the IR stays
+                            //           uniform across struct-vs-ptr
+                            //           BasicValueEnum shapes.
+                            if !rhs_is_fresh {
+                                let new_tag_ptr = self
+                                    .builder
+                                    .build_struct_gep(
+                                        option_ty,
+                                        slot.ptr,
+                                        0,
+                                        "opt.assign.new.tag.p",
+                                    )
+                                    .unwrap();
+                                let new_tag = self
+                                    .builder
+                                    .build_load(i64_t, new_tag_ptr, "opt.assign.new.tag")
+                                    .unwrap()
+                                    .into_int_value();
+                                let new_is_some = self
+                                    .builder
+                                    .build_int_compare(
+                                        IntPredicate::EQ,
+                                        new_tag,
+                                        some_tag_const,
+                                        "opt.assign.new.is_some",
+                                    )
+                                    .unwrap();
+                                let new_do_bb =
+                                    self.context.append_basic_block(fn_val, "opt.assign.new.do");
+                                let new_skip_bb = self
+                                    .context
+                                    .append_basic_block(fn_val, "opt.assign.new.skip");
+                                self.builder
+                                    .build_conditional_branch(new_is_some, new_do_bb, new_skip_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(new_do_bb);
+                                let new_w0_ptr = self
+                                    .builder
+                                    .build_struct_gep(option_ty, slot.ptr, 1, "opt.assign.new.w0.p")
+                                    .unwrap();
+                                let new_w0 = self
+                                    .builder
+                                    .build_load(i64_t, new_w0_ptr, "opt.assign.new.w0")
+                                    .unwrap()
+                                    .into_int_value();
+                                let new_inner = self
+                                    .builder
+                                    .build_int_to_ptr(new_w0, ptr_ty, "opt.assign.new.inner")
+                                    .unwrap();
+                                let new_is_null = self
+                                    .builder
+                                    .build_is_null(new_inner, "opt.assign.new.is_null")
+                                    .unwrap();
+                                let new_real_do_bb = self
+                                    .context
+                                    .append_basic_block(fn_val, "opt.assign.new.real_do");
+                                self.builder
+                                    .build_conditional_branch(
+                                        new_is_null,
+                                        new_skip_bb,
+                                        new_real_do_bb,
+                                    )
+                                    .unwrap();
+                                self.builder.position_at_end(new_real_do_bb);
+                                self.emit_refcount_inc(name, heap_type, new_inner);
+                                self.builder
+                                    .build_unconditional_branch(new_skip_bb)
+                                    .unwrap();
+                                self.builder.position_at_end(new_skip_bb);
+                            }
+                            return Ok(());
                         }
                     }
                     // Free the LHS's existing heap buffer before writing

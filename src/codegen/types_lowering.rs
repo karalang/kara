@@ -916,4 +916,45 @@ impl<'ctx> super::Codegen<'ctx> {
         let info = shared_types.get(head)?;
         Some(info.heap_type)
     }
+
+    /// If `te` is `Option[T]` and `T` is a known `shared` struct / enum,
+    /// return the inner shared type's surface name plus its
+    /// `SharedTypeInfo`. Returns `None` for plain shared `T` (use
+    /// `shared_heap_type_for_type_expr` for that), for non-shared
+    /// `Option[T]` (`Option[i64]`, `Option[String]`, …), or for any
+    /// non-Path TypeExpr. Used by the let-stmt handler to recognize
+    /// `let x: Option[ShareT] = …;` and queue an `RcDecOption` cleanup
+    /// so the inner pointer's refcount drops on scope exit. The Option
+    /// outer layout is the seeded `{tag, w0, w1, w2}` shape; the inner
+    /// pointer occupies w0 (per `coerce_to_payload_words(ptr, 3)`'s
+    /// primitive fast path, which `ptr_to_int`s the pointer into w0
+    /// and zero-fills w1/w2).
+    pub(super) fn option_inner_shared_type_for_type_expr(
+        &self,
+        te: &TypeExpr,
+    ) -> Option<(String, SharedTypeInfo<'ctx>)> {
+        let p = match &te.kind {
+            TypeKind::Path(p) => p,
+            _ => return None,
+        };
+        // Accept both bare `Option[T]` and `path::to::Option[T]` (the
+        // latter is rare today but mirrors how `shared_heap_type_for_type_expr`
+        // doesn't require single-segment paths — defensive against
+        // future path-qualified Option references).
+        if p.segments.last().map(|s| s.as_str()) != Some("Option") {
+            return None;
+        }
+        let args = p.generic_args.as_ref()?;
+        let inner_te = args.iter().find_map(|a| match a {
+            GenericArg::Type(t) => Some(t),
+            _ => None,
+        })?;
+        let inner_path = match &inner_te.kind {
+            TypeKind::Path(p) => p,
+            _ => return None,
+        };
+        let inner_name = inner_path.segments.last()?;
+        let info = self.shared_types.get(inner_name.as_str())?.clone();
+        Some((inner_name.clone(), info))
+    }
 }

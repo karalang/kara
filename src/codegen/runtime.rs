@@ -79,7 +79,21 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_store(rc_ptr, rc_inc).unwrap();
     }
 
-    /// Decrement the reference count. If it reaches zero, call free().
+    /// Decrement the reference count. If it reaches zero, dispatch to
+    /// the per-struct recursive drop fn (`__karac_rc_drop_<Name>`)
+    /// when one was lazily synthesized by `track_rc_var` for this
+    /// heap type. The drop fn walks each heap-owning field (shared
+    /// inner refs, `Option[shared T]` fields, Vec/String data
+    /// buffers, Map/Set handles) before `free(ptr)`. Falls back to
+    /// plain `free(ptr)` when the struct has no walkable fields
+    /// (every field primitive) — `emit_shared_struct_rc_drop_fn`
+    /// caches `None` for those, and the reverse-lookup below sees
+    /// `Some(None)` and takes the legacy path.
+    ///
+    /// Resolving heap_type → struct name is done by iterating
+    /// `shared_types` (small map; O(n) is fine — measured cost
+    /// noise versus a malloc/free pair). A reverse map could be
+    /// added if profiles show it.
     pub(super) fn emit_rc_dec(&self, heap_type: StructType<'ctx>, ptr: PointerValue<'ctx>) {
         let rc_ptr = self
             .builder
@@ -115,9 +129,27 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
-        self.builder
-            .build_call(self.free_fn, &[ptr.into()], "")
-            .unwrap();
+        // Dispatch to the per-struct recursive drop fn when one was
+        // synthesized for this heap_type. Otherwise plain `free`. The
+        // drop fn includes `free(ptr)` after its field walk, so we
+        // don't emit a second `free` here.
+        let mut dropped = false;
+        for (name, info) in &self.shared_types {
+            if info.heap_type == heap_type {
+                if let Some(Some(drop_fn)) = self.rc_drop_fns.get(name) {
+                    self.builder
+                        .build_call(*drop_fn, &[ptr.into()], "")
+                        .unwrap();
+                    dropped = true;
+                }
+                break;
+            }
+        }
+        if !dropped {
+            self.builder
+                .build_call(self.free_fn, &[ptr.into()], "")
+                .unwrap();
+        }
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         self.builder.position_at_end(done_bb);
@@ -183,9 +215,28 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(free_bb);
-        self.builder
-            .build_call(self.free_fn, &[ptr.into()], "")
-            .unwrap();
+        // Mirror `emit_rc_dec`'s drop-fn dispatch on the atomic
+        // path. The drop fn body uses non-atomic field walks
+        // internally — the last decrement happens HERE (atomicrmw
+        // sub), so once we're inside `free_bb` we hold the unique
+        // reference and the walk runs on a non-shared memory view.
+        let mut dropped = false;
+        for (name, info) in &self.shared_types {
+            if info.heap_type == heap_type {
+                if let Some(Some(drop_fn)) = self.rc_drop_fns.get(name) {
+                    self.builder
+                        .build_call(*drop_fn, &[ptr.into()], "")
+                        .unwrap();
+                    dropped = true;
+                }
+                break;
+            }
+        }
+        if !dropped {
+            self.builder
+                .build_call(self.free_fn, &[ptr.into()], "")
+                .unwrap();
+        }
         self.builder.build_unconditional_branch(done_bb).unwrap();
 
         self.builder.position_at_end(done_bb);
@@ -229,12 +280,36 @@ impl<'ctx> super::Codegen<'ctx> {
     /// the let-stmt flow). The caller in `compile_stmt` re-fetches the
     /// slot after bind_pattern and calls `null_init_slot_in_entry_block`
     /// directly.
+    /// Reverse-lookup a shared struct's surface name from its heap
+    /// `StructType`. Used by `track_rc_var` / `track_rc_option_var`
+    /// to drive the lazy synth of `__karac_rc_drop_<Name>`. O(n) over
+    /// `shared_types`; cheap in practice (small number of shared
+    /// types per program) and only runs at let-binding time, not on
+    /// the hot scope-exit path.
+    pub(super) fn struct_name_for_heap_type(&self, heap_type: StructType<'ctx>) -> Option<String> {
+        for (name, info) in &self.shared_types {
+            if info.heap_type == heap_type {
+                return Some(name.clone());
+            }
+        }
+        None
+    }
+
     pub(super) fn track_rc_var(
         &mut self,
         name: &str,
         ptr: PointerValue<'ctx>,
         heap_type: StructType<'ctx>,
     ) {
+        // Lazy-synth the recursive drop fn for this shared struct's
+        // heap type. Without this, `emit_rc_dec`'s reverse-lookup
+        // would never find a registered drop fn and the recursive
+        // chain leaks (closes the LeetCode #2 kata bench). The
+        // synthesis builds an idempotent fn — repeated `track_rc_var`
+        // calls for the same type return the cached entry.
+        if let Some(struct_name) = self.struct_name_for_heap_type(heap_type) {
+            let _ = self.emit_shared_struct_rc_drop_fn(&struct_name);
+        }
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::RcDec {
                 name: name.to_string(),
@@ -269,6 +344,89 @@ impl<'ctx> super::Codegen<'ctx> {
         }
         let null = self.context.ptr_type(AddressSpace::default()).const_null();
         let _ = b.build_store(slot, null);
+    }
+
+    /// Track an `Option[shared T]` binding for scope-exit rc_dec of its
+    /// inner pointer. Mirrors `track_rc_var` but operates on the Option
+    /// struct's `{tag, w0, ...}` shape: cleanup loads the tag, branches
+    /// on `Some`, and when Some recovers the inner heap pointer from
+    /// `w0` (i64 → ptr) before dispatching through `emit_refcount_dec`.
+    /// Closes the kata-bench leak: `let out: Option[ShareT] = call();`
+    /// (and the same shape via inferred annotation) now drops the
+    /// chain's head ref on scope exit. See `CleanupAction::RcDecOption`
+    /// for the runtime IR shape.
+    pub(super) fn track_rc_option_var(
+        &mut self,
+        name: &str,
+        option_slot: PointerValue<'ctx>,
+        option_ty: StructType<'ctx>,
+        heap_type: StructType<'ctx>,
+    ) {
+        // Lazy-synth the recursive drop fn for the inner shared
+        // struct's heap type. Same rationale as `track_rc_var`'s
+        // synth call; the cleanup arm's `emit_refcount_dec` will
+        // dispatch through the cached drop fn for transitive
+        // refcount management.
+        if let Some(struct_name) = self.struct_name_for_heap_type(heap_type) {
+            let _ = self.emit_shared_struct_rc_drop_fn(&struct_name);
+        }
+        // Record the inner heap layout so the `Assign` arm in
+        // `compile_stmt` can perform refcount-aware reassignment of
+        // an `Option[shared T]` variable (dec the old inner ptr,
+        // inc the new one unless the RHS is a fresh `Some(...)`).
+        // Mirrors the plain shared-T Assign arm's behavior, scaled
+        // up to the Option-wrapped shape. Without this, a `mut
+        // Option[shared T]` binding's reassignment (`next_a =
+        // n.next;` in the LeetCode #2 recursive variant) strands
+        // the old ref and over-decrements at scope exit, freeing
+        // an aliased chain mid-recursion.
+        self.var_option_shared_heap
+            .insert(name.to_string(), heap_type);
+        // Resolve the Some-tag from the seeded Option layout. Defaults
+        // to 1 if (impossibly) the table is missing — matches the
+        // canonical `seed_builtin_enum_layouts` numbering.
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::RcDecOption {
+                name: name.to_string(),
+                option_slot,
+                option_ty,
+                heap_type,
+                some_tag,
+            });
+        }
+    }
+
+    /// Zero-init an `Option[T]` slot at the top of the current
+    /// function's entry block. Mirrors `null_init_slot_in_entry_block`'s
+    /// shape but operates on the full Option struct (`{tag, w0, w1,
+    /// w2}`) — `store zeroinitializer`, which puts tag=0 (None) in the
+    /// slot. Used by the let-stmt handler for nested-block
+    /// `Option[shared T]` lets whose bind_pattern store may not fire
+    /// at runtime (loop body skipped, branch not taken); without this,
+    /// the cleanup arm reads `undef` as the tag and may dispatch on a
+    /// garbage Some-tag path.
+    pub(super) fn zero_init_option_slot_in_entry_block(
+        &self,
+        slot: PointerValue<'ctx>,
+        option_ty: StructType<'ctx>,
+    ) {
+        let Some(fn_val) = self.current_fn else {
+            return;
+        };
+        let Some(entry) = fn_val.get_first_basic_block() else {
+            return;
+        };
+        let b = self.context.create_builder();
+        match entry.get_terminator() {
+            Some(term) => b.position_before(&term),
+            None => b.position_at_end(entry),
+        }
+        let _ = b.build_store(slot, option_ty.const_zero());
     }
 
     /// Track a Vec/String alloca for scope-exit buffer free. Pass the
@@ -891,6 +1049,107 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(*drop_fn, &[(*struct_alloca).into()], "")
                     .unwrap();
+            }
+            // `Option[shared T]` binding — load the tag, branch on
+            // Some, recover the inner pointer from word 0, dispatch
+            // through `emit_refcount_dec`. None side is a no-op (no
+            // inner heap allocation to release). Mirrors the `RcDec`
+            // arm's reload-from-slot discipline so a reassignment of
+            // the binding is observed at scope exit; mirrors the
+            // null-guard shape but on the tag instead of a pointer
+            // (`tag == None` is the "skip" path here).
+            CleanupAction::RcDecOption {
+                name,
+                option_slot,
+                option_ty,
+                heap_type,
+                some_tag,
+            } => {
+                // GEP to tag (field 0), load, compare with Some-tag.
+                let tag_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        *option_ty,
+                        *option_slot,
+                        0,
+                        &format!("{}_opt_tag_ptr", name),
+                    )
+                    .unwrap();
+                let tag = self
+                    .builder
+                    .build_load(i64_t, tag_ptr, &format!("{}_opt_tag", name))
+                    .unwrap()
+                    .into_int_value();
+                let some_tag_const = i64_t.const_int(*some_tag, false);
+                let is_some = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        tag,
+                        some_tag_const,
+                        &format!("{}_opt_is_some", name),
+                    )
+                    .unwrap();
+                let do_bb = self.context.append_basic_block(fn_val, "opt_rc_cleanup_do");
+                let skip_bb = self
+                    .context
+                    .append_basic_block(fn_val, "opt_rc_cleanup_skip");
+                let join_bb = self
+                    .context
+                    .append_basic_block(fn_val, "opt_rc_cleanup_join");
+                self.builder
+                    .build_conditional_branch(is_some, do_bb, skip_bb)
+                    .unwrap();
+                // Some-side: load w0 (field 1) as i64, int_to_ptr,
+                // dec. The Some-side inner pointer can itself be null
+                // in malformed-IR cases — defensive null-skip mirrors
+                // the `RcDec` arm so a hypothetical future codegen
+                // shape that stores a sentinel-null doesn't crash the
+                // dec. The common case (a real Some(ptr) payload) has
+                // a non-null pointer.
+                self.builder.position_at_end(do_bb);
+                let w0_ptr = self
+                    .builder
+                    .build_struct_gep(*option_ty, *option_slot, 1, &format!("{}_opt_w0_ptr", name))
+                    .unwrap();
+                let w0 = self
+                    .builder
+                    .build_load(i64_t, w0_ptr, &format!("{}_opt_w0", name))
+                    .unwrap()
+                    .into_int_value();
+                let inner_ptr = self
+                    .builder
+                    .build_int_to_ptr(w0, ptr_ty, &format!("{}_opt_inner_ptr", name))
+                    .unwrap();
+                let inner_null = ptr_ty.const_null();
+                let inner_is_null = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        inner_ptr,
+                        inner_null,
+                        &format!("{}_opt_inner_is_null", name),
+                    )
+                    .unwrap();
+                let inner_do_bb = self
+                    .context
+                    .append_basic_block(fn_val, "opt_rc_cleanup_inner_do");
+                let inner_skip_bb = self
+                    .context
+                    .append_basic_block(fn_val, "opt_rc_cleanup_inner_skip");
+                self.builder
+                    .build_conditional_branch(inner_is_null, inner_skip_bb, inner_do_bb)
+                    .unwrap();
+                self.builder.position_at_end(inner_do_bb);
+                self.emit_refcount_dec(name, *heap_type, inner_ptr);
+                self.builder
+                    .build_unconditional_branch(inner_skip_bb)
+                    .unwrap();
+                self.builder.position_at_end(inner_skip_bb);
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+                self.builder.build_unconditional_branch(join_bb).unwrap();
+                self.builder.position_at_end(join_bb);
             }
         }
     }

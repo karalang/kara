@@ -101,6 +101,16 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.fn_return_type_names
                         .insert(func.name.clone(), seg.clone());
                 }
+                // Record the inner shared name when the return type is
+                // `Option[shared T]` — read by the let-stmt handler's
+                // `RcDecOption` registration for untyped lets whose
+                // RHS is a call to this function (`let out = call();`
+                // shape; explicit `let out: Option[T] = ...` reads the
+                // inner directly off the annotation).
+                if let Some((inner_name, _)) = self.option_inner_shared_type_for_type_expr(ret_ty) {
+                    self.fn_return_option_inner_shared
+                        .insert(func.name.clone(), inner_name);
+                }
             }
         }
 
@@ -119,6 +129,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn_name = func.name.clone();
         self.variables.clear();
         self.var_type_names.clear();
+        self.var_option_shared_heap.clear();
         self.ref_params.clear();
         self.rc_fallback_heap_types.clear();
         self.scope_cleanup_actions.clear();
