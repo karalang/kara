@@ -12389,3 +12389,119 @@ fn test_gat_slice5_non_gat_binding_still_resolves() {
          }",
     );
 }
+
+// ── GAT slice 6 — coherence regression pin ──────────────────────────
+//
+// Per the design.md spec sentence: the "one impl per trait per type"
+// coherence rule covers GATs unchanged — the GAT binding is part of
+// the impl, not a separate addressable item. Slice 6 is a single
+// regression-test pin with NO production-code change; the test
+// confirms `TypeErrorKind::ConflictingImpl` fires for two
+// concretely-instantiated GAT impls the same way it does for
+// non-GAT duplicate impls (see
+// `test_generic_specialized_overlap_rejected` /
+// `test_specialized_overlap_in_either_order_rejected` siblings
+// around line 10790).
+//
+// Scope note: the existing `impl_overlap_exists` check
+// (env_build.rs) covers (a) generic-vs-specialized overlap and (b)
+// two specialized impls on the same concrete instantiation. Two
+// impls with *empty target args* (no generic params on the target
+// type, e.g. `impl Functor for Doubler`) are not caught — this is
+// the pre-existing "trait-coherence concerns left unchanged" carve-
+// out documented in env_build.rs's overlap-check comment, not a
+// GAT-introduced gap. Slice 6 pins the GAT case under the surface
+// where the existing diagnostic actually fires: two specialized
+// impls on the same concrete instantiation of a generic target
+// (`impl Functor for Wrapper[i32]` twice).
+
+#[test]
+fn test_gat_slice6_duplicate_gat_impls_on_concrete_instantiation_rejected() {
+    // Two `impl Functor for Wrapper[i32]` blocks, each binding
+    // `Mapped[U]` to a different right-hand side (`Vec[U]` vs
+    // `Set[U]`). The existing `impl_overlap_exists` check fires
+    // ConflictingImpl on the second registration because both
+    // impls have identical concrete target_args = [i32]. The GAT
+    // bindings are part of the impl block and contribute no extra
+    // coherence rule.
+    let errors = typecheck_errors(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+         }\n\
+         struct Wrapper[T] { x: T }\n\
+         impl Functor for Wrapper[i32] {\n\
+             type Mapped[U] = Vec[U];\n\
+         }\n\
+         impl Functor for Wrapper[i32] {\n\
+             type Mapped[U] = Set[U];\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ConflictingImpl),
+        "expected ConflictingImpl for duplicate GAT impls on the same \
+         concrete instantiation, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice6_duplicate_gat_impls_rejected_even_with_identical_binding() {
+    // The coherence rule is "one impl per trait per type", not
+    // "one impl per trait per type unless bindings match". Pins
+    // that the diagnostic is at the impl level, not the GAT
+    // binding level — identical bindings still trip ConflictingImpl
+    // because the second impl is itself a duplicate registration.
+    let errors = typecheck_errors(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+         }\n\
+         struct Wrapper[T] { x: T }\n\
+         impl Functor for Wrapper[i32] {\n\
+             type Mapped[U] = Vec[U];\n\
+         }\n\
+         impl Functor for Wrapper[i32] {\n\
+             type Mapped[U] = Vec[U];\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ConflictingImpl),
+        "expected ConflictingImpl even when GAT bindings match, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_gat_slice6_generic_and_specialized_gat_impls_rejected() {
+    // Generic-vs-specialized overlap also fires regardless of the
+    // GAT binding — `impl[T] Functor for Wrapper[T]` (generic-on-
+    // name) cannot coexist with `impl Functor for Wrapper[i32]`
+    // (specialized) on the same trait. The GAT bindings flow
+    // through unchanged.
+    let errors = typecheck_errors(
+        "trait Functor {\n\
+             type Mapped[U];\n\
+         }\n\
+         struct Wrapper[T] { x: T }\n\
+         impl[T] Functor for Wrapper[T] {\n\
+             type Mapped[U] = Vec[U];\n\
+         }\n\
+         impl Functor for Wrapper[i32] {\n\
+             type Mapped[U] = Set[U];\n\
+         }\n\
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ConflictingImpl),
+        "expected ConflictingImpl for generic-vs-specialized GAT \
+         impls, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
