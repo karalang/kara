@@ -2973,20 +2973,22 @@ fn test_unsafe_link_section_round_trips_through_formatter() {
     assert_eq!(formatted, src, "round-trip mismatch:\n{formatted}");
 }
 
-// ── Slice 5 of the `unsafe_op_in_unsafe_fn` epic ──────────────────────
+// ── Slice 6 of "Lint level attributes" (was: slice 5 of the
+//    `unsafe_op_in_unsafe_fn` epic) ────────────────────────────────────
 //
-// Kāra is greenfield — there is no migration story — so the rule is a
-// hard error with no opt-out. `#[allow(unsafe_op_in_unsafe_fn)]` is
-// rejected at the attribute parser with a focused diagnostic that
-// redirects the author to the actual fix (wrap the offending operation
-// in an `unsafe { ... }` block).
+// Kāra is greenfield — there is no migration story — so
+// `unsafe_op_in_unsafe_fn` is a *hard rule*, not a lint. The central
+// lint registry in `src/lints.rs` intentionally excludes it (see the
+// module doc comment). The four lint-level attributes
+// (`#[allow]` / `#[warn]` / `#[deny]` / `#[expect]`) are rejected
+// uniformly on the rule's name with `error[E_LINT_LEVEL_ON_HARD_RULE]`,
+// redirecting the author to the actual fix (wrap the offending
+// operation in an `unsafe { ... }` block).
 //
-// Scope: only `#[allow]` is rejected on the rule's name. The companion
-// `#[warn]` / `#[deny]` / `#[expect]` lint-level attributes are a
-// separate future feature (`docs/implementation_checklist/phase-5-
-// diagnostics.md` § "Lint level attributes"); when that feature lands
-// it will reject all four uniformly on `unsafe_op_in_unsafe_fn` via the
-// same hard-rule channel.
+// The slice-5 scoping decision (only `#[allow]` rejected; `#[deny]` /
+// `#[warn]` / `#[expect]` parse cleanly) was replaced by slice 6's
+// uniform rejection — see `test_lint_level_on_hard_rule_rejects_*`
+// below for the four attribute names.
 
 #[test]
 fn test_allow_unsafe_op_in_unsafe_fn_rejected_with_focused_diagnostic() {
@@ -3003,8 +3005,14 @@ fn test_allow_unsafe_op_in_unsafe_fn_rejected_with_focused_diagnostic() {
         "diagnostic should name the rule; got {errors:?}"
     );
     assert!(
-        errors_contain(&errors, "hard error"),
-        "diagnostic should state the rule is a hard error; got {errors:?}"
+        errors_contain(&errors, "E_LINT_LEVEL_ON_HARD_RULE"),
+        "diagnostic should carry the symbolic error code so CLI/IDE \
+         consumers can route; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "hard rule"),
+        "diagnostic should state the rule is a hard rule, not a lint; \
+         got {errors:?}"
     );
     assert!(
         errors_contain(&errors, "unsafe {"),
@@ -3041,7 +3049,7 @@ fn test_allow_unsafe_op_in_unsafe_fn_rejected_on_impl_method() {
 
 #[test]
 fn test_allow_other_lints_still_accepted() {
-    // Slice 5 is scoped to `unsafe_op_in_unsafe_fn`. Other lint names
+    // Slice 6 is scoped to `unsafe_op_in_unsafe_fn`. Other lint names
     // continue to parse cleanly — `#[allow(undocumented_unsafe)]` is the
     // documented suppression mechanism for the older lint and must
     // remain a no-op at parse time.
@@ -3079,24 +3087,119 @@ fn test_allow_with_multiple_lints_including_unsafe_op_rejected() {
 }
 
 #[test]
-fn test_deny_unsafe_op_in_unsafe_fn_still_accepted() {
-    // Slice 5 only rejects `#[allow]` on the rule. `#[deny]` (and the
-    // not-yet-recognised `#[warn]` / `#[expect]`) parse as plain
-    // attributes today; when the lint-level-attributes feature lands it
-    // will reject all four uniformly via the hard-rule channel. Until
-    // then, `#[deny(unsafe_op_in_unsafe_fn)]` is redundant (the rule is
-    // already deny-by-default) but not parse-rejected — this pins that
-    // current scoping decision.
-    let prog = parse_ok(
+fn test_lint_level_on_hard_rule_rejects_warn() {
+    // Slice 6 — `#[warn]` joins `#[allow]` in the rejection set.
+    let (_, errors) = parse_with_errors(
+        "#[warn(unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { unsafe { *p } }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection of #[warn(unsafe_op_in_unsafe_fn)]"
+    );
+    assert!(
+        errors_contain(&errors, "E_LINT_LEVEL_ON_HARD_RULE"),
+        "diagnostic should carry the symbolic error code; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "#[warn(unsafe_op_in_unsafe_fn)]"),
+        "diagnostic should name the offending attribute form so the \
+         author sees their literal source quoted back; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_lint_level_on_hard_rule_rejects_deny() {
+    // Slice 6 — `#[deny(unsafe_op_in_unsafe_fn)]` was deliberately
+    // accepted under slice 5 (the rule is already deny-by-default, so
+    // the attribute was redundant-but-harmless). Slice 6 flips it to
+    // rejected to make the hard-rule channel uniform across the four
+    // attribute names. Replaces the prior
+    // `test_deny_unsafe_op_in_unsafe_fn_still_accepted` regression pin.
+    let (_, errors) = parse_with_errors(
         "#[deny(unsafe_op_in_unsafe_fn)]\n\
          fn caller(p: *const i64) -> i64 { unsafe { *p } }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection of #[deny(unsafe_op_in_unsafe_fn)]"
+    );
+    assert!(
+        errors_contain(&errors, "E_LINT_LEVEL_ON_HARD_RULE"),
+        "diagnostic should carry the symbolic error code; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "#[deny(unsafe_op_in_unsafe_fn)]"),
+        "diagnostic should name the offending attribute form; \
+         got {errors:?}"
+    );
+}
+
+#[test]
+fn test_lint_level_on_hard_rule_rejects_expect() {
+    // Slice 6 — `#[expect]` is rejected too. The fulfilled / unfulfilled
+    // expectation machinery (slice 5 of the lint-level entry) has no
+    // story for a name that isn't a lint, so the rejection here keeps
+    // the four attributes symmetric on the hard-rule surface.
+    let (_, errors) = parse_with_errors(
+        "#[expect(unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { unsafe { *p } }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection of #[expect(unsafe_op_in_unsafe_fn)]"
+    );
+    assert!(
+        errors_contain(&errors, "E_LINT_LEVEL_ON_HARD_RULE"),
+        "diagnostic should carry the symbolic error code; got {errors:?}"
+    );
+    assert!(
+        errors_contain(&errors, "#[expect(unsafe_op_in_unsafe_fn)]"),
+        "diagnostic should name the offending attribute form; \
+         got {errors:?}"
+    );
+}
+
+#[test]
+fn test_lint_level_on_hard_rule_rejects_warn_in_multi_lint_list() {
+    // Iter-any branch — a `#[warn]` with the hard rule mixed into a
+    // multi-lint list is still rejected.
+    let (_, errors) = parse_with_errors(
+        "#[warn(undocumented_unsafe, unsafe_op_in_unsafe_fn)]\n\
+         fn caller(p: *const i64) -> i64 { unsafe { *p } }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected rejection of `#[warn(undocumented_unsafe, \
+         unsafe_op_in_unsafe_fn)]`"
+    );
+    assert!(
+        errors_contain(&errors, "E_LINT_LEVEL_ON_HARD_RULE"),
+        "diagnostic should carry the symbolic error code; got {errors:?}"
+    );
+}
+
+#[test]
+fn test_lint_level_attrs_with_other_lint_names_still_accepted() {
+    // Negative pin — slice 6 is scoped to `unsafe_op_in_unsafe_fn` on the
+    // four attribute names. `#[warn]` / `#[deny]` / `#[expect]` carrying
+    // *other* lint names parse cleanly; the lint-name validation is
+    // slice 4's job (the cascade), and a name the registry doesn't
+    // recognise still parses today per the design.md "Naming" rule.
+    let prog = parse_ok(
+        "#[warn(deprecated)]\n\
+         #[deny(rc_fallback)]\n\
+         #[expect(implicit_clone)]\n\
+         fn f() { }",
     );
     let f = match &prog.items[0] {
         Item::Function(f) => f,
         _ => panic!("expected function"),
     };
-    assert_eq!(f.attributes.len(), 1);
-    assert_eq!(f.attributes[0].name, "deny");
+    assert_eq!(f.attributes.len(), 3);
+    assert_eq!(f.attributes[0].name, "warn");
+    assert_eq!(f.attributes[1].name, "deny");
+    assert_eq!(f.attributes[2].name, "expect");
 }
 
 #[test]

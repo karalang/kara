@@ -139,19 +139,31 @@ impl super::Parser {
 
         self.expect(&Token::RightBracket)?;
 
-        // Slice 5 of the `unsafe_op_in_unsafe_fn` epic
+        // Slice 6 of the lint-level-attributes entry
         // (`docs/implementation_checklist/phase-5-diagnostics.md` §
-        // `unsafe_op_in_unsafe_fn` rule, slice 5). Kāra is greenfield —
-        // there is no migration story — so the rule is a hard error with
-        // no opt-out. Reject `#[allow(unsafe_op_in_unsafe_fn)]` at parse
-        // time and redirect the author to the actual fix: wrap the
-        // offending operation in an `unsafe { ... }` block (with a
-        // `// Safety:` comment per the `undocumented_unsafe` lint). The
-        // attribute is recognised in two surface forms — positional
+        // "Lint level attributes" slice 6) + slice 5 of the
+        // `unsafe_op_in_unsafe_fn` epic. `unsafe_op_in_unsafe_fn` is a
+        // *hard rule*, not a lint — the central lint registry in
+        // `src/lints.rs` intentionally excludes it. Kāra is greenfield
+        // and there is no migration story, so all four lint-level
+        // attributes (`#[allow]` / `#[warn]` / `#[deny]` / `#[expect]`)
+        // are rejected uniformly on the rule with
+        // `error[E_LINT_LEVEL_ON_HARD_RULE]`. The diagnostic redirects
+        // the author to the actual fix: wrap the offending operation
+        // in an `unsafe { ... }` block (with a `// Safety:` comment
+        // per the `undocumented_unsafe` lint).
+        //
+        // Recognised in two surface forms — positional
         // (`#[allow(unsafe_op_in_unsafe_fn)]`, the form anyone would
         // write) and named (`#[allow(name = unsafe_op_in_unsafe_fn)]`,
-        // theoretical only) — both are caught.
-        if name == "allow"
+        // theoretical only) — both are caught. Matching the four
+        // attribute names by bare-string keeps the rejection
+        // synchronous with the parser surface even though the lint
+        // registry is the authoritative list elsewhere — we cannot
+        // call `LintLevel::from_attr_name` from inside `ast::*`
+        // expression-walk code without a circular import, and the
+        // four names are a fixed v1 surface per the spec.
+        if matches!(name.as_str(), "allow" | "warn" | "deny" | "expect")
             && args.iter().any(|a| {
                 a.name.as_deref() == Some("unsafe_op_in_unsafe_fn")
                     || a.value
@@ -162,14 +174,17 @@ impl super::Parser {
                         .unwrap_or(false)
             })
         {
-            self.error(
-                "`#[allow(unsafe_op_in_unsafe_fn)]` is not accepted — the \
-                 `unsafe_op_in_unsafe_fn` rule is a hard error with no opt-out \
-                 (Kāra is greenfield; there is no migration story). Wrap the \
-                 offending operation in an `unsafe { ... }` block instead, and \
-                 add a `// Safety: ...` comment above the block per the \
-                 `undocumented_unsafe` lint.",
-            );
+            self.error(&format!(
+                "error[E_LINT_LEVEL_ON_HARD_RULE]: \
+                 `#[{name}(unsafe_op_in_unsafe_fn)]` is not accepted — \
+                 `unsafe_op_in_unsafe_fn` is a hard rule, not a lint, \
+                 so none of `#[allow]` / `#[warn]` / `#[deny]` / \
+                 `#[expect]` apply (Kāra is greenfield; there is no \
+                 migration story). Wrap the offending operation in an \
+                 `unsafe {{ ... }}` block instead, and add a \
+                 `// Safety: ...` comment above the block per the \
+                 `undocumented_unsafe` lint."
+            ));
         }
 
         Some(Attribute {
