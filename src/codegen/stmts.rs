@@ -1460,7 +1460,7 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 } else if let ExprKind::FieldAccess { object, field } = &target.kind {
-                    self.compile_field_store(object, field, val)?;
+                    self.compile_field_store(object, field, val, rhs_is_fresh)?;
                 } else if let ExprKind::Index { object, index } = &target.kind {
                     self.compile_index_store(object, index, val)?;
                 } else if let ExprKind::Unary {

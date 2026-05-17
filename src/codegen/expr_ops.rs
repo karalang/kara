@@ -203,6 +203,7 @@ impl<'ctx> super::Codegen<'ctx> {
         object: &Expr,
         field: &str,
         new_val: BasicValueEnum<'ctx>,
+        rhs_is_fresh: bool,
     ) -> Result<(), String> {
         // Indexed-shared-struct receiver: `nodes[i].field = X` where
         // `nodes: Vec[Shared(N)]`. Load the heap pointer at `nodes[i]`
@@ -299,6 +300,49 @@ impl<'ctx> super::Codegen<'ctx> {
                                             &format!("sh_{}_ptr", field),
                                         )
                                         .unwrap();
+                                    // `Option[shared T]` field-store: dec
+                                    // the OLD inner ref (if Some) before
+                                    // clobbering the slot, then store the
+                                    // new value, then inc the NEW inner
+                                    // ref (if Some and RHS isn't fresh).
+                                    // Mirrors the Assign-arm's
+                                    // `var_option_shared_heap` dispatch
+                                    // for plain Option[shared T] bindings,
+                                    // scaled up to a struct-field slot:
+                                    // `field_ptr` is the per-field GEP
+                                    // into the heap struct rather than a
+                                    // per-binding alloca. Without this,
+                                    // `tail.next = Some(node);` followed
+                                    // by `tail.next = Some(new_node);`
+                                    // strands the first node's whole
+                                    // chain — the leak shape the 79a7db8
+                                    // follow-up notes called out.
+                                    //
+                                    // Returns Ok(()) after the
+                                    // refcount-aware path completes so
+                                    // the plain `build_store` below
+                                    // doesn't re-fire. No-op for
+                                    // non-Option-shared fields, which
+                                    // fall through to the plain store.
+                                    if let Some(field_te) = self
+                                        .struct_field_type_exprs
+                                        .get(&type_name)
+                                        .and_then(|v| v.get(idx))
+                                        .cloned()
+                                    {
+                                        if let Some((_, inner_info)) =
+                                            self.option_inner_shared_type_for_type_expr(&field_te)
+                                        {
+                                            self.emit_option_shared_field_store(
+                                                field_ptr,
+                                                new_val,
+                                                inner_info.heap_type,
+                                                rhs_is_fresh,
+                                                field,
+                                            );
+                                            return Ok(());
+                                        }
+                                    }
                                     self.builder.build_store(field_ptr, new_val).unwrap();
                                 }
                             }
@@ -346,6 +390,199 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         Ok(())
+    }
+
+    /// Refcount-aware store into an `Option[shared T]` struct field.
+    /// `field_ptr` is the GEP'd address of the Option slot inside the
+    /// heap struct; `new_val` is the just-compiled RHS Option struct
+    /// SSA; `inner_heap_type` is the heap layout of `T`; `rhs_is_fresh`
+    /// matches the parent commit's `rhs_yields_fresh_ref` semantics.
+    /// Mirrors the Assign-arm's `var_option_shared_heap` dispatch in
+    /// `compile_stmt`:
+    ///
+    ///   1. Load the old slot's tag; if Some, dec the old inner ptr.
+    ///   2. Store the new Option value.
+    ///   3. If RHS is not fresh, branch on the new tag; if Some, inc
+    ///      the new inner ptr.
+    ///
+    /// Without this, `obj.next = some_other_opt;` strands the old
+    /// inner ref; `obj.next = Some(node);` over the same field
+    /// across iterations leaks one chain per overwrite. The kata's
+    /// `tail.next = Some(node); tail = node;` shape doesn't surface
+    /// the leak (each iter creates a fresh `tail` so each field
+    /// store sees a None old value), but mutations against a
+    /// long-lived holder (`head.next = Some(...);` on a persistent
+    /// `head`) hit it.
+    pub(super) fn emit_option_shared_field_store(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+        new_val: BasicValueEnum<'ctx>,
+        inner_heap_type: StructType<'ctx>,
+        rhs_is_fresh: bool,
+        field_name: &str,
+    ) {
+        let option_ty = self.enum_layouts["Option"].llvm_type;
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let some_tag_const = i64_t.const_int(some_tag, false);
+        let Some(fn_val) = self.current_fn else {
+            // Defensive: outside a function body, fall back to a plain
+            // store. The let-stmt / Assign sites are inside fn bodies
+            // by construction, so this branch is unreachable today.
+            let _ = self.builder.build_store(field_ptr, new_val);
+            return;
+        };
+        // ── Step 1: dec old inner if old is Some. ──
+        let old_tag_ptr = self
+            .builder
+            .build_struct_gep(
+                option_ty,
+                field_ptr,
+                0,
+                &format!("opt.fld.{field_name}.old.tag.p"),
+            )
+            .unwrap();
+        let old_tag = self
+            .builder
+            .build_load(i64_t, old_tag_ptr, &format!("opt.fld.{field_name}.old.tag"))
+            .unwrap()
+            .into_int_value();
+        let old_is_some = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                old_tag,
+                some_tag_const,
+                &format!("opt.fld.{field_name}.old.is_some"),
+            )
+            .unwrap();
+        let old_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.do"));
+        let old_skip_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.skip"));
+        self.builder
+            .build_conditional_branch(old_is_some, old_do_bb, old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_do_bb);
+        let old_w0_ptr = self
+            .builder
+            .build_struct_gep(
+                option_ty,
+                field_ptr,
+                1,
+                &format!("opt.fld.{field_name}.old.w0.p"),
+            )
+            .unwrap();
+        let old_w0 = self
+            .builder
+            .build_load(i64_t, old_w0_ptr, &format!("opt.fld.{field_name}.old.w0"))
+            .unwrap()
+            .into_int_value();
+        let old_inner = self
+            .builder
+            .build_int_to_ptr(old_w0, ptr_ty, &format!("opt.fld.{field_name}.old.inner"))
+            .unwrap();
+        let old_is_null = self
+            .builder
+            .build_is_null(
+                old_inner,
+                &format!("opt.fld.{field_name}.old.inner.is_null"),
+            )
+            .unwrap();
+        let old_real_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("opt.fld.{field_name}.old.real_do"));
+        self.builder
+            .build_conditional_branch(old_is_null, old_skip_bb, old_real_do_bb)
+            .unwrap();
+        self.builder.position_at_end(old_real_do_bb);
+        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.builder
+            .build_unconditional_branch(old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_skip_bb);
+        // ── Step 2: store the new Option value. ──
+        self.builder.build_store(field_ptr, new_val).unwrap();
+        // ── Step 3: inc new inner if RHS is an aliasing source. ──
+        if !rhs_is_fresh {
+            let new_tag_ptr = self
+                .builder
+                .build_struct_gep(
+                    option_ty,
+                    field_ptr,
+                    0,
+                    &format!("opt.fld.{field_name}.new.tag.p"),
+                )
+                .unwrap();
+            let new_tag = self
+                .builder
+                .build_load(i64_t, new_tag_ptr, &format!("opt.fld.{field_name}.new.tag"))
+                .unwrap()
+                .into_int_value();
+            let new_is_some = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    new_tag,
+                    some_tag_const,
+                    &format!("opt.fld.{field_name}.new.is_some"),
+                )
+                .unwrap();
+            let new_do_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("opt.fld.{field_name}.new.do"));
+            let new_skip_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("opt.fld.{field_name}.new.skip"));
+            self.builder
+                .build_conditional_branch(new_is_some, new_do_bb, new_skip_bb)
+                .unwrap();
+            self.builder.position_at_end(new_do_bb);
+            let new_w0_ptr = self
+                .builder
+                .build_struct_gep(
+                    option_ty,
+                    field_ptr,
+                    1,
+                    &format!("opt.fld.{field_name}.new.w0.p"),
+                )
+                .unwrap();
+            let new_w0 = self
+                .builder
+                .build_load(i64_t, new_w0_ptr, &format!("opt.fld.{field_name}.new.w0"))
+                .unwrap()
+                .into_int_value();
+            let new_inner = self
+                .builder
+                .build_int_to_ptr(new_w0, ptr_ty, &format!("opt.fld.{field_name}.new.inner"))
+                .unwrap();
+            let new_is_null = self
+                .builder
+                .build_is_null(
+                    new_inner,
+                    &format!("opt.fld.{field_name}.new.inner.is_null"),
+                )
+                .unwrap();
+            let new_real_do_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("opt.fld.{field_name}.new.real_do"));
+            self.builder
+                .build_conditional_branch(new_is_null, new_skip_bb, new_real_do_bb)
+                .unwrap();
+            self.builder.position_at_end(new_real_do_bb);
+            self.emit_rc_inc(inner_heap_type, new_inner);
+            self.builder
+                .build_unconditional_branch(new_skip_bb)
+                .unwrap();
+            self.builder.position_at_end(new_skip_bb);
+        }
     }
 
     pub(super) fn compile_tuple_index(
