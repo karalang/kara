@@ -14773,6 +14773,178 @@ fn non_exhaustive_slice5_enum_info_carries_flag() {
     assert!(!b.defining_stdlib_origin);
 }
 
+// ── `#[non_exhaustive]` slice 6: stdlib hygiene lint ────────────
+//
+// `missing_non_exhaustive` fires on a stdlib `pub enum` whose name
+// ends in `Error` and which lacks `#[non_exhaustive]`. The lint is
+// `Deny`-by-default in the registry, so the typical firing surfaces
+// as an error; the cascade allows `#[allow(missing_non_exhaustive)]`
+// on the enum itself to suppress. User code is silent by construction
+// (the check site gates on `stdlib_origin`).
+
+#[test]
+fn non_exhaustive_slice6_stdlib_error_enum_without_attr_fires() {
+    // Headline negative — a stdlib `pub enum FooError` without
+    // `#[non_exhaustive]` fires the lint. Deny-by-default → error.
+    let errs = typecheck_with_stdlib_origin_on_enums("pub enum FooError { Read, Write, NotFound }");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "expected MissingNonExhaustive on stdlib `pub enum FooError`; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            matches!(e.kind, TypeErrorKind::MissingNonExhaustive)
+                && e.message.contains("E_MISSING_NON_EXHAUSTIVE")
+                && e.message.contains("FooError")
+                && e.message.contains("#[non_exhaustive]")
+        }),
+        "diagnostic must carry symbolic code, name the enum, and \
+         reference the attribute; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_stdlib_error_enum_with_attr_silent() {
+    // Positive twin — the enum carries `#[non_exhaustive]`, so the
+    // lint does not fire.
+    let errs = typecheck_with_stdlib_origin_on_enums(
+        "#[non_exhaustive]\npub enum FooError { Read, Write }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "lint must not fire when `#[non_exhaustive]` is present; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_user_error_enum_silent() {
+    // User-package (non-stdlib) `pub enum FooError` — the rule does
+    // not fire because the check site gates on `stdlib_origin`. This
+    // covers the spec's "allow for user code" surface without needing
+    // a build-wide CLI default.
+    let parsed = parse("pub enum FooError { Read, Write }");
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive))
+            && !result
+                .warnings
+                .iter()
+                .any(|w| matches!(w.kind, TypeErrorKind::MissingNonExhaustive)),
+        "user-code enum must not trigger the lint; got errors: {:?}, warnings: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        result
+            .warnings
+            .iter()
+            .map(|w| &w.message)
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_stdlib_non_error_name_silent() {
+    // Stdlib `pub enum BarConfig` (non-Error suffix) — the lint
+    // heuristic keys on the name suffix, so non-Error names are not
+    // examined.
+    let errs = typecheck_with_stdlib_origin_on_enums("pub enum BarConfig { On, Off }");
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "non-Error-suffix enum must not trigger the lint; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_private_enum_silent() {
+    // Private (non-pub) stdlib enum — the lint only examines `pub`
+    // enums because non-pub types have no cross-package boundary the
+    // attribute is meaningful at. Mirrors the resolver-side placement
+    // rule from slices 1+2 which rejects `#[non_exhaustive]` on
+    // private types.
+    let errs = typecheck_with_stdlib_origin_on_enums("enum InternalError { A, B }");
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "non-pub enum must not trigger the lint; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_allow_suppresses_at_enum() {
+    // `#[allow(missing_non_exhaustive)]` on the enum itself
+    // self-suppresses through the slice-4b cascade (the emission
+    // pre-pass pushes the enum's own `lint_overrides` as the
+    // innermost frame before calling `type_lint_warning`).
+    let errs = typecheck_with_stdlib_origin_on_enums(
+        "#[allow(missing_non_exhaustive)]\npub enum FooError { Read, Write }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "#[allow(missing_non_exhaustive)] on the enum must suppress \
+         the lint; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_warn_demotes_to_warning() {
+    // `#[warn(missing_non_exhaustive)]` overrides the deny default
+    // and routes the lint to `warnings` instead of `errors`. Pins
+    // the cascade integration path (the lint goes through
+    // `type_lint_warning` rather than `type_error` directly).
+    use karac::ast::Item;
+    let mut parsed = parse("#[warn(missing_non_exhaustive)]\npub enum FooError { Read, Write }");
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        if let Item::EnumDef(e) = item {
+            e.stdlib_origin = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::MissingNonExhaustive)),
+        "deny → warn override must remove the entry from `errors`",
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| matches!(w.kind, TypeErrorKind::MissingNonExhaustive)),
+        "deny → warn override must route the lint to `warnings`",
+    );
+}
+
+#[test]
+fn non_exhaustive_slice6_lint_is_registered() {
+    // Registry pin — the lint exists in `STARTER_LINTS` with the
+    // documented `Deny` default. Adding the lint to the registry
+    // without wiring the check, or vice versa, breaks this loudly.
+    let info = karac::lints::lint_by_name("missing_non_exhaustive").expect("lint registered");
+    assert!(matches!(info.default_level, karac::lints::LintLevel::Deny));
+}
+
 // ── `impl Trait` slice 5: RPITIT blocks `dyn Trait` ─────────────
 
 #[test]

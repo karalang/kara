@@ -181,6 +181,13 @@ pub const STARTER_LINTS: &[LintInfo] = &[
             "A match arm pattern is fully covered by an earlier (unguarded) arm, so its body \
              can never execute.",
     },
+    LintInfo {
+        name: "missing_non_exhaustive",
+        default_level: LintLevel::Deny,
+        description:
+            "A stdlib `pub enum` whose name ends in `Error` lacks `#[non_exhaustive]`, blocking \
+             future variant additions across packages without a source break.",
+    },
 ];
 
 /// Look up a lint by its registered name. Returns `None` for
@@ -227,6 +234,7 @@ mod tests {
             "malformed_diagnostic_attribute",
             "unfulfilled_lint_expectation",
             "unknown_lint",
+            "missing_non_exhaustive",
         ];
         for name in required {
             assert!(

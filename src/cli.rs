@@ -793,6 +793,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // settings; if `#[deny(deprecated)]` promotes it to an
                 // error the same code is reused as `E0245`.
                 crate::typechecker::TypeErrorKind::Deprecated => "E0245",
+                // `MissingNonExhaustive` is `Deny`-by-default per
+                // `STARTER_LINTS`, so it normally surfaces as an error
+                // (W-prefixed because the underlying carrier is a lint).
+                crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
@@ -814,6 +818,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::UnreachableArm => "W0237",
                 crate::typechecker::TypeErrorKind::UnknownLint => "W0244",
                 crate::typechecker::TypeErrorKind::Deprecated => "W0245",
+                crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
                 // Other kinds aren't expected to appear as warnings today.
                 _ => "W0299",
             };

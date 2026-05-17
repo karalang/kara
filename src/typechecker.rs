@@ -413,6 +413,18 @@ pub enum TypeErrorKind {
     /// `#[deny(deprecated)]` / `#[expect(deprecated)]` attributes. The
     /// message surfaces the optional `note` / `since` fields when set.
     Deprecated,
+    /// `#[non_exhaustive]` slice 6 — a stdlib `pub enum` whose name ends
+    /// in `Error` lacks `#[non_exhaustive]`. The attribute is what lets
+    /// cross-package consumers' `match` arms include a wildcard so the
+    /// stdlib can add new error variants in future versions without a
+    /// source break. Routed through `type_lint_warning` with the
+    /// `missing_non_exhaustive` lint name (registered `Deny`-by-default,
+    /// see [`crate::lints::STARTER_LINTS`]) so the same cascade walker
+    /// suppresses (`#[allow(missing_non_exhaustive)]` on the enum) and
+    /// the rule does not fire on user code (the check site gates on
+    /// `stdlib_origin`). See design.md § `#[non_exhaustive]` for
+    /// Evolvable Public Types > "stdlib hygiene lint".
+    MissingNonExhaustive,
 }
 
 impl std::fmt::Display for TypeError {
@@ -861,6 +873,11 @@ impl<'a> TypeChecker<'a> {
         // cascade-aware emission path is already wired (see
         // `emit_unknown_lint_warnings`).
         self.emit_unknown_lint_warnings();
+        // `#[non_exhaustive]` slice 6 — stdlib hygiene lint. Runs as a
+        // pre-pass for the same reason: cascade-aware emission needs
+        // each enum's own `lint_overrides` pushed as the innermost
+        // frame before `type_lint_warning` consults the stack.
+        self.emit_missing_non_exhaustive_warnings();
         self.check_items();
         self.finalize_pattern_binding_inner_types();
         let trait_impls: std::collections::HashSet<(String, String)> = self
@@ -966,6 +983,54 @@ impl<'a> TypeChecker<'a> {
             if pushed_outer {
                 self.lint_override_stack.pop();
             }
+        }
+    }
+
+    /// `#[non_exhaustive]` slice 6 — walk every top-level `EnumDef`
+    /// and emit the `missing_non_exhaustive` lint on a stdlib `pub
+    /// enum` whose name ends in `Error` and which lacks the attribute.
+    /// The lint is `Deny`-by-default in the registry, so the typical
+    /// firing surfaces as an error; cross-package consumers' `match`
+    /// arms can't include a wildcard against a non-`#[non_exhaustive]`
+    /// stdlib error enum because the strict exhaustiveness rule would
+    /// flag the wildcard arm as unreachable — so adding a new variant
+    /// later is a source break, exactly what the lint prevents.
+    ///
+    /// Same shape as `emit_unknown_lint_warnings`: push the enum's
+    /// own `lint_overrides` frame so the cascade walker sees
+    /// `#[allow(missing_non_exhaustive)]` on the enum as the
+    /// innermost matching override and self-suppresses.
+    ///
+    /// User code (`!stdlib_origin`) is silent by construction — the
+    /// rule does not examine user enums at all, matching the spec's
+    /// *"deny-by-default for stdlib crates and allow for user code"*
+    /// surface without needing a build-wide CLI default (which lands
+    /// in slice 4b polish).
+    fn emit_missing_non_exhaustive_warnings(&mut self) {
+        let mut emissions: Vec<(Vec<crate::lints::LintLevelOverride>, Span, String)> = Vec::new();
+        for item in &self.program.items {
+            if let Item::EnumDef(e) = item {
+                if e.stdlib_origin && e.is_pub && e.name.ends_with("Error") && !e.is_non_exhaustive
+                {
+                    emissions.push((e.lint_overrides.clone(), e.span.clone(), e.name.clone()));
+                }
+            }
+        }
+        for (frame, span, name) in emissions {
+            self.lint_override_stack.push(frame);
+            let message = format!(
+                "error[E_MISSING_NON_EXHAUSTIVE]: stdlib `pub enum {name}` lacks \
+                 `#[non_exhaustive]`; add the attribute so future variants can be added \
+                 without breaking cross-package `match` arms (see design.md \
+                 § `#[non_exhaustive]` for Evolvable Public Types)",
+            );
+            self.type_lint_warning(
+                message,
+                span,
+                TypeErrorKind::MissingNonExhaustive,
+                "missing_non_exhaustive",
+            );
+            self.lint_override_stack.pop();
         }
     }
 
