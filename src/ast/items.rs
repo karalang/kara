@@ -274,6 +274,15 @@ pub struct EnumDef {
 #[derive(Debug, Clone)]
 pub struct Variant {
     pub span: Span,
+    /// Attributes attached to this enum variant. Enables item-level
+    /// attributes like `#[deprecated]` and `#[diagnostic::*]` to
+    /// attach at variant granularity per the design.md specs. Empty
+    /// `Vec` when no attributes were attached.
+    pub attributes: Vec<Attribute>,
+    /// `#[deprecated]` payload captured at parse time. `None` when
+    /// the attribute is absent. Mirrors the `deprecation` field on
+    /// every item-kind that supports the attribute.
+    pub deprecation: Option<Deprecation>,
     /// Joined contents of `///` doc comments preceding the variant.
     /// `None` when no doc comments were attached. CommonMark.
     pub doc_comment: Option<String>,
@@ -383,6 +392,17 @@ pub struct AssocTypeDecl {
 #[derive(Debug, Clone)]
 pub struct TraitMethod {
     pub span: Span,
+    /// Attributes attached to this trait method declaration. Enables
+    /// item-level attributes like `#[deprecated]`, `#[track_caller]`,
+    /// `#[diagnostic::*]` to attach at trait-method granularity per
+    /// the design.md specs. Per the spec, `#[track_caller]` on a
+    /// trait method declaration applies to every impl unless the impl
+    /// explicitly drops it (last-writer-wins propagation); the
+    /// per-impl override lives on the `Function.is_track_caller`
+    /// flag.
+    pub attributes: Vec<Attribute>,
+    /// Joined contents of `///` doc comments preceding the method.
+    pub doc_comment: Option<String>,
     /// `unsafe fn ...` in a trait-method declaration. Mirrors the
     /// `Function.is_unsafe` precondition role: an impl satisfying this
     /// trait method must itself be `unsafe fn`, and every call site
@@ -401,6 +421,13 @@ pub struct TraitMethod {
     pub ensures: Vec<EnsuresClause>,
     pub where_clause: Option<WhereClause>,
     pub body: Option<Block>,
+    /// `#[deprecated]` payload — see [`Deprecation`].
+    pub deprecation: Option<Deprecation>,
+    /// `#[track_caller]` on this trait method declaration. Per
+    /// design.md the attribute applies to every impl unless the impl
+    /// explicitly drops it. Parsed here so the impl coherence pass
+    /// can propagate the flag to impl methods (slice 4 codegen).
+    pub is_track_caller: bool,
 }
 
 // ── Impl Blocks ──────────────────────────────────────────────────

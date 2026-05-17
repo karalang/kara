@@ -179,7 +179,29 @@ impl super::Parser {
         self.expect(&Token::LeftBrace)?;
         let mut items = Vec::new();
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            // Collect leading doc comments + attributes for the trait
+            // item. The Type-decl branch ignores attributes for now
+            // (associated-type attributes aren't part of any current
+            // surface); the method branch threads them into
+            // `parse_trait_method`.
+            self.collect_leading_doc_comments();
+            let item_attributes = self.parse_attributes();
             if self.check(&Token::Type) {
+                if !item_attributes.is_empty() {
+                    // Per design.md, attribute targets on associated
+                    // type declarations are not part of the v1 surface
+                    // — silently dropping the attributes would mask
+                    // user intent. Emit a focused diagnostic; the
+                    // parsed item still attaches without the attrs.
+                    self.errors.push(ParseError {
+                        message: "error[E_ATTR_ON_ASSOC_TYPE_DECL]: \
+                                  attributes are not supported on \
+                                  associated-type declarations at v1; \
+                                  remove the attribute"
+                            .to_string(),
+                        span: item_attributes[0].span.clone(),
+                    });
+                }
                 let item = self.parse_assoc_type_decl()?;
                 items.push(TraitItem::AssocType(Box::new(item)));
             } else {
@@ -203,7 +225,7 @@ impl super::Parser {
                 } else {
                     false
                 };
-                let method = self.parse_trait_method(is_unsafe)?;
+                let method = self.parse_trait_method(item_attributes, is_unsafe)?;
                 items.push(TraitItem::Method(Box::new(method)));
             }
         }
@@ -354,8 +376,15 @@ impl super::Parser {
         });
     }
 
-    fn parse_trait_method(&mut self, is_unsafe: bool) -> Option<TraitMethod> {
+    fn parse_trait_method(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_unsafe: bool,
+    ) -> Option<TraitMethod> {
         let start = self.current_span();
+        // Take the item-level doc *before* descending into the
+        // signature so per-param doc collection doesn't overwrite it.
+        let doc_comment = self.take_pending_doc();
         self.expect(&Token::Fn)?;
         let name = self.expect_method_name()?;
         let name_span = self.span_from(&start);
@@ -393,8 +422,19 @@ impl super::Parser {
         };
         self.effect_var_stack.pop();
 
+        // Capture `#[track_caller]` and `#[deprecated]` from the
+        // attributes attached at the dispatcher level — the same
+        // helpers that `parse_function` uses. The track_caller
+        // helper additionally emits `E_TRACK_CALLER_ARGS_NOT_PERMITTED`
+        // for malformed args; the deprecated helper emits the four
+        // `E_DEPRECATED_*` diagnostics for malformed forms.
+        let is_track_caller = self.scan_track_caller_attr(&attributes);
+        let deprecation = self.scan_deprecated_attr(&attributes);
+
         Some(TraitMethod {
             span: self.span_from(&start),
+            attributes,
+            doc_comment,
             is_unsafe,
             name,
             generic_params,
@@ -406,6 +446,8 @@ impl super::Parser {
             ensures,
             where_clause,
             body,
+            deprecation,
+            is_track_caller,
         })
     }
 

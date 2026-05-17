@@ -2432,6 +2432,106 @@ fn deprecated_slice3_accepted_on_struct_enum_trait() {
     );
 }
 
+// ── TraitMethod + Variant attribute placement validation ─────────
+//
+// With attribute support landed on `TraitMethod` and `Variant`, the
+// resolver extends the per-site rejection helpers to cover the new
+// surface:
+//   - `#[track_caller]` on enum variants → rejected (variants
+//     aren't fns)
+//   - `#[non_exhaustive]` on enum variants → rejected (type-level
+//     only per spec)
+//   - `#[non_exhaustive]` on trait methods → rejected (type-level
+//     only)
+//   - `#[track_caller]` on trait methods → ACCEPTED (propagates to
+//     impls per spec)
+//   - `#[deprecated]` on enum variants → ACCEPTED (spec allows
+//     variant-level deprecation)
+//   - `#[deprecated]` on trait methods → ACCEPTED (spec allows
+//     trait-method-level deprecation)
+
+#[test]
+fn enabling_change_track_caller_on_enum_variant_rejected() {
+    let errs = resolve_errors("pub enum E { #[track_caller] V, }");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::TrackCallerInvalidTarget
+                && e.message.contains("enum variant")
+        }),
+        "Expected TrackCallerInvalidTarget on enum variant; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enabling_change_non_exhaustive_on_enum_variant_rejected() {
+    let errs = resolve_errors("pub enum E { #[non_exhaustive] V, }");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("enum variant")
+        }),
+        "Expected NonExhaustiveInvalidTarget on enum variant; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enabling_change_non_exhaustive_on_trait_method_rejected() {
+    let errs = resolve_errors("pub trait Show { #[non_exhaustive] fn show(ref self) -> String; }");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("trait method")
+        }),
+        "Expected NonExhaustiveInvalidTarget on trait method; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enabling_change_track_caller_on_trait_method_accepted() {
+    let parsed = parse("pub trait Show { #[track_caller] fn show(ref self) -> String; }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::TrackCallerInvalidTarget),
+        "#[track_caller] on trait method should be accepted; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enabling_change_deprecated_on_enum_variant_accepted() {
+    let parsed = parse("pub enum E { #[deprecated] Old, New, }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter().all(|e| !matches!(
+            e.kind,
+            ResolveErrorKind::DeprecatedOnImpl | ResolveErrorKind::DeprecatedOnField
+        )),
+        "#[deprecated] on enum variant should be accepted; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn enabling_change_deprecated_on_trait_method_accepted() {
+    let parsed = parse("pub trait Show { #[deprecated] fn show(ref self) -> String; }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter().all(|e| !matches!(
+            e.kind,
+            ResolveErrorKind::DeprecatedOnImpl | ResolveErrorKind::DeprecatedOnField
+        )),
+        "#[deprecated] on trait method should be accepted; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 // ── Slice / array patterns (phase 5.2 sub-item 1) ─────────────────────────
 
 #[test]

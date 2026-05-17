@@ -272,7 +272,7 @@ impl super::Parser {
     /// value — the attribute is bare. Diagnostic is anchored at the
     /// attribute's own span so the user can navigate directly to the
     /// malformed `#[...]`.
-    fn scan_track_caller_attr(&mut self, attributes: &[Attribute]) -> bool {
+    pub(crate) fn scan_track_caller_attr(&mut self, attributes: &[Attribute]) -> bool {
         let mut present = false;
         for attr in attributes {
             if attr.name != "track_caller" {
@@ -840,6 +840,10 @@ impl super::Parser {
         // consume via `take_pending_doc` at construction.
         self.collect_leading_doc_comments();
         let start = self.current_span();
+        // Attributes attached to this variant — `#[deprecated]`,
+        // `#[diagnostic::*]`, etc. Doc comments come first per the
+        // existing `///`-then-`#[...]` ordering used at item-level.
+        let attributes = self.parse_attributes();
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
         self.check_ident_class(&name, IdentClass::Type, "enum variant", name_span);
@@ -871,8 +875,11 @@ impl super::Parser {
             VariantKind::Unit
         };
 
+        let deprecation = self.scan_deprecated_attr(&attributes);
         Some(Variant {
             span: self.span_from(&start),
+            attributes,
+            deprecation,
             doc_comment,
             name,
             kind,

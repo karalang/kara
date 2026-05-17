@@ -2164,6 +2164,176 @@ fn deprecated_slice1_set_on_impl_block_parser_does_not_reject() {
     assert_eq!(imp.attributes[0].name, "deprecated");
 }
 
+// ── TraitMethod + Variant attributes enabling change ─────────────
+//
+// `TraitMethod` and `Variant` AST nodes now carry `attributes`
+// (and `doc_comment`, for TraitMethod). This unblocks
+// `#[deprecated]` on enum variants and trait method declarations,
+// and `#[track_caller]` on trait method declarations per the
+// design.md specs.
+//
+// Parser changes:
+//   - `parse_trait_def_tail` collects attributes before each item
+//     and threads them into `parse_trait_method`. Attributes on
+//     associated-type declarations are rejected with
+//     `E_ATTR_ON_ASSOC_TYPE_DECL` (out of v1 scope).
+//   - `parse_variant` collects attributes before the variant name
+//     and threads them into the AST node.
+
+#[test]
+fn enabling_change_variant_captures_attributes() {
+    let prog = parse_ok(
+        "pub enum Color {\n\
+         #[deprecated = \"use Rgb\"]\n\
+         Legacy,\n\
+         Modern,\n\
+         }",
+    );
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert_eq!(e.variants.len(), 2);
+    assert_eq!(e.variants[0].name, "Legacy");
+    assert_eq!(e.variants[0].attributes.len(), 1);
+    assert_eq!(e.variants[0].attributes[0].name, "deprecated");
+    let d = e.variants[0]
+        .deprecation
+        .as_ref()
+        .expect("Legacy variant should have Deprecation payload");
+    assert_eq!(d.note.as_deref(), Some("use Rgb"));
+    assert!(e.variants[1].attributes.is_empty());
+    assert!(e.variants[1].deprecation.is_none());
+}
+
+#[test]
+fn enabling_change_variant_bare_deprecated_attaches() {
+    let prog = parse_ok("pub enum Color { #[deprecated] Red, Green, Blue, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert!(e.variants[0].deprecation.is_some());
+    assert!(e.variants[1].deprecation.is_none());
+}
+
+#[test]
+fn enabling_change_trait_method_captures_attributes() {
+    let prog = parse_ok(
+        "pub trait Format {\n\
+         #[deprecated = \"use fmt_v2\"]\n\
+         fn fmt(ref self) -> String;\n\
+         fn fmt_v2(ref self) -> String;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(methods.len(), 2);
+    assert_eq!(methods[0].name, "fmt");
+    assert_eq!(methods[0].attributes.len(), 1);
+    assert_eq!(methods[0].attributes[0].name, "deprecated");
+    let d = methods[0]
+        .deprecation
+        .as_ref()
+        .expect("fmt method should have Deprecation payload");
+    assert_eq!(d.note.as_deref(), Some("use fmt_v2"));
+    assert!(methods[1].attributes.is_empty());
+    assert!(methods[1].deprecation.is_none());
+}
+
+#[test]
+fn enabling_change_trait_method_track_caller_attaches() {
+    // `#[track_caller]` on a trait method declaration is now legal —
+    // the propagation rule (impls inherit unless explicitly dropped)
+    // is the codegen slice's job; this test pins the parse surface.
+    let prog = parse_ok(
+        "pub trait Show {\n\
+         #[track_caller]\n\
+         fn show(ref self) -> String;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert!(methods[0].is_track_caller);
+    assert_eq!(methods[0].attributes.len(), 1);
+    assert_eq!(methods[0].attributes[0].name, "track_caller");
+}
+
+#[test]
+fn enabling_change_trait_method_doc_comment_captured() {
+    let prog = parse_ok(
+        "pub trait Format {\n\
+         /// Render to a string.\n\
+         fn fmt(ref self) -> String;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(
+        methods[0].doc_comment.as_deref(),
+        Some("Render to a string."),
+    );
+}
+
+#[test]
+fn enabling_change_attr_on_assoc_type_decl_rejected() {
+    let (_prog, errors) = parse_with_errors(
+        "pub trait Container {\n\
+         #[deprecated]\n\
+         type Item;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_ATTR_ON_ASSOC_TYPE_DECL")),
+        "Expected E_ATTR_ON_ASSOC_TYPE_DECL diagnostic; got: {errors:?}"
+    );
+}
+
+#[test]
+fn enabling_change_unsafe_fn_in_trait_with_attribute() {
+    // The `unsafe fn` dispatch in the trait body must thread the
+    // attributes through, not lose them.
+    let prog = parse_ok(
+        "pub trait Raw {\n\
+         #[deprecated]\n\
+         unsafe fn raw_op(ref self);\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert_eq!(methods[0].name, "raw_op");
+    assert!(methods[0].is_unsafe);
+    assert!(methods[0].deprecation.is_some());
+}
+
+#[test]
+fn enabling_change_attr_on_tuple_variant() {
+    let prog = parse_ok("pub enum E { #[deprecated] Old(i64), New(i64), }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert!(e.variants[0].deprecation.is_some());
+    assert!(matches!(e.variants[0].kind, VariantKind::Tuple(_)));
+}
+
+#[test]
+fn enabling_change_attr_on_struct_variant() {
+    let prog = parse_ok("pub enum E { #[deprecated] Old { x: i64 }, New { x: i64 }, }");
+    let Item::EnumDef(e) = &prog.items[0] else {
+        panic!("Expected EnumDef");
+    };
+    assert!(e.variants[0].deprecation.is_some());
+    assert!(matches!(e.variants[0].kind, VariantKind::Struct(_)));
+}
+
 #[test]
 fn test_const_generic_args() {
     let prog = parse_ok("fn dot(a: Array[f64, 3], b: Array[f64, 3]) -> f64 { 0.0 }");

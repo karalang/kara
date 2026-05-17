@@ -502,6 +502,15 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&e.attributes, "private enum");
         }
         self.reject_track_caller_attr(&e.attributes, "enum");
+        // Variant-level attribute placement validation —
+        // `#[track_caller]` and `#[non_exhaustive]` are rejected on
+        // individual variants (the spec scopes both at type-level
+        // only). `#[deprecated]` IS legal on variants per design.md
+        // and so is not rejected here.
+        for variant in &e.variants {
+            self.reject_track_caller_attr(&variant.attributes, "enum variant");
+            self.reject_non_exhaustive_attr(&variant.attributes, "enum variant");
+        }
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
         let enum_id = match self.table.define(
             e.name.clone(),
@@ -543,6 +552,16 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         self.reject_non_exhaustive_attr(&t.attributes, "trait");
         self.reject_track_caller_attr(&t.attributes, "trait");
+        // Trait-method-level attribute placement validation —
+        // `#[track_caller]` IS legal (propagates to impls), so the
+        // helper is not called. `#[deprecated]` IS legal. But
+        // `#[non_exhaustive]` is rejected (the spec scopes it to
+        // pub struct / pub enum types only).
+        for item in &t.items {
+            if let TraitItem::Method(m) = item {
+                self.reject_non_exhaustive_attr(&m.attributes, "trait method");
+            }
+        }
         let method_names: Vec<String> = t
             .items
             .iter()
