@@ -11,7 +11,6 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
 use inkwell::values::FunctionValue;
 use inkwell::AddressSpace;
 
-use super::helpers::{map_kv_type_exprs, slice_inner_type_expr, vec_inner_type_expr};
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -124,64 +123,38 @@ impl<'ctx> super::Codegen<'ctx> {
                 // Track ref params: alloca holds a pointer-to-data.
                 if let Some(inner_ty) = self.inner_type_of_ref(&param.ty) {
                     self.ref_params.insert(param_name.clone(), inner_ty);
-                    // Also track vec_elem_types for ref Vec/String params.
-                    if let TypeKind::Ref(inner) | TypeKind::MutRef(inner) = &param.ty.kind {
-                        if let Some(elem) = self.extract_vec_elem_type(inner) {
-                            self.vec_elem_types.insert(param_name.clone(), elem);
-                            if let Some(inner_te) = vec_inner_type_expr(inner) {
-                                self.var_elem_type_exprs
-                                    .insert(param_name.clone(), inner_te);
-                            }
-                        }
-                        if self.is_string_type_expr(inner) {
-                            self.vec_elem_types
-                                .insert(param_name.clone(), self.context.i8_type().into());
-                            self.string_vars.insert(param_name.clone());
-                        }
-                    }
                 }
-                // Track slice params: both `Slice[T]` and `mut Slice[T]` use
-                // the 2-field `{ptr, i64}` representation. Recording the
-                // element type here lets indexing and iteration dispatch on
-                // the slice shape.
-                if let Some(elem) = self.extract_slice_elem_type(&param.ty) {
-                    self.slice_elem_types.insert(param_name.clone(), elem);
-                    if let Some(inner_te) = slice_inner_type_expr(&param.ty) {
-                        self.var_elem_type_exprs
-                            .insert(param_name.clone(), inner_te);
-                    }
-                }
-                // Track owned `Vec[T]` / `String` params. Without this,
-                // `vec_elem_types` only knows about the `ref Vec[T]` case
-                // and local let-bound Vecs; slice patterns and other
-                // element-typed dispatch sites that look up the param's
-                // element type on the side-table would otherwise miss.
-                if matches!(&param.ty.kind, TypeKind::Path(_)) {
-                    if let Some(elem) = self.extract_vec_elem_type(&param.ty) {
-                        self.vec_elem_types.insert(param_name.clone(), elem);
-                        if let Some(inner_te) = vec_inner_type_expr(&param.ty) {
-                            self.var_elem_type_exprs
-                                .insert(param_name.clone(), inner_te);
-                        }
-                    }
-                    if self.is_string_type_expr(&param.ty) {
-                        self.vec_elem_types
-                            .insert(param_name.clone(), self.context.i8_type().into());
-                        self.string_vars.insert(param_name.clone());
-                    }
-                }
-                // Track Map params: both K and V LLVM types + per-position
-                // TypeExprs so `for (k, v) in m` can register each binding.
-                if let Some((k_ty, v_ty)) = self.extract_map_kv_types(&param.ty) {
-                    self.map_key_types.insert(param_name.clone(), k_ty);
-                    self.map_val_types.insert(param_name.clone(), v_ty);
-                    if let Some(k_name) = Self::extract_map_key_name(&param.ty) {
-                        self.map_key_type_names.insert(param_name.clone(), k_name);
-                    }
-                    if let Some((k_te, v_te)) = map_kv_type_exprs(&param.ty) {
-                        self.map_key_type_exprs.insert(param_name.clone(), k_te);
-                        self.var_elem_type_exprs.insert(param_name.clone(), v_te);
-                    }
+                // Register collection / String / struct side-tables for the
+                // parameter. Mirrors the let-binding registration in
+                // `compile_stmt(StmtKind::Let)` so every `ref T` /
+                // `mut ref T` / owned-collection parameter participates in
+                // the same method-dispatch surface as a let-bound local.
+                //
+                // For `ref T` / `mut ref T`, `register_var_from_type_expr`
+                // is invoked with the inner type — `Vec`, `Map`, `Set`,
+                // `String`, `Slice`, and bare user-type names all flow
+                // through the same registrar. Without this, the
+                // dispatcher in `compile_method_call` falls through to
+                // the "no handler for method 'X' on variable 'v'" error
+                // for any `mut ref Map[K,V]` / `mut ref Set[T]` /
+                // `mut ref VecDeque[T]` receiver — the structural
+                // symmetric of the for-loop binding gap fixed in commit
+                // `394cd64` (struct fields in for-loop bodies) but for
+                // the parameter-mode case. The fix also covers
+                // `mut ref Vec[T]` / `mut ref String` uniformly,
+                // collapsing the previous ad-hoc per-shape branches
+                // into one call.
+                //
+                // Owned `Slice[T]` / `mut Slice[T]` params take the
+                // type expression as-is (no inner unwrap) — both
+                // `MutSlice(inner)` and `Path(Slice[...])` flow through
+                // `register_var_from_type_expr`'s slice arm.
+                let registration_te: Option<&TypeExpr> = match &param.ty.kind {
+                    TypeKind::Ref(inner) | TypeKind::MutRef(inner) => Some(inner.as_ref()),
+                    _ => Some(&param.ty),
+                };
+                if let Some(te) = registration_te {
+                    self.register_var_from_type_expr(&param_name, te);
                 }
                 // Track the declared type name so field/variant lookups work on this param.
                 // Both owned (`Type`) and ref-wrapped (`ref Type` / `mut ref Type`)

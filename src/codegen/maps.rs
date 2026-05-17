@@ -270,14 +270,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let slot = self
-            .variables
+        self.variables
             .get(name)
             .copied()
             .ok_or_else(|| format!("unknown map variable '{name}' in index-store"))?;
+        // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(name)
+            .ok_or_else(|| format!("unknown map variable '{name}' in index-store"))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "map.idxst.handle")
+            .build_load(ptr_ty, handle_ptr, "map.idxst.handle")
             .unwrap()
             .into_pointer_value();
 
@@ -330,14 +335,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let slot = self
-            .variables
+        self.variables
             .get(name)
             .copied()
             .ok_or_else(|| format!("unknown map variable '{name}' in index expression"))?;
+        // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(name)
+            .ok_or_else(|| format!("unknown map variable '{name}' in index expression"))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "map.idx.handle")
+            .build_load(ptr_ty, handle_ptr, "map.idx.handle")
             .unwrap()
             .into_pointer_value();
 
@@ -410,14 +420,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let fn_val = self.current_fn.unwrap();
 
-        let slot = self
-            .variables
+        self.variables
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        // Use `get_data_ptr` so `mut ref Map[K,V]` params unwrap one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(var_name)
+            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "kvg.map.handle")
+            .build_load(ptr_ty, handle_ptr, "kvg.map.handle")
             .unwrap()
             .into_pointer_value();
 
@@ -602,16 +617,24 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        let slot = self
-            .variables
+        self.variables
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
 
-        // Load the opaque map handle from the ptr alloca.
+        // Load the opaque map handle. `get_data_ptr` returns the alloca
+        // for owned Map params/locals (alloca holds the handle), or the
+        // caller's alloca address for `ref Map` / `mut ref Map` params
+        // (alloca holds a `*Map`). The single subsequent load yields the
+        // opaque handle in both cases — owned reads through one level,
+        // ref reads through two levels, with the first level already
+        // performed inside `get_data_ptr`.
+        let handle_ptr = self
+            .get_data_ptr(var_name)
+            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "map.handle")
+            .build_load(ptr_ty, handle_ptr, "map.handle")
             .unwrap()
             .into_pointer_value();
 

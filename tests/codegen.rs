@@ -11723,4 +11723,114 @@ fn main() {
             );
         }
     }
+
+    /// Bug #5 regression: `mut ref Map[K, V]` parameter receivers must
+    /// dispatch through the Map-method codegen path. Pre-fix the
+    /// dispatcher in `compile_method_call` walked the side-tables
+    /// (`map_key_types` / `set_elem_types` / `vec_elem_types`) but
+    /// `compile_function`'s parameter-registration only seeded those
+    /// tables for owned + `ref Vec[T]` / `ref String` shapes. A
+    /// `mut ref Map[K,V]` param landed in `variables` but missed
+    /// `map_key_types`, so dispatch fell through to the "no handler
+    /// for method 'X' on variable 'v'" diagnostic.
+    ///
+    /// Fix: route parameter-side registration through
+    /// `register_var_from_type_expr` against the inner type for
+    /// Ref/MutRef params — uniform with let-bindings and for-loop
+    /// bindings. Companion fix in `compile_map_method` /
+    /// `compile_set_method` (plus the matching for-loop iterator
+    /// sites in `control_flow_for.rs` and the entry-chain site in
+    /// `entry_chains.rs`) routes the handle load through
+    /// `get_data_ptr` so the ref-param's alloca contents are
+    /// dereferenced before the opaque-handle load.
+    ///
+    /// Symmetric structural gap to commit `394cd64` (for-loop
+    /// binding type registration). The fix incidentally unblocks
+    /// `mut ref Set[T]`, `mut ref VecDeque[T]`, and `mut ref String`
+    /// receivers — all collection shapes flow through the same
+    /// registrar.
+    #[test]
+    fn test_e2e_mut_ref_map_param_method_dispatch() {
+        let src = r#"
+shared struct Node { val: i64 }
+fn helper(node: Node, visited: mut ref Map[i64, Node]) -> Node {
+    match visited.get(node.val) {
+        Some(x) => x,
+        None => {
+            let _ = visited.insert(node.val, node);
+            node
+        }
+    }
+}
+fn main() {
+    let mut m: Map[i64, Node] = Map.new();
+    let n = Node { val: 42 };
+    let r = helper(n, mut m);
+    println(r.val);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "42\n",
+                "mut ref Map[K,V] parameter — .get / .insert dispatch must reach \
+                 compile_map_method, not the no-handler fall-through"
+            );
+        }
+    }
+
+    /// Side benefit of the bug #5 fix: `mut ref Set[T]` parameters
+    /// participate in the same registrar path and dispatch through
+    /// `compile_set_method` correctly. Pre-fix this errored with
+    /// the same "no handler for method 'insert'" message.
+    #[test]
+    fn test_e2e_mut_ref_set_param_method_dispatch() {
+        let src = r#"
+fn add_to(s: mut ref Set[i64], x: i64) -> i64 {
+    let _ = s.insert(x);
+    s.len()
+}
+fn main() {
+    let mut s: Set[i64] = Set.new();
+    let _ = add_to(mut s, 5);
+    let n = add_to(mut s, 10);
+    println(n);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "2\n",
+                "mut ref Set[T] parameter — .insert / .len dispatch must reach \
+                 compile_set_method"
+            );
+        }
+    }
+
+    /// Side benefit of the bug #5 fix: `mut ref VecDeque[T]`
+    /// parameters dispatch through the Vec method surface
+    /// (VecDeque shares Vec's `{ptr, len, cap}` runtime layout).
+    /// Pre-fix this errored with the same "no handler for method
+    /// 'push_back'" message because `vec_elem_types` was unset
+    /// for the `mut ref` shape.
+    #[test]
+    fn test_e2e_mut_ref_vec_deque_param_method_dispatch() {
+        let src = r#"
+fn push_to(q: mut ref VecDeque[i64], x: i64) -> i64 {
+    q.push_back(x);
+    q.len()
+}
+fn main() {
+    let mut q: VecDeque[i64] = VecDeque.new();
+    let _ = push_to(mut q, 5);
+    let n = push_to(mut q, 10);
+    println(n);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            assert_eq!(
+                out, "2\n",
+                "mut ref VecDeque[T] parameter — .push_back / .len dispatch must \
+                 reach compile_vec_method"
+            );
+        }
+    }
 }

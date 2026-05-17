@@ -969,14 +969,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        let slot = self
-            .variables
+        self.variables
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
+        // Use `get_data_ptr` so `for (k, v) in mut_ref_map` unwraps one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(var_name)
+            .ok_or_else(|| format!("unknown map variable '{var_name}'"))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "map.handle")
+            .build_load(ptr_ty, handle_ptr, "map.handle")
             .unwrap()
             .into_pointer_value();
 
@@ -1092,14 +1097,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let i8_t = self.context.i8_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        let slot = self
-            .variables
+        self.variables
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        // Use `get_data_ptr` so `for x in mut_ref_set` unwraps one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(var_name)
+            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
         let set_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "set.handle")
+            .build_load(ptr_ty, handle_ptr, "set.handle")
             .unwrap()
             .into_pointer_value();
 

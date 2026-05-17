@@ -39,14 +39,19 @@ impl<'ctx> super::Codegen<'ctx> {
         let bool_t = self.context.bool_type();
         let i8_t = self.context.i8_type();
 
-        let slot = self
-            .variables
+        self.variables
             .get(var_name)
             .copied()
             .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
+        // Use `get_data_ptr` so `mut ref Set[T]` params unwrap one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly. Mirrors the Map-side fix.
+        let handle_ptr = self
+            .get_data_ptr(var_name)
+            .ok_or_else(|| format!("unknown set variable '{var_name}'"))?;
         let set_handle = self
             .builder
-            .build_load(ptr_ty, slot.ptr, "set.handle")
+            .build_load(ptr_ty, handle_ptr, "set.handle")
             .unwrap()
             .into_pointer_value();
 

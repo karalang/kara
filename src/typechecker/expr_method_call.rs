@@ -1068,6 +1068,41 @@ impl<'a> super::TypeChecker<'a> {
 
         // `String` method dispatch. `Type::Str` is not `Type::Named` so it
         // also falls through the generic branch; handle it here.
+        //
+        // Deref `ref T` / `mut ref T` once when checking the receiver
+        // shape against stdlib named types (Map / Set / Entry / Sender /
+        // Receiver / Regex / Client / Response / HttpError / String /
+        // SortedSet). Without this, `mut ref Map[K,V].get(k)` lands in
+        // the impl-block fallback path (which uses
+        // `receiver_for_method_lookup` and so does deref), but the
+        // map-specific signature — which threads the V into
+        // `Option[V]` — is skipped, surfacing the get's return type as
+        // `Type::Error`. The subsequent pattern-binding registration
+        // misses `pattern_binding_types[Some(x)] = "Node"` and codegen
+        // can't reconstitute the shared-struct payload from the i64
+        // word, leaving the match-arm value as `i64` while the function
+        // return type is `ptr` → LLVM verifier error.
+        //
+        // Symmetric to the existing deref in `unwrap`/`is_some`/etc.
+        // above; the deref-on-named-receiver pattern is what makes a
+        // `mut ref Vec[T]` parameter's `.push(x)` typecheck through
+        // the existing impl-block-method path (Vec lives in the
+        // impl-block surface, not in a stdlib_seq dispatcher) — Map /
+        // Set / Entry are the holdouts.
+        let obj_ty_for_named = match &obj_ty {
+            Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+            _ => obj_ty.clone(),
+        };
+
+        // String method dispatch keeps the un-derefed `obj_ty` check
+        // intentionally: `ref String` / `mut ref String` are intended
+        // to flow through the impl-block-method path (which calls
+        // `receiver_for_method_lookup` to deref and then resolves
+        // `len` / `contains` / `is_empty` / etc.). `infer_str_method`
+        // is the narrow stdlib_seq surface for the small set of
+        // String methods that don't live in an impl block (`sorted`,
+        // `sorted_by`, `chars`) — routing a derefed `ref String`
+        // here would silently fail `len` lookup on those tests.
         if obj_ty == Type::Str {
             return self.infer_str_method(method, args, span);
         }
@@ -1076,7 +1111,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Type::Named {
             name,
             args: type_args,
-        } = &obj_ty
+        } = &obj_ty_for_named
         {
             if name == "Map" {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
@@ -1090,7 +1125,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Type::Named {
             name,
             args: type_args,
-        } = &obj_ty
+        } = &obj_ty_for_named
         {
             if name == "Entry" {
                 let key = type_args.first().cloned().unwrap_or(Type::Error);
@@ -1104,7 +1139,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Type::Named {
             name,
             args: type_args,
-        } = &obj_ty
+        } = &obj_ty_for_named
         {
             if name == "SortedSet" {
                 let element = type_args.first().cloned().unwrap_or(Type::Error);
@@ -1117,14 +1152,14 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         // `Regex` method dispatch.
-        if let Type::Named { name, .. } = &obj_ty {
+        if let Type::Named { name, .. } = &obj_ty_for_named {
             if name == "Regex" {
                 return self.infer_regex_method(method, args, span);
             }
         }
 
         // `Client` / `Response` / `HttpError` method dispatch.
-        if let Type::Named { name, .. } = &obj_ty {
+        if let Type::Named { name, .. } = &obj_ty_for_named {
             match name.as_str() {
                 "Client" => return self.infer_http_client_method(method, args, span),
                 "Response" => return self.infer_http_response_method(method, args, span),
@@ -1137,7 +1172,7 @@ impl<'a> super::TypeChecker<'a> {
         if let Type::Named {
             name,
             args: type_args,
-        } = &obj_ty
+        } = &obj_ty_for_named
         {
             if name == "Sender" || name == "Receiver" {
                 let element = type_args.first().cloned().unwrap_or(Type::Error);

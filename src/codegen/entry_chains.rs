@@ -205,14 +205,19 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
-        let map_slot = self
-            .variables
+        self.variables
             .get(map_name)
             .copied()
             .ok_or_else(|| format!("entry chain: unknown map '{}'", map_name))?;
+        // Use `get_data_ptr` so `mut_ref_map.entry(k)` unwraps one
+        // ref-level before the handle load. Owned bindings yield
+        // `slot.ptr` directly.
+        let handle_ptr = self
+            .get_data_ptr(map_name)
+            .ok_or_else(|| format!("entry chain: unknown map '{}'", map_name))?;
         let map_handle = self
             .builder
-            .build_load(ptr_ty, map_slot.ptr, "entry.map.handle")
+            .build_load(ptr_ty, handle_ptr, "entry.map.handle")
             .unwrap()
             .into_pointer_value();
         let key_ty = *self
