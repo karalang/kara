@@ -9176,6 +9176,51 @@ pub enum ChannelSide { Sender, Receiver }
 
 **Layer classification.** Per the existing § 3 Debugger Contract rule, the four elements form a *Reported behavior* surface — stable within a release, additive evolution across releases. The `NetworkIo` variant's specific shape (the `RawFd` / `IoDirection` / `Option[Duration]` payload triple) is itself *Reported*; tools must tolerate additive evolution.
 
+#### FFI Across Yield Points
+
+A network-boundary function cannot make a foreign-function call across a yield point. The FFI boundary must complete before the function yields — every FFI call must enter the foreign code, return, and produce its result, all without a yield point intervening. This is a **hard compile error** under v1.
+
+**The rule.** For every `extern "C"` or `extern "C-unwind"` call inside a network-boundary function `f`, the typechecker verifies that no yield point lies between the FFI call's argument evaluation and its return. The check is structural — the FFI call expression and any expressions that consume its result must lie within the same yield-free statement boundary. If a yield point would interleave (e.g., an FFI call returns a handle and `f` later awaits a network response that depends on the handle), the function fails to typecheck with `error[E_FFI_ACROSS_YIELD]`.
+
+**Diagnostic shape.**
+
+```
+error[E_FFI_ACROSS_YIELD]: foreign-function call cannot span a yield point in a network-boundary function
+  --> src/handler.kara:42:13
+   |
+40 |     let handle = ffi_register(req);   // foreign call
+   |                  ------------ FFI boundary entered here
+41 |     let response = server.fetch(url)?;
+   |                    ^^^^^^^^^^^^^^^^^ yield point (sends(Network))
+42 |     ffi_finalize(handle, response);
+   |                  ------ FFI handle consumed here, after a yield
+   |
+note: foreign code does not participate in Kāra's cooperative cancellation; a yield point intervening between the FFI call's preparation and the consumption of its result would leave the foreign code's expected synchronous-progress assumption violated
+help: extract the cross-yield work into a non-yielding helper that completes the FFI sequence in one go, then make the network call in the caller
+   |
+35 + fn finalize_now(req: Request) -> Handle {
+36 +     ffi_register(req)
+37 + }
+   |
+   |     let handle = finalize_now(req);
+   |     let response = server.fetch(url)?;
+   |     ffi_finalize(handle, response);
+```
+
+The diagnostic surfaces both the FFI-call site and the intervening yield-point site, names the rule explicitly, and includes the canonical fix-it shape — extract the cross-yield work into a non-yielding helper so the FFI sequence and the network call sit in two separate frames.
+
+**Why FFI cannot yield.** Foreign code makes a synchronous-progress assumption: when Kāra invokes an `extern "C"` function, the foreign side expects the call to enter its body, execute to completion, and return. Yielding mid-call would require either (a) suspending the foreign frame — which the C ABI does not support; there is no portable way to park a C stack and resume it on a different OS thread, and even on platforms where it is technically possible (`ucontext_t`, fiber APIs), the cost and edge-case surface are prohibitive — or (b) abandoning the foreign frame, which means leaking whatever heap allocations, file descriptors, and locks the foreign code is holding. Neither is acceptable; the v1 stance is that the FFI boundary is *transactional* — enter, execute, return, atomic from Kāra's perspective.
+
+**Interaction with `extern "C-unwind"`.** The rule applies identically to `extern "C-unwind"` calls (which may unwind back into Kāra via a foreign exception). The unwind path is a synchronous return — control returns to the Kāra frame at the FFI call site without yielding. The rule's invariant ("FFI boundary completes before yield") holds for the unwind case the same way it holds for the normal-return case.
+
+**Interaction with `unsafe` blocks.** The rule fires inside `unsafe { ... }` blocks too, with one narrow `unsafe` escape hatch: a function that genuinely needs to invoke FFI from within a network-boundary function may do so per the state-machine transform spec's documented exception ([State-Machine Transform — Network-Boundary Functions](#state-machine-transform--network-boundary-functions) § FFI interaction) — the `unsafe { ... }` block must not have a yield point between the FFI call's argument preparation and the consumption of its result, and the author is responsible for verifying the property with a `// Safety:` comment. The escape hatch widens the rule for niche cases (custom event-loop adapters, embedded targets, certain timer / signal integrations) but does not turn off the check — the typechecker still rejects `unsafe { ... }` blocks where the FFI / yield interleave is structurally observable in the source.
+
+**Why not a soft warning.** Treating FFI-across-yield as a warning rather than a hard error would defer the failure mode to runtime: the foreign code would execute against torn state when the yield resumed, manifesting as memory corruption, double-frees, file-descriptor leaks, or — worst case — silent wrong results. The rule pays its cost up front (some valid programs require the fix-it restructure) to avoid an entire category of runtime defects that would otherwise be effectively undebuggable. This matches the design's broader stance: cancellation-related foot-guns are surfaced at compile time, not at runtime.
+
+**Pure-CPU FFI (the `#[noblock]` case).** An FFI function declared `#[noblock]` (per [Execution Effect Inference](#execution-effect-inference)) is a pure-CPU helper that does not block. The rule applies identically: even a fast `strlen()` call cannot span a yield point in a network-boundary function. The cost of the rule is uniform across blocking and non-blocking FFI — the fix-it is the same in either case (extract the FFI work into a non-yielding helper). Treating `#[noblock]` specially would complicate the rule for marginal benefit; the helper-extraction pattern is cheap.
+
+**Layer classification.** The rule "network-boundary function cannot make an FFI call across a yield point" is *Guaranteed semantics* — a conforming compiler must enforce it. The diagnostic wording is *Reported behavior* per the general carve-out. The `unsafe`-block escape hatch is *Guaranteed* (the rule's exception is part of the spec), but the `// Safety:` comment the author writes to justify use of the hatch is content the compiler does not interpret — auditing belongs to the author per the existing [`unsafe_op_in_unsafe_fn` rule](#unsafe_op_in_unsafe_fn-rule).
+
 ### Explicit Concurrency: `par {}` and `spawn()`
 
 Auto-concurrency handles the common case — the compiler finds independent operations and parallelizes them. Two explicit constructs complement it for cases the compiler cannot handle alone:
