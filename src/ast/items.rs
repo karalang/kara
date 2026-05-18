@@ -37,6 +37,29 @@ pub struct Deprecation {
     pub note: Option<String>,
 }
 
+// ── `#[diagnostic::on_unimplemented]` payload ────────────────────
+
+/// `#[diagnostic::on_unimplemented(message: "...", label: "...", note: "...")]`
+/// payload captured at parse time and attached as `Option<OnUnimplemented>`
+/// to [`TraitDef`]. All three fields are optional named string-literal
+/// arguments; any absent field falls back to the default failed-bound
+/// diagnostic phrasing at emit time (slice 6 of item 36).
+///
+/// Template placeholders `{Self}`, `{T0}`, `{T1}`, ... in the message /
+/// label / note are recognised; substitution happens at the failed-bound
+/// emit site against the solved metavariable map (slice 6). Unknown
+/// placeholders are warned about at parse time (slice 3 lint pass) and
+/// render literally if reached at emit time.
+///
+/// See design.md § Diagnostic Namespace Attributes.
+#[derive(Debug, Clone)]
+pub struct OnUnimplemented {
+    pub span: Span,
+    pub message: Option<String>,
+    pub label: Option<String>,
+    pub note: Option<String>,
+}
+
 // ── Top-level Items ──────────────────────────────────────────────
 
 #[derive(Debug, Clone)]
@@ -338,6 +361,12 @@ pub struct TraitDef {
     pub deprecation: Option<Deprecation>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+    /// `#[diagnostic::on_unimplemented(...)]` payload — see
+    /// [`OnUnimplemented`]. `None` when the trait carries no such
+    /// attribute. Slice 3 of item 36 — populated at parse time;
+    /// consumed by the failed-bound diagnostic builder at emit time
+    /// (slice 6).
+    pub on_unimplemented: Option<OnUnimplemented>,
 }
 
 #[derive(Debug, Clone)]

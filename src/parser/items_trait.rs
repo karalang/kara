@@ -235,6 +235,7 @@ impl super::Parser {
 
         let deprecation = self.scan_deprecated_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
+        let on_unimplemented = self.scan_on_unimplemented_attr(&attributes);
         Some(TraitDef {
             span: self.span_from(start),
             attributes,
@@ -250,6 +251,7 @@ impl super::Parser {
             stdlib_origin: false,
             deprecation,
             lint_overrides,
+            on_unimplemented,
         })
     }
 

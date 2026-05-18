@@ -421,6 +421,62 @@ impl super::Parser {
         first
     }
 
+    /// Scan `attributes` for `#[diagnostic::on_unimplemented(...)]` and
+    /// return the first occurrence's payload (slice 3 of item 36's
+    /// `#[diagnostic::*]` attribute namespace entry). Best-effort
+    /// extraction — malformed shapes (positional args, unknown fields,
+    /// non-string values, the `= "string"` shorthand, multiple
+    /// occurrences) are silently tolerated here; the
+    /// `malformed_diagnostic_attribute` warning is produced by the
+    /// post-parse lint pass in [`crate::diagnostic_attrs_lint`], which
+    /// also handles the off-target case. Keeping shape diagnostics out
+    /// of the parser scan lets a single warning flow through one cascade
+    /// rather than splitting between `E_*` parse errors (deprecation's
+    /// approach) and a `warn`-by-default lint (the spec's choice here).
+    pub(crate) fn scan_on_unimplemented_attr(
+        &mut self,
+        attributes: &[Attribute],
+    ) -> Option<OnUnimplemented> {
+        for attr in attributes {
+            if attr.path.len() != 2
+                || attr.path[0] != "diagnostic"
+                || attr.path[1] != "on_unimplemented"
+            {
+                continue;
+            }
+            let mut message: Option<String> = None;
+            let mut label: Option<String> = None;
+            let mut note: Option<String> = None;
+            for arg in &attr.args {
+                let Some(name) = &arg.name else {
+                    continue;
+                };
+                let field_slot = match name.as_str() {
+                    "message" => &mut message,
+                    "label" => &mut label,
+                    "note" => &mut note,
+                    _ => continue,
+                };
+                let Some(value_expr) = &arg.value else {
+                    continue;
+                };
+                let ExprKind::StringLit(s) = &value_expr.kind else {
+                    continue;
+                };
+                if field_slot.is_none() {
+                    *field_slot = Some(s.clone());
+                }
+            }
+            return Some(OnUnimplemented {
+                span: attr.span.clone(),
+                message,
+                label,
+                note,
+            });
+        }
+        None
+    }
+
     /// Scan `attributes` for the four lint-level attributes —
     /// `#[allow(...)]`, `#[warn(...)]`, `#[deny(...)]`,
     /// `#[expect(...)]` — and produce one `LintLevelOverride`

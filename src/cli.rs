@@ -2661,6 +2661,22 @@ fn cmd_run(
                 diag.message
             );
         }
+        // Lint: malformed_diagnostic_attribute (slice 3 of item 36 —
+        // shape + placeholder checks for `#[diagnostic::on_unimplemented]`).
+        for diag in crate::diagnostic_attrs_lint::check_diagnostic_attributes(
+            &pipeline.parsed.program,
+            &pipeline.lint_overrides,
+        ) {
+            let prefix = if diag.level == crate::diagnostic_attrs_lint::LintLevel::Error {
+                "error"
+            } else {
+                "warning"
+            };
+            eprintln!(
+                "{prefix}[malformed_diagnostic_attribute]: {}:{}:{}: {}",
+                filename, diag.span.line, diag.span.column, diag.message
+            );
+        }
     }
 
     // Provider-rooted resource escape — a hard error per design.md §

@@ -8,6 +8,7 @@ pub mod concurrency;
 pub mod concurrency_report;
 pub mod cost_summary;
 pub mod desugar;
+pub mod diagnostic_attrs_lint;
 pub mod doc;
 pub mod dominator;
 pub mod edit_distance;

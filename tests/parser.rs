@@ -8847,3 +8847,100 @@ fn rest_pattern_struct_with_qualified_path() {
         _ => panic!("expected struct pattern"),
     }
 }
+
+// ── #[diagnostic::on_unimplemented] payload extraction (item 36 slice 3) ──
+
+#[test]
+fn on_unimpl_slice3_full_payload_captured() {
+    let prog = parse_ok(
+        "#[diagnostic::on_unimplemented(message: \"m\", label: \"l\", note: \"n\")]\n\
+         trait Foo { }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let payload = t
+        .on_unimplemented
+        .as_ref()
+        .expect("expected on_unimplemented payload");
+    assert_eq!(payload.message.as_deref(), Some("m"));
+    assert_eq!(payload.label.as_deref(), Some("l"));
+    assert_eq!(payload.note.as_deref(), Some("n"));
+}
+
+#[test]
+fn on_unimpl_slice3_partial_payload_captured() {
+    let prog = parse_ok("#[diagnostic::on_unimplemented(message: \"only msg\")]\ntrait Foo { }");
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let payload = t.on_unimplemented.as_ref().unwrap();
+    assert_eq!(payload.message.as_deref(), Some("only msg"));
+    assert!(payload.label.is_none());
+    assert!(payload.note.is_none());
+}
+
+#[test]
+fn on_unimpl_slice3_trait_without_attribute_has_none() {
+    let prog = parse_ok("trait Bare { }");
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    assert!(t.on_unimplemented.is_none());
+}
+
+#[test]
+fn on_unimpl_slice3_first_wins_on_duplicate() {
+    // The parser scan picks the first occurrence; the second is
+    // ignored. The duplicate warning fires in the lint pass, not the
+    // parser — so this test does NOT assert any parse error, only
+    // payload correctness.
+    let prog = parse_ok(
+        "#[diagnostic::on_unimplemented(message: \"first\")]\n\
+         #[diagnostic::on_unimplemented(message: \"second\")]\n\
+         trait Foo { }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let payload = t.on_unimplemented.as_ref().unwrap();
+    assert_eq!(payload.message.as_deref(), Some("first"));
+}
+
+#[test]
+fn on_unimpl_slice3_malformed_fields_silently_dropped_at_parse() {
+    // Unknown field, non-string value, and the shorthand `= "..."` are
+    // all *silently* ignored by the parser scan — the lint pass
+    // produces the warnings, but payload extraction stays best-effort
+    // so legal sibling fields still flow through.
+    let prog = parse_ok(
+        "#[diagnostic::on_unimplemented(messsage: \"typo\", message: \"good\", \
+         label: 42, polish: \"x\")]\n\
+         trait Foo { }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("expected TraitDef");
+    };
+    let payload = t.on_unimplemented.as_ref().unwrap();
+    assert_eq!(payload.message.as_deref(), Some("good"));
+    // `label: 42` is non-string-literal → dropped.
+    assert!(payload.label.is_none());
+    // The typo and the unknown field are silently dropped at parse.
+    assert!(payload.note.is_none());
+}
+
+#[test]
+fn on_unimpl_slice3_non_trait_carrier_still_in_attribute_list() {
+    // `on_unimplemented` on a function is silently retained in the
+    // attribute list (slice 1 / slice 2 of item 36 accept any
+    // multi-segment `diagnostic::*` path) but does not populate any
+    // function-side payload — the field only lives on `TraitDef`.
+    let prog = parse_ok("#[diagnostic::on_unimplemented(message: \"x\")]\nfn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert_eq!(
+        f.attributes[0].path,
+        vec!["diagnostic".to_string(), "on_unimplemented".to_string()],
+    );
+}

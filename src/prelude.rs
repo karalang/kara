@@ -740,6 +740,7 @@ fn stub_trait(name: &str, span: &Span) -> Item {
         stdlib_origin: true,
         deprecation: None,
         lint_overrides: Vec::new(),
+        on_unimplemented: None,
     })
 }
 
