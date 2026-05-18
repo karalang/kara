@@ -353,6 +353,15 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) exit_fn: FunctionValue<'ctx>,
     /// memcmp for string comparison.
     pub(crate) memcmp_fn: FunctionValue<'ctx>,
+    /// `int sched_yield(void)` — POSIX thread-yield primitive. Phase 6
+    /// line 26 slice 8e wires this into the caller-side network-boundary
+    /// intercept's Pending path so the parent thread cooperatively
+    /// yields to the OS scheduler / dispatcher between poll-fn
+    /// invocations instead of busy-looping. Linked from libc (same
+    /// path as malloc / free). Windows IOCP support (line 17 sub-item 7)
+    /// will need a `SwitchToThread` analog; v1 targets Linux / macOS
+    /// where sched_yield is available.
+    pub(crate) sched_yield_fn: FunctionValue<'ctx>,
     /// Local bindings that alias `vec_var.len()` — populated at let-sites of
     /// the form `let n = v.len()` where `v` is a Vec identifier in scope.
     /// Consulted by the bounds-check-elision pass when parsing while-guard
@@ -962,6 +971,15 @@ impl<'ctx> Codegen<'ctx> {
         );
         let memcmp_fn = module.add_function("memcmp", memcmp_type, Some(Linkage::External));
 
+        // `int sched_yield(void)` — POSIX cooperative thread yield. Wired
+        // into the caller-side network-boundary intercept's Pending path
+        // (phase 6 line 26 slice 8e) so the parent thread yields the
+        // OS scheduler quantum between poll-fn invocations rather than
+        // busy-looping. Linked from libc — same path as malloc / free.
+        let sched_yield_type = i32_type.fn_type(&[], false);
+        let sched_yield_fn =
+            module.add_function("sched_yield", sched_yield_type, Some(Linkage::External));
+
         // Declare runtime types and entry points for par blocks.
         // `KaracBranch { func: ptr, ctx: ptr }` matches the #[repr(C)] struct in
         // runtime/src/lib.rs. karac_par_run(branches, count, spawn_site_id)
@@ -1398,6 +1416,7 @@ impl<'ctx> Codegen<'ctx> {
             free_fn,
             exit_fn,
             memcmp_fn,
+            sched_yield_fn,
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
             vec_elem_types: HashMap::new(),

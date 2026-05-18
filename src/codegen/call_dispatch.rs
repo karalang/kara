@@ -249,8 +249,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value();
-            // Branch into the poll loop.
+            // Branch into the poll loop. Slice 8e routes the Pending
+            // path through a `kara.poll_yield` block that calls
+            // `sched_yield` before looping back to `kara.poll_loop`,
+            // so the parent thread cooperatively yields the OS
+            // scheduler quantum between poll-fn invocations instead
+            // of busy-spinning. Without the yield, a tight loop would
+            // starve the line-17 dispatcher thread (and any other
+            // ready tasks on the same scheduler) of cycles needed to
+            // process event-loop readiness wakeups, defeating the
+            // purpose of the state-machine transform.
             let loop_bb = self.context.append_basic_block(cur_fn, "kara.poll_loop");
+            let yield_bb = self.context.append_basic_block(cur_fn, "kara.poll_yield");
             let done_bb = self.context.append_basic_block(cur_fn, "kara.poll_done");
             self.builder
                 .build_unconditional_branch(loop_bb)
@@ -280,8 +290,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 )
                 .expect("icmp eq i8 result, 0");
             self.builder
-                .build_conditional_branch(is_pending, loop_bb, done_bb)
+                .build_conditional_branch(is_pending, yield_bb, done_bb)
                 .expect("br on poll discriminant");
+            // Yield block (Pending path): cooperatively yield the OS
+            // scheduler then loop back. `sched_yield` returns i32 — we
+            // discard the result (a non-zero return means the OS
+            // refused to yield, which on Linux / macOS only happens on
+            // catastrophic failure and isn't recoverable from here).
+            self.builder.position_at_end(yield_bb);
+            self.builder
+                .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                .expect("call sched_yield");
+            self.builder
+                .build_unconditional_branch(loop_bb)
+                .expect("br back to poll loop after yield");
             // Done: release the state struct, position for downstream IR.
             self.builder.position_at_end(done_bb);
             self.builder

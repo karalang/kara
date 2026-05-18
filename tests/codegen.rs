@@ -14302,6 +14302,89 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8e: cooperative yield on Pending ─────────
+    //
+    // The caller-side intercept routes the Pending path through a
+    // `kara.poll_yield` block that calls `sched_yield` before looping
+    // back to the poll-loop, so the parent thread yields the OS
+    // scheduler quantum between poll-fn invocations rather than busy-
+    // spinning. Without the yield the line-17 dispatcher thread (and
+    // other tasks on the same scheduler) would be starved of cycles.
+
+    #[test]
+    fn test_caller_side_intercept_emits_poll_yield_block() {
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("kara.poll_yield:"),
+            "intercept must emit a `kara.poll_yield` block:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_yield_block_calls_sched_yield() {
+        // The yield block calls the POSIX `sched_yield` libc primitive
+        // — an external i32-returning function declared at module-build
+        // time. The discriminant is discarded.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        assert!(
+            ir.contains("declare i32 @sched_yield()"),
+            "module must declare extern @sched_yield:\n{ir}"
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("call i32 @sched_yield()"),
+            "yield block must call @sched_yield:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_pending_branches_to_yield_not_loop() {
+        // The Pending conditional branch routes to `kara.poll_yield` —
+        // the yield block is the indirection that handles the
+        // cooperative yield before re-entering the loop.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains(
+                "br i1 %kara.is_pending, label %kara.poll_yield, label %kara.poll_done"
+            ),
+            "Pending branch must route to kara.poll_yield (not directly back to poll_loop):\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_yield_block_loops_back_to_poll_loop() {
+        // After `sched_yield`, the yield block unconditionally branches
+        // back to `kara.poll_loop` to re-invoke the poll-fn.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("br label %kara.poll_loop"),
+            "yield block must br back to kara.poll_loop:\n{main_body}"
+        );
+    }
+
     #[test]
     fn test_caller_side_intercept_multi_call_sites_get_distinct_labels() {
         // Two calls to network-boundary fns in the same caller produce
