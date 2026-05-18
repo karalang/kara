@@ -121,6 +121,74 @@ fn test_query_queries_empty_envelope() {
 }
 
 #[test]
+fn test_query_queries_populated_envelope_has_inlining_query() {
+    // Phase-7 line 25 (P1.3 codegen queries) — the codegen-queries
+    // analyzer surfaces an inlining-decision query for a pub fn
+    // that's called from three hot-looking sites. The CLI must
+    // serialize it into the envelope with the expected `kind`,
+    // `id`, and resolution surface so external tooling can render
+    // the fix without parsing the body.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-query-populated-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("hot.kara");
+    let src = r#"
+pub fn step(x: i64) -> i64 { x + 1 }
+fn main() {
+    let mut acc: i64 = 0;
+    for i in 0..100 {
+        acc = step(acc);
+        acc = step(acc);
+        acc = step(acc);
+    }
+    println(f"{acc}");
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "queries", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"inlining_decision\""),
+        "expected an inlining_decision entry; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"id\":\"step\""),
+        "expected query id `step`; got stdout={stdout}",
+    );
+    // Both halves of the resolution surface are exposed so tools can
+    // pick either direction as the suggested fix.
+    assert!(
+        stdout.contains("\"inline\""),
+        "expected `inline` in resolution_surface; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"inline(never)\""),
+        "expected `inline(never)` in resolution_surface; got stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("\"cross_phase_origin\":\"codegen\""),
+        "expected codegen-origin tag; got stdout={stdout}",
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[test]
 fn test_subcommand_help_fmt() {
     let out = karac_bin().args(["fmt", "--help"]).output().unwrap();
     assert!(out.status.success());

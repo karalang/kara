@@ -4608,47 +4608,119 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
 }
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 3.
-/// Collate every `CompilerQuery` across all phase results and emit
-/// them as a single JSON envelope on stdout. v1 catalogue is empty;
-/// the output shape is `{"queries":[]}` until P1.x entries populate.
-/// Surface lock — adding catalogue entries (or new phases) is a non-
-/// breaking change as long as the envelope shape stays
-/// `{"queries":[…]}`.
+/// Collate every `CompilerQuery` across all phase results plus the
+/// P1.3 codegen analyzer (`crate::codegen_queries`) and emit them as
+/// a single JSON envelope on stdout. The envelope shape is
+/// `{"queries":[…]}`; adding new catalogue entries or phases is
+/// non-breaking.
 fn query_queries(pipeline: &Pipeline) {
-    let mut total = 0usize;
+    let mut all: Vec<crate::queries::CompilerQuery> = Vec::new();
     if let Some(r) = pipeline.resolved.as_ref() {
-        total += r.queries.len();
+        all.extend(r.queries.iter().cloned());
     }
     if let Some(t) = pipeline.typed.as_ref() {
-        total += t.queries.len();
+        all.extend(t.queries.iter().cloned());
     }
     if let Some(e) = pipeline.effects.as_ref() {
-        total += e.queries.len();
+        all.extend(e.queries.iter().cloned());
     }
     if let Some(o) = pipeline.ownership.as_ref() {
-        total += o.queries.len();
+        all.extend(o.queries.iter().cloned());
     }
     if let Some(c) = pipeline.concurrency.as_ref() {
-        total += c.queries.len();
+        all.extend(c.queries.iter().cloned());
     }
-    // v1 emits the empty array unconditionally — `CompilerQuery`
-    // values aren't yet stable JSON-renderable from this layer (their
-    // shape lands alongside the first catalogue entry that pushes
-    // values). Once a P1.x entry populates, the per-query JSON
-    // encoder lives here.
-    if total == 0 {
-        println!("{{\"queries\":[]}}");
-    } else {
-        // Defensive — unreachable in v1 because no phase pushes
-        // queries. Future-proof against a phase landing query
-        // emission ahead of this renderer.
-        eprintln!(
-            "note: {} compiler-query value(s) emitted but the v1 JSON renderer is empty-only — \
-             extend query_queries() to serialize the per-query envelope.",
-            total,
-        );
-        println!("{{\"queries\":[]}}");
+    // P1.3 codegen queries — plain-data analyzer over the parsed AST.
+    // Runs unconditionally; cheap (single AST walk) and doesn't
+    // require any later-phase side-tables.
+    all.extend(crate::codegen_queries::analyze(&pipeline.parsed.program));
+
+    println!("{}", render_queries_envelope(&all, &pipeline.filename));
+}
+
+fn render_queries_envelope(queries: &[crate::queries::CompilerQuery], filename: &str) -> String {
+    if queries.is_empty() {
+        return "{\"queries\":[]}".to_string();
     }
+    let entries: Vec<String> = queries
+        .iter()
+        .map(|q| render_compiler_query(q, filename))
+        .collect();
+    format!("{{\"queries\":[{}]}}", entries.join(","))
+}
+
+fn render_compiler_query(q: &crate::queries::CompilerQuery, filename: &str) -> String {
+    use crate::queries::{Confidence, Phase, QueryKind};
+    let kind = match q.kind {
+        QueryKind::Stub => "stub",
+        QueryKind::InliningDecision => "inlining_decision",
+        QueryKind::BranchHint => "branch_hint",
+    };
+    let confidence = match q.default_confidence {
+        Confidence::Low => "low",
+        Confidence::Medium => "medium",
+        Confidence::High => "high",
+    };
+    let origin = q.cross_phase_origin.map(|p| match p {
+        Phase::Resolver => "resolver",
+        Phase::TypeChecker => "typechecker",
+        Phase::EffectChecker => "effectchecker",
+        Phase::Ownership => "ownership",
+        Phase::Concurrency => "concurrency",
+        Phase::Codegen => "codegen",
+    });
+    let options_json: Vec<String> = q
+        .options
+        .iter()
+        .map(|opt| {
+            let note = opt
+                .note
+                .as_deref()
+                .map(|n| format!(",\"note\":\"{}\"", json_escape(n)))
+                .unwrap_or_default();
+            format!("{{\"label\":\"{}\"{}}}", json_escape(&opt.label), note)
+        })
+        .collect();
+    let resolution_json: Vec<String> = q
+        .resolution_surface
+        .attributes
+        .iter()
+        .map(|a| format!("\"{}\"", json_escape(a)))
+        .collect();
+    let origin_field = origin
+        .map(|o| format!(",\"cross_phase_origin\":\"{}\"", o))
+        .unwrap_or_default();
+    format!(
+        "{{\"id\":\"{}\",\"site\":{{\"file\":\"{}\",\"line\":{},\"column\":{},\"offset\":{},\"length\":{}}},\"kind\":\"{}\",\"options\":[{}],\"default\":{},\"default_confidence\":\"{}\",\"resolution_surface\":[{}]{}}}",
+        json_escape(&q.id.to_string()),
+        json_escape(filename),
+        q.site.line,
+        q.site.column,
+        q.site.offset,
+        q.site.length,
+        kind,
+        options_json.join(","),
+        q.default,
+        confidence,
+        resolution_json.join(","),
+        origin_field,
+    )
+}
+
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn query_attributes(pipeline: &Pipeline, tool_prefix: Option<String>) {

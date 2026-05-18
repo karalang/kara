@@ -62,20 +62,29 @@ pub struct CompilerQuery {
     pub cross_phase_origin: Option<Phase>,
 }
 
-/// What kind of query this is. v1 catalogue is intentionally empty
-/// (just the `Stub` placeholder); the first real variant lands with
-/// phase-7-codegen.md line 25 (P1.3 codegen queries). Marked
-/// `non_exhaustive` so adding catalogue entries is non-breaking for
-/// consumers.
+/// What kind of query this is. P1.3 (phase-7-codegen.md line 25) lands
+/// the first two real catalogue entries — `InliningDecision` and
+/// `BranchHint`. Marked `non_exhaustive` so adding catalogue entries
+/// (P1.1 RC fallback, P1.2 specialization, P1.5 layout, P1.6 fork
+/// threshold) stays a non-breaking change for downstream tooling.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum QueryKind {
-    /// Placeholder so the enum is non-trivial and matchable from v1.
-    /// Never emitted by any phase. The `Vec<CompilerQuery>` field on
-    /// every phase result is empty in v1 because no phase populates
-    /// it yet — first real catalogue entry replaces this with named
-    /// variants per the P1.x sub-entries below the parent P0.
+    /// Placeholder so the enum is non-trivial and matchable from v1
+    /// even when the analyzer pushes no queries. Never emitted by any
+    /// phase.
     Stub,
+    /// Inlining decision at a non-attributed function definition that
+    /// reads as "hot-looking" (called from inside loops at multiple
+    /// sites). Resolution surface: `#[inline]` / `#[inline(never)]`
+    /// on the function definition.
+    InliningDecision,
+    /// Branch-hint decision at a `match` expression or `if`/`else`
+    /// with no `#[likely]`/`#[unlikely]` annotation on any arm/branch
+    /// when the cost model considers the choice notable (asymmetric
+    /// arm/branch body sizes). Resolution surface: `#[likely]` /
+    /// `#[unlikely]` on the arm or branch the author considers hot.
+    BranchHint,
 }
 
 /// One alternative the compiler considered at a decision site.
