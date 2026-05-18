@@ -1565,4 +1565,78 @@ fn main() {
             "auto_par_vec_char_return_freed_on_caller_scope_exit",
         );
     }
+
+    #[test]
+    fn asan_auto_par_shared_struct_option_return_slot() {
+        // A par group with two effectful stmts where one returns
+        // `Option[shared T]` consumed in the parent scope. Pre-fix
+        // (2026-05-17), the branch's `emit_scope_cleanup` ran the
+        // queued `RcDecOption` on the slot-source local, dropping the
+        // head Node's refcount to 0 → freed. The parent's load from
+        // the return slot then yielded a dangling pointer; the
+        // kata 2 add-two-numbers bench manifested as `node.val = 0`
+        // (allocator-zeroed memory). Fix added RcDec/RcDecOption
+        // suppression to the par-branch slot-source loop (analog to
+        // the existing Vec `cap=0` suppression).
+        //
+        // The test geometry mirrors the kata 2 reduction: `make_vec`
+        // returns `Vec[i64]`, `from_arr` returns `Option[Node]` where
+        // `Node` is a `shared struct`. The analyzer parallelizes
+        // `let b = make_vec(...)` and `let l1 = from_arr(...)` (both
+        // effectful, independent vars, no effect-resource conflict).
+        // The body prints `node.val` for the surviving head node —
+        // 7 if the RC transfer worked, 0 (or ASAN error) if not.
+        // Inline match on `l1` rather than passing through a helper fn
+        // taking `Option[shared T]` by value — the latter hits a
+        // separate pre-existing karac codegen bug (a fn taking a
+        // self-referential `Option[shared T]` hangs at call entry,
+        // independent of par). Inline match avoids the helper.
+        assert_clean_asan_run(
+            r#"
+shared struct Node {
+    val: i64,
+    mut next: Option[Node],
+}
+
+fn make_vec(n: u64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.new();
+    let mut i = 0u64;
+    while i < n {
+        v.push(7);
+        i = i + 1u64;
+    }
+    v
+}
+
+fn from_arr(arr: Slice[i64]) -> Option[Node] {
+    let n = arr.len();
+    if n == 0 {
+        return None;
+    }
+    let head = Node { val: arr[0], next: None };
+    let mut tail = head;
+    for i in 1..n {
+        let node = Node { val: arr[i], next: None };
+        tail.next = Some(node);
+        tail = node;
+    }
+    Some(head)
+}
+
+fn main() {
+    let a = make_vec(5u64);
+    let b = make_vec(5u64);
+    let l1 = from_arr(a.as_slice());
+
+    match l1 {
+        Some(n) => println(n.val),
+        None => println(-1i64),
+    }
+    println(b.len());
+}
+"#,
+            &["7", "5"],
+            "auto_par_shared_struct_option_return_slot",
+        );
+    }
 }

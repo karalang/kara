@@ -16,7 +16,7 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::{ReturnSlot, VarSlot};
+use super::state::{CleanupAction, ReturnSlot, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Compile a `par {}` block by spawning each stmt as a per-branch
@@ -753,7 +753,72 @@ impl<'ctx> super::Codegen<'ctx> {
                     let vec_st: BasicTypeEnum<'ctx> = self.vec_struct_type().into();
                     if local.ty == vec_st {
                         self.zero_vec_alloca_cap(local.ptr);
+                        continue;
                     }
+                }
+                // RC-bearing slot sources: a `let binding = <expr>` whose
+                // result type involves a `shared struct` / `shared enum`
+                // had `track_rc_var` / `track_rc_option_var` register a
+                // queued `RcDec` / `RcDecOption` cleanup against the
+                // binding's local alloca during the body's `compile_stmt`.
+                // Run on branch exit, that dec would drop the same heap
+                // object the parent's slot field still references —
+                // observed as `Option[ListNode]` payload reading freed
+                // memory after `karac_par_run` join (kata 2 add-two-numbers
+                // bench corruption, 2026-05-17).
+                //
+                // Suppress by structurally mutating the local's tracked
+                // state to a value the cleanup's runtime guard treats as
+                // "nothing to drop":
+                //   - `RcDec` reloads `variables[name].ptr` and skips when
+                //     null → store a null pointer into the local alloca.
+                //   - `RcDecOption` reloads the option tag and skips when
+                //     tag != Some → store a zero tag into field 0 of the
+                //     option slot.
+                // The slot-write loop above already copied the live value
+                // into the return struct, so the parent receives an
+                // intact pointer. Mirrors the Vec `cap=0` suppression
+                // pattern, generalised over the RC cleanup shapes.
+                let frame_idx = self.scope_cleanup_actions.len().saturating_sub(1);
+                let mut nullify_local: Option<PointerValue<'ctx>> = None;
+                let mut zero_opt_tag: Option<(PointerValue<'ctx>, StructType<'ctx>)> = None;
+                if let Some(frame) = self.scope_cleanup_actions.get(frame_idx) {
+                    for action in frame {
+                        match action {
+                            CleanupAction::RcDec { name, .. } if *name == slot.binding_name => {
+                                if let Some(local) = self.variables.get(&slot.binding_name).copied()
+                                {
+                                    nullify_local = Some(local.ptr);
+                                }
+                            }
+                            CleanupAction::RcDecOption {
+                                name,
+                                option_slot,
+                                option_ty,
+                                ..
+                            } if *name == slot.binding_name => {
+                                zero_opt_tag = Some((*option_slot, *option_ty));
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                if let Some(ptr) = nullify_local {
+                    let null = self.context.ptr_type(AddressSpace::default()).const_null();
+                    let _ = self.builder.build_store(ptr, null);
+                }
+                if let Some((opt_slot, opt_ty)) = zero_opt_tag {
+                    let tag_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            opt_ty,
+                            opt_slot,
+                            0,
+                            &format!("{}_par_suppress_tag", slot.binding_name),
+                        )
+                        .unwrap();
+                    let zero = self.context.i64_type().const_int(0, false);
+                    let _ = self.builder.build_store(tag_ptr, zero);
                 }
             }
             self.emit_scope_cleanup();
