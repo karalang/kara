@@ -207,6 +207,56 @@ impl<'ctx> super::Codegen<'ctx> {
                 .state_struct_layouts
                 .get(fn_key)
                 .expect("layout exists for sorted key");
+
+            // Slice 8h: build per-arm segments of user-code statements
+            // between yield-point spans. For each statement in the user
+            // function's body, classify it as either:
+            // - a yield-point Call/MethodCall (advances the current
+            //   segment index, statement itself isn't emitted — the
+            //   state-transition lowering handles it via tag-store +
+            //   Pending return),
+            // - an emittable void-call statement (free-function call
+            //   with no args, callee declared in the module, callee
+            //   returns void) → queued into the current arm's segment,
+            // - any other shape (let bindings, control flow, non-void
+            //   calls, args-bearing calls, method calls) → ignored at
+            //   v1; future slices extend the supported statement set.
+            let yield_points = program
+                .yield_points
+                .get(fn_key)
+                .cloned()
+                .unwrap_or_default();
+            let mut per_arm_calls: Vec<Vec<String>> = vec![Vec::new(); yield_points.len() + 1];
+            if let Some(fn_ast) = find_function_ast(program, fn_key) {
+                let mut cur_arm = 0usize;
+                for stmt in &fn_ast.body.stmts {
+                    let StmtKind::Expr(expr) = &stmt.kind else {
+                        continue;
+                    };
+                    // Is this stmt-expr the yield-point call for the
+                    // next yield? Compare offsets — yield_points are
+                    // recorded in source order by slice 2's walker.
+                    if cur_arm < yield_points.len() {
+                        let yp_span = &yield_points[cur_arm].span;
+                        if expr.span.offset == yp_span.offset && expr.span.length == yp_span.length
+                        {
+                            cur_arm += 1;
+                            continue;
+                        }
+                    }
+                    // Emit-eligible shape: bare-identifier free-fn
+                    // call with no args. Method calls and arg-bearing
+                    // calls are deferred to follow-on slices that
+                    // thread receivers + args through the state struct.
+                    if let ExprKind::Call { callee, args } = &expr.kind {
+                        if args.is_empty() {
+                            if let ExprKind::Identifier(name) = &callee.kind {
+                                per_arm_calls[cur_arm].push(name.clone());
+                            }
+                        }
+                    }
+                }
+            }
             let poll_name = format!("__kara_poll_{fn_key}");
             let poll_fn = self.module.add_function(&poll_name, fn_type, None);
             // `Internal` rather than `Private`: both restrict visibility
@@ -337,6 +387,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_store(slot, loaded)
                         .expect("store reloaded captured-local into slot");
+                }
+                // Slice 8h body-splitting: emit each user-code void
+                // call queued for this arm. Only callees that are
+                // already declared in the module with a void return
+                // type emit — non-void returns would produce malformed
+                // LLVM IR (a SSA value with no name binding), and
+                // not-yet-declared callees indicate compilation order
+                // issues that should surface in a regression test
+                // rather than silently emit a dangling call. Lookup
+                // uses `module.get_function` against the LLVM symbol
+                // name (matching the user-level `@<name>` shape).
+                if let Some(arm_calls) = per_arm_calls.get(arm_idx) {
+                    for callee_name in arm_calls {
+                        let Some(callee_fn) = self.module.get_function(callee_name) else {
+                            continue;
+                        };
+                        if callee_fn.get_type().get_return_type().is_some() {
+                            // Non-void return — skip at v1 (the call
+                            // would need a name binding which adds
+                            // complexity we'll thread through a later
+                            // slice).
+                            continue;
+                        }
+                        self.builder
+                            .build_call(callee_fn, &[], "")
+                            .expect("emit slice-8h void user call");
+                    }
                 }
                 // Slice-8b state transition: non-terminal arms (the
                 // first `yield_count` arms — state_0..state_<N-1>) write
@@ -1056,4 +1133,45 @@ impl<'ctx> super::Codegen<'ctx> {
         self.apply_linker_attrs(fn_val, block_attrs);
         self.apply_linker_attrs(fn_val, &ext.attributes);
     }
+}
+
+/// Locate the user-level `Function` AST node corresponding to a state-
+/// machine function key. For free functions the key is the bare name
+/// (`"driver"`); for impl methods the key is `"Type.method"` and we
+/// match the impl block's target-type name's last segment against
+/// the key's prefix. Returns `None` when no matching item is found
+/// (e.g. the key refers to a generic or trait-method that doesn't
+/// have a concrete free-fn / impl-method AST node yet).
+///
+/// Used by phase 6 line 26 slice 8h's body-splitting walk to find
+/// the user's statements to emit per state arm.
+pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Option<&'p Function> {
+    for item in &program.items {
+        match item {
+            Item::Function(f) if f.name == fn_key => return Some(f),
+            Item::ImplBlock(imp) => {
+                let type_name = match &imp.target_type.kind {
+                    TypeKind::Path(p) => match p.segments.last() {
+                        Some(s) => s.as_str(),
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                let expected_prefix = format!("{type_name}.");
+                if !fn_key.starts_with(&expected_prefix) {
+                    continue;
+                }
+                let method_name = &fn_key[expected_prefix.len()..];
+                for ii in &imp.items {
+                    if let ImplItem::Method(m) = ii {
+                        if m.name == method_name {
+                            return Some(m);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

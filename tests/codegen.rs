@@ -14950,4 +14950,125 @@ fn main() {
             "method arg literal 42 must be stored into field 2:\n{main_body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8h: body-splitting for void calls ────────
+    //
+    // The poll-fn now walks the user function's body AST and partitions
+    // statements at yield-point spans. Non-yield arg-less Call(Identifier)
+    // statements with void-returning callees are emitted as `call void
+    // @<name>()` in the corresponding state arm, between the slice-8a
+    // reload prologue and the slice-8b tag-store / Ready return.
+    // Method calls, args-bearing calls, let bindings, and control flow
+    // are deferred to follow-on slices.
+
+    #[test]
+    fn test_body_splitting_emits_pre_yield_void_call_in_state_0() {
+        // `fn driver() { helper(); fetch(); }` — `helper();` runs in
+        // state_0 (before the first yield); the yield-point call to
+        // `fetch()` advances to state_1 (terminal).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn helper() {}
+             fn driver() { helper(); fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // The helper call should appear in state_0 BEFORE the tag-store
+        // that transitions to state 1.
+        let helper_pos = body
+            .find("call void @helper()")
+            .expect("helper void-call must appear in poll-fn body");
+        let tag_store_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 must store next tag = 1");
+        assert!(
+            helper_pos < tag_store_pos,
+            "helper call must precede the tag-store in state_0:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_emits_post_yield_void_call_in_terminal_arm() {
+        // `fn driver() { fetch(); helper(); }` — `helper();` runs in
+        // the terminal arm (state_1 for 1-yield) before the Ready return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn helper() {}
+             fn driver() { fetch(); helper(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let helper_pos = body
+            .find("call void @helper()")
+            .expect("helper void-call must appear in poll-fn body");
+        let ready_pos = body
+            .find("ret i8 1")
+            .expect("terminal arm must return Ready");
+        assert!(
+            helper_pos < ready_pos,
+            "helper call must precede the Ready return in terminal arm:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_multi_yield_segments_calls_per_arm() {
+        // `fn driver() { a(); fetch(); b(); fetch(); c(); }` —
+        // a() in state_0, b() in state_1, c() in terminal state_2.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn a() {}
+             fn b() {}
+             fn c() {}
+             fn driver() { a(); fetch(); b(); fetch(); c(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Each call should appear exactly once in the poll-fn.
+        assert_eq!(
+            body.matches("call void @a()").count(),
+            1,
+            "a() should appear once in state_0:\n{body}"
+        );
+        assert_eq!(
+            body.matches("call void @b()").count(),
+            1,
+            "b() should appear once in state_1:\n{body}"
+        );
+        assert_eq!(
+            body.matches("call void @c()").count(),
+            1,
+            "c() should appear once in terminal state_2:\n{body}"
+        );
+        // a() must precede state_0's tag-store; b() must precede
+        // state_1's tag-store; c() must precede the Ready return.
+        let pos_a = body.find("call void @a()").unwrap();
+        let pos_state_0_store = body.find("store i32 1, ptr %state_0.next_tag_ptr").unwrap();
+        let pos_b = body.find("call void @b()").unwrap();
+        let pos_state_1_store = body.find("store i32 2, ptr %state_1.next_tag_ptr").unwrap();
+        let pos_c = body.find("call void @c()").unwrap();
+        let pos_ready = body.rfind("ret i8 1").unwrap();
+        assert!(pos_a < pos_state_0_store, "a() before state_0 tag-store");
+        assert!(pos_b > pos_state_0_store && pos_b < pos_state_1_store);
+        assert!(pos_c > pos_state_1_store && pos_c < pos_ready);
+    }
+
+    #[test]
+    fn test_body_splitting_no_emission_for_trivial_yield_only_body() {
+        // `fn driver() { fetch(); }` — no user-code between yields, so
+        // the poll-fn body has no extra calls beyond the slice-7
+        // switch + slice-8a reload + slice-8b tag-store / Ready.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn helper() {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // helper is declared but never called inside driver's body —
+        // it must NOT appear in the poll-fn body.
+        assert!(
+            !body.contains("call void @helper()"),
+            "helper must not appear in trivial driver's poll-fn:\n{body}"
+        );
+    }
 }

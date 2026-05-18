@@ -1679,13 +1679,6 @@ impl<'ctx> Codegen<'ctx> {
         // up the struct type at body-rewrite time. Empty when no
         // network-boundary functions exist (the common case).
         self.emit_state_struct_types(program);
-        // Phase 6 line 26 slice 6: emit a stub poll function per
-        // state-struct entry, declaring the line-17 `KaracParkedTask`
-        // poll-fn ABI (`i8 fn(ptr state, ptr cancel)`) for caller-side
-        // wiring in subsequent sub-slices. Body is a Pending-return
-        // stub at this slice; the dispatch switch + yield-arm lowering
-        // land in slice 7+.
-        self.emit_state_machine_poll_fns(program);
         // Phase 6 line 26 slice 8c: emit a state-struct constructor
         // helper per state-struct entry. Caller-side wiring in
         // slice 8d+ replaces direct calls to network-boundary fns
@@ -1863,6 +1856,22 @@ impl<'ctx> Codegen<'ctx> {
         // into it. The populator ctor is emitted at finalize. No-op
         // when --enable-hot-swap is off.
         self.pre_emit_hot_swap_table();
+
+        // Phase 6 line 26 slice 6 + 8h: emit the state-machine poll
+        // function per state-struct entry. Runs HERE (after user
+        // function declarations) rather than early in the type-emission
+        // block because slice-8h body-splitting needs to reference
+        // user functions in the per-arm void-call emissions —
+        // `module.get_function("pure_helper")` requires that callee
+        // to be declared first. The declaration-only piece could in
+        // principle land earlier (declarations don't need user-fn
+        // symbols), but keeping declaration + body in one pass at
+        // this point is simpler than splitting the emit function
+        // across two compile_program phases, and the caller-side
+        // intercept (slice 8d / 8g) only reads `state_machine_poll_fns`
+        // during user body compilation that runs immediately after
+        // this — so the side-table is populated in time.
+        self.emit_state_machine_poll_fns(program);
 
         // Second pass: compile concrete functions (generic ones are compiled lazily).
         for item in &program.items {
