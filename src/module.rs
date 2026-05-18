@@ -747,6 +747,7 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
     module.items.iter().any(|item| match item {
         Item::Function(f) => f.name == name,
         Item::StructDef(s) => s.name == name,
+        Item::UnionDef(u) => u.name == name,
         Item::EnumDef(e) => e.name == name,
         Item::TraitDef(t) => t.name == name,
         Item::TraitAlias(t) => t.name == name,
@@ -850,6 +851,7 @@ pub fn canonical_item_visibility(
         match item {
             Item::Function(f) if f.name == origin_name => return Some(f.visibility()),
             Item::StructDef(s) if s.name == origin_name => return Some(s.visibility()),
+            Item::UnionDef(u) if u.name == origin_name => return Some(u.visibility()),
             Item::EnumDef(e) if e.name == origin_name => return Some(e.visibility()),
             Item::TraitDef(t) if t.name == origin_name => return Some(t.visibility()),
             Item::ConstDecl(c) if c.name == origin_name => return Some(c.visibility()),

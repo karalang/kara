@@ -44,6 +44,13 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
                 visit_expr(inv, visit);
             }
         }
+        Item::UnionDef(u) => {
+            visit(&u.span);
+            for field in &u.fields {
+                visit(&field.span);
+                visit_type(&field.ty, visit);
+            }
+        }
         Item::EnumDef(e) => {
             visit(&e.span);
             for v in &e.variants {

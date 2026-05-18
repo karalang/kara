@@ -9152,3 +9152,100 @@ fn on_unimpl_slice3_non_trait_carrier_still_in_attribute_list() {
         vec!["diagnostic".to_string(), "on_unimplemented".to_string()],
     );
 }
+
+// ── FFI unions (line 549 / v60 item 22) ──────────────────────────
+//
+// Slice 1 parser surface: `union NAME { ... }` parses into
+// `Item::UnionDef` with named fields. Empty bodies, tuple-style,
+// generic forms, where-clauses, and `mut` on fields are rejected at
+// parse with focused diagnostic codes. The keyword is unconditional
+// at item position; at field- or method-name position `union` keeps
+// working as an identifier (covered by an existing Set.union test in
+// tests/effectchecker.rs).
+
+#[test]
+fn union_parses_minimal_form() {
+    let prog = parse_ok(
+        "#[repr(C)]\n\
+         union FloatBits {\n\
+             f: f32,\n\
+             bits: u32,\n\
+         }",
+    );
+    let Item::UnionDef(u) = &prog.items[0] else {
+        panic!("expected UnionDef, got {:?}", prog.items[0]);
+    };
+    assert_eq!(u.name, "FloatBits");
+    assert_eq!(u.fields.len(), 2);
+    assert_eq!(u.fields[0].name, "f");
+    assert_eq!(u.fields[1].name, "bits");
+    assert!(!u.fields[0].is_pub);
+    // The `#[repr(C)]` attribute survives onto the parsed item; the
+    // typechecker reads it via `has_repr_c`.
+    assert!(u.attributes.iter().any(|a| a.is_bare("repr")));
+}
+
+#[test]
+fn union_empty_body_rejected_with_focused_diagnostic() {
+    let (_, errs) = parse_with_errors("#[repr(C)]\nunion Empty { }");
+    assert!(
+        errs.iter().any(|e| e.message.contains("E_EMPTY_UNION")),
+        "expected E_EMPTY_UNION diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_with_generics_rejected() {
+    let (_, errs) = parse_with_errors("#[repr(C)]\nunion Foo[T] {\n    a: i32,\n    b: T,\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_UNION_GENERICS_FORBIDDEN")),
+        "expected E_UNION_GENERICS_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_tuple_style_rejected() {
+    let (_, errs) = parse_with_errors("#[repr(C)]\nunion Foo(i32, f32);");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_UNION_TUPLE_FORBIDDEN")),
+        "expected E_UNION_TUPLE_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_where_clause_rejected() {
+    let (_, errs) = parse_with_errors("#[repr(C)]\nunion Foo where i32: Copy {\n    a: i32,\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_UNION_WHERE_FORBIDDEN")),
+        "expected E_UNION_WHERE_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_mut_field_rejected() {
+    let (_, errs) = parse_with_errors("#[repr(C)]\nunion Foo {\n    mut a: i32,\n    b: f32,\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_UNION_FIELD_MUT_FORBIDDEN")),
+        "expected E_UNION_FIELD_MUT_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_pub_visibility_parses() {
+    let prog = parse_ok("#[repr(C)]\npub union FloatBits {\n    pub f: f32,\n    bits: u32,\n}");
+    let Item::UnionDef(u) = &prog.items[0] else {
+        panic!("expected UnionDef");
+    };
+    assert!(u.is_pub);
+    assert!(u.fields[0].is_pub);
+    assert!(!u.fields[1].is_pub);
+}

@@ -120,6 +120,32 @@ pub(super) fn extract_must_use_message(attributes: &[Attribute]) -> Option<Strin
         .map(|a| a.string_value.clone().unwrap_or_default())
 }
 
+/// Returns `true` when `attributes` contains `#[repr(C)]` or
+/// `#[repr(C, packed)]`. v1 unions accept only these two repr shapes
+/// (transparent / packed-without-C / Rust-default / int-tagged
+/// variants are rejected by the absence-of-`C` test). Used at union
+/// declaration time to emit `E_UNION_REQUIRES_REPR` when no acceptable
+/// repr attribute is present.
+pub(super) fn has_repr_c(attributes: &[Attribute]) -> bool {
+    for attr in attributes {
+        if !attr.is_bare("repr") {
+            continue;
+        }
+        for arg in &attr.args {
+            if let Some(Expr {
+                kind: ExprKind::Identifier(name),
+                ..
+            }) = &arg.value
+            {
+                if name == "C" {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
 /// Returns `true` when `attributes` contains `#[derive(Display(snake_case))]`.
 pub(super) fn has_display_snake_case(attributes: &[Attribute]) -> bool {
     for attr in attributes {

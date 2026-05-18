@@ -33,6 +33,7 @@ impl<'a> super::Resolver<'a> {
             match item {
                 Item::Function(f) => self.resolve_function(f),
                 Item::StructDef(s) => self.resolve_struct_def(s),
+                Item::UnionDef(u) => self.resolve_union_def(u),
                 Item::EnumDef(e) => self.resolve_enum_def(e),
                 Item::TraitDef(t) => self.resolve_trait_def(t),
                 Item::ImplBlock(i) => self.resolve_impl_block(i),
@@ -117,6 +118,15 @@ impl<'a> super::Resolver<'a> {
             for field in &s.fields {
                 self.resolve_type_expr(&field.ty);
             }
+        }
+    }
+
+    fn resolve_union_def(&mut self, u: &UnionDef) {
+        // Unions are non-generic at v1 — the parser rejects generics
+        // and where-clauses, so we resolve field types directly in the
+        // module scope without pushing a generic-params scope.
+        for field in &u.fields {
+            self.resolve_type_expr(&field.ty);
         }
     }
 

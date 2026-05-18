@@ -287,6 +287,7 @@ pub(super) fn item_name(item: &crate::ast::Item) -> Option<&str> {
     match item {
         Item::Function(f) => Some(&f.name),
         Item::StructDef(s) => Some(&s.name),
+        Item::UnionDef(u) => Some(&u.name),
         Item::EnumDef(e) => Some(&e.name),
         Item::TraitDef(t) => Some(&t.name),
         Item::TraitAlias(t) => Some(&t.name),
@@ -323,6 +324,7 @@ pub(super) fn item_span(item: &crate::ast::Item) -> &crate::token::Span {
     match item {
         Item::Function(f) => &f.span,
         Item::StructDef(s) => &s.span,
+        Item::UnionDef(u) => &u.span,
         Item::EnumDef(e) => &e.span,
         Item::TraitDef(t) => &t.span,
         Item::TraitAlias(t) => &t.span,

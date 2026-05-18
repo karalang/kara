@@ -3789,3 +3789,35 @@ fn query_resolution_conflict_does_not_fire_on_single_attribute() {
         "lone #[cold] must not trigger the conflict diagnostic",
     );
 }
+
+// ── FFI unions (line 549) ────────────────────────────────────────
+//
+// Resolver-time registration: a `union NAME { ... }` declaration
+// surfaces in the type namespace under `SymbolKind::Union { ... }`
+// so downstream type-expression resolution finds the name (e.g.
+// `extern "C" { fn f(u: *mut FloatBits); }` resolves `FloatBits`).
+
+#[test]
+fn union_registers_in_type_namespace() {
+    let result = resolve_ok("#[repr(C)]\nunion FloatBits {\n    f: f32,\n    bits: u32,\n}");
+    let sym = result
+        .symbol_table
+        .lookup_in_scope(ScopeId(0), "FloatBits")
+        .expect("FloatBits should be registered in the type namespace");
+    match &sym.kind {
+        SymbolKind::Union { field_names } => {
+            assert_eq!(field_names, &["f".to_string(), "bits".to_string()]);
+        }
+        other => panic!("expected SymbolKind::Union, got {:?}", other),
+    }
+}
+
+#[test]
+fn union_field_types_resolve_in_module_scope() {
+    // i32 / f32 must resolve; if union registration broke field-type
+    // resolution we would see an unresolved-type error.
+    resolve_ok(
+        "#[repr(C)]\nunion FloatBits {\n    f: f32,\n    bits: u32,\n}\n\
+         fn read_bits(u: *const FloatBits) -> i32 { 0 }",
+    );
+}

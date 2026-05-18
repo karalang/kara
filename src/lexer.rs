@@ -1064,6 +1064,7 @@ impl<'a> Lexer<'a> {
             // Declarations
             "fn" => Token::Fn,
             "struct" => Token::Struct,
+            "union" => Token::Union,
             "enum" => Token::Enum,
             "trait" => Token::Trait,
             "marker" => Token::Marker,

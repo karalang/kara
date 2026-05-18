@@ -16898,3 +16898,79 @@ fn on_unimpl_slice6_self_placeholder_substitutes_in_label_and_note() {
     assert!(msg.contains("label for NotImpl"));
     assert!(msg.contains("note for NotImpl"));
 }
+
+// ── FFI unions (line 549) ────────────────────────────────────────
+//
+// Slice 1 decl-time validation: `#[repr(C)]` required;
+// per-field `Copy` bound required (overlapping storage cannot run
+// destructors); `#[derive(...)]` rejected. Use-site `unsafe { }`
+// rules + impl Drop rejection + codegen ship in follow-up slices.
+
+#[test]
+fn union_repr_c_typechecks_clean() {
+    typecheck_ok("#[repr(C)]\nunion FloatBits {\n    f: f32,\n    bits: u32,\n}");
+}
+
+#[test]
+fn union_repr_c_packed_typechecks_clean() {
+    typecheck_ok("#[repr(C, packed)]\nunion Packed {\n    a: i32,\n    b: f32,\n}");
+}
+
+#[test]
+fn union_without_repr_c_rejected() {
+    let errors = typecheck_errors("union FloatBits {\n    f: f32,\n    bits: u32,\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_REQUIRES_REPR")),
+        "expected E_UNION_REQUIRES_REPR, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_non_copy_field_rejected() {
+    // `String` is owned/heap-allocated — definitely not Copy. The
+    // diagnostic should name both the union and the offending field.
+    let errors = typecheck_errors("#[repr(C)]\nunion Bad {\n    s: String,\n    bits: u64,\n}");
+    let copy_err = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_FIELD_NOT_COPY"))
+        .expect("expected E_UNION_FIELD_NOT_COPY diagnostic");
+    assert!(
+        copy_err.message.contains("Bad.s"),
+        "diagnostic should name offending field, got: {}",
+        copy_err.message,
+    );
+}
+
+#[test]
+fn union_derive_rejected() {
+    let errors =
+        typecheck_errors("#[repr(C)]\n#[derive(Eq)]\nunion Foo {\n    a: i32,\n    b: f32,\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_DERIVE_FORBIDDEN")),
+        "expected E_UNION_DERIVE_FORBIDDEN, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_typecheck_diagnostic_names_wrapper_alternative_in_repr_msg() {
+    // The E_UNION_REQUIRES_REPR diagnostic body explains FFI-boundary
+    // motivation and names `#[repr(C)]` and `#[repr(C, packed)]` as
+    // accepted forms — that breadcrumb is what steers the user to a
+    // working fix rather than just stating the rule.
+    let errors = typecheck_errors("union FloatBits {\n    f: f32,\n    bits: u32,\n}");
+    let repr_err = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_REQUIRES_REPR"))
+        .expect("expected E_UNION_REQUIRES_REPR");
+    assert!(
+        repr_err.message.contains("#[repr(C)]"),
+        "diagnostic should suggest #[repr(C)], got: {}",
+        repr_err.message,
+    );
+}

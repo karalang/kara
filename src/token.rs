@@ -50,6 +50,7 @@ pub enum Token {
     // Declarations
     Fn,
     Struct,
+    Union,
     Enum,
     Trait,
     Impl,

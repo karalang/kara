@@ -516,6 +516,7 @@ impl Parser {
             match self.peek_token() {
                 Token::Fn
                 | Token::Struct
+                | Token::Union
                 | Token::Enum
                 | Token::Trait
                 | Token::Impl

@@ -36,6 +36,7 @@ impl<'a> super::Resolver<'a> {
             match item {
                 Item::Function(f) => self.collect_function(f),
                 Item::StructDef(s) => self.collect_struct(s),
+                Item::UnionDef(u) => self.collect_union(u),
                 Item::EnumDef(e) => self.collect_enum(e),
                 Item::TraitDef(t) => self.collect_trait(t),
                 Item::TraitAlias(t) => self.collect_trait_alias(t),
@@ -553,6 +554,35 @@ impl<'a> super::Resolver<'a> {
             s.is_pub,
         ) {
             Ok(id) => self.record_deprecation_if_present(id, &s.deprecation),
+            Err(e) => self.errors.push(e),
+        }
+    }
+
+    fn collect_union(&mut self, u: &UnionDef) {
+        self.check_compiler_builtin_attr(&u.attributes, u.stdlib_origin);
+        // Per-attribute placement rejections that mirror struct treatment.
+        // `#[non_exhaustive]` / `#[track_caller]` / `#[profile]` are not
+        // meaningful on unions (the FFI shape carries no Kāra-side
+        // version surface, no body, and no effect set). Reject up front
+        // so the user gets a focused diagnostic rather than silent
+        // acceptance of an attribute that does nothing.
+        self.reject_non_exhaustive_attr(&u.attributes, "union");
+        self.reject_track_caller_attr(&u.attributes, "union");
+        self.reject_profile_attr(&u.attributes, "union");
+        for field in &u.fields {
+            self.reject_non_exhaustive_attr(&field.attributes, "union field");
+            self.reject_track_caller_attr(&field.attributes, "union field");
+            self.reject_profile_attr(&field.attributes, "union field");
+            self.reject_deprecated_on_field(&field.attributes);
+        }
+        let field_names: Vec<String> = u.fields.iter().map(|f| f.name.clone()).collect();
+        match self.table.define(
+            u.name.clone(),
+            SymbolKind::Union { field_names },
+            u.span.clone(),
+            u.is_pub,
+        ) {
+            Ok(id) => self.record_deprecation_if_present(id, &u.deprecation),
             Err(e) => self.errors.push(e),
         }
     }

@@ -185,9 +185,32 @@ pub struct ImplAssocTypeEntry {
     pub where_clause: Option<crate::ast::WhereClause>,
 }
 
+/// `union NAME { ... }` registration entry — declaration-time view
+/// of an FFI union. Holds the lowered field map plus the parsed
+/// `#[repr(C)]` flag and an `is_pub` view of declaration visibility.
+/// Use-site rules (`unsafe { }` for field reads, etc.) are not yet
+/// wired (see phase-5 tracker line 549 follow-ups) — this entry is
+/// the substrate they will read.
+pub struct UnionInfo {
+    /// Field name → type → is_pub. Mirrors `StructInfo.fields` shape
+    /// so per-field codegen and unsafe-rule passes can iterate in a
+    /// familiar form.
+    pub fields: Vec<(String, Type, bool)>,
+    /// True iff the declaration carries `#[repr(C)]` (the only repr
+    /// shape v1 accepts on unions). Read at typecheck time to emit
+    /// `E_UNION_REQUIRES_REPR` when absent.
+    pub is_repr_c: bool,
+    /// True when this entry came from baked stdlib source. Mirrors
+    /// [`StructInfo::defining_stdlib_origin`] for diagnostic sites
+    /// that need to distinguish user vs. stdlib origin.
+    pub defining_stdlib_origin: bool,
+}
+
 pub struct TypeEnv {
     pub structs: HashMap<String, StructInfo>,
     pub enums: HashMap<String, EnumInfo>,
+    /// `union NAME { ... }` declarations. See [`UnionInfo`].
+    pub unions: HashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
     pub distinct_types: HashMap<String, HashSet<String>>,
     /// Names of opaque foreign types declared inside `unsafe extern "ABI" { ... }`
@@ -277,6 +300,7 @@ impl TypeEnv {
         TypeEnv {
             structs: HashMap::new(),
             enums: HashMap::new(),
+            unions: HashMap::new(),
             distinct_types: HashMap::new(),
             opaque_foreign_types: HashSet::new(),
             functions: HashMap::new(),

@@ -302,6 +302,12 @@ fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
                 visit_attrs(&field.attributes, errors);
             }
         }
+        Item::UnionDef(u) => {
+            visit_attrs(&u.attributes, errors);
+            for field in &u.fields {
+                visit_attrs(&field.attributes, errors);
+            }
+        }
         Item::EnumDef(e) => {
             visit_attrs(&e.attributes, errors);
             for variant in &e.variants {

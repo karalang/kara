@@ -116,6 +116,17 @@ fn walk_item(item: &Item, filter: &AttributeQueryFilter, out: &mut Vec<Attribute
                 );
             }
         }
+        Item::UnionDef(u) => {
+            emit_attrs(&u.attributes, &format!("union {}", u.name), filter, out);
+            for field in &u.fields {
+                emit_attrs(
+                    &field.attributes,
+                    &format!("union {}.{}", u.name, field.name),
+                    filter,
+                    out,
+                );
+            }
+        }
         Item::EnumDef(e) => {
             emit_attrs(&e.attributes, &format!("enum {}", e.name), filter, out);
             for v in &e.variants {

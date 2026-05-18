@@ -58,6 +58,17 @@ pub enum SymbolKind {
     Struct {
         field_names: Vec<String>,
     },
+    /// `union NAME { ... }` — FFI union type declaration. Holds the
+    /// field-name list parallel to [`Struct`] so the resolver can
+    /// validate field references against the declared names. Like
+    /// structs, unions are a type-namespace entry; unlike structs,
+    /// downstream phases enforce per-field `Copy` bounds, require
+    /// `#[repr(C)]`, and gate field reads behind `unsafe { ... }`
+    /// (use-site rules ship in follow-up slices — see phase 5
+    /// tracker line 549).
+    Union {
+        field_names: Vec<String>,
+    },
     Enum {
         variant_names: Vec<String>,
     },
@@ -632,6 +643,7 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
         match item {
             Item::Function(f) => names.push(f.name.clone()),
             Item::StructDef(s) => names.push(s.name.clone()),
+            Item::UnionDef(u) => names.push(u.name.clone()),
             Item::EnumDef(e) => names.push(e.name.clone()),
             Item::TraitDef(t) => names.push(t.name.clone()),
             Item::TraitAlias(t) => names.push(t.name.clone()),

@@ -14,6 +14,7 @@ impl super::Formatter {
         match item {
             Item::Function(f) => self.format_function(f),
             Item::StructDef(s) => self.format_struct(s),
+            Item::UnionDef(u) => self.format_union(u),
             Item::EnumDef(e) => self.format_enum(e),
             Item::TraitDef(t) => self.format_trait(t),
             Item::TraitAlias(t) => self.format_trait_alias(t),
@@ -337,6 +338,30 @@ impl super::Formatter {
             self.write_str("invariant ");
             self.format_expr(inv);
             self.write_str("\n");
+        }
+        self.pop_indent();
+        self.writeln("}");
+    }
+
+    // ── Unions ──────────────────────────────────────────────────
+
+    pub(super) fn format_union(&mut self, u: &UnionDef) {
+        self.format_attributes(&u.attributes);
+        self.write_indent();
+        self.write_visibility(u.visibility());
+        self.write_str("union ");
+        self.write_ident(&u.name);
+        self.write_str(" {\n");
+        self.push_indent();
+        for field in &u.fields {
+            self.write_indent();
+            if field.is_pub {
+                self.write_str("pub ");
+            }
+            self.write_ident(&field.name);
+            self.write_str(": ");
+            self.format_type_expr(&field.ty);
+            self.write_str(",\n");
         }
         self.pop_indent();
         self.writeln("}");

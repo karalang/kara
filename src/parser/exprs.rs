@@ -105,8 +105,20 @@ impl super::Parser {
                                 },
                             };
                         }
-                        Token::Identifier { .. } => {
-                            let method = self.expect_identifier()?;
+                        Token::Identifier { .. } | Token::Union => {
+                            // `union` is a keyword at item position only —
+                            // in field- or method-name position it must be
+                            // accepted as a plain identifier so existing
+                            // stdlib methods like `Set.union(...)` and any
+                            // user-defined field named `union` keep working.
+                            // This is the standard "weak keyword" treatment
+                            // (Rust does the same).
+                            let method = if self.check(&Token::Union) {
+                                self.advance();
+                                "union".to_string()
+                            } else {
+                                self.expect_identifier()?
+                            };
                             let turbofish = None;
                             if self.check(&Token::LeftParen) {
                                 // Method call

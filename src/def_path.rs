@@ -142,6 +142,9 @@ pub fn collect_item_def_paths(program: &Program) -> HashMap<String, DefPath> {
             Item::StructDef(s) => {
                 out.insert(s.name.clone(), DefPath::item(s.name.clone()));
             }
+            Item::UnionDef(u) => {
+                out.insert(u.name.clone(), DefPath::item(u.name.clone()));
+            }
             Item::EnumDef(e) => {
                 out.insert(e.name.clone(), DefPath::item(e.name.clone()));
             }

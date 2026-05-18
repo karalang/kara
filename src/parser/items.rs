@@ -60,6 +60,9 @@ impl super::Parser {
             Token::Struct => Some(Item::StructDef(
                 self.parse_struct_def(attributes, is_pub, is_private, false)?,
             )),
+            Token::Union => Some(Item::UnionDef(
+                self.parse_union_def(attributes, is_pub, is_private)?,
+            )),
             Token::Enum => Some(Item::EnumDef(
                 self.parse_enum_def(attributes, is_pub, is_private, false)?,
             )),
@@ -1058,6 +1061,124 @@ impl super::Parser {
             is_non_exhaustive,
             lint_overrides,
         })
+    }
+
+    // ── Unions ───────────────────────────────────────────────────
+
+    fn parse_union_def(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<UnionDef> {
+        let start = self.current_span();
+        self.expect(&Token::Union)?;
+        let name = self.expect_identifier()?;
+        let name_span = self.span_from(&start);
+        self.check_ident_class(&name, IdentClass::Type, "union", name_span);
+        let doc_comment = self.take_pending_doc();
+
+        // Generic / tuple / where-clause forms are rejected at parse —
+        // v1 FFI unions are non-generic and brace-bodied only.
+        if self.check(&Token::LeftBracket) {
+            self.error(&format!(
+                "error[E_UNION_GENERICS_FORBIDDEN]: generic parameters are not \
+                 allowed on union declarations; `union {name}[…]` is rejected — \
+                 v1 FFI unions are non-generic per design.md § FFI Unions",
+            ));
+            // Best-effort recovery: skip until we see `{` or run out.
+            while !self.check(&Token::LeftBrace) && !self.is_at_end() {
+                self.advance();
+            }
+        }
+        if self.check(&Token::LeftParen) {
+            self.error(&format!(
+                "error[E_UNION_TUPLE_FORBIDDEN]: tuple-style union declarations \
+                 are not allowed; write `union {name} {{ field_name: T, … }}` \
+                 with named fields",
+            ));
+            while !self.check(&Token::LeftBrace) && !self.is_at_end() {
+                self.advance();
+            }
+        }
+        if self.check(&Token::Where) {
+            self.error(
+                "error[E_UNION_WHERE_FORBIDDEN]: where-clauses are not allowed \
+                 on union declarations; v1 FFI unions are non-generic so there \
+                 is nothing to bound",
+            );
+            self.advance();
+            while !self.check(&Token::LeftBrace) && !self.is_at_end() {
+                self.advance();
+            }
+        }
+
+        self.expect(&Token::LeftBrace)?;
+        let fields = self.parse_union_fields()?;
+        self.expect(&Token::RightBrace)?;
+
+        if fields.is_empty() {
+            self.error(&format!(
+                "error[E_EMPTY_UNION]: union `{name}` declares no fields; empty \
+                 unions have no storage and no use — declare at least one field"
+            ));
+        }
+
+        let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
+
+        Some(UnionDef {
+            span: self.span_from(&start),
+            attributes,
+            doc_comment,
+            is_pub,
+            is_private,
+            name,
+            fields,
+            stdlib_origin: false,
+            deprecation,
+            lint_overrides,
+        })
+    }
+
+    fn parse_union_fields(&mut self) -> Option<Vec<UnionField>> {
+        let mut fields = Vec::new();
+        while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            self.collect_leading_doc_comments();
+            let start = self.current_span();
+            let attributes = self.parse_attributes();
+            let is_pub = self.eat(&Token::Pub);
+            // `mut` on a union field is rejected: every field shares
+            // storage with every other field, so per-field mutability
+            // is not a meaningful annotation. Assignment to a union
+            // field is unconditionally safe regardless.
+            if self.check(&Token::Mut) {
+                self.error(
+                    "error[E_UNION_FIELD_MUT_FORBIDDEN]: `mut` is not allowed \
+                     on union fields; all union fields share storage and \
+                     writes are unconditionally permitted",
+                );
+                self.advance();
+            }
+            let name = self.expect_identifier()?;
+            let name_span = self.span_from(&start);
+            self.check_ident_class(&name, IdentClass::Value, "union field", name_span);
+            self.expect(&Token::Colon)?;
+            let ty = self.parse_type()?;
+            let doc_comment = self.take_pending_doc();
+            fields.push(UnionField {
+                span: self.span_from(&start),
+                attributes,
+                doc_comment,
+                is_pub,
+                name,
+                ty,
+            });
+            if !self.eat(&Token::Comma) {
+                break;
+            }
+        }
+        Some(fields)
     }
 
     fn parse_struct_fields(&mut self) -> Option<Vec<StructField>> {

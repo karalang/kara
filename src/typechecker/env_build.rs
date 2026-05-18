@@ -13,13 +13,15 @@
 use crate::ast::*;
 use std::collections::{HashMap, HashSet};
 
-use super::env::{EnumInfo, FunctionSig, ImplAssocTypeEntry, ImplInfo, StructInfo, TraitInfo};
+use super::env::{
+    EnumInfo, FunctionSig, ImplAssocTypeEntry, ImplInfo, StructInfo, TraitInfo, UnionInfo,
+};
 use super::types::{
     type_display, type_is_fully_concrete, FloatSize, IntSize, Type, UIntSize, VariantTypeInfo,
 };
 use super::{
     extract_derived_traits, extract_must_use_message, find_item_visibility, has_display_snake_case,
-    normalize_bounds_into_where_clause, TypeErrorKind,
+    has_repr_c, normalize_bounds_into_where_clause, TypeErrorKind,
 };
 
 impl<'a> super::TypeChecker<'a> {
@@ -96,6 +98,7 @@ impl<'a> super::TypeChecker<'a> {
         for item in &items {
             match item {
                 Item::StructDef(s) => self.env_add_struct(s),
+                Item::UnionDef(u) => self.env_add_union(u),
                 Item::EnumDef(e) => self.env_add_enum(e),
                 Item::Function(f) => self.env_add_function(f),
                 Item::TraitDef(t) => self.env_add_trait(t),
@@ -263,7 +266,8 @@ impl<'a> super::TypeChecker<'a> {
                 Item::EnumDef(e) => self.env_add_enum(e),
                 Item::TraitDef(t) => self.env_add_trait(t),
                 Item::ImplBlock(i) => self.env_add_impl(i),
-                Item::TraitAlias(_)
+                Item::UnionDef(_)
+                | Item::TraitAlias(_)
                 | Item::MarkerTrait(_)
                 | Item::ConstDecl(_)
                 | Item::TypeAlias(_)
@@ -1014,6 +1018,102 @@ impl<'a> super::TypeChecker<'a> {
                 defining_stdlib_origin: s.stdlib_origin,
             },
         );
+    }
+
+    fn env_add_union(&mut self, u: &UnionDef) {
+        // Unions are non-generic at v1 — pass an empty generic-params
+        // list when lowering field types.
+        let no_generics: Vec<String> = Vec::new();
+        let fields: Vec<(String, Type, bool)> = u
+            .fields
+            .iter()
+            .map(|f| {
+                (
+                    f.name.clone(),
+                    self.lower_type_expr(&f.ty, &no_generics),
+                    f.is_pub,
+                )
+            })
+            .collect();
+        let is_repr_c = has_repr_c(&u.attributes);
+        self.env.unions.insert(
+            u.name.clone(),
+            UnionInfo {
+                fields,
+                is_repr_c,
+                defining_stdlib_origin: u.stdlib_origin,
+            },
+        );
+
+        // Declaration-time validation:
+        //   - `#[repr(C)]` is required.
+        //   - Every field type must be `Copy` (unions overlap storage
+        //     and cannot run destructors). Surfaces a focused
+        //     `E_UNION_FIELD_NOT_COPY` per offending field; the field
+        //     stays in the registered shape so downstream phases can
+        //     still see the declared field list.
+        //   - `#[derive(...)]` is rejected (derived impls require
+        //     per-variant / per-field machinery that overlapping
+        //     storage cannot support).
+        // Drop-impl rejection and use-site `unsafe { … }` rules ship
+        // in follow-up slices (see phase-5 tracker line 549).
+        if !is_repr_c {
+            self.type_error(
+                format!(
+                    "error[E_UNION_REQUIRES_REPR]: union `{}` is missing the \
+                     required `#[repr(C)]` attribute — unions are an FFI \
+                     boundary and need a fixed layout. Add `#[repr(C)]` (or \
+                     `#[repr(C, packed)]`) on the declaration",
+                    u.name
+                ),
+                u.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+        for (fname, fty, _) in &self.env.unions[&u.name].fields.clone() {
+            if !self.is_type_copy(fty) {
+                self.type_error(
+                    format!(
+                        "error[E_UNION_FIELD_NOT_COPY]: union field `{}.{}` has \
+                         type `{}`, which is not `Copy` — every field of a \
+                         union must be `Copy` because overlapping storage means \
+                         the compiler cannot run a destructor on the right \
+                         variant. Replace the type with a `Copy` equivalent or \
+                         hold it behind a raw pointer (`*mut T` / `*const T`)",
+                        u.name,
+                        fname,
+                        type_display(fty),
+                    ),
+                    u.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+        }
+        // `#[derive(...)]` rejection — list every derive the user wrote
+        // back to them so they can see which one was offending.
+        let derived = extract_derived_traits(&u.attributes);
+        if !derived.is_empty() {
+            let mut names: Vec<&String> = derived.iter().collect();
+            names.sort();
+            let list = names
+                .iter()
+                .map(|s| s.as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            self.type_error(
+                format!(
+                    "error[E_UNION_DERIVE_FORBIDDEN]: `#[derive({list})]` on \
+                     union `{}` — derives are not supported on union types \
+                     because overlapping storage prevents the compiler from \
+                     synthesising per-variant code. Remove the derive; if you \
+                     need equality / hashing, implement the trait by hand \
+                     inside `unsafe {{ }}`",
+                    u.name,
+                ),
+                u.span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
     }
 
     fn env_add_enum(&mut self, e: &EnumDef) {

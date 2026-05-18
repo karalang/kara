@@ -66,6 +66,15 @@ pub struct OnUnimplemented {
 pub enum Item {
     Function(Function),
     StructDef(StructDef),
+    /// `[#[repr(C)]] union NAME { f1: T1, f2: T2, ... }` — FFI union
+    /// declaration. v60 item 22 / design.md § FFI Unions. Unions share
+    /// storage across their fields and are designed for C interop.
+    /// `#[repr(C)]` is required at typecheck time. Per-field `Copy`
+    /// bound is required (unions cannot run destructors on overlapping
+    /// storage). Field reads and borrows require `unsafe { … }`; field
+    /// assignment is unconditionally safe. No generic / tuple / empty
+    /// forms — those are rejected at parse with focused diagnostics.
+    UnionDef(UnionDef),
     EnumDef(EnumDef),
     TraitDef(TraitDef),
     /// `trait NAME[GENERICS] = bound1 + bound2 + ... [where ...];` — a
@@ -230,6 +239,7 @@ macro_rules! impl_vis {
 
 impl_vis!(Function);
 impl_vis!(StructDef);
+impl_vis!(UnionDef);
 impl_vis!(EnumDef);
 impl_vis!(TraitDef);
 impl_vis!(ConstDecl);
@@ -285,6 +295,42 @@ pub struct StructField {
     pub doc_comment: Option<String>,
     pub is_pub: bool,
     pub is_mut: bool,
+    pub name: String,
+    pub ty: TypeExpr,
+}
+
+// ── Unions ───────────────────────────────────────────────────────
+
+/// `[#[repr(C)]] union NAME { f1: T1, f2: T2, ... }` — FFI union.
+/// See `Item::UnionDef` for the high-level contract. v60 item 22 /
+/// design.md § FFI Unions. Generics, tuple-style, and empty bodies
+/// are rejected at parse time, so the AST never carries them; the
+/// shape here is intentionally narrower than [`StructDef`] (no
+/// `is_shared`, `no_rc`, `invariants`, `is_non_exhaustive` — those
+/// are either nonsensical for unions or explicitly forbidden by the
+/// spec).
+#[derive(Debug, Clone)]
+pub struct UnionDef {
+    pub span: Span,
+    pub attributes: Vec<Attribute>,
+    pub doc_comment: Option<String>,
+    pub is_pub: bool,
+    pub is_private: bool,
+    pub name: String,
+    pub fields: Vec<UnionField>,
+    /// See [`Function::stdlib_origin`]. Unions originating from baked
+    /// stdlib source flip this to `true` after parsing.
+    pub stdlib_origin: bool,
+    pub deprecation: Option<Deprecation>,
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+}
+
+#[derive(Debug, Clone)]
+pub struct UnionField {
+    pub span: Span,
+    pub attributes: Vec<Attribute>,
+    pub doc_comment: Option<String>,
+    pub is_pub: bool,
     pub name: String,
     pub ty: TypeExpr,
 }

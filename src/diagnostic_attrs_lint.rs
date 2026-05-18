@@ -143,6 +143,12 @@ fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
                 emit_off_target_for(&field.attributes, "struct field", &[], level, diags);
             }
         }
+        Item::UnionDef(u) => {
+            emit_off_target_for(&u.attributes, "union", &[], level, diags);
+            for field in &u.fields {
+                emit_off_target_for(&field.attributes, "union field", &[], level, diags);
+            }
+        }
         Item::EnumDef(e) => {
             emit_off_target_for(&e.attributes, "enum", &[], level, diags);
             for v in &e.variants {
