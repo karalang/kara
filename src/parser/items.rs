@@ -241,6 +241,7 @@ impl super::Parser {
         let is_track_caller = self.scan_track_caller_attr(&attributes);
         let deprecation = self.scan_deprecated_attr(&attributes);
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
+        let profile_compat = self.scan_profile_attr(&attributes);
 
         Some(Function {
             span: self.span_from(&start),
@@ -263,6 +264,7 @@ impl super::Parser {
             deprecation,
             is_track_caller,
             lint_overrides,
+            profile_compat,
         })
     }
 
@@ -294,6 +296,100 @@ impl super::Parser {
             }
         }
         present
+    }
+
+    /// Scan `attributes` for `#[profile(P1, P2, ...)]` and return the
+    /// collected profile-name list. Slice 1+2 of v60 item entry at
+    /// line 499 — parser surface for profile-compatibility marking
+    /// before the effect-checker integration in slice 3.
+    ///
+    /// **Argument shape.** Bare positional identifiers only:
+    /// `#[profile(embedded, kernel)]`. Reject everything else with
+    /// focused parse diagnostics:
+    /// - `E_PROFILE_NO_PROFILES` on `#[profile]` (bare, no parens) or
+    ///   `#[profile()]` (parens, empty list).
+    /// - `E_PROFILE_STRING_VALUE` on `#[profile = "..."]` shorthand or
+    ///   `#[profile("embedded")]` (string-literal positional).
+    /// - `E_PROFILE_NAMED_ARG` on `#[profile(name: embedded)]` or
+    ///   `#[profile(name = embedded)]`.
+    /// - `E_PROFILE_NON_IDENT_ARG` on positional non-identifier args
+    ///   (`#[profile(42)]`, `#[profile(true)]`).
+    ///
+    /// **Duplicates** within a single attribute (`#[profile(a, a)]`)
+    /// are silently tolerated at parse — the resolver dedupes when it
+    /// computes the constraint-intersection in slice 3. Multiple
+    /// `#[profile(...)]` attributes on the same function accumulate
+    /// (union of all listed names) — again, slice 3 dedupes.
+    pub(crate) fn scan_profile_attr(&mut self, attributes: &[Attribute]) -> Vec<String> {
+        use crate::ast::ExprKind;
+        let mut out = Vec::new();
+        for attr in attributes {
+            if !attr.is_bare("profile") {
+                continue;
+            }
+            if attr.string_value.is_some() {
+                self.errors.push(super::ParseError {
+                    message: "error[E_PROFILE_STRING_VALUE]: \
+                              `#[profile = \"...\"]` is not a recognised shape; \
+                              use `#[profile(NAME, ...)]` with bare profile names"
+                        .to_string(),
+                    span: attr.span.clone(),
+                });
+                continue;
+            }
+            if attr.args.is_empty() {
+                self.errors.push(super::ParseError {
+                    message: "error[E_PROFILE_NO_PROFILES]: \
+                              `#[profile]` requires at least one profile name — \
+                              `#[profile(default)]`, `#[profile(embedded, kernel)]`, etc."
+                        .to_string(),
+                    span: attr.span.clone(),
+                });
+                continue;
+            }
+            for arg in &attr.args {
+                if arg.name.is_some() {
+                    self.errors.push(super::ParseError {
+                        message: "error[E_PROFILE_NAMED_ARG]: \
+                                  `#[profile(...)]` takes positional profile names only; \
+                                  remove the `name:` / `name =` prefix"
+                            .to_string(),
+                        span: arg.span.clone(),
+                    });
+                    continue;
+                }
+                let Some(value_expr) = &arg.value else {
+                    continue;
+                };
+                let name = match &value_expr.kind {
+                    ExprKind::Identifier(s) => s.clone(),
+                    ExprKind::Path { segments, .. } if segments.len() == 1 => segments[0].clone(),
+                    ExprKind::StringLit(_) => {
+                        self.errors.push(super::ParseError {
+                            message: "error[E_PROFILE_STRING_VALUE]: \
+                                      `#[profile(...)]` takes bare profile names, not \
+                                      string literals — write `#[profile(embedded)]` \
+                                      instead of `#[profile(\"embedded\")]`"
+                                .to_string(),
+                            span: arg.span.clone(),
+                        });
+                        continue;
+                    }
+                    _ => {
+                        self.errors.push(super::ParseError {
+                            message: "error[E_PROFILE_NON_IDENT_ARG]: \
+                                      `#[profile(...)]` takes bare profile-name identifiers; \
+                                      this argument is not an identifier"
+                                .to_string(),
+                            span: arg.span.clone(),
+                        });
+                        continue;
+                    }
+                };
+                out.push(name);
+            }
+        }
+        out
     }
 
     /// Scan `attributes` for `#[deprecated]` and produce the

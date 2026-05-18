@@ -386,6 +386,62 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
+    /// Reject `#[profile(...)]` placed on an item kind that doesn't
+    /// support it. Slice 1+2 of v60 item entry at line 499 — the
+    /// attribute asserts function-level profile compatibility and is
+    /// fn-only at v1. Module-level placement is part of the spec but
+    /// blocked on the module-attribute AST surface.
+    fn reject_profile_attr(&mut self, attrs: &[Attribute], target_kind: &str) {
+        for attr in attrs {
+            if attr.is_bare("profile") {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_PROFILE_INVALID_TARGET]: \
+                         `#[profile(...)]` is not valid on {target_kind}; \
+                         the attribute asserts per-function profile \
+                         compatibility and only applies to `fn` declarations",
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::ProfileInvalidTarget,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
+    }
+
+    /// Validate every `#[profile(...)]` name on a `fn` against the
+    /// closed v1 set (`default` / `embedded` / `kernel`, mirroring
+    /// `CompileProfile` from `src/manifest.rs`). Unknown names emit
+    /// `error[E_UNKNOWN_PROFILE]`. Empty `profile_compat` (the
+    /// no-attribute case) short-circuits.
+    fn validate_profile_names(&mut self, f: &crate::ast::Function) {
+        const KNOWN: &[&str] = &["default", "embedded", "kernel"];
+        for name in &f.profile_compat {
+            if !KNOWN.iter().any(|k| k == name) {
+                // Anchor the diagnostic at the function's span — the
+                // attribute span is the bracketed `#[profile(...)]`
+                // outer, not the offending arg; pointing at the fn
+                // gets the user to the right neighbourhood. A future
+                // refinement could thread per-arg spans through the
+                // scan helper for precise underlines.
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_UNKNOWN_PROFILE]: \
+                         unknown profile `{name}` in `#[profile(...)]` on \
+                         `fn {fn_name}` — the v1 profiles are {known}",
+                        fn_name = f.name,
+                        known = KNOWN.join(", "),
+                    ),
+                    span: f.span.clone(),
+                    kind: ResolveErrorKind::UnknownProfile,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
+    }
+
     /// Reject `#[non_exhaustive]` placed on an item kind that does
     /// not support it. Per design.md § `#[non_exhaustive]` for
     /// Evolvable Public Types, the attribute is meaningful only on
@@ -449,6 +505,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_function(&mut self, f: &Function) {
         self.check_compiler_builtin_attr(&f.attributes, f.stdlib_origin);
         self.reject_non_exhaustive_attr(&f.attributes, "function");
+        self.validate_profile_names(f);
         let param_names: Vec<String> = f
             .params
             .iter()
@@ -476,6 +533,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&s.attributes, "private struct");
         }
         self.reject_track_caller_attr(&s.attributes, "struct");
+        self.reject_profile_attr(&s.attributes, "struct");
         // Field-level `#[non_exhaustive]` is post-v1 (Rust accepts it
         // on fields too; we ship type-level only). Reject so users get
         // a focused message instead of a silent acceptance that does
@@ -484,6 +542,7 @@ impl<'a> super::Resolver<'a> {
         for field in &s.fields {
             self.reject_non_exhaustive_attr(&field.attributes, "struct field");
             self.reject_track_caller_attr(&field.attributes, "struct field");
+            self.reject_profile_attr(&field.attributes, "struct field");
             self.reject_deprecated_on_field(&field.attributes);
         }
         let field_names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
@@ -504,6 +563,7 @@ impl<'a> super::Resolver<'a> {
             self.reject_non_exhaustive_attr(&e.attributes, "private enum");
         }
         self.reject_track_caller_attr(&e.attributes, "enum");
+        self.reject_profile_attr(&e.attributes, "enum");
         // Variant-level attribute placement validation —
         // `#[track_caller]` and `#[non_exhaustive]` are rejected on
         // individual variants (the spec scopes both at type-level
@@ -511,6 +571,7 @@ impl<'a> super::Resolver<'a> {
         // and so is not rejected here.
         for variant in &e.variants {
             self.reject_track_caller_attr(&variant.attributes, "enum variant");
+            self.reject_profile_attr(&variant.attributes, "enum variant");
             self.reject_non_exhaustive_attr(&variant.attributes, "enum variant");
         }
         let variant_names: Vec<String> = e.variants.iter().map(|v| v.name.clone()).collect();
@@ -561,6 +622,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&t.attributes, t.stdlib_origin);
         self.reject_non_exhaustive_attr(&t.attributes, "trait");
         self.reject_track_caller_attr(&t.attributes, "trait");
+        self.reject_profile_attr(&t.attributes, "trait");
         // Trait-method-level attribute placement validation —
         // `#[track_caller]` IS legal (propagates to impls), so the
         // helper is not called. `#[deprecated]` IS legal. But
@@ -613,6 +675,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_trait_alias(&mut self, t: &TraitAliasDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "trait alias");
         self.reject_track_caller_attr(&t.attributes, "trait alias");
+        self.reject_profile_attr(&t.attributes, "trait alias");
         match self.table.define(
             t.name.clone(),
             SymbolKind::TraitAlias,
@@ -627,6 +690,7 @@ impl<'a> super::Resolver<'a> {
     fn collect_marker_trait(&mut self, t: &MarkerTraitDef) {
         self.reject_non_exhaustive_attr(&t.attributes, "marker trait");
         self.reject_track_caller_attr(&t.attributes, "marker trait");
+        self.reject_profile_attr(&t.attributes, "marker trait");
         // Marker traits register in the trait namespace alongside ordinary
         // traits; no methods to track, so the symbol carries an empty
         // method list. Trait-bound resolution and impl coherence treat
@@ -660,6 +724,7 @@ impl<'a> super::Resolver<'a> {
         self.check_compiler_builtin_attr(&imp.attributes, false);
         self.reject_non_exhaustive_attr(&imp.attributes, "impl block");
         self.reject_track_caller_attr(&imp.attributes, "impl block");
+        self.reject_profile_attr(&imp.attributes, "impl block");
         self.reject_deprecated_on_impl(&imp.attributes);
         // Methods are registered in type_methods, not global scope.
         // We need the type name from the target_type.
@@ -748,6 +813,7 @@ impl<'a> super::Resolver<'a> {
         // share the same "target kind" message shape.
         self.reject_non_exhaustive_attr(&c.attributes, "module const");
         self.reject_track_caller_attr(&c.attributes, "module const");
+        self.reject_profile_attr(&c.attributes, "module const");
         match self.table.define(
             c.name.clone(),
             SymbolKind::Constant,
@@ -766,6 +832,7 @@ impl<'a> super::Resolver<'a> {
         // (non_exhaustive invalid).
         self.reject_non_exhaustive_attr(&t.attributes, "type alias");
         self.reject_track_caller_attr(&t.attributes, "type alias");
+        self.reject_profile_attr(&t.attributes, "type alias");
         match self.table.define(
             t.name.clone(),
             SymbolKind::TypeAlias,

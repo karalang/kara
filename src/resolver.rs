@@ -523,6 +523,15 @@ pub enum ResolveErrorKind {
     /// design.md § Error Handling > "Stdlib panic-emitters report the
     /// caller's source location". `E0240`.
     TrackCallerInvalidTarget,
+    /// `#[profile(...)]` placed on a non-`fn` item. The attribute
+    /// asserts per-function profile compatibility and is fn-only at
+    /// v1. Module-level placement is part of the spec but blocked on
+    /// the module-attribute AST surface.
+    ProfileInvalidTarget,
+    /// A name inside `#[profile(...)]` doesn't match the closed v1
+    /// set (`default` / `embedded` / `kernel`). The diagnostic lists
+    /// the valid names.
+    UnknownProfile,
     /// `#[deprecated]` placed on an `impl` block. The spec rejects
     /// this with `E_DEPRECATED_ON_IMPL` — impl-level deprecation
     /// would be ambiguous (which methods?); the user should

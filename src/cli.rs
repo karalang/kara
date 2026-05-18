@@ -1871,6 +1871,8 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0241",
                 crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0242",
                 crate::resolver::ResolveErrorKind::UnknownAttribute => "E0243",
+                crate::resolver::ResolveErrorKind::ProfileInvalidTarget => "E0244",
+                crate::resolver::ResolveErrorKind::UnknownProfile => "E0245",
                 crate::resolver::ResolveErrorKind::QueryResolutionConflict => {
                     "E_QUERY_RESOLUTION_CONFLICT"
                 }
@@ -4118,6 +4120,8 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::DeprecatedOnImpl => "E0241",
         ResolveErrorKind::DeprecatedOnField => "E0242",
         ResolveErrorKind::UnknownAttribute => "E0243",
+        ResolveErrorKind::ProfileInvalidTarget => "E0244",
+        ResolveErrorKind::UnknownProfile => "E0245",
         ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
     }
 }

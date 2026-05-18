@@ -170,6 +170,15 @@ pub struct Function {
     /// emit-time consumer once it lands. See `design.md § Lint
     /// Level Attributes`.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+    /// `#[profile(P1, P2, ...)]` payload — the closed v1 set of
+    /// declared profile names this function asserts compatibility
+    /// with. Populated by the parser scan helper; the resolver
+    /// validates each name against the `CompileProfile` enum and
+    /// emits `E_UNKNOWN_PROFILE` on misspellings. Empty when no
+    /// `#[profile]` attribute is present. Slice 3 (effect-checker
+    /// integration) consults the list to intersect constraints
+    /// against the function's effect set.
+    pub profile_compat: Vec<String>,
 }
 
 #[derive(Debug, Clone)]

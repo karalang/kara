@@ -1994,6 +1994,123 @@ fn track_caller_slice1_trait_method_per_method_independent() {
     assert!(!methods[1].is_track_caller);
 }
 
+// ── #[profile(...)] slices 1+2 — parser surface ──────────────────
+
+#[test]
+fn profile_slice1_single_profile_captured() {
+    let prog = parse_ok("#[profile(embedded)]\nfn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert_eq!(f.profile_compat, vec!["embedded".to_string()]);
+}
+
+#[test]
+fn profile_slice1_multi_profile_captured() {
+    let prog = parse_ok("#[profile(embedded, kernel)]\nfn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert_eq!(
+        f.profile_compat,
+        vec!["embedded".to_string(), "kernel".to_string()]
+    );
+}
+
+#[test]
+fn profile_slice1_absent_attribute_leaves_empty() {
+    let prog = parse_ok("fn f() { }");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert!(f.profile_compat.is_empty());
+}
+
+#[test]
+fn profile_slice1_multiple_attributes_accumulate() {
+    // Two `#[profile(...)]` attributes on the same fn append into one
+    // list — slice 3 dedupes at intersection-compute time.
+    let prog = parse_ok(
+        "#[profile(embedded)]\n\
+         #[profile(kernel)]\n\
+         fn f() { }",
+    );
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("Expected Function");
+    };
+    assert_eq!(
+        f.profile_compat,
+        vec!["embedded".to_string(), "kernel".to_string()]
+    );
+}
+
+#[test]
+fn profile_slice1_rejects_empty_arg_list() {
+    let (_prog, errors) = parse_with_errors("#[profile()]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_NO_PROFILES")),
+        "Expected E_PROFILE_NO_PROFILES; got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice1_rejects_string_shorthand() {
+    let (_prog, errors) = parse_with_errors("#[profile = \"embedded\"]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_STRING_VALUE")),
+        "Expected E_PROFILE_STRING_VALUE; got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice1_rejects_string_positional() {
+    let (_prog, errors) = parse_with_errors("#[profile(\"embedded\")]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_STRING_VALUE")),
+        "Expected E_PROFILE_STRING_VALUE; got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice1_rejects_named_arg() {
+    let (_prog, errors) = parse_with_errors("#[profile(name: embedded)]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_NAMED_ARG")),
+        "Expected E_PROFILE_NAMED_ARG; got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice1_rejects_integer_arg() {
+    let (_prog, errors) = parse_with_errors("#[profile(42)]\nfn f() { }");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PROFILE_NON_IDENT_ARG")),
+        "Expected E_PROFILE_NON_IDENT_ARG; got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice1_set_on_non_fn_item_parser_does_not_reject() {
+    // Parser captures attributes uniformly; the resolver rejects
+    // placement on non-fn items.
+    let prog = parse_ok("#[profile(embedded)]\npub struct S { x: i64 }");
+    let Item::StructDef(s) = &prog.items[0] else {
+        panic!("Expected StructDef");
+    };
+    assert_eq!(s.attributes.len(), 1);
+    assert!(s.attributes[0].is_bare("profile"));
+}
+
 // ── #[deprecated] slices 1+2 — parser + AST payload ───────────────
 //
 // Three forms per design.md § `#[deprecated]` for Item Deprecation:

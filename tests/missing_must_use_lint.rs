@@ -136,6 +136,7 @@ impl<'a> FnSpec<'a> {
             deprecation: None,
             is_track_caller: false,
             lint_overrides: Vec::new(),
+            profile_compat: Vec::new(),
         }
     }
 }

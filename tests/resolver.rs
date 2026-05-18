@@ -2349,6 +2349,177 @@ fn track_caller_slice1_rejection_uses_dedicated_error_kind() {
     );
 }
 
+// ── #[profile(...)] slices 1+2 — resolver validation + placement ──
+
+#[test]
+fn profile_slice12_accepted_on_function_with_known_profile() {
+    let parsed = parse("#[profile(embedded)]\nfn f() { }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        !errs.iter().any(|e| matches!(
+            e.kind,
+            ResolveErrorKind::UnknownProfile | ResolveErrorKind::ProfileInvalidTarget
+        )),
+        "did not expect profile diagnostics; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_accepted_on_function_with_all_three_known() {
+    let parsed = parse("#[profile(default, embedded, kernel)]\nfn f() { }");
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        !errs.iter().any(|e| matches!(
+            e.kind,
+            ResolveErrorKind::UnknownProfile | ResolveErrorKind::ProfileInvalidTarget
+        )),
+        "did not expect profile diagnostics; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejects_unknown_profile_name() {
+    let errs = resolve_errors("#[profile(yolo)]\nfn f() { }");
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::UnknownProfile
+                && e.message.contains("E_UNKNOWN_PROFILE")
+                && e.message.contains("`yolo`")
+        }),
+        "Expected E_UNKNOWN_PROFILE naming `yolo`; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_unknown_diagnostic_lists_valid_profiles() {
+    let errs = resolve_errors("#[profile(yolo)]\nfn f() { }");
+    let msg = errs
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UnknownProfile)
+        .map(|e| e.message.clone())
+        .expect("expected UnknownProfile");
+    assert!(msg.contains("default"));
+    assert!(msg.contains("embedded"));
+    assert!(msg.contains("kernel"));
+}
+
+#[test]
+fn profile_slice12_rejects_one_unknown_among_known() {
+    // Mixed list: `embedded` accepted, `yolo` rejected. Pin per-name
+    // checking — one bad name doesn't suppress the good ones.
+    let errs = resolve_errors("#[profile(embedded, yolo, kernel)]\nfn f() { }");
+    let unknowns = errs
+        .iter()
+        .filter(|e| e.kind == ResolveErrorKind::UnknownProfile)
+        .count();
+    assert_eq!(
+        unknowns, 1,
+        "Expected exactly one UnknownProfile; got: {errs:?}"
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_struct() {
+    let errs = resolve_errors("#[profile(embedded)]\nstruct S { x: i64 }");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+                && e.message.contains("struct")),
+        "Expected ProfileInvalidTarget on struct; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_enum() {
+    let errs = resolve_errors("#[profile(embedded)]\nenum E { A, B }");
+    assert!(
+        errs.iter().any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+            && e.message.contains("enum")),
+        "Expected ProfileInvalidTarget on enum; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_trait() {
+    let errs = resolve_errors("#[profile(embedded)]\ntrait T { fn m(self) -> i64; }");
+    assert!(
+        errs.iter().any(
+            |e| e.kind == ResolveErrorKind::ProfileInvalidTarget && e.message.contains("trait")
+        ),
+        "Expected ProfileInvalidTarget on trait; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_impl_block() {
+    let errs = resolve_errors(
+        "struct S { x: i64 }\n\
+         #[profile(embedded)]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+                && e.message.contains("impl block")),
+        "Expected ProfileInvalidTarget on impl block; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_module_const() {
+    let errs = resolve_errors("#[profile(embedded)]\nconst MAX_X: i64 = 1;");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+                && e.message.contains("module const")),
+        "Expected ProfileInvalidTarget on module const; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_type_alias() {
+    let errs = resolve_errors("#[profile(embedded)]\ntype Alias = i64;");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+                && e.message.contains("type alias")),
+        "Expected ProfileInvalidTarget on type alias; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejected_on_struct_field() {
+    let errs = resolve_errors(
+        "struct S {\n\
+         #[profile(embedded)]\n\
+         x: i64,\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget
+                && e.message.contains("struct field")),
+        "Expected ProfileInvalidTarget on struct field; got: {errs:?}",
+    );
+}
+
+#[test]
+fn profile_slice12_rejection_uses_dedicated_error_kinds() {
+    // Pin that both new error kinds round-trip through the resolver
+    // (regression guard against accidental kind overload).
+    let off_target = resolve_errors("#[profile(embedded)]\nstruct S { x: i64 }");
+    assert!(off_target
+        .iter()
+        .any(|e| e.kind == ResolveErrorKind::ProfileInvalidTarget));
+
+    let unknown = resolve_errors("#[profile(yolo)]\nfn f() { }");
+    assert!(unknown
+        .iter()
+        .any(|e| e.kind == ResolveErrorKind::UnknownProfile));
+}
+
 // ── #[deprecated] placement validation (E0241 / E0242) ────────────
 // Per design.md § `#[deprecated]` for Item Deprecation > "Where it
 // cannot appear", impl blocks (`E_DEPRECATED_ON_IMPL`) and struct
