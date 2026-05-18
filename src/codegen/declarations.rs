@@ -771,6 +771,43 @@ impl<'ctx> super::Codegen<'ctx> {
                 // struct (final field carries the result; caller reads
                 // it after observing Ready).
                 if arm_idx < yield_count {
+                    // Slice 8n: write-back captured-locals to state-
+                    // struct fields before the yield. After slice 8m,
+                    // a `let x = ...` inside the arm body can shadow a
+                    // captured-local slot pointer in `slot_map` with a
+                    // new arm-local alloca; without write-back, the
+                    // post-yield reload reads the stale state-struct
+                    // field. Iterating `layout.fields` (the slice-4
+                    // capture set) and storing the current `slot_map`
+                    // value into the corresponding state-struct field
+                    // covers both shadowing and any other in-arm
+                    // mutation path. For captured locals untouched
+                    // inside the arm, the write-back is a value-
+                    // equivalent no-op (slice 8a's reload loaded the
+                    // field; write-back stores the same value back) —
+                    // the LLVM optimizer can elide the redundant store.
+                    for (field_idx, field) in layout.fields.iter().enumerate() {
+                        let struct_field_idx = (field_idx + 1) as u32;
+                        let Some((slot_ty, slot_ptr)) = slot_map.get(&field.name).copied() else {
+                            continue;
+                        };
+                        let val = self
+                            .builder
+                            .build_load(slot_ty, slot_ptr, &format!("{}.writeback", field.name))
+                            .expect("load slot for state-struct writeback");
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                state_struct,
+                                state_ptr,
+                                struct_field_idx,
+                                &format!("{}.writeback_field_ptr", field.name),
+                            )
+                            .expect("GEP state-struct field for writeback");
+                        self.builder
+                            .build_store(field_ptr, val)
+                            .expect("store slot back to state-struct field");
+                    }
                     let next_tag_ptr = self
                         .builder
                         .build_struct_gep(

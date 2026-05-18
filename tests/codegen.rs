@@ -14247,14 +14247,15 @@ fn main() {
              fn driver(items: Vec[i64]) { fetch(); }",
         );
         let body = extract_fn_ir(&ir, "__kara_poll_driver");
-        // 1 yield point → 2 arms (state_0, state_1) → 2 GEPs into
-        // field 1 (one per arm, one captured local).
+        // 1 yield point → 2 arms (state_0 + terminal state_1) → 2 reload
+        // GEPs into field 1 (one per arm, one captured local) + 1 slice-
+        // 8n writeback GEP in state_0 (non-terminal) = 3.
         let gep_count = body
             .matches("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 1")
             .count();
         assert_eq!(
-            gep_count, 2,
-            "expected 2 GEPs for `items` (one per state arm) in 1-yield function:\n{body}"
+            gep_count, 3,
+            "expected 3 GEPs for `items` (2 reload + 1 slice-8n writeback) in 1-yield function:\n{body}"
         );
     }
 
@@ -14283,14 +14284,16 @@ fn main() {
             .matches("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 2")
             .count();
         // 2 yield points → 3 arms (state_0, state_1, state_2). Each arm
-        // reloads both fields → 3 GEPs per field.
+        // reloads both fields → 3 reload GEPs per field. Plus slice-8n
+        // writebacks before each non-terminal yield (state_0, state_1)
+        // → +2 writeback GEPs per field. Total: 5 per field.
         assert_eq!(
-            gep_field_1, 3,
-            "expected 3 GEPs to field 1 (one per arm) in 2-yield function:\n{body}"
+            gep_field_1, 5,
+            "expected 5 GEPs to field 1 (3 reload + 2 slice-8n writeback) in 2-yield function:\n{body}"
         );
         assert_eq!(
-            gep_field_2, 3,
-            "expected 3 GEPs to field 2 (one per arm) in 2-yield function:\n{body}"
+            gep_field_2, 5,
+            "expected 5 GEPs to field 2 (3 reload + 2 slice-8n writeback) in 2-yield function:\n{body}"
         );
     }
 
@@ -15607,6 +15610,128 @@ fn main() {
         assert!(
             body.contains("call void @take(i64 %b.arg)"),
             "take(b) must pass b's slot-loaded value:\n{body}"
+        );
+    }
+
+    // ── Phase 6 line 26 slice 8n: cross-yield captured-local writeback ────
+    //
+    // Before each non-terminal arm's tag-store + Pending return, the
+    // poll-fn now writes each captured-local's current slot value back
+    // into its state-struct field. This makes slice 8m's arm-local lets
+    // (which can shadow captured-local slot pointers) actually survive
+    // across yields — the next arm's reload prologue reads the post-arm-
+    // body value.
+
+    #[test]
+    fn test_body_splitting_8n_writes_back_captured_local_before_yield() {
+        // `fn driver(n: i64) with sends(Network) { fetch(); }` — `n` is
+        // a captured local, no user mutation; the writeback is a value-
+        // equivalent no-op but still appears in IR as a load+GEP+store
+        // before the tag-store + Pending return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.writeback = load i64, ptr %n.slot"),
+            "state_0 must load n.slot for writeback:\n{body}"
+        );
+        assert!(
+            body.contains("%n.writeback_field_ptr = getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 1"),
+            "writeback must GEP into state-struct field 1 for n:\n{body}"
+        );
+        // Writeback must precede the tag-store + Pending return.
+        let writeback_store_pos = body
+            .find("store i64 %n.writeback, ptr %n.writeback_field_ptr")
+            .expect("writeback store missing");
+        let tag_store_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("tag-store missing");
+        assert!(
+            writeback_store_pos < tag_store_pos,
+            "writeback must precede tag-store:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8n_writeback_skipped_in_terminal_arm() {
+        // The terminal arm doesn't yield — it returns Ready and the
+        // caller's `@free` releases the state struct. No writeback
+        // needed (or wanted; the field is about to be freed).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Single yield → one non-terminal arm (state_0) + one terminal
+        // arm (state_1). Writeback shows up exactly once.
+        assert_eq!(
+            body.matches("%n.writeback = load i64").count(),
+            1,
+            "writeback must appear in non-terminal arm only:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8n_writeback_includes_let_shadowed_local() {
+        // `fn driver(n: i64) with sends(Network) { let n = 99; fetch(); }`
+        // — slice 8m's let shadows the captured-local `n` slot in the
+        // slot map. The writeback before the yield uses the slice-8m
+        // alloca's stored value (99), not the slice-8a reload's value
+        // (the original n).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 let n = 99;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // The let-store (slice 8m) puts `99` into n.slot.
+        assert!(
+            body.contains("store i64 99, ptr %n.slot"),
+            "let n = 99 must store 99 into n.slot:\n{body}"
+        );
+        // The writeback then loads n.slot (which now has 99) and
+        // stores into the state-struct field.
+        assert!(
+            body.contains("%n.writeback = load i64, ptr %n.slot"),
+            "writeback must load from the (now-shadowed) n.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8n_multi_yield_writeback_in_each_arm() {
+        // Two yields → two non-terminal arms (state_0, state_1) each
+        // emit writeback for the captured local; terminal arm (state_2)
+        // does not. Total writeback occurrences: 2 (LLVM auto-suffixes
+        // the duplicate SSA names so we match the named-GEP suffix
+        // which appears once per writeback).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 fetch();
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // The GEP-defining line ` = getelementptr` for the
+        // `writeback_field_ptr` name appears once per writeback site
+        // (the store using the name is a separate match site we don't
+        // count). LLVM may auto-suffix the SSA name across sites.
+        assert_eq!(
+            body.matches("writeback_field_ptr").count() / 2,
+            2,
+            "two non-terminal arms must each emit one writeback site:\n{body}"
         );
     }
 
