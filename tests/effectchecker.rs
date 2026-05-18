@@ -4985,3 +4985,198 @@ fn mut_ref_capture_does_not_synthesize_writes_effect() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Yield-point enumeration (phase 6 line 26 slice 2) ──────────────────
+//
+// The cli pipeline populates `Program.yield_points` after
+// `callee_network_yield_effect` is in place. For each network-boundary
+// function, the table lists the call sites whose callees are themselves
+// network-boundary — these are the suspension points the state-machine
+// transform will lower to "register fd + park + yield" code.
+
+/// Drive parse → resolve → typecheck → lower → effectcheck → build both
+/// `callee_network_yield_effect` and `yield_points` side-tables, returning
+/// the populated `Program`. Mirrors `Pipeline::effectcheck`'s wiring.
+fn pipeline_with_yield_points(source: &str) -> karac::ast::Program {
+    use karac::cli::{build_callee_network_yield_effect_table, build_yield_points_table};
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    assert!(typed.errors.is_empty(), "Type errors: {:?}", typed.errors);
+    let method_types = typed.method_callee_types.clone();
+    let call_type_subs = typed.call_type_subs.clone();
+    lower(&mut parsed.program, &typed);
+    let effects = effectcheck_with_typecheck_data(
+        &parsed.program,
+        PublicEffectsPolicy::default(),
+        CompileProfile::Default,
+        method_types.clone(),
+        call_type_subs,
+    );
+    parsed.program.callee_network_yield_effect = build_callee_network_yield_effect_table(&effects);
+    let yield_points = build_yield_points_table(
+        &parsed.program,
+        &parsed.program.callee_network_yield_effect,
+        &method_types,
+    );
+    parsed.program.yield_points = yield_points;
+    parsed.program
+}
+
+#[test]
+fn yield_points_records_single_call_to_network_boundary_callee() {
+    // A function calling one `with sends(Network)` callee gets one yield
+    // point in its table entry, pointing at the call expression's span.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() { fetch(); }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver should have yield points (calls into a network-boundary callee)");
+    assert_eq!(yps.len(), 1, "expected exactly one yield point: {:?}", yps);
+    assert_eq!(yps[0].callee, "fetch");
+}
+
+#[test]
+fn yield_points_records_multiple_calls_in_order() {
+    // Three calls in source order produce three yield points in the same
+    // order — the walker traverses statements left-to-right, top-to-bottom.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         pub fn upload() with sends(Network) {}
+         fn driver() {
+             fetch();
+             upload();
+             fetch();
+         }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver should have yield points");
+    assert_eq!(yps.len(), 3, "expected three yield points: {:?}", yps);
+    let callees: Vec<&str> = yps.iter().map(|y| y.callee.as_str()).collect();
+    assert_eq!(callees, vec!["fetch", "upload", "fetch"]);
+}
+
+#[test]
+fn yield_points_walks_into_conditionals() {
+    // A yield point inside an `if` branch is still recorded — the walker
+    // descends into both arms.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(cond: bool) {
+             if cond { fetch(); } else { fetch(); }
+         }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver should have yield points");
+    assert_eq!(
+        yps.len(),
+        2,
+        "if/else with yield in each arm = 2 yield points: {:?}",
+        yps
+    );
+}
+
+#[test]
+fn yield_points_walks_into_loops() {
+    // A yield point inside a `while` body is recorded — the walker
+    // descends into the loop body block. The yield-inside-loop case is
+    // explicitly called out in the line-26 test-coverage list.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() {
+             while true { fetch(); }
+         }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver should have yield points");
+    assert_eq!(yps.len(), 1, "single yield in loop body: {:?}", yps);
+    assert_eq!(yps[0].callee, "fetch");
+}
+
+#[test]
+fn yield_points_omits_non_network_boundary_functions() {
+    // A function that doesn't call any network-boundary callee gets no
+    // entry in the table, even if it lives in the same Program as a
+    // network-boundary function.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn pure_fn(x: i64) -> i64 { x + 1 }
+         fn driver() { fetch(); }",
+    );
+    assert!(
+        !program.yield_points.contains_key("pure_fn"),
+        "pure_fn has no network yield points: {:?}",
+        program.yield_points.get("pure_fn")
+    );
+    assert!(
+        program.yield_points.contains_key("driver"),
+        "driver should have yield points"
+    );
+}
+
+#[test]
+fn yield_points_omits_non_boundary_callees_in_boundary_function() {
+    // Inside a network-boundary function, only calls to OTHER
+    // network-boundary callees count as yield points. Calls to pure or
+    // non-network functions in the same body are ignored.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn pure_helper(x: i64) -> i64 { x + 1 }
+         fn driver() {
+             let _a = pure_helper(1);
+             fetch();
+             let _b = pure_helper(2);
+         }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver is network-boundary via fetch call");
+    assert_eq!(
+        yps.len(),
+        1,
+        "only the fetch call counts; pure_helper calls do not: {:?}",
+        yps
+    );
+    assert_eq!(yps[0].callee, "fetch");
+}
+
+#[test]
+fn yield_points_empty_for_program_without_network_effects() {
+    // A program with no network-boundary callees has an empty yield_points
+    // table. The state-machine transform has nothing to do.
+    let program = pipeline_with_yield_points(
+        "fn add(a: i64, b: i64) -> i64 { a + b }
+         fn use_add() { let _r = add(1, 2); }",
+    );
+    assert!(
+        program.yield_points.is_empty(),
+        "no network-boundary callees → empty yield_points: {:?}",
+        program.yield_points.keys().collect::<Vec<_>>()
+    );
+}

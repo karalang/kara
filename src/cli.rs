@@ -403,6 +403,26 @@ impl Pipeline {
             self.parsed.program.callee_network_yield_effect =
                 build_callee_network_yield_effect_table(effects);
         }
+        // Now that `callee_network_yield_effect` is populated, walk each
+        // network-boundary function body and enumerate its yield points.
+        // Resolves `MethodCall` sites through the typechecker's
+        // `method_callee_types`; absent that data (e.g. when typecheck
+        // didn't run), method-call yield points are silently dropped, which
+        // is fine for the not-typechecked path that produces no codegen
+        // anyway. The walker reads the program tree by shared reference, so
+        // we route the assignment through a local to avoid borrowing
+        // `self.parsed.program` mutably and immutably at the same time.
+        let method_callee_types_for_yields = self
+            .typed
+            .as_ref()
+            .map(|t| t.method_callee_types.clone())
+            .unwrap_or_default();
+        let yield_points = build_yield_points_table(
+            &self.parsed.program,
+            &self.parsed.program.callee_network_yield_effect,
+            &method_callee_types_for_yields,
+        );
+        self.parsed.program.yield_points = yield_points;
     }
 
     fn ownershipcheck(&mut self) {
@@ -636,7 +656,7 @@ fn build_callee_effectful_table(
 ///   - codegen lowering at network-effect call sites (phase 6 line 17
 ///     sub-item 6) — a call to a `true` callee lowers to "register fd +
 ///     park + yield" instead of a synchronous call.
-fn build_callee_network_yield_effect_table(
+pub fn build_callee_network_yield_effect_table(
     effects: &EffectCheckResult,
 ) -> std::collections::HashMap<String, bool> {
     fn set_has_network_yield(set: &crate::effectchecker::EffectSet) -> bool {
@@ -669,6 +689,341 @@ fn build_callee_network_yield_effect_table(
             .or_insert(network_yield);
     }
     table
+}
+
+/// Walk every function/method body in `program` and, for each
+/// network-boundary function (one marked `true` in `network_yield`),
+/// produce its ordered list of yield points — call sites whose callee is
+/// itself in `network_yield` with value `true`.
+///
+/// Callee resolution rules at a call site:
+///   - `Call { callee: Identifier(name) }` → callee key is `name`;
+///   - `Call { callee: Path { segments, .. } }` → callee key is the joined
+///     segments separated by `.` (matches `Type.method` shape from
+///     `EffectCheckResult` keys);
+///   - `MethodCall { .. }` → callee key looked up in `method_callee_types`
+///     via the call expression's span;
+///   - All other callee shapes (indirect through closure value, function
+///     pointer, etc.) → skipped — the codegen lowering pass can't park
+///     through an unresolved callee without a stable effect signature.
+///
+/// Functions without any yield-point calls are omitted from the table
+/// (they may still be network-boundary if classified via Polymorphic
+/// effect declaration, but they have no concrete suspension points within
+/// their bodies for the state-machine transform to lower against).
+pub fn build_yield_points_table(
+    program: &Program,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+) -> std::collections::HashMap<String, Vec<crate::ast::YieldPoint>> {
+    let mut table = std::collections::HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(func) => {
+                let key = func.name.clone();
+                if network_yield.get(&key).copied().unwrap_or(false) {
+                    let mut yps = Vec::new();
+                    collect_yield_points_in_block(
+                        &func.body,
+                        network_yield,
+                        method_callee_types,
+                        &mut yps,
+                    );
+                    if !yps.is_empty() {
+                        table.insert(key, yps);
+                    }
+                }
+            }
+            Item::ImplBlock(imp) => {
+                let type_name = match &imp.target_type.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                    _ => continue,
+                };
+                for ii in &imp.items {
+                    let method = match ii {
+                        crate::ast::ImplItem::Method(m) => m,
+                        crate::ast::ImplItem::AssocType(_) => continue,
+                    };
+                    let key = format!("{}.{}", type_name, method.name);
+                    if network_yield.get(&key).copied().unwrap_or(false) {
+                        let mut yps = Vec::new();
+                        collect_yield_points_in_block(
+                            &method.body,
+                            network_yield,
+                            method_callee_types,
+                            &mut yps,
+                        );
+                        if !yps.is_empty() {
+                            table.insert(key, yps);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    table
+}
+
+fn collect_yield_points_in_block(
+    block: &crate::ast::Block,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    out: &mut Vec<crate::ast::YieldPoint>,
+) {
+    for stmt in &block.stmts {
+        collect_yield_points_in_stmt(stmt, network_yield, method_callee_types, out);
+    }
+    if let Some(ref expr) = block.final_expr {
+        collect_yield_points_in_expr(expr, network_yield, method_callee_types, out);
+    }
+}
+
+fn collect_yield_points_in_stmt(
+    stmt: &crate::ast::Stmt,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    out: &mut Vec<crate::ast::YieldPoint>,
+) {
+    use crate::ast::StmtKind;
+    match &stmt.kind {
+        StmtKind::Let { value, .. } => {
+            collect_yield_points_in_expr(value, network_yield, method_callee_types, out)
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collect_yield_points_in_expr(value, network_yield, method_callee_types, out);
+            collect_yield_points_in_block(else_block, network_yield, method_callee_types, out);
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_yield_points_in_block(body, network_yield, method_callee_types, out);
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            collect_yield_points_in_expr(target, network_yield, method_callee_types, out);
+            collect_yield_points_in_expr(value, network_yield, method_callee_types, out);
+        }
+        StmtKind::Expr(expr) => {
+            collect_yield_points_in_expr(expr, network_yield, method_callee_types, out)
+        }
+    }
+}
+
+fn callee_key_from_call(callee: &crate::ast::Expr) -> Option<String> {
+    use crate::ast::ExprKind;
+    match &callee.kind {
+        ExprKind::Identifier(name) => Some(name.clone()),
+        ExprKind::Path { segments, .. } => Some(segments.join(".")),
+        _ => None,
+    }
+}
+
+fn collect_yield_points_in_expr(
+    expr: &crate::ast::Expr,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    out: &mut Vec<crate::ast::YieldPoint>,
+) {
+    use crate::ast::ExprKind;
+    let recurse = |e: &crate::ast::Expr, out: &mut Vec<crate::ast::YieldPoint>| {
+        collect_yield_points_in_expr(e, network_yield, method_callee_types, out)
+    };
+    let recurse_block = |b: &crate::ast::Block, out: &mut Vec<crate::ast::YieldPoint>| {
+        collect_yield_points_in_block(b, network_yield, method_callee_types, out)
+    };
+    match &expr.kind {
+        ExprKind::Call { callee, args } => {
+            if let Some(key) = callee_key_from_call(callee) {
+                if network_yield.get(&key).copied().unwrap_or(false) {
+                    out.push(crate::ast::YieldPoint {
+                        callee: key,
+                        span: expr.span.clone(),
+                    });
+                }
+            }
+            recurse(callee, out);
+            for arg in args {
+                recurse(&arg.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            if let Some(key) = method_callee_types
+                .get(&crate::resolver::SpanKey::from_span(&expr.span))
+                .cloned()
+            {
+                if network_yield.get(&key).copied().unwrap_or(false) {
+                    out.push(crate::ast::YieldPoint {
+                        callee: key,
+                        span: expr.span.clone(),
+                    });
+                }
+            }
+            recurse(object, out);
+            for arg in args {
+                recurse(&arg.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            recurse(left, out);
+            recurse(right, out);
+        }
+        ExprKind::Unary { operand, .. } => recurse(operand, out),
+        ExprKind::Question(inner) => recurse(inner, out),
+        ExprKind::OptionalChain { object, args, .. } => {
+            recurse(object, out);
+            if let Some(arglist) = args {
+                for arg in arglist {
+                    recurse(&arg.value, out);
+                }
+            }
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            recurse(left, out);
+            recurse(right, out);
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            recurse(object, out)
+        }
+        ExprKind::Index { object, index } => {
+            recurse(object, out);
+            recurse(index, out);
+        }
+        ExprKind::Block(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Par(b) => recurse_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            recurse(condition, out);
+            recurse_block(then_block, out);
+            if let Some(eb) = else_branch {
+                recurse(eb, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            recurse(value, out);
+            recurse_block(then_block, out);
+            if let Some(eb) = else_branch {
+                recurse(eb, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            recurse(scrutinee, out);
+            for arm in arms {
+                if let Some(ref g) = arm.guard {
+                    recurse(g, out);
+                }
+                recurse(&arm.body, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            recurse(condition, out);
+            recurse_block(body, out);
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            recurse(value, out);
+            recurse_block(body, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            recurse(iterable, out);
+            recurse_block(body, out);
+        }
+        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+            recurse_block(body, out)
+        }
+        ExprKind::Closure { body, .. } => recurse(body, out),
+        ExprKind::Return(Some(e)) => recurse(e, out),
+        ExprKind::Return(None) => {}
+        ExprKind::Break { value, .. } => {
+            if let Some(v) = value {
+                recurse(v, out);
+            }
+        }
+        ExprKind::Continue { .. } => {}
+        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+            for e in items {
+                recurse(e, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for e in items {
+                recurse(e, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            recurse(value, out);
+            recurse(count, out);
+        }
+        ExprKind::MapLiteral(pairs) => {
+            for (k, v) in pairs {
+                recurse(k, out);
+                recurse(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                recurse(&f.value, out);
+            }
+            if let Some(s) = spread {
+                recurse(s, out);
+            }
+        }
+        ExprKind::Pipe { left, right } => {
+            recurse(left, out);
+            recurse(right, out);
+        }
+        ExprKind::Cast { expr, .. } => recurse(expr, out),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                recurse(s, out);
+            }
+            if let Some(e) = end {
+                recurse(e, out);
+            }
+        }
+        ExprKind::Lock { body, .. } => recurse_block(body, out),
+        ExprKind::Providers { bindings, body } => {
+            for b in bindings {
+                recurse(&b.value, out);
+            }
+            recurse_block(body, out);
+        }
+        // Leaves / no-call shapes.
+        ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::Bool(_)
+        | ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::PipePlaceholder
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
+        ExprKind::InterpolatedStringLit(parts) => {
+            // Each `ParsedInterpolationPart::Expr(e)` contributes an
+            // embedded expression to walk.
+            for part in parts {
+                if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                    recurse(e, out);
+                }
+            }
+        }
+    }
 }
 
 fn effect_verb_str(v: &EffectVerbKind) -> &str {

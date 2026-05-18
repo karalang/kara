@@ -3,6 +3,8 @@
 //! Abstract Syntax Tree definitions for the Kāra language.
 //! Every node carries a `Span` for source location tracking.
 
+use crate::token::Span;
+
 /// Three-level visibility per `design.md § Three-level visibility`.
 /// Items carry `is_pub: bool` and `is_private: bool`; this enum is the
 /// single-value view used by the resolver / typechecker when enforcing
@@ -78,6 +80,45 @@ pub type CalleeEffectfulTable = std::collections::HashMap<String, bool>;
 /// network-bearing effect; the transform itself reads the resolved
 /// monomorphized effect set when deciding to apply.
 pub type CalleeNetworkYieldEffectTable = std::collections::HashMap<String, bool>;
+
+/// One yield-point entry within a network-boundary function: the call site
+/// where execution suspends pending I/O readiness, paired with the
+/// resolved callee key (`Identifier(name) → name`, two-segment
+/// `Type.method` Path → joined, `MethodCall` resolved via
+/// `TypeCheckResult.method_callee_types`). The state-machine transform
+/// (phase 6 line 26) consumes the per-function vector to size the state
+/// struct (one tag per yield point), and the codegen lowering pass
+/// consumes the per-yield-point callee key to identify which network
+/// runtime FFI helper to call at each yield site.
+#[derive(Debug, Clone)]
+pub struct YieldPoint {
+    /// Resolved callee key — same shape as `CalleeNetworkYieldEffectTable`
+    /// keys (`name`, `Type.method`). The state-machine transform looks
+    /// this up to determine the parking convention at the call boundary.
+    pub callee: String,
+    /// Span of the call expression (the `MethodCall` or `Call` node, not
+    /// the callee identifier). Used to thread debugger metadata through
+    /// the state-machine transform — `WaitTarget.NetworkIo` per the
+    /// debugger contract carries this span so `list_tasks()` can show
+    /// the source-level yield site, identical to a thread-blocking
+    /// syscall's stack frame.
+    pub span: Span,
+}
+
+/// Side-table populated by the cli pipeline after `EffectCheckResult` and
+/// `CalleeNetworkYieldEffectTable` are available. Maps each
+/// network-boundary function's canonical name to the ordered list of
+/// yield points within its body (in source-traversal order). Functions
+/// without any yield-point calls — even network-boundary ones reaching the
+/// classification through their own emitted `sends(Network)` /
+/// `receives(Network)` effect at the FFI primitive layer rather than via
+/// a sub-call — have no entry. Consumed by:
+///   - the state-machine transform codegen (phase 6 line 26) — one state
+///     per entry sizes the function's poll-function switch arm count;
+///   - the live-range pass that computes the captured-locals union per
+///     yield point — needs the yield-point spans to define the
+///     suspension-boundary set.
+pub type YieldPointsTable = std::collections::HashMap<String, Vec<YieldPoint>>;
 
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map. Maps each `MethodCall` expression's span to the
@@ -157,6 +198,15 @@ pub struct Program {
     /// for the state-machine transform (phase 6 line 26) and codegen
     /// lowering at yield points (phase 6 line 17 sub-item 6).
     pub callee_network_yield_effect: CalleeNetworkYieldEffectTable,
+    /// Set by the cli pipeline after `callee_network_yield_effect` is
+    /// populated; empty otherwise. For each network-boundary function (one
+    /// where `callee_network_yield_effect.get(name) == Some(&true)`),
+    /// lists the call sites whose callee is itself in
+    /// `callee_network_yield_effect`. These are the suspension points the
+    /// state-machine transform codegen lowers to "register fd + park +
+    /// yield" code (phase 6 line 17 sub-item 6); their count drives the
+    /// state struct's tag arity (phase 6 line 26).
+    pub yield_points: YieldPointsTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
     /// Set by the lowering pass from
