@@ -3821,3 +3821,105 @@ fn union_field_types_resolve_in_module_scope() {
          fn read_bits(u: *const FloatBits) -> i32 { 0 }",
     );
 }
+
+// ── FFI unions slice 3b — E_UNION_NON_EXHAUSTIVE_FORBIDDEN ──────
+//
+// `#[non_exhaustive]` on a union gets a focused, union-specific
+// diagnostic code distinct from the generic
+// `E_NON_EXHAUSTIVE_INVALID_TARGET` because the reason it's
+// meaningless is union-specific: unions are an FFI boundary shape
+// whose field list is determined by the C side, not a versioned
+// Kāra-owned aggregate that can be extended in a backwards-compatible
+// way like `pub struct` / `pub enum` can.
+
+#[test]
+fn union_non_exhaustive_uses_focused_code() {
+    let errs = resolve_errors(
+        "#[non_exhaustive]\n\
+         #[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }",
+    );
+    let diag = errs
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UnionNonExhaustiveForbidden)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected UnionNonExhaustiveForbidden, got kinds: {:?}",
+                errs.iter().map(|e| &e.kind).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("E_UNION_NON_EXHAUSTIVE_FORBIDDEN"),
+        "diagnostic should carry the focused code in the message body, got: {}",
+        diag.message,
+    );
+    assert!(
+        diag.message.contains("FloatBits"),
+        "diagnostic should name the union, got: {}",
+        diag.message,
+    );
+    assert!(
+        diag.message.contains("FFI"),
+        "diagnostic body should explain the FFI-shape reasoning, got: {}",
+        diag.message,
+    );
+    // Slice 3b's focused kind replaces the generic placement kind —
+    // emitting both would route through two distinct CLI codes and
+    // confuse IDE consumers. Pin the absence so a future refactor
+    // doesn't accidentally double-fire.
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("union")),
+        "generic NonExhaustiveInvalidTarget should not also fire for the same union, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_non_exhaustive_fires_regardless_of_pub() {
+    // `#[non_exhaustive]` on a `pub union` is just as meaningless —
+    // the attribute presupposes a versioned-aggregate surface that
+    // FFI shapes do not have, irrespective of visibility. The focused
+    // code fires for `pub union` as it does for the bare form.
+    let errs = resolve_errors(
+        "#[non_exhaustive]\n\
+         #[repr(C)]\n\
+         pub union FloatBits { f: f32, bits: u32 }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::UnionNonExhaustiveForbidden),
+        "expected UnionNonExhaustiveForbidden on `pub union`, got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_field_non_exhaustive_still_uses_generic_kind() {
+    // The focused code is type-level only — field-level
+    // `#[non_exhaustive]` inside a union body continues to route
+    // through the generic helper (the field surface is the same
+    // post-v1 deferred case across struct / union / enum, so the
+    // diagnostic stays uniform there).
+    let errs = resolve_errors(
+        "#[repr(C)]\n\
+         union FloatBits { #[non_exhaustive] f: f32, bits: u32 }",
+    );
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::NonExhaustiveInvalidTarget
+                && e.message.contains("union field")
+        }),
+        "expected generic NonExhaustiveInvalidTarget for the field, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.kind == ResolveErrorKind::UnionNonExhaustiveForbidden),
+        "focused kind should not fire on a field-level attribute, got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+    );
+}

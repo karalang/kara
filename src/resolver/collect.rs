@@ -561,12 +561,44 @@ impl<'a> super::Resolver<'a> {
     fn collect_union(&mut self, u: &UnionDef) {
         self.check_compiler_builtin_attr(&u.attributes, u.stdlib_origin);
         // Per-attribute placement rejections that mirror struct treatment.
-        // `#[non_exhaustive]` / `#[track_caller]` / `#[profile]` are not
-        // meaningful on unions (the FFI shape carries no Kāra-side
-        // version surface, no body, and no effect set). Reject up front
-        // so the user gets a focused diagnostic rather than silent
-        // acceptance of an attribute that does nothing.
-        self.reject_non_exhaustive_attr(&u.attributes, "union");
+        // `#[track_caller]` / `#[profile]` are not meaningful on unions
+        // (the FFI shape carries no body and no effect set), so they
+        // route through the generic helpers.
+        //
+        // Phase-5 FFI unions slice 3b: `#[non_exhaustive]` on a union
+        // gets its own focused code (`E_UNION_NON_EXHAUSTIVE_FORBIDDEN`)
+        // because the reason it is meaningless is union-specific —
+        // unions are an FFI boundary shape, not a versioned Kāra-owned
+        // aggregate; the field list is determined by the C side and
+        // cannot be extended in a backwards-compatible way the way
+        // `pub struct` / `pub enum` can. The dedicated kind lets
+        // downstream consumers (CLI E-code mapping, IDE quick-fix UIs)
+        // distinguish the union case from the generic one without
+        // parsing the message body. Field-level `#[non_exhaustive]`
+        // still routes through the generic helper below — the focused
+        // code is type-level only.
+        for attr in &u.attributes {
+            if attr.is_bare("non_exhaustive") {
+                self.errors.push(ResolveError {
+                    message: format!(
+                        "error[E_UNION_NON_EXHAUSTIVE_FORBIDDEN]: \
+                         `#[non_exhaustive]` is not valid on union `{}` \
+                         — unions are an FFI boundary shape, not a \
+                         versioned Kāra-owned aggregate; their field \
+                         list is determined by the C side and cannot \
+                         be extended in a backwards-compatible way the \
+                         way `pub struct` / `pub enum` can. Remove the \
+                         attribute; if the C contract changes, the \
+                         union definition changes in lockstep",
+                        u.name,
+                    ),
+                    span: attr.span.clone(),
+                    kind: ResolveErrorKind::UnionNonExhaustiveForbidden,
+                    suggestion: None,
+                    replacement: None,
+                });
+            }
+        }
         self.reject_track_caller_attr(&u.attributes, "union");
         self.reject_profile_attr(&u.attributes, "union");
         for field in &u.fields {

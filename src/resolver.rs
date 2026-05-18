@@ -585,6 +585,18 @@ pub enum ResolveErrorKind {
     /// [`crate::attribute_validator::QUERY_RESOLUTION_CONFLICT_PAIRS`].
     /// Mapped to `E_QUERY_RESOLUTION_CONFLICT`.
     QueryResolutionConflict,
+    /// Phase-5 FFI unions slice 3b — `#[non_exhaustive]` placed on a
+    /// `union` declaration. Distinct from the generic
+    /// [`NonExhaustiveInvalidTarget`] because unions are an FFI
+    /// boundary shape: their field list is determined by the C side
+    /// and cannot be extended in a backwards-compatible way the way
+    /// `pub struct` / `pub enum` can. The focused diagnostic body
+    /// (`E_UNION_NON_EXHAUSTIVE_FORBIDDEN`) calls that reasoning out
+    /// directly instead of routing through the generic "attribute is
+    /// not valid on {kind}" template. Field-level `#[non_exhaustive]`
+    /// inside a union still routes through the generic helper —
+    /// the focused code is type-level only.
+    UnionNonExhaustiveForbidden,
 }
 
 impl std::fmt::Display for ResolveError {

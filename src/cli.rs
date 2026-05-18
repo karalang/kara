@@ -1883,6 +1883,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::QueryResolutionConflict => {
                     "E_QUERY_RESOLUTION_CONFLICT"
                 }
+                crate::resolver::ResolveErrorKind::UnionNonExhaustiveForbidden => {
+                    "E_UNION_NON_EXHAUSTIVE_FORBIDDEN"
+                }
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -4133,6 +4136,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::ProfileInvalidTarget => "E0244",
         ResolveErrorKind::UnknownProfile => "E0245",
         ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
+        ResolveErrorKind::UnionNonExhaustiveForbidden => "E_UNION_NON_EXHAUSTIVE_FORBIDDEN",
     }
 }
 
