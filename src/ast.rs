@@ -135,6 +135,54 @@ pub struct YieldPoint {
 ///     suspension-boundary set.
 pub type YieldPointsTable = std::collections::HashMap<String, Vec<YieldPoint>>;
 
+/// One field in a network-boundary function's state struct: a binding
+/// from the function body (parameter, `let`, pattern binding) that the
+/// state-machine transform must preserve across at least one of the
+/// function's yield points. Slice 4 of phase 6 line 26: the v1 layout
+/// is the union of every yield point's captured-locals set, in
+/// source-introduction order, with no overlap optimization.
+#[derive(Debug, Clone)]
+pub struct StateStructField {
+    /// Source-level binding name (matches the names in
+    /// `YieldPoint.captured_locals`).
+    pub name: String,
+    /// Surface type name as recorded by the typechecker's
+    /// `pattern_binding_types` map at this binding's pattern span.
+    /// `None` when the typechecker did not record a name there: at v1
+    /// this covers primitive-typed bindings (`i64`/`bool`/`u8`/...),
+    /// anonymous-tuple shapes the recorder skips, and bindings whose
+    /// pattern span was not threaded into `pattern_binding_types`
+    /// (e.g. `let-uninit` and slice-pattern rest bindings — neither
+    /// passes through `bind_pattern_types`). Codegen consults this
+    /// name plus the sibling `pattern_binding_inner_types` table to
+    /// materialize the LLVM shape; `None` entries fall through to the
+    /// existing primitive-sizing path.
+    pub type_name: Option<String>,
+}
+
+/// State-struct layout synthesized per network-boundary function. The
+/// `fields` list is the union of every yield point's captured-locals
+/// set within the function body, in source-introduction order
+/// (parameters first left-to-right, then per-block let-binding sequence;
+/// the first occurrence of a name across yield points fixes its
+/// position). Slice 4 of phase 6 line 26 produces this conservative
+/// over-approximation layout; a later slice may refine to per-yield
+/// non-overlapping live ranges per design.md § State-Machine Transform.
+#[derive(Debug, Clone)]
+pub struct StateStructLayout {
+    pub fields: Vec<StateStructField>,
+}
+
+/// Side-table populated by the cli pipeline after `Program.yield_points`
+/// is built. Maps each network-boundary function with at least one
+/// concrete yield point in its body to a `StateStructLayout`. Functions
+/// classified network-boundary by Polymorphic declared-effect candidacy
+/// without any actual sub-call yield points (FFI-primitive-emitting
+/// shape) have no entry — matches `YieldPointsTable`'s presence rule.
+/// Consumed by the state-machine transform codegen to size and lower
+/// the state struct one-per-function-instantiation.
+pub type StateStructLayoutTable = std::collections::HashMap<String, StateStructLayout>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map. Maps each `MethodCall` expression's span to the
 /// canonical `Type.method` callee key — the same shape used in
@@ -222,6 +270,14 @@ pub struct Program {
     /// yield" code (phase 6 line 17 sub-item 6); their count drives the
     /// state struct's tag arity (phase 6 line 26).
     pub yield_points: YieldPointsTable,
+    /// Set by the cli pipeline after `yield_points` is populated; empty
+    /// otherwise. For each network-boundary function with at least one
+    /// concrete yield point, the per-function state-struct layout (union
+    /// of captured-locals across yield points, in source-introduction
+    /// order, paired with their typechecker-recorded surface type
+    /// names where available). Drives the state-machine transform's
+    /// poll-function state-struct shape (phase 6 line 26).
+    pub state_struct_layouts: StateStructLayoutTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
     /// Set by the lowering pass from

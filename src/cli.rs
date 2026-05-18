@@ -449,6 +449,26 @@ impl Pipeline {
             &method_callee_types_for_yields,
         );
         self.parsed.program.yield_points = yield_points;
+        // Slice 4: synthesize the per-function state-struct layout (union
+        // of captured-locals across yield points + their typechecker-known
+        // surface type names where recorded). Routed through a local copy
+        // of `pattern_binding_types` for the same borrow-discipline reason
+        // as the yield-points walker above. The typed phase may be absent
+        // (e.g. parse-only pipelines); in that case `pattern_binding_types`
+        // is empty and every field's `type_name` resolves to `None`, which
+        // matches codegen's primitive-sizing fallback path.
+        let pattern_binding_types_for_layouts = self
+            .typed
+            .as_ref()
+            .map(|t| t.pattern_binding_types.clone())
+            .unwrap_or_default();
+        let state_struct_layouts = build_state_struct_layouts(
+            &self.parsed.program,
+            &self.parsed.program.callee_network_yield_effect,
+            &method_callee_types_for_yields,
+            &pattern_binding_types_for_layouts,
+        );
+        self.parsed.program.state_struct_layouts = state_struct_layouts;
     }
 
     fn ownershipcheck(&mut self) {
@@ -1120,6 +1140,493 @@ impl YieldPointWalker<'_> {
                 self.walk_block(body);
             }
             // Leaves / no-call shapes.
+            ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => {}
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                        self.walk_expr(e);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Build the per-function state-struct layout table from a fully-typed
+/// `Program` whose `yield_points` table is populated. For each
+/// network-boundary function with at least one concrete yield point,
+/// produces a `StateStructLayout` whose `fields` list is the union of
+/// every yield point's captured-locals set in source-introduction order
+/// (parameters first left-to-right, then per-block let-binding sequence;
+/// first occurrence across yield points fixes position).
+///
+/// Each field's `type_name` is looked up in `pattern_binding_types`
+/// against the introducing pattern's span — primitives and other shapes
+/// the typechecker doesn't record there yield `None`, and codegen falls
+/// through to its primitive-sizing path on absent entries.
+///
+/// `self` is recorded with `type_name` set to the impl block's target
+/// type name (not via `pattern_binding_types` — there is no pattern
+/// span for `self`; the impl target supplies the canonical name
+/// directly).
+///
+/// Shadowed bindings get separate field slots — collision is keyed on
+/// the introducing pattern's span, not the binding name, so the v1
+/// layout faithfully reflects the source-level binding identity.
+///
+/// Functions network-boundary by Polymorphic declared-effect candidacy
+/// without any concrete sub-call yield points are omitted from the
+/// table (mirrors `YieldPointsTable`'s presence rule).
+pub fn build_state_struct_layouts(
+    program: &Program,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+) -> std::collections::HashMap<String, crate::ast::StateStructLayout> {
+    let mut table = std::collections::HashMap::new();
+    for item in &program.items {
+        match item {
+            Item::Function(func) => {
+                let key = func.name.clone();
+                if network_yield.get(&key).copied().unwrap_or(false) {
+                    if let Some(layout) = walk_fn_for_state_struct_layout(
+                        func,
+                        None,
+                        network_yield,
+                        method_callee_types,
+                        pattern_binding_types,
+                    ) {
+                        table.insert(key, layout);
+                    }
+                }
+            }
+            Item::ImplBlock(imp) => {
+                let type_name = match &imp.target_type.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                    _ => continue,
+                };
+                for ii in &imp.items {
+                    let method = match ii {
+                        crate::ast::ImplItem::Method(m) => m,
+                        crate::ast::ImplItem::AssocType(_) => continue,
+                    };
+                    let key = format!("{}.{}", type_name, method.name);
+                    if network_yield.get(&key).copied().unwrap_or(false) {
+                        if let Some(layout) = walk_fn_for_state_struct_layout(
+                            method,
+                            Some(type_name.as_str()),
+                            network_yield,
+                            method_callee_types,
+                            pattern_binding_types,
+                        ) {
+                            table.insert(key, layout);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    table
+}
+
+/// Walker state for one function body's state-struct layout synthesis.
+/// Mirrors `YieldPointWalker`'s scope-tracking discipline (push on binding
+/// introduction; truncate on block exit) but enriches each scope slot with
+/// the `SpanKey` of the pattern that introduced the binding so the
+/// typechecker's `pattern_binding_types` lookup resolves at yield-point
+/// snapshots. The walker accumulates a per-function field union directly
+/// — duplicate (name, span) pairs across yield points are coalesced via
+/// `seen`. Same-name bindings introduced at different spans (shadowing)
+/// get distinct slots.
+struct StateStructLayoutWalker<'a> {
+    network_yield: &'a std::collections::HashMap<String, bool>,
+    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    /// Flat stack of in-scope binding (name, introducing-pattern-span)
+    /// pairs in source-introduction order. `self` carries a fixed sentinel
+    /// span-key — its type comes from the impl target, not from the
+    /// pattern_binding_types map.
+    scope: Vec<ScopeEntry>,
+    fields: Vec<crate::ast::StateStructField>,
+    seen: std::collections::HashSet<ScopeEntryKey>,
+    /// Flips `true` the first time the walker recognises a network-effect
+    /// call site (yield point). Drives the presence rule: a network-boundary
+    /// function without any concrete yield-point call in its body — even
+    /// one classified by Polymorphic candidacy at the FFI primitive layer
+    /// — produces no table entry, mirroring `YieldPointsTable`.
+    had_yield_point: bool,
+}
+
+#[derive(Clone)]
+struct ScopeEntry {
+    name: String,
+    /// `Some(key)` for ordinary bindings (param, let, pattern); `None`
+    /// for `self` and any future synthetic binding without a recorded
+    /// pattern span. When `None`, `type_override` carries the surface
+    /// type directly.
+    span_key: Option<crate::resolver::SpanKey>,
+    type_override: Option<String>,
+}
+
+#[derive(Clone, Eq, PartialEq, Hash)]
+enum ScopeEntryKey {
+    Span(crate::resolver::SpanKey),
+    Synthetic(String),
+}
+
+fn walk_fn_for_state_struct_layout(
+    func: &crate::ast::Function,
+    impl_target_type: Option<&str>,
+    network_yield: &std::collections::HashMap<String, bool>,
+    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
+) -> Option<crate::ast::StateStructLayout> {
+    let mut walker = StateStructLayoutWalker {
+        network_yield,
+        method_callee_types,
+        pattern_binding_types,
+        scope: Vec::new(),
+        fields: Vec::new(),
+        seen: std::collections::HashSet::new(),
+        had_yield_point: false,
+    };
+    if func.self_param.is_some() {
+        walker.scope.push(ScopeEntry {
+            name: "self".to_string(),
+            span_key: None,
+            type_override: impl_target_type.map(|s| s.to_string()),
+        });
+    }
+    for p in &func.params {
+        for (name, span) in p.pattern.binding_name_spans() {
+            walker.scope.push(ScopeEntry {
+                name,
+                span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                type_override: None,
+            });
+        }
+    }
+    walker.walk_block(&func.body);
+    if walker.had_yield_point {
+        Some(crate::ast::StateStructLayout {
+            fields: walker.fields,
+        })
+    } else {
+        None
+    }
+}
+
+impl StateStructLayoutWalker<'_> {
+    fn record_yield_point_capture(&mut self) {
+        self.had_yield_point = true;
+        for entry in &self.scope {
+            let key = match entry.span_key {
+                Some(k) => ScopeEntryKey::Span(k),
+                None => ScopeEntryKey::Synthetic(entry.name.clone()),
+            };
+            if self.seen.insert(key) {
+                let type_name = entry.type_override.clone().or_else(|| {
+                    entry
+                        .span_key
+                        .and_then(|k| self.pattern_binding_types.get(&k).cloned())
+                });
+                self.fields.push(crate::ast::StateStructField {
+                    name: entry.name.clone(),
+                    type_name,
+                });
+            }
+        }
+    }
+
+    fn walk_block(&mut self, block: &crate::ast::Block) {
+        let scope_mark = self.scope.len();
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_block_with_pattern(&mut self, pat: &crate::ast::Pattern, block: &crate::ast::Block) {
+        let scope_mark = self.scope.len();
+        for (name, span) in pat.binding_name_spans() {
+            self.scope.push(ScopeEntry {
+                name,
+                span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                type_override: None,
+            });
+        }
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_expr_with_pattern(&mut self, pat: &crate::ast::Pattern, expr: &crate::ast::Expr) {
+        let scope_mark = self.scope.len();
+        for (name, span) in pat.binding_name_spans() {
+            self.scope.push(ScopeEntry {
+                name,
+                span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                type_override: None,
+            });
+        }
+        self.walk_expr(expr);
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_stmt(&mut self, stmt: &crate::ast::Stmt) {
+        use crate::ast::StmtKind;
+        match &stmt.kind {
+            StmtKind::Let { value, pattern, .. } => {
+                self.walk_expr(value);
+                for (name, span) in pattern.binding_name_spans() {
+                    self.scope.push(ScopeEntry {
+                        name,
+                        span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                        type_override: None,
+                    });
+                }
+            }
+            StmtKind::LetUninit {
+                name, name_span, ..
+            } => {
+                self.scope.push(ScopeEntry {
+                    name: name.clone(),
+                    span_key: Some(crate::resolver::SpanKey::from_span(name_span)),
+                    type_override: None,
+                });
+            }
+            StmtKind::LetElse {
+                value,
+                pattern,
+                else_block,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block(else_block);
+                for (name, span) in pattern.binding_name_spans() {
+                    self.scope.push(ScopeEntry {
+                        name,
+                        span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                        type_override: None,
+                    });
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.walk_block(body);
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.walk_expr(target);
+                self.walk_expr(value);
+            }
+            StmtKind::Expr(expr) => self.walk_expr(expr),
+        }
+    }
+
+    fn walk_expr(&mut self, expr: &crate::ast::Expr) {
+        use crate::ast::ExprKind;
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some(key) = callee_key_from_call(callee) {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        self.record_yield_point_capture();
+                    }
+                }
+                self.walk_expr(callee);
+                for arg in args {
+                    self.walk_expr(&arg.value);
+                }
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                if let Some(key) = self
+                    .method_callee_types
+                    .get(&crate::resolver::SpanKey::from_span(&expr.span))
+                    .cloned()
+                {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        self.record_yield_point_capture();
+                    }
+                }
+                self.walk_expr(object);
+                for arg in args {
+                    self.walk_expr(&arg.value);
+                }
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Unary { operand, .. } => self.walk_expr(operand),
+            ExprKind::Question(inner) => self.walk_expr(inner),
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.walk_expr(object);
+                if let Some(arglist) = args {
+                    for arg in arglist {
+                        self.walk_expr(&arg.value);
+                    }
+                }
+            }
+            ExprKind::NilCoalesce { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.walk_expr(object)
+            }
+            ExprKind::Index { object, index } => {
+                self.walk_expr(object);
+                self.walk_expr(index);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                pattern,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee);
+                for arm in arms {
+                    if let Some(ref g) = arm.guard {
+                        let scope_mark = self.scope.len();
+                        for (name, span) in arm.pattern.binding_name_spans() {
+                            self.scope.push(ScopeEntry {
+                                name,
+                                span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                                type_override: None,
+                            });
+                        }
+                        self.walk_expr(g);
+                        self.scope.truncate(scope_mark);
+                    }
+                    self.walk_expr_with_pattern(&arm.pattern, &arm.body);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(body);
+            }
+            ExprKind::WhileLet {
+                value,
+                pattern,
+                body,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.walk_expr(iterable);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                self.walk_block(body)
+            }
+            // Closures form their own state machine — same as YieldPointWalker.
+            ExprKind::Closure { .. } => {}
+            ExprKind::Return(Some(e)) => self.walk_expr(e),
+            ExprKind::Return(None) => {}
+            ExprKind::Break { value, .. } => {
+                if let Some(v) = value {
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::Continue { .. } => {}
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.walk_expr(value);
+                self.walk_expr(count);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.walk_expr(k);
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.walk_expr(&f.value);
+                }
+                if let Some(s) = spread {
+                    self.walk_expr(s);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Cast { expr, .. } => self.walk_expr(expr),
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.walk_expr(s);
+                }
+                if let Some(e) = end {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::Lock { body, .. } => self.walk_block(body),
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.walk_expr(&b.value);
+                }
+                self.walk_block(body);
+            }
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)

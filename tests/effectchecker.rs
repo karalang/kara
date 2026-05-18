@@ -5338,3 +5338,244 @@ fn captured_locals_does_not_descend_into_closures() {
         program.yield_points.get("driver")
     );
 }
+
+// ─── Phase 6 line 26 slice 4: state-struct layout synthesis ────────────────
+//
+// Slice 4 lifts the captured-local *name* lists (slice 3) into a per-function
+// `StateStructLayout` carrying the **union** of captured locals across every
+// yield point, paired with each binding's surface type name as recorded by
+// the typechecker's `pattern_binding_types` map. Codegen consumes this layout
+// (in a future slice) to size and lower the network-boundary function's
+// state struct one-per-monomorphization.
+
+/// Drive parse → resolve → typecheck → lower → effectcheck → build all four
+/// side-tables (`callee_network_yield_effect`, `yield_points`,
+/// `pattern_binding_types` mirror on Program, `state_struct_layouts`),
+/// returning the populated `Program`. Mirrors `Pipeline::effectcheck`'s
+/// wiring including the slice-4 step.
+fn pipeline_with_state_struct_layouts(source: &str) -> karac::ast::Program {
+    use karac::cli::{
+        build_callee_network_yield_effect_table, build_state_struct_layouts,
+        build_yield_points_table,
+    };
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors: {:?}",
+        resolved.errors
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    assert!(typed.errors.is_empty(), "Type errors: {:?}", typed.errors);
+    let method_types = typed.method_callee_types.clone();
+    let call_type_subs = typed.call_type_subs.clone();
+    let pattern_binding_types = typed.pattern_binding_types.clone();
+    lower(&mut parsed.program, &typed);
+    let effects = effectcheck_with_typecheck_data(
+        &parsed.program,
+        PublicEffectsPolicy::default(),
+        CompileProfile::Default,
+        method_types.clone(),
+        call_type_subs,
+    );
+    parsed.program.callee_network_yield_effect = build_callee_network_yield_effect_table(&effects);
+    let yield_points = build_yield_points_table(
+        &parsed.program,
+        &parsed.program.callee_network_yield_effect,
+        &method_types,
+    );
+    parsed.program.yield_points = yield_points;
+    let layouts = build_state_struct_layouts(
+        &parsed.program,
+        &parsed.program.callee_network_yield_effect,
+        &method_types,
+        &pattern_binding_types,
+    );
+    parsed.program.state_struct_layouts = layouts;
+    parsed.program
+}
+
+#[test]
+fn state_struct_layout_records_named_param_with_typechecker_recorded_type_name() {
+    // A `Vec[T]` param's surface type is recorded by the typechecker into
+    // `pattern_binding_types` (`"Vec"`), so slice 4 surfaces it in the
+    // state-struct field's `type_name` — codegen has enough info to size
+    // the slot without re-deriving the type.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(items: Vec[i64]) { fetch(); }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("driver")
+        .expect("driver should have a state-struct layout");
+    assert_eq!(layout.fields.len(), 1);
+    assert_eq!(layout.fields[0].name, "items");
+    assert_eq!(layout.fields[0].type_name.as_deref(), Some("Vec"));
+}
+
+#[test]
+fn state_struct_layout_unions_captures_across_yield_points_in_source_order() {
+    // Two sequential yield points where the second yield sees a binding
+    // introduced after the first: the layout = source-introduction-ordered
+    // union [a, b], with `b` reachable only at the second yield. v1 packs
+    // unconditionally — every entry holds storage across every yield.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(a: Vec[i64]) {
+             fetch();
+             let b: Vec[i64] = a;
+             fetch();
+         }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("driver")
+        .expect("driver layout");
+    let names: Vec<&str> = layout.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["a", "b"]);
+    assert_eq!(layout.fields[0].type_name.as_deref(), Some("Vec"));
+    assert_eq!(layout.fields[1].type_name.as_deref(), Some("Vec"));
+}
+
+#[test]
+fn state_struct_layout_self_in_methods_uses_impl_target_type() {
+    // `self` has no introducing pattern, so its `type_name` comes from the
+    // impl block's target type directly — `Hub` here. This makes codegen's
+    // first-pass lookup for `self`-typed state-struct slots consistent with
+    // the same canonical name used for other Named-type entries.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("Hub.run")
+        .expect("Hub.run layout");
+    assert_eq!(layout.fields.len(), 1);
+    assert_eq!(layout.fields[0].name, "self");
+    assert_eq!(layout.fields[0].type_name.as_deref(), Some("Hub"));
+}
+
+#[test]
+fn state_struct_layout_primitive_typed_bindings_have_none_type_name() {
+    // The typechecker's `pattern_binding_types` map only records Named /
+    // Str / Shared surface names. Primitive-typed bindings (`i64`, `bool`,
+    // ...) yield `None` in the layout; codegen falls through to its
+    // primitive-sizing path on absent entries.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(n: i64) { fetch(); }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("driver")
+        .expect("driver layout");
+    assert_eq!(layout.fields.len(), 1);
+    assert_eq!(layout.fields[0].name, "n");
+    assert!(layout.fields[0].type_name.is_none());
+}
+
+#[test]
+fn state_struct_layout_excludes_inner_block_bindings_not_seen_at_any_yield() {
+    // A binding introduced inside an inner block that closes before the
+    // (only) yield-point call is NOT in the layout — slice 4's union is
+    // *what every yield point captures*, not *every binding the body ever
+    // had*. Lexical scope pop discipline carries through from slice 3.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(outer: Vec[i64]) {
+             {
+                 let inner: Vec[i64] = outer;
+                 // no yield here — `inner` pops at this block's close
+             }
+             fetch();
+         }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("driver")
+        .expect("driver layout");
+    let names: Vec<&str> = layout.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(
+        names,
+        vec!["outer"],
+        "`inner` popped before the yield — must not appear in layout"
+    );
+}
+
+#[test]
+fn state_struct_layout_excludes_closures_no_entry_for_outer_function() {
+    // Same closure rule as slice 3: a yield inside a closure body is the
+    // closure's own state machine, not the enclosing function's. The
+    // enclosing function gets no entry in `state_struct_layouts` when its
+    // own body has zero network-effect call sites.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(items: Vec[i64]) {
+             let _c = |x: i64| { fetch(); };
+         }",
+    );
+    assert!(
+        !program.state_struct_layouts.contains_key("driver"),
+        "closure-body yield must not produce an entry for the outer function: {:?}",
+        program.state_struct_layouts.get("driver")
+    );
+}
+
+#[test]
+fn state_struct_layout_pure_function_has_no_entry() {
+    // A function with no network-effect calls in its body — even one
+    // whose surrounding program declares network-bearing effects — gets
+    // no entry. Mirrors `YieldPointsTable`'s presence rule exactly.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn pure_helper(x: i64) -> i64 { x + 1 }
+         fn driver() { fetch(); }",
+    );
+    assert!(
+        !program.state_struct_layouts.contains_key("pure_helper"),
+        "pure function must not have a state-struct layout entry"
+    );
+    // sanity check: the driver entry exists (we did populate the table)
+    assert!(program.state_struct_layouts.contains_key("driver"));
+}
+
+#[test]
+fn state_struct_layout_includes_inner_block_binding_when_yield_inside() {
+    // The mirror of the pop test: a binding introduced inside an inner
+    // block that DOES contain a yield ends up in the layout. The walker
+    // snapshots scope at the yield site, so the inner binding is part
+    // of that yield's captures and thus part of the function-level union.
+    let program = pipeline_with_state_struct_layouts(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(outer: Vec[i64]) {
+             {
+                 let inner: Vec[i64] = outer;
+                 fetch();
+             }
+         }",
+    );
+    let layout = program
+        .state_struct_layouts
+        .get("driver")
+        .expect("driver layout");
+    let names: Vec<&str> = layout.fields.iter().map(|f| f.name.as_str()).collect();
+    assert_eq!(names, vec!["outer", "inner"]);
+}
