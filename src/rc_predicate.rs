@@ -375,20 +375,18 @@ fn first_uam_witness(
 //
 // Predicate: ∃C such that
 //   • kind(C) = Consume, AND
-//   • block(C) lies in some natural loop L of the CFG, AND
-//   • no Reassign of C's binding sits in any natural loop block —
-//     i.e. the binding is not rebound between back-edge passes.
+//   • ∃ natural loop L with block(C) ∈ L AND no Reassign of C's
+//     binding sits in L's blocks — i.e. the inner back-edge re-
+//     enters C's site without the binding having been rebound.
 //
 // The reassign-suppression handles `let mut x; while c { let _ = x;
 // x = next(); }` (the common consuming-iterator shape — clean code
 // that rebinds before the back-edge fires) without flagging it.
-// v1 uses a coarse "any reassign in any loop block" check; a more
-// precise version would tie the reassign to the same natural loop
-// as the consume. Per design.md § "Conservative in the safe
-// direction" for ownership analysis, over-firing is acceptable but
-// surprising RC fallback insertions on programs the legacy state
-// machine accepts is unwelcome — the coarse rule trades precision
-// for matching legacy behavior on the common rebind shape.
+// Per-loop precision (matched to the consume's containing natural
+// loop, not the union of every loop in the function) ensures a
+// rebind in a sibling or non-containing loop does not spuriously
+// suppress the rule: sibling loops do not close the consume's
+// back-edge, so the loop-of-consume condition still holds there.
 //
 // The witness has `consume_span == other_use_span` (both point at
 // the in-loop Consume site). `consume_origin` carries the
@@ -396,12 +394,14 @@ fn first_uam_witness(
 // `OwnershipChecker::populate_predicate_outputs` produces a
 // flavor-correct `RcEntry`.
 
-/// Compute the union of every natural loop's blocks. A back edge
-/// is `(b → v)` where `v` dominates `b`; the natural loop with
-/// header `v` and back-edge source `b` is `{v}` plus every block
-/// that reaches `b` along predecessor edges without crossing `v`.
-fn loop_blocks(cfg: &Cfg, dom: &DominatorTree) -> HashSet<BlockId> {
-    let mut in_loop: HashSet<BlockId> = HashSet::new();
+/// Compute each natural loop's body block set. A back edge is
+/// `(b → v)` where `v` dominates `b`; the natural loop with header
+/// `v` and back-edge source `b` is `{v}` plus every block that
+/// reaches `b` along predecessor edges without crossing `v`. One
+/// entry per back-edge; nested loops appear as separate entries
+/// (the inner loop's set is a subset of its enclosing loop's set).
+fn natural_loops(cfg: &Cfg, dom: &DominatorTree) -> Vec<HashSet<BlockId>> {
+    let mut loops: Vec<HashSet<BlockId>> = Vec::new();
     for b in 0..cfg.num_blocks() {
         for &v in &cfg.block(b).successors {
             if !dom.dominates(v, b) {
@@ -427,20 +427,21 @@ fn loop_blocks(cfg: &Cfg, dom: &DominatorTree) -> HashSet<BlockId> {
                     }
                 }
             }
-            in_loop.extend(visited);
+            loops.push(visited);
         }
     }
-    in_loop
+    loops
 }
 
 /// Find each binding's first in-loop Consume site that fires the
 /// loop-of-consume rule. Returns one witness per binding with
 /// `consume_span == other_use_span` (both point at the in-loop
-/// Consume). Bindings whose Consume sits outside any loop, or whose
-/// loop also contains a Reassign, are absent from the map.
+/// Consume). A Consume qualifies iff at least one natural loop
+/// contains it AND that loop has no Reassign of the same binding
+/// — sibling-loop and non-containing-loop rebinds do not suppress.
 pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<String, RcWitness> {
-    let in_loop = loop_blocks(cfg, dom);
-    if in_loop.is_empty() {
+    let loops = natural_loops(cfg, dom);
+    if loops.is_empty() {
         return HashMap::new();
     }
 
@@ -456,21 +457,27 @@ pub fn loop_of_consume_candidates(cfg: &Cfg, dom: &DominatorTree) -> HashMap<Str
 
     let mut witnesses = HashMap::new();
     for (binding, uses) in &sites {
-        // v1 coarse suppression: any in-loop Reassign of the same
-        // binding kills the rule. Catches the common
-        // `consume(x); x = next();` rebind shape; over-suppresses
-        // when the reassign is in a sibling loop or conditional.
-        let has_in_loop_reassign = uses
-            .iter()
-            .any(|(b, _, u)| u.kind == UseKind::Reassign && in_loop.contains(b));
-        if has_in_loop_reassign {
-            continue;
-        }
         for (cb, _ci, c) in uses.iter() {
             if c.kind != UseKind::Consume {
                 continue;
             }
-            if !in_loop.contains(cb) {
+            // Per-loop precision: the Consume fires loop-of-consume
+            // iff at least one natural loop contains its block AND
+            // that same loop has no Reassign of the binding. A
+            // rebind in a sibling loop (or in an enclosing loop
+            // outside the inner body) does not close the inner
+            // back-edge — it leaves the Consume re-entering its
+            // already-moved value on the next iteration.
+            let fires = loops.iter().any(|nloop| {
+                if !nloop.contains(cb) {
+                    return false;
+                }
+                let has_rebind = uses
+                    .iter()
+                    .any(|(rb, _, u)| u.kind == UseKind::Reassign && nloop.contains(rb));
+                !has_rebind
+            });
+            if !fires {
                 continue;
             }
             witnesses.insert(
@@ -1230,6 +1237,62 @@ mod tests {
             !cands.contains_key("x"),
             "in-loop reassign must suppress loop-of-consume; got {:?}",
             cands.get("x")
+        );
+    }
+
+    #[test]
+    fn loop_of_consume_fires_for_sibling_loop_reassign() {
+        // Per-loop precision: consume in loop L1, reassign in
+        // sibling loop L2 (sequential, not nested) — the reassign
+        // does NOT close L1's back-edge, so the rule must fire.
+        // Under the prior coarse rule, any in-loop reassign of the
+        // binding suppressed the rule for the whole function.
+        let src = "fn main() {\n\
+                       let mut x = 5;\n\
+                       let mut i = 0;\n\
+                       while i < 3 { let _a = x; i = i + 1; }\n\
+                       while i < 6 { x = i; i = i + 1; }\n\
+                   }";
+        let mut cfg = cfg_of(src);
+        mark_consume_at_line(&mut cfg, "x", 4);
+        mark_reassign_at_line(&mut cfg, "x", 5);
+        let dom = compute_dominators(&cfg);
+        let cands = loop_of_consume_candidates(&cfg, &dom);
+        assert!(
+            cands.contains_key("x"),
+            "sibling-loop reassign must not suppress consume in a different loop; got {:?}",
+            cands.keys().collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn loop_of_consume_fires_when_reassign_is_outside_inner_loop() {
+        // Per-loop precision: nested loops where the consume sits
+        // in the inner body and the reassign sits in the outer
+        // body before the inner header. The inner loop's natural
+        // blocks do not contain the reassign, so the inner back-
+        // edge re-enters the consume on an already-moved value —
+        // rule must fire. (The outer loop's natural blocks do
+        // contain the rebind, so the outer scope alone would
+        // suppress; the inner-scope firing is what the precision
+        // improvement surfaces.)
+        let src = "fn main() {\n\
+                       let mut x = 5;\n\
+                       let mut i = 0;\n\
+                       while i < 3 {\n\
+                           x = i;\n\
+                           while i < 5 { let _a = x; i = i + 1; }\n\
+                       }\n\
+                   }";
+        let mut cfg = cfg_of(src);
+        mark_consume_at_line(&mut cfg, "x", 6);
+        mark_reassign_at_line(&mut cfg, "x", 5);
+        let dom = compute_dominators(&cfg);
+        let cands = loop_of_consume_candidates(&cfg, &dom);
+        assert!(
+            cands.contains_key("x"),
+            "inner-loop consume must fire when only the enclosing-loop body rebinds; got {:?}",
+            cands.keys().collect::<Vec<_>>()
         );
     }
 
