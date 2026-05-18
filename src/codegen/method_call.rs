@@ -654,6 +654,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 Ok(Some(to_i64(self, a, label)))
             }
+            // (field_ptr: *_ F, offset: usize) -> *_ T
+            //   (ptr.container_of / ptr.container_of_mut)
+            //
+            // Intrusive-DS pointer recovery — subtract the field
+            // offset from the field-pointer's address bits. The
+            // provenance-preserving lowering the spec describes is
+            // `field_ptr.with_addr(field_ptr.addr() - offset)` — under
+            // the current i64-pointer ABI that collapses to plain
+            // integer subtraction, which is what we emit here. The
+            // `with_addr` and `addr` round-trips are no-ops at the
+            // LLVM level (see slice 3's helper-docstring).
+            "container_of" | "container_of_mut" if args.len() == 2 => {
+                let field_ptr_val = self.compile_expr(&args[0].value)?;
+                let offset_val = self.compile_expr(&args[1].value)?;
+                let label = if method == "container_of" {
+                    "ptr.container_of"
+                } else {
+                    "ptr.container_of_mut"
+                };
+                let field_ptr_i64 = to_i64(self, field_ptr_val, &format!("{label}.fp"));
+                let offset_i64 = to_i64(self, offset_val, &format!("{label}.off"));
+                let result = self
+                    .builder
+                    .build_int_sub(
+                        field_ptr_i64.into_int_value(),
+                        offset_i64.into_int_value(),
+                        label,
+                    )
+                    .unwrap();
+                Ok(Some(result.into()))
+            }
             _ => Ok(None),
         }
     }

@@ -826,6 +826,46 @@ fn main() {
         );
     }
 
+    // ── ptr.container_of / ptr.container_of_mut (line 509 follow-up) ─
+
+    #[test]
+    fn test_ir_ptr_container_of_compiles() {
+        let ir = ir_for(
+            "struct Inner { x: i32, y: i32 } \
+             struct Outer { a: i32, inner: Inner } \
+             fn recover(fp: *const i32) -> *const Outer { \
+                 unsafe { ptr.container_of(fp, offset_of[Outer](inner.y)) } \
+             } \
+             fn main() {}",
+        );
+        assert!(
+            ir.contains("@recover"),
+            "recover fn should be emitted; got IR:\n{ir}"
+        );
+        // The lowering subtracts the offset from the field pointer's
+        // address bits — `sub` instruction must appear.
+        assert!(
+            ir.contains("sub"),
+            "`ptr.container_of` should emit an integer subtract; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_container_of_mut_compiles() {
+        let ir = ir_for(
+            "struct Inner { x: i32, y: i32 } \
+             struct Outer { a: i32, inner: Inner } \
+             fn recover(fp: *mut i32) -> *mut Outer { \
+                 unsafe { ptr.container_of_mut(fp, offset_of[Outer](inner.y)) } \
+             } \
+             fn main() {}",
+        );
+        assert!(
+            ir.contains("@recover"),
+            "recover fn should be emitted; got IR:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_e2e_and_short_circuit_skips_rhs_call() {
         // `false and boom()` must not call boom() at runtime.

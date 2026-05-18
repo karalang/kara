@@ -746,6 +746,47 @@ fn test_ptr_expose_safe_silent() {
     );
 }
 
+#[test]
+fn test_ptr_container_of_outside_unsafe_block_errors() {
+    let diags =
+        lint_op("fn caller(fp: *const i32) -> *const i64 { ptr.container_of(fp, 0) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ptr.container_of")
+                && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `ptr.container_of`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_container_of_mut_outside_unsafe_block_errors() {
+    let diags =
+        lint_op("fn caller(fp: *mut i32) -> *mut i64 { ptr.container_of_mut(fp, 0) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ptr.container_of_mut")
+                && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `ptr.container_of_mut`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_container_of_inside_unsafe_block_silent() {
+    let diags = lint_op(
+        "fn caller(fp: *const i32) -> *const i64 { \
+             unsafe { ptr.container_of(fp, 0) } \
+         } fn main() {}",
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|d| !d.message.contains("ptr.container_of")),
+        "did not expect a ptr.container_of diagnostic inside unsafe block, got: {diags:?}"
+    );
+}
+
 // ── Slice 4b cross-cutting — CLI fall-through ──────────────────
 
 #[test]

@@ -612,6 +612,55 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
 
+        // ── ptr.container_of / ptr.container_of_mut ─────────────────────
+        // Intrusive-DS pointer recovery: given a `*const F` (or `*mut F`)
+        // that points at a known field of an enclosing `T`, recover a
+        // `*const T` (or `*mut T`) by subtracting the field's offset
+        // from the field pointer's address. Spec: `design.md § Field
+        // Offsets` (v60 item 25). The full spec API takes a field-path
+        // syntax for the offset argument — the parser-sugar form
+        // (`ptr.container_of[T, F](field_ptr, inner.y)`) requires method-
+        // call turbofish parsing and lands as a follow-up; today the
+        // offset is supplied as a plain usize, typically via
+        // `offset_of[T](inner.y)`.
+        //
+        // Type params: `T` (enclosing, returned) and `F` (field type,
+        // inferred from the pointer arg). The field-ptr ↔ named-field
+        // type match is an *unsafe contract* the caller must uphold —
+        // there's no type-level verification without the field-path
+        // sugar.
+        let type_param_f = || Type::TypeParam("F".to_string());
+        let const_ptr_f = || Type::Pointer {
+            is_mut: false,
+            inner: Box::new(type_param_f()),
+        };
+        let mut_ptr_f = || Type::Pointer {
+            is_mut: true,
+            inner: Box::new(type_param_f()),
+        };
+        // ptr.container_of[T, F](field_ptr: *const F, offset: usize) -> *const T   (unsafe)
+        self.env.functions.insert(
+            "ptr.container_of".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string(), "F".to_string()],
+                param_names: vec![Some("field_ptr".to_string()), Some("offset".to_string())],
+                params: vec![const_ptr_f(), usize_ty()],
+                return_type: const_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.container_of_mut[T, F](field_ptr: *mut F, offset: usize) -> *mut T   (unsafe)
+        self.env.functions.insert(
+            "ptr.container_of_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string(), "F".to_string()],
+                param_names: vec![Some("field_ptr".to_string()), Some("offset".to_string())],
+                params: vec![mut_ptr_f(), usize_ty()],
+                return_type: mut_ptr_t(),
+                where_clause: None,
+            },
+        );
+
         // ── Stats namespace ──────────────────────────────────────────────────
         // CR-202 slice 6.3: every Stats method now lives in baked source as
         // `impl Stats { #[compiler_builtin] fn ... }`. See

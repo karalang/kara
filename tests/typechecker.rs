@@ -5317,6 +5317,63 @@ fn provenance_slice2_addr_with_wrong_arg_rejected() {
     );
 }
 
+// ── ptr.container_of / ptr.container_of_mut (line 509 follow-up) ────
+
+#[test]
+fn container_of_returns_const_ptr_to_t() {
+    typecheck_ok(
+        "struct Inner { x: i32, y: i32 } \
+         struct Outer { a: i32, inner: Inner } \
+         fn recover(fp: *const i32) -> *const Outer { \
+             unsafe { ptr.container_of(fp, offset_of[Outer](inner.y)) } \
+         } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn container_of_mut_returns_mut_ptr_to_t() {
+    typecheck_ok(
+        "struct Inner { x: i32, y: i32 } \
+         struct Outer { a: i32, inner: Inner } \
+         fn recover(fp: *mut i32) -> *mut Outer { \
+             unsafe { ptr.container_of_mut(fp, offset_of[Outer](inner.y)) } \
+         } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn container_of_with_wrong_arity_rejected() {
+    let errors = typecheck_errors(
+        "fn caller(fp: *const i32) -> *const i64 { \
+             unsafe { ptr.container_of(fp) } \
+         } \
+         fn main() {}",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected typecheck failure with arity mismatch; got none"
+    );
+}
+
+#[test]
+fn container_of_pointer_arg_is_required() {
+    // The first arg must be a pointer (any `*const F` / `*mut F`).
+    // Passing a non-pointer value should fail unification — `*const F`
+    // requires Pointer-shape on the right-hand side.
+    let errors = typecheck_errors(
+        "fn caller(s: String) -> *const i64 { \
+             unsafe { ptr.container_of(s, 0) } \
+         } \
+         fn main() {}",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected typecheck failure when first arg is not a pointer; got none"
+    );
+}
+
 // ── @ binding semantics — typechecker coverage ──────────────────────
 
 #[test]

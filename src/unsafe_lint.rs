@@ -533,8 +533,15 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     //     resulting pointer is dereferenced and doesn't point at a live
     //     object of type `T`. Spec: `design.md § Pointer Provenance`
     //     (v60 item 20).
+    //   - `ptr.container_of[T, F](field_ptr, offset)` /
+    //     `ptr.container_of_mut[T, F](field_ptr, offset)`: intrusive-DS
+    //     pointer recovery. UB if `field_ptr` doesn't point at the named
+    //     field of an enclosing `T`. Spec: `design.md § Field Offsets`
+    //     (v60 item 25).
     top_level_unsafe.insert("ptr.from_exposed".to_string());
     top_level_unsafe.insert("ptr.from_exposed_mut".to_string());
+    top_level_unsafe.insert("ptr.container_of".to_string());
+    top_level_unsafe.insert("ptr.container_of_mut".to_string());
     for item in &program.items {
         match item {
             Item::Function(f) if f.is_unsafe => {
