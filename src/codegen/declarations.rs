@@ -415,6 +415,52 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         continue;
                     }
+                    // Slice 8r: `name OP= value` compound assignment.
+                    // Desugars to `name = name OP value` so the
+                    // existing slice-8p Assign emission + slice-8q
+                    // Binary materialisation handle the actual codegen
+                    // unchanged. Walker accepts identifier targets in
+                    // `current_names` (captured-local OR arm-local
+                    // let) and value shapes in the slice-8q recognised
+                    // set. CompoundOp arms supported by slice 8r: Add
+                    // / Sub / Mul / Div / Mod — match the v1
+                    // arithmetic ops `BinaryArithOp` already lowers to
+                    // LLVM `build_int_*` calls. Bitwise / shift
+                    // compound ops (`&=` / `|=` / `^=` / `<<=` /
+                    // `>>=`) silently drop pending the same
+                    // recognition extension on the `Binary` side.
+                    if let StmtKind::CompoundAssign { target, op, value } = &stmt.kind {
+                        if let ExprKind::Identifier(name) = &target.kind {
+                            if current_names.contains(name) {
+                                let arith_op = match op {
+                                    CompoundOp::Add => Some(BinaryArithOp::Add),
+                                    CompoundOp::Sub => Some(BinaryArithOp::Sub),
+                                    CompoundOp::Mul => Some(BinaryArithOp::Mul),
+                                    CompoundOp::Div => Some(BinaryArithOp::Div),
+                                    CompoundOp::Mod => Some(BinaryArithOp::Mod),
+                                    CompoundOp::BitAnd
+                                    | CompoundOp::BitOr
+                                    | CompoundOp::BitXor
+                                    | CompoundOp::Shl
+                                    | CompoundOp::Shr => None,
+                                };
+                                if let (Some(arith_op), Some(rhs)) =
+                                    (arith_op, recognize_body_arg(value, &current_names))
+                                {
+                                    let lhs = BodyArg::Slot(name.clone());
+                                    per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
+                                        name: name.clone(),
+                                        value: BodyArg::Binary {
+                                            op: arith_op,
+                                            lhs: Box::new(lhs),
+                                            rhs: Box::new(rhs),
+                                        },
+                                    });
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     let StmtKind::Expr(expr) = &stmt.kind else {
                         continue;
                     };

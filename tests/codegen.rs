@@ -15976,6 +15976,205 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8r: compound-assign in arm bodies ───────────
+    //
+    // `name OP= value` compound-assignment desugars in the body-splitting
+    // walker to `Assign { name, value: Binary { op, lhs: Slot(name), rhs:
+    // <recognised> } }`, so the existing slice-8p Assign emission +
+    // slice-8q Binary materialisation handle the codegen unchanged.
+    // Walker supports the five arithmetic CompoundOps (`+=` / `-=` /
+    // `*=` / `/=` / `%=`); bitwise / shift compound ops (`&=` / `|=` /
+    // `^=` / `<<=` / `>>=`) silently drop pending the same widening on
+    // the `Binary` recognition side.
+
+    #[test]
+    fn test_body_splitting_8r_compound_add_assign_captured_local() {
+        // `n += 1;` before yield — desugars to `n = n + 1`. The slot
+        // store carries the binary result; slice 8n's writeback then
+        // transfers the post-arm value to the state struct.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 n += 1;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.assign_rhs = load i64, ptr %n.slot"),
+            "compound-assign lhs must load n.slot via .assign_rhs:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.assign_rhs = add i64 %n.assign_rhs, 1"),
+            "compound-assign must emit `add i64 %n.assign_rhs, 1`:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %binop.assign_rhs, ptr %n.slot"),
+            "compound-assign result must be stored back into n.slot:\n{body}"
+        );
+        // Writeback observes the post-op value.
+        let assign_pos = body
+            .find("store i64 %binop.assign_rhs, ptr %n.slot")
+            .expect("compound-assign store missing");
+        let writeback_pos = body
+            .find("%n.writeback = load i64, ptr %n.slot")
+            .expect("writeback load missing");
+        assert!(
+            assign_pos < writeback_pos,
+            "compound-assign must precede the writeback load:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8r_compound_assign_all_five_arith_ops() {
+        // Pin the LLVM lowering of all five recognised compound-assign
+        // ops: `+=` → `add i64`, `-=` → `sub i64`, `*=` → `mul i64`,
+        // `/=` → `sdiv i64`, `%=` → `srem i64`. The walker desugars
+        // each into `Assign { Binary { op, Slot(name), rhs } }`.
+        for (src_op, llvm_pat) in [
+            ("+=", "add i64"),
+            ("-=", "sub i64"),
+            ("*=", "mul i64"),
+            ("/=", "sdiv i64"),
+            ("%=", "srem i64"),
+        ] {
+            let src = format!(
+                "effect resource Network;
+                 pub fn fetch() with sends(Network) receives(Network) {{}}
+                 fn driver(a: i64, b: i64) with sends(Network) receives(Network) {{
+                     a {src_op} b;
+                     fetch();
+                 }}"
+            );
+            let ir = ir_for_with_state_struct_layouts(&src);
+            let body = extract_fn_ir(&ir, "__kara_poll_driver");
+            let expected = format!("%binop.assign_rhs = {llvm_pat} %a.assign_rhs, %b.assign_rhs");
+            assert!(
+                body.contains(&expected),
+                "op `{src_op}` must emit `{expected}`:\n{body}"
+            );
+            assert!(
+                body.contains("store i64 %binop.assign_rhs, ptr %a.slot"),
+                "op `{src_op}` result must store into a.slot:\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_body_splitting_8r_terminal_arm_compound_assign() {
+        // `fn driver(n: i64) -> i64 { fetch(); n += 41; n }` — terminal
+        // arm compound-assign. No writeback follows (terminal arm), but
+        // slice 8o's `%n.return` final-expression read sees the post-op
+        // slot value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) {
+                 fetch();
+                 n += 41;
+                 n
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%binop.assign_rhs = add i64 %n.assign_rhs, 41"),
+            "terminal-arm compound-assign must emit the binary add:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %binop.assign_rhs, ptr %n.slot"),
+            "terminal-arm compound-assign must store into n.slot:\n{body}"
+        );
+        // The slice-8o terminal-return reads the updated slot.
+        assert!(
+            body.contains("%n.return = load i64, ptr %n.slot"),
+            "terminal-return must load from updated n.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8r_bitwise_compound_assign_silently_dropped() {
+        // `n &= 1;` — bitwise compound op outside slice-8r's recognised
+        // set. The walker drops the statement; no `and i64` / `or i64`
+        // / `xor i64` / `shl i64` / `ashr i64` appears in the poll-fn
+        // body. The slice-8n writeback still fires for the untouched
+        // slot (a value-equivalent no-op via slice 8a's reload).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 n &= 1;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            !body.contains("and i64"),
+            "bitwise-AND compound-assign must skip lowering:\n{body}"
+        );
+        // No binary-result store into n.slot beyond the slice-8a reload
+        // store. The reload store carries the value `%n.reload`; the
+        // skipped compound-assign would have stored `%binop.assign_rhs`.
+        assert!(
+            !body.contains("%binop.assign_rhs"),
+            "skipped compound-assign must not materialise a binop:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8r_field_target_compound_assign_silently_dropped() {
+        // `h.count += 1;` — non-identifier target (field access). The
+        // walker drops the statement; no compound-op result lands in
+        // any arm-local slot.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.count += 1;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Struct-literal RHS isn't recognised by the slice-8m let, so
+        // `h.slot` itself never emits — but more importantly, no
+        // `binop.assign_rhs` would emit even if h.slot existed because
+        // the target is a non-identifier expression.
+        assert!(
+            !body.contains("%binop.assign_rhs"),
+            "field-target compound-assign must skip the whole statement:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8r_compound_assign_with_slot_rhs() {
+        // `a += b;` — compound-assign with another captured-local on
+        // the RHS. Desugars to `a = a + b`; both operands resolve to
+        // slot loads.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: i64, b: i64) with sends(Network) receives(Network) {
+                 a += b;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%a.assign_rhs = load i64, ptr %a.slot"),
+            "compound-assign lhs must load a.slot:\n{body}"
+        );
+        assert!(
+            body.contains("%b.assign_rhs = load i64, ptr %b.slot"),
+            "compound-assign rhs must load b.slot:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.assign_rhs = add i64 %a.assign_rhs, %b.assign_rhs"),
+            "compound-assign must emit `add i64 %a.assign_rhs, %b.assign_rhs`:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
     //
     // The terminal-arm store into the state-struct terminal field now
