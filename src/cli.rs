@@ -1184,6 +1184,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
                 crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0241",
                 crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0242",
+                crate::resolver::ResolveErrorKind::UnknownAttribute => "E0243",
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -3269,6 +3270,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::TrackCallerInvalidTarget => "E0240",
         ResolveErrorKind::DeprecatedOnImpl => "E0241",
         ResolveErrorKind::DeprecatedOnField => "E0242",
+        ResolveErrorKind::UnknownAttribute => "E0243",
     }
 }
 

@@ -541,6 +541,14 @@ pub enum ResolveErrorKind {
     /// so users can rename the label or restructure the block.
     /// See design.md § Loops > "Labeled blocks".
     ContinueOnBlockLabel,
+    /// `#[no_such_thing]` — a bare-name attribute path whose name is not
+    /// in the v1 recognised set. Emitted by
+    /// [`crate::attribute_validator::validate_program_attributes`] (slice
+    /// 2 of the `#[diagnostic::*]` attribute namespace entry; see
+    /// design.md § Diagnostic Namespace Attributes and design.md §
+    /// Tool-Namespaced Attributes for the bare-vs-namespaced
+    /// discriminator). Mapped to `E_UNKNOWN_ATTRIBUTE` / `E0243`.
+    UnknownAttribute,
 }
 
 impl std::fmt::Display for ResolveError {
@@ -753,6 +761,16 @@ impl<'a> Resolver<'a> {
         self.collect_top_level_items();
         // Pass 1.5: validate layout blocks against collected struct definitions
         self.validate_layouts();
+        // Pass 1.6: attribute-name validation. Unknown bare-name
+        // attributes (`#[no_such_thing]`) emit `E_UNKNOWN_ATTRIBUTE`;
+        // multi-segment paths (`#[diagnostic::*]`, tool namespaces)
+        // are silently accepted at this layer — see
+        // `attribute_validator` for the per-namespace policy. Slice 2
+        // of the `#[diagnostic::*]` entry.
+        self.errors
+            .extend(crate::attribute_validator::validate_program_attributes(
+                self.program,
+            ));
         // Pass 2: resolve all bodies
         self.resolve_items();
 

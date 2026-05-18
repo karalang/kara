@@ -3205,3 +3205,196 @@ fn impl_trait_slice2_synthetic_param_bounds_recorded_in_symbol_table() {
     assert_eq!(bounds.len(), 1);
     assert_eq!(bounds[0].path, vec!["Display".to_string()]);
 }
+
+// ── `#[diagnostic::*]` slice 2 — namespace dispatch + E_UNKNOWN_ATTRIBUTE ──
+// Validates the central attribute checker shipped in
+// `src/attribute_validator.rs`. Bare-name attributes that are not in the
+// recognised set produce `error[E_UNKNOWN_ATTRIBUTE]` (`E0243`); members
+// of a compiler-reserved namespace (`#[diagnostic::*]`) and tool
+// namespaces are silently accepted at this layer (per-namespace
+// validation lives in slices 3, 4 / item 37).
+
+fn assert_unknown_attribute(source: &str, name: &str) {
+    let errs = resolve_errors(source);
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::UnknownAttribute
+                && e.message.contains("E_UNKNOWN_ATTRIBUTE")
+                && e.message.contains(name)
+        }),
+        "expected E_UNKNOWN_ATTRIBUTE for `{name}`; got: {:?}",
+        errs.iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+fn assert_no_unknown_attribute(source: &str) {
+    let parsed = parse(source);
+    assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+    let errs = resolve(&parsed.program).errors;
+    assert!(
+        errs.iter()
+            .all(|e| e.kind != ResolveErrorKind::UnknownAttribute),
+        "unexpected E_UNKNOWN_ATTRIBUTE; got: {:?}",
+        errs.iter()
+            .filter(|e| e.kind == ResolveErrorKind::UnknownAttribute)
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_function_rejected() {
+    assert_unknown_attribute("#[no_such_thing]\nfn f() { }", "no_such_thing");
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_with_args_rejected() {
+    // Argument shape is irrelevant — the rejection is on the path's
+    // first segment alone. Pins that a parenthesised unknown attribute
+    // also fires E_UNKNOWN_ATTRIBUTE.
+    assert_unknown_attribute(
+        "#[polish_my_error_pretty(level: 9)]\nfn f() { }",
+        "polish_my_error_pretty",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_struct_rejected() {
+    assert_unknown_attribute(
+        "#[invent_a_layout]\npub struct Foo { x: i64, }",
+        "invent_a_layout",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_struct_field_rejected() {
+    assert_unknown_attribute(
+        "pub struct Foo { #[invent_a_layout] x: i64, }",
+        "invent_a_layout",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_enum_variant_rejected() {
+    assert_unknown_attribute(
+        "pub enum Color { #[invent_a_layout] Red, Green, }",
+        "invent_a_layout",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_trait_method_rejected() {
+    assert_unknown_attribute(
+        "trait Show { #[polish_my_error_pretty] fn show(ref self) -> String; }",
+        "polish_my_error_pretty",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_bare_attribute_on_impl_method_rejected() {
+    assert_unknown_attribute(
+        "pub struct Foo { x: i64, }\nimpl Foo { #[polish_my_error_pretty] fn x(ref self) -> i64 { self.x } }",
+        "polish_my_error_pretty",
+    );
+}
+
+#[test]
+fn attr_slice2_recognised_bare_attributes_accepted() {
+    // Spot-check across families — lint level, item annotation, FFI,
+    // testing — that the recognised list does not flag any of them.
+    // Each on its own item to keep failure messages crisp.
+    assert_no_unknown_attribute("#[allow(deprecated)]\nfn a() { }");
+    assert_no_unknown_attribute("#[deprecated]\nfn b() { }");
+    assert_no_unknown_attribute("#[derive(Eq)]\npub struct C { x: i64, }");
+    assert_no_unknown_attribute("#[must_use]\nfn d() -> i64 { 0 }");
+    assert_no_unknown_attribute("#[non_exhaustive]\npub struct E { x: i64, }");
+    assert_no_unknown_attribute("#[track_caller]\nfn f() { }");
+    assert_no_unknown_attribute(
+        "#[kara_name = \"GLXFBConfig\"]\nunsafe extern \"C\" { fn g() -> i64; }",
+    );
+}
+
+#[test]
+fn attr_slice2_diagnostic_namespaced_unknown_member_accepted_silently() {
+    // The headline rule of the compiler-reserved namespace — even a
+    // member the compiler has never heard of is silently accepted
+    // (per design.md § Diagnostic Namespace Attributes "advisory
+    // contract").
+    assert_no_unknown_attribute(
+        "#[diagnostic::polish_my_error_pretty]\ntrait Show { fn show(ref self) -> String; }",
+    );
+}
+
+#[test]
+fn attr_slice2_diagnostic_namespaced_known_member_accepted_silently() {
+    // The two v1 members of the namespace — pins that slice 2 does
+    // not error on the ones slices 3 / 4 will validate; the
+    // per-member shape checks live with those slices.
+    assert_no_unknown_attribute(
+        "#[diagnostic::on_unimplemented(message: \"x\")]\ntrait Show { fn show(ref self) -> String; }",
+    );
+    assert_no_unknown_attribute(
+        "pub struct Foo { x: i64, }\n#[diagnostic::do_not_recommend]\nimpl Foo { fn x(ref self) -> i64 { self.x } }",
+    );
+}
+
+#[test]
+fn attr_slice2_tool_namespaced_attribute_accepted_silently() {
+    // Tool-namespaced attributes (item 37 — `#[TOOL::NAME(...)]`) are
+    // already silently accepted at the slice-2 layer because the
+    // walker only validates bare-name paths; item 37 will formalise
+    // the rule + add `karac query attributes`. Pinning here so the
+    // existing surface does not regress when item 37 lands.
+    assert_no_unknown_attribute("#[karafmt::skip]\nfn manually_aligned() { }");
+    assert_no_unknown_attribute(
+        "#[acmecorp_security::audit_required(level: \"strict\")]\npub fn login() { }",
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_attribute_has_dedicated_error_kind_and_e0243() {
+    // Pin the discriminant + the symbolic prefix so CLI / IDE
+    // consumers can branch reliably. The E0243 mapping is asserted
+    // separately in tests/cli.rs (the cli-side mapping table); here
+    // we only pin the kind and the message prefix.
+    let errs = resolve_errors("#[no_such_thing]\nfn f() { }");
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == ResolveErrorKind::UnknownAttribute),
+        "expected UnknownAttribute kind; got: {:?}",
+        errs.iter().map(|e| &e.kind).collect::<Vec<_>>()
+    );
+    assert!(
+        errs.iter().any(|e| {
+            e.kind == ResolveErrorKind::UnknownAttribute
+                && e.message.contains("E_UNKNOWN_ATTRIBUTE")
+        }),
+        "expected message to include symbolic code; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn attr_slice2_unknown_attribute_message_suggests_namespaced_form() {
+    // The error message offers the namespaced alternatives
+    // (`#[diagnostic::NAME]` or `#[your_tool::NAME]`) so the author
+    // can pivot to a silently-accepted form when the bare name was a
+    // tool hint. Pin the suggestion so future message tweaks keep the
+    // recovery hint.
+    let errs = resolve_errors("#[no_such_thing]\nfn f() { }");
+    let msg = errs
+        .iter()
+        .find(|e| e.kind == ResolveErrorKind::UnknownAttribute)
+        .map(|e| e.message.clone())
+        .expect("expected an UnknownAttribute diagnostic");
+    assert!(
+        msg.contains("#[diagnostic::no_such_thing]"),
+        "expected diagnostic suggestion; got: {msg}"
+    );
+    assert!(
+        msg.contains("#[your_tool::no_such_thing]"),
+        "expected tool-namespace suggestion; got: {msg}"
+    );
+}
