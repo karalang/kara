@@ -400,6 +400,8 @@ impl Pipeline {
         // the wiring of `Program.question_conversions` from the lowering pass.
         if let Some(ref effects) = self.effects {
             self.parsed.program.callee_effectful = build_callee_effectful_table(effects);
+            self.parsed.program.callee_network_yield_effect =
+                build_callee_network_yield_effect_table(effects);
         }
     }
 
@@ -612,6 +614,59 @@ fn build_callee_effectful_table(
             .entry(name.clone())
             .and_modify(|v| *v = *v || effectful)
             .or_insert(effectful);
+    }
+    table
+}
+
+/// Build the per-callee "is network-boundary" side-table from an
+/// `EffectCheckResult`.
+///
+/// A callee is "network-boundary" iff its inferred or declared effect set
+/// contains a `sends(Network)` or `receives(Network)` verb-resource pair.
+/// These are the only effects that route through the network event loop's
+/// non-blocking park-and-yield path at v1 (design.md § Network Event Loop
+/// and State-Machine Transform > State-Machine Transform — Network-Boundary
+/// Functions). Functions whose suspension is rooted in other verbs
+/// (`Receiver.recv` via `suspends`, custom user `suspends`, future channel
+/// waits) continue to thread-block at v1 and are NOT marked.
+///
+/// Consumed by:
+///   - the state-machine transform codegen (phase 6 line 26) — only callees
+///     marked `true` are candidates for the transform;
+///   - codegen lowering at network-effect call sites (phase 6 line 17
+///     sub-item 6) — a call to a `true` callee lowers to "register fd +
+///     park + yield" instead of a synchronous call.
+fn build_callee_network_yield_effect_table(
+    effects: &EffectCheckResult,
+) -> std::collections::HashMap<String, bool> {
+    fn set_has_network_yield(set: &crate::effectchecker::EffectSet) -> bool {
+        set.effects.iter().any(|t| {
+            matches!(
+                t.effect.verb,
+                EffectVerbKind::Sends | EffectVerbKind::Receives
+            ) && t.effect.resource == "Network"
+        })
+    }
+    let mut table = std::collections::HashMap::new();
+    for (name, set) in &effects.inferred_effects {
+        table.insert(name.clone(), set_has_network_yield(set));
+    }
+    for (name, decl) in &effects.declared_effects {
+        // Polymorphic effect parameters may bind to a `sends(Network)` /
+        // `receives(Network)` at a monomorphization site, so conservatively
+        // mark as network-boundary candidate. The state-machine transform
+        // itself reads the resolved monomorphized effect set when deciding
+        // to apply, so over-counting here is harmless — it just keeps the
+        // function in the candidate pool that the transform pass filters.
+        let network_yield = match decl {
+            DeclaredEffects::Explicit(set) => set_has_network_yield(set),
+            DeclaredEffects::PolymorphicWithFixed(_) | DeclaredEffects::Polymorphic => true,
+            DeclaredEffects::None => false,
+        };
+        table
+            .entry(name.clone())
+            .and_modify(|v| *v = *v || network_yield)
+            .or_insert(network_yield);
     }
     table
 }

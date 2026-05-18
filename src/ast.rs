@@ -62,6 +62,23 @@ pub type QuestionConversionTable = std::collections::HashMap<(usize, usize), Str
 /// § Effect-boundary cooperative cancellation.
 pub type CalleeEffectfulTable = std::collections::HashMap<String, bool>;
 
+/// Side-table populated by the cli pipeline from `EffectCheckResult`. Maps
+/// each callable's canonical name to whether its effect set carries a
+/// `sends(Network)` or `receives(Network)` verb-resource pair — the only
+/// effects that route through the network event loop's non-blocking
+/// park-and-yield path at v1. Other suspending effects (`Receiver.recv` via
+/// `suspends`, custom user `suspends`, future channel waits) stay
+/// thread-blocking and are NOT marked. Consumed by the state-machine
+/// transform codegen (phase 6 line 26) to identify which functions need
+/// the transform, and by codegen at network-effect call sites (phase 6
+/// line 17 sub-item 6) to identify which call boundaries lower to "register
+/// fd + park + yield" instead of a synchronous call. `Polymorphic` and
+/// `PolymorphicWithFixed` declared-effect callees are conservatively marked
+/// `true` because a monomorphization may bind their effect parameter to a
+/// network-bearing effect; the transform itself reads the resolved
+/// monomorphized effect set when deciding to apply.
+pub type CalleeNetworkYieldEffectTable = std::collections::HashMap<String, bool>;
+
 /// Side-table populated by the lowering pass from the typechecker's
 /// `expr_types` map. Maps each `MethodCall` expression's span to the
 /// canonical `Type.method` callee key — the same shape used in
@@ -134,6 +151,12 @@ pub struct Program {
     pub question_conversions: QuestionConversionTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise.
     pub callee_effectful: CalleeEffectfulTable,
+    /// Set by the cli pipeline after effectcheck; empty otherwise. Identifies
+    /// callees that route through the network event loop's park-and-yield
+    /// path (i.e., carry `sends(Network)` / `receives(Network)`). Foundation
+    /// for the state-machine transform (phase 6 line 26) and codegen
+    /// lowering at yield points (phase 6 line 17 sub-item 6).
+    pub callee_network_yield_effect: CalleeNetworkYieldEffectTable,
     /// Set by the lowering pass from `TypeCheckResult.expr_types`; empty otherwise.
     pub method_callee_types: MethodCalleeTypesTable,
     /// Set by the lowering pass from

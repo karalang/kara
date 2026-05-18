@@ -4724,6 +4724,242 @@ fn test_iter_chunk_by_infers_allocates_heap() {
     );
 }
 
+// ── Network-boundary callee identification (phase 6 line 26 slice 1) ──
+//
+// The cli pipeline populates `Program.callee_network_yield_effect` from the
+// effect-check result by filtering for `sends(Network)` / `receives(Network)`
+// verb-resource pairs. These helpers mirror the logic in
+// `src/cli.rs::build_callee_network_yield_effect_table` so tests can verify
+// what the pipeline would compute from a given effect-check result; if the
+// production helper changes shape, this mirror must change with it.
+
+fn set_has_network_yield_effect(set: &EffectSet) -> bool {
+    set.effects.iter().any(|t| {
+        matches!(
+            t.effect.verb,
+            EffectVerbKind::Sends | EffectVerbKind::Receives
+        ) && t.effect.resource == "Network"
+    })
+}
+
+#[test]
+fn network_yield_filter_classifies_sends_network_as_boundary() {
+    // Unit test of the filter rule on a hand-constructed EffectSet. A set
+    // carrying `sends(Network)` must classify as network-boundary.
+    let mut set = EffectSet::new();
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Sends,
+            resource: "Network".to_string(),
+        },
+        EffectOrigin::Direct(karac::token::Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        }),
+    );
+    assert!(set_has_network_yield_effect(&set));
+}
+
+#[test]
+fn network_yield_filter_classifies_receives_network_as_boundary() {
+    // A set carrying `receives(Network)` must classify as network-boundary.
+    let mut set = EffectSet::new();
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Receives,
+            resource: "Network".to_string(),
+        },
+        EffectOrigin::Direct(karac::token::Span {
+            line: 0,
+            column: 0,
+            offset: 0,
+            length: 0,
+        }),
+    );
+    assert!(set_has_network_yield_effect(&set));
+}
+
+#[test]
+fn network_yield_filter_rejects_non_network_resources() {
+    // Sends and Receives against a non-Network resource must NOT classify
+    // as network-boundary. This is what keeps channel sends and filesystem
+    // writes out of the state-machine-transform candidate pool.
+    for resource in &["Heap", "Filesystem", "Channel", "Database"] {
+        for verb in &[EffectVerbKind::Sends, EffectVerbKind::Receives] {
+            let mut set = EffectSet::new();
+            set.add(
+                Effect {
+                    verb: verb.clone(),
+                    resource: (*resource).to_string(),
+                },
+                EffectOrigin::Direct(karac::token::Span {
+                    line: 0,
+                    column: 0,
+                    offset: 0,
+                    length: 0,
+                }),
+            );
+            assert!(
+                !set_has_network_yield_effect(&set),
+                "{:?}({}) must NOT classify as network-boundary",
+                verb,
+                resource
+            );
+        }
+    }
+}
+
+#[test]
+fn network_yield_filter_rejects_non_send_receive_verbs() {
+    // Other verbs paired with `Network` must NOT classify (only Sends and
+    // Receives drive the network event loop's park-and-yield path).
+    let span = karac::token::Span {
+        line: 0,
+        column: 0,
+        offset: 0,
+        length: 0,
+    };
+    for verb in &[
+        EffectVerbKind::Reads,
+        EffectVerbKind::Writes,
+        EffectVerbKind::Allocates,
+        EffectVerbKind::Panics,
+        EffectVerbKind::Blocks,
+        EffectVerbKind::Suspends,
+    ] {
+        let mut set = EffectSet::new();
+        set.add(
+            Effect {
+                verb: verb.clone(),
+                resource: "Network".to_string(),
+            },
+            EffectOrigin::Direct(span.clone()),
+        );
+        assert!(
+            !set_has_network_yield_effect(&set),
+            "{:?}(Network) must NOT classify as network-boundary — only \
+             Sends/Receives qualify",
+            verb
+        );
+    }
+}
+
+#[test]
+fn network_yield_filter_picks_one_of_many() {
+    // A mixed effect set containing `sends(Network)` alongside other
+    // non-network effects must classify as network-boundary — even one
+    // qualifying entry is enough.
+    let span = karac::token::Span {
+        line: 0,
+        column: 0,
+        offset: 0,
+        length: 0,
+    };
+    let mut set = EffectSet::new();
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Allocates,
+            resource: "Heap".to_string(),
+        },
+        EffectOrigin::Direct(span.clone()),
+    );
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Reads,
+            resource: "Filesystem".to_string(),
+        },
+        EffectOrigin::Direct(span.clone()),
+    );
+    set.add(
+        Effect {
+            verb: EffectVerbKind::Sends,
+            resource: "Network".to_string(),
+        },
+        EffectOrigin::Direct(span.clone()),
+    );
+    assert!(set_has_network_yield_effect(&set));
+}
+
+#[test]
+fn network_yield_table_marks_seeded_client_methods_as_boundary() {
+    // Integration check: the effect-checker's built-in seeded entries for
+    // `Client.get` and `Client.post` carry `sends(Network) +
+    // receives(Network)`, so they must classify as network-boundary under
+    // the filter. This is the contract the state-machine transform relies
+    // on — stdlib HTTP entry points are the canonical v1 network-boundary
+    // calls.
+    let result = effectcheck_full_pipeline("fn dummy() {}");
+    let client_get = result
+        .inferred_effects
+        .get("Client.get")
+        .expect("Client.get must be seeded by the effect-checker");
+    assert!(
+        set_has_network_yield_effect(client_get),
+        "Client.get builtin must be network-boundary: {:?}",
+        client_get.effects
+    );
+    let client_post = result
+        .inferred_effects
+        .get("Client.post")
+        .expect("Client.post must be seeded by the effect-checker");
+    assert!(
+        set_has_network_yield_effect(client_post),
+        "Client.post builtin must be network-boundary: {:?}",
+        client_post.effects
+    );
+}
+
+#[test]
+fn network_yield_table_excludes_receiver_recv_suspends() {
+    // `Receiver.recv` carries `suspends` (no Network resource). The spec at
+    // phase-6 line 26 explicitly excludes `suspends` from the
+    // state-machine-transform candidate set — those functions stay
+    // thread-blocking at v1 even though they suspend the calling task.
+    let receiver_recv = effectcheck_full_pipeline("fn dummy() {}")
+        .inferred_effects
+        .get("Receiver.recv")
+        .cloned()
+        .expect("Receiver.recv must be seeded by the effect-checker");
+    assert!(
+        !set_has_network_yield_effect(&receiver_recv),
+        "Receiver.recv carries `suspends`, not `sends`/`receives(Network)` — \
+         must NOT classify as network-boundary: {:?}",
+        receiver_recv.effects
+    );
+}
+
+#[test]
+fn network_yield_table_excludes_pure_functions() {
+    // A function with no effectful calls must NOT classify as network-boundary.
+    let result = effectcheck_full_pipeline("fn add(a: i64, b: i64) -> i64 { a + b }");
+    let add = result.inferred_effects.get("add").unwrap();
+    assert!(
+        !set_has_network_yield_effect(add),
+        "pure function `add` must not classify as network-boundary: {:?}",
+        add.effects
+    );
+}
+
+#[test]
+fn network_yield_table_excludes_alloc_only_callees() {
+    // A function that only allocates heap (e.g., `Vec.new`) is NOT
+    // network-boundary — `allocates(Heap)` is not a Sends/Receives(Network)
+    // pair.
+    let result = effectcheck_full_pipeline(
+        "fn make_vec() {
+             let _v: Vec[i64] = Vec.new();
+         }",
+    );
+    let make_vec = result.inferred_effects.get("make_vec").unwrap();
+    assert!(
+        !set_has_network_yield_effect(make_vec),
+        "alloc-only function must not classify as network-boundary: {:?}",
+        make_vec.effects
+    );
+}
+
 #[test]
 fn mut_ref_capture_does_not_synthesize_writes_effect() {
     // A closure that captures `mut ref` and mutates the captured binding
