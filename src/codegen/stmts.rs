@@ -171,7 +171,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 // inferred `par_run` — rather than the whole function-
                 // body span (slice 2's MVP).
                 let group_span = body.stmts[group.statement_indices[0]].span.clone();
-                let slot_values = self.emit_par_run(&group_stmts, &group_span, &return_slots)?;
+                // Slice 1a (Phase 7 — Par codegen: cancellation and
+                // error propagation, 2026-05-18) — auto-par dispatch
+                // doesn't currently surface Result-typed branches, so
+                // the per-branch Result-slot list is empty here. When
+                // slice 2 wires inferred Result types through the
+                // typechecker, this site folds in alongside.
+                let slot_values =
+                    self.emit_par_run(&group_stmts, &group_span, &return_slots, &[])?;
                 // Slice A (sub-step g): bind each loaded slot value as a
                 // fresh let-binding in the surrounding function-body
                 // scope so subsequent stmts referencing the slot's

@@ -452,7 +452,119 @@ fn main() {
         );
     }
 
+    /// Slice 1a (Phase 7 — Par codegen: cancellation and error
+    /// propagation, 2026-05-18). A par-block branch whose let-statement
+    /// carries an explicit `Result[T, E]` type annotation must (a)
+    /// receive a slot in a parent-allocated `__par_result_slots` array,
+    /// (b) emit a slot-store of the branch's terminal Result value
+    /// before `ret void`, and (c) conditionally store `i8 1` into the
+    /// per-call cancel-flag pointer when the stored Result tag is
+    /// `Err` (== 0 per the Result lowering convention). Sibling
+    /// branches' next cooperative cancel check observes the flip.
+    /// Parent-side surfacing of the Err as the par-block's value is
+    /// slice 1b.
+    #[test]
+    fn test_ir_par_branch_result_typed_let_emits_slot_and_cancel_store() {
+        let ir = ir_for(
+            r#"
+fn maybe_ok() -> Result[i64, i64] { Ok(42_i64) }
+fn maybe_err() -> Result[i64, i64] { Err(99_i64) }
+fn main() {
+    par {
+        let r1: Result[i64, i64] = maybe_ok();
+        let r2: Result[i64, i64] = maybe_err();
+    }
+}
+"#,
+        );
+        // (a) Parent allocates the Result-slot array. Result lowers to
+        // `{ i64, i64 }`; two branches → `[2 x { i64, i64 }]`.
+        assert!(
+            ir.contains("%__par_result_slots = alloca [2 x { i64, i64 }]"),
+            "expected parent-side __par_result_slots alloca [2 x {{ i64, i64 }}]; IR:\n{ir}"
+        );
+
+        // (b) Each branch fn emits a slot-store. The slot pointer is
+        // named `__par_result_slot_<binding>_ptr`. With two Result-
+        // typed branches we expect two such GEPs across the module.
+        let slot_ptrs: usize = ir
+            .lines()
+            .filter(|l| l.contains("__par_result_slot_") && l.contains("_ptr"))
+            .count();
+        assert!(
+            slot_ptrs >= 2,
+            "expected ≥2 result-slot GEPs across branch fns, found {slot_ptrs}; IR:\n{ir}"
+        );
+
+        // (c) Each branch fn emits a conditional cancel-flag store
+        // gated on the Result tag. The conditional flow appears as
+        // `__par_result_<binding>_set_cancel:` and
+        // `__par_result_<binding>_after_cancel:` labels.
+        let set_cancel_blocks: usize = ir
+            .lines()
+            .filter(|l| l.contains("__par_result_") && l.contains("_set_cancel"))
+            .count();
+        assert!(
+            set_cancel_blocks >= 2,
+            "expected ≥2 set-cancel basic blocks across branch fns, found \
+             {set_cancel_blocks}; IR:\n{ir}"
+        );
+
+        // (d) Non-Result-typed par-blocks should NOT allocate the slot
+        // array (it's a nullptr in the env-struct) — sanity check that
+        // we didn't bloat the existing test's IR.
+        let plain_ir = ir_for(
+            r#"
+fn main() {
+    par {
+        println(100);
+        println(200);
+    }
+}
+"#,
+        );
+        assert!(
+            !plain_ir.contains("%__par_result_slots = alloca"),
+            "plain par-block should not allocate the Result-slot array; IR:\n{plain_ir}"
+        );
+    }
+
     // ── End-to-end tests ──────────────────────────────────────────
+
+    /// Slice 1a (Phase 7 — Par codegen: cancellation and error
+    /// propagation, 2026-05-18). E2E smoke that a par-block with
+    /// Result-typed let-statement branches compiles and runs to
+    /// completion. The Err branch flips the per-call cancel flag
+    /// before returning; sibling branches' next cooperative-cancel
+    /// check observes the flip and short-circuits. Slice 1a does NOT
+    /// surface the Err as the par-block's value (that's 1b) — the
+    /// par-block here evaluates to unit and the subsequent `println`
+    /// always fires. This test pins the IR's runtime correctness:
+    /// the new slot-write + cancel-store ops don't crash, don't
+    /// corrupt the cancel-flag pointer, and don't block the join.
+    #[test]
+    fn test_e2e_par_result_typed_branches_run_to_completion() {
+        let out = run_program(
+            r#"
+fn maybe_ok() -> Result[i64, i64] { Ok(42_i64) }
+fn maybe_err() -> Result[i64, i64] { Err(99_i64) }
+fn main() {
+    par {
+        let r1: Result[i64, i64] = maybe_ok();
+        let r2: Result[i64, i64] = maybe_err();
+    }
+    println(123_i64);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert!(
+                out.contains("123"),
+                "post-par println should run regardless of which branch errored \
+                 (slice 1a does not surface Err as par-block value); got {out:?}"
+            );
+        }
+    }
 
     #[test]
     fn test_e2e_par_both_branches_run() {

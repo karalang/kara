@@ -361,6 +361,27 @@ pub(crate) struct ReturnSlot<'ctx> {
     pub(crate) llvm_ty: BasicTypeEnum<'ctx>,
 }
 
+/// Phase 7 — Par codegen: cancellation and error propagation (slice 1a,
+/// 2026-05-18). A `ResultSlot` records a par-block branch whose terminal
+/// source expression is `Result[T, E]`-typed. Codegen materialises one
+/// `Result_t_e` cell per such branch into a parent-allocated array;
+/// branches write their Result value before `ret void` and, when the
+/// stored tag is `Err` (== 0), also store `true` into the per-call
+/// `AtomicBool` cancel flag so siblings' cooperative-cancel checks fire.
+///
+/// `binding_name` is the let-bound name carrying the Result; the
+/// branch-fn locates the value to copy by looking up
+/// `self.variables[binding_name]`. `branch_index` is the par-block
+/// branch position (== statement index); `array_index` is the position
+/// in the parent-allocated `[N_results x Result_t_e]` slot array
+/// (which is dense — only result-tracking branches consume slots).
+#[derive(Clone)]
+pub(crate) struct ResultSlot {
+    pub(crate) binding_name: String,
+    pub(crate) branch_index: usize,
+    pub(crate) array_index: usize,
+}
+
 /// Per-element predicate driving `emit_set_op_iter` (`Set.union` /
 /// `intersection` / `difference` codegen). `Always` means insert every
 /// element; the other two consult `karac_map_contains` against the named

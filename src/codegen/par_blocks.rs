@@ -16,9 +16,43 @@ use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::{CleanupAction, ReturnSlot, VarSlot};
+use super::state::{CleanupAction, ResultSlot, ReturnSlot, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
+    /// Slice 1a (Phase 7 — Par codegen: cancellation and error
+    /// propagation, 2026-05-18). Recognise a par-block branch whose
+    /// statement is `let <name>: Result[T, E] = <expr>;` and return
+    /// the binding name. Used by `compile_par_block` to build the
+    /// `ResultSlot` list — each named binding's value is copied into
+    /// a parent-allocated Result-slot before the branch returns, and
+    /// the cancel flag is flipped on `Err` so siblings' cooperative
+    /// cancel checks fire.
+    ///
+    /// Scope is annotation-only in slice 1a: only let-statements
+    /// carrying an explicit `Result[...]` path annotation match.
+    /// Inferred Result types (`let r = maybe_fail();`) fold in
+    /// alongside slice 2's typechecker-side hooks. Returns `None`
+    /// for non-let statements and for lets without a Result-shaped
+    /// annotation.
+    fn branch_result_binding_name(stmt: &Stmt) -> Option<String> {
+        let (pattern, ty_opt) = match &stmt.kind {
+            StmtKind::Let { pattern, ty, .. } | StmtKind::LetElse { pattern, ty, .. } => {
+                (pattern, ty.as_ref())
+            }
+            _ => return None,
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return None;
+        };
+        let ty = ty_opt?;
+        if let TypeKind::Path(path) = &ty.kind {
+            if path.segments.len() == 1 && path.segments[0] == "Result" {
+                return Some(name.clone());
+            }
+        }
+        None
+    }
+
     /// Compile a `par {}` block by spawning each stmt as a per-branch
     /// fn, building a `KaracBranch[]` array, and handing it to
     /// `karac_par_run`. Each branch fn is given a fresh stack ctx that
@@ -129,15 +163,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // diagnostic.
         }
 
-        // Step 4 — Run the branches. `emit_par_run` allocates a
+        // Step 4 (slice 1a — Par codegen: cancellation and error
+        // propagation, 2026-05-18) — Build the `ResultSlot` list for
+        // branches whose let-statement carries an explicit
+        // `Result[T, E]` type annotation. Each such branch will write
+        // its terminal Result value into a parent-allocated slot before
+        // returning, and on `Err` (tag == 0) also store `true` into the
+        // per-call cancel flag so sibling branches' cooperative cancel
+        // checks fire. Detection scope for slice 1a is annotation-only
+        // — broader inference folds in alongside slice 2's typechecker
+        // hooks. `array_index` is the slot's position in the
+        // parent-allocated dense `[N_results x Result_t_e]` array
+        // (non-result branches don't consume an index).
+        let mut result_slots: Vec<ResultSlot> = Vec::new();
+        for (branch_idx, stmt) in block.stmts.iter().enumerate() {
+            if let Some(name) = Self::branch_result_binding_name(stmt) {
+                let array_index = result_slots.len();
+                result_slots.push(ResultSlot {
+                    binding_name: name,
+                    branch_index: branch_idx,
+                    array_index,
+                });
+            }
+        }
+
+        // Step 5 — Run the branches. `emit_par_run` allocates a
         // parent-side return struct (one field per slot), passes its
         // pointer through the per-branch env struct, and each branch
         // fn writes its slot's value before returning. The barrier
         // inside `karac_par_run` guarantees all writes are visible by
         // the time the runtime call returns.
-        let slot_values = self.emit_par_run(&block.stmts, &block.span, &return_slots)?;
+        let slot_values =
+            self.emit_par_run(&block.stmts, &block.span, &return_slots, &result_slots)?;
 
-        // Step 5 — Bind each loaded slot value as a fresh local in the
+        // Step 6 — Bind each loaded slot value as a fresh local in the
         // surrounding scope. Mirrors the auto-par dispatch site's
         // bind-back step (`compile_function_body` ~line 189) so the
         // join expression's identifier reads resolve through
@@ -171,12 +230,20 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Step 6 — Compile the join expression. The block-result
+        // Step 7 — Compile the join expression. The block-result
         // semantics dictate the par-block's value is the join's value.
         // When there is no final expression, the par-block evaluates
         // to unit (i64 0) — preserves the pre-fix behavior for
         // statement-form par-blocks (`par { side_effect_a();
         // side_effect_b(); }`).
+        //
+        // Slice 1a (Phase 7 — Par codegen: cancellation and error
+        // propagation, 2026-05-18) intentionally does **not** override
+        // the join expression with an errored slot's value here — the
+        // parent-side Err-as-par-block-value surface is slice 1b.
+        // Slice 1a's observable effect is the in-IR cancel-flag store
+        // on a branch that produces Err, which sibling branches' next
+        // cooperative-cancel check picks up.
         if let Some(expr) = &block.final_expr {
             self.compile_expr(expr)
         } else {
@@ -219,6 +286,7 @@ impl<'ctx> super::Codegen<'ctx> {
         stmts: &[Stmt],
         span: &Span,
         return_slots: &[ReturnSlot<'ctx>],
+        result_slots: &[ResultSlot],
     ) -> Result<HashMap<String, BasicValueEnum<'ctx>>, String> {
         // Zero statements: nothing to do. Single statement: no parallelism
         // needed — compile in place to avoid the runtime call overhead.
@@ -267,9 +335,14 @@ impl<'ctx> super::Codegen<'ctx> {
         //    leading slots; the next slot (added in slice 4) is the
         //    `*const ProviderFrame` snapshot of the calling thread's
         //    stack head (Theme 6 sub-step 5 — provider inheritance).
-        //    The final slot (added in slice A) is a `*mut
+        //    The next slot (added in slice A) is a `*mut
         //    ParGroupReturns` pointing at the parent-allocated return
-        //    struct — branches dereference and write through it. The
+        //    struct — branches dereference and write through it.
+        //    The final slot (slice 1a of the Phase-7 cancellation /
+        //    error-propagation tranche, 2026-05-18) is a `*mut
+        //    [Result_t_e; N_results]` — the per-branch Result slot
+        //    array. Each Result-tracking branch writes its terminal
+        //    Result value to its assigned slot before `ret void`. The
         //    env-struct grows by one pointer field whether the slot
         //    list is empty or not (ABI uniformity — keeps the env-
         //    struct shape predictable per spawn-site for downstream
@@ -280,6 +353,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let provider_head_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
         let par_returns_idx = env_field_types.len();
+        env_field_types.push(ptr_ty.into());
+        let par_result_slots_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
@@ -358,6 +433,39 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap()
             .into_struct_value();
+
+        // Slice 1a (Phase 7 — Par codegen: cancellation and error
+        // propagation, 2026-05-18). Allocate the parent-side Result-
+        // slot array — a dense `[N_results x Result_t_e]` where
+        // `N_results = result_slots.len()` (non-Result branches don't
+        // consume a slot). The branch fn locates its slot by the
+        // `array_index` recorded in its `ResultSlot`. Empty list → no
+        // array, the env-struct's `__par_result_slots` field is a null
+        // `ptr` (never dereferenced because no branch's slot-write
+        // path is reachable). Each slot is `{ i64 tag, i64 w0 }` per
+        // the Result lowering convention in
+        // `seed_builtin_enum_layouts` (Err = tag 0, Ok = tag 1).
+        let result_slot_struct_ty: Option<StructType<'ctx>> = if result_slots.is_empty() {
+            None
+        } else {
+            self.enum_layouts.get("Result").map(|l| l.llvm_type)
+        };
+        let result_slots_alloca: PointerValue<'ctx> = if let Some(rty) = result_slot_struct_ty {
+            let arr_ty = rty.array_type(result_slots.len() as u32);
+            self.create_entry_alloca(outer_fn, "__par_result_slots", arr_ty.into())
+        } else {
+            ptr_ty.const_null()
+        };
+        env_agg = self
+            .builder
+            .build_insert_value(
+                env_agg,
+                result_slots_alloca,
+                par_result_slots_idx as u32,
+                "__par_env_result_slots",
+            )
+            .unwrap()
+            .into_struct_value();
         self.builder.build_store(env_alloca, env_agg).unwrap();
 
         // 4. Generate one branch function per statement.
@@ -376,6 +484,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 .filter(|s| s.branch_index == i)
                 .cloned()
                 .collect();
+            // Slice 1a — lookup this branch's `ResultSlot` (at most
+            // one per branch in slice 1a, since each branch is a
+            // single statement and we only detect let-statements).
+            let branch_result_slot: Option<ResultSlot> =
+                result_slots.iter().find(|s| s.branch_index == i).cloned();
             let fn_ptr = self.emit_par_branch_fn(
                 par_id,
                 i,
@@ -387,6 +500,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 return_struct_ty,
                 &branch_slots,
                 return_slots,
+                par_result_slots_idx,
+                result_slot_struct_ty,
+                branch_result_slot,
             )?;
             branch_fn_ptrs.push(fn_ptr);
         }
@@ -500,6 +616,9 @@ impl<'ctx> super::Codegen<'ctx> {
         return_struct_ty: Option<StructType<'ctx>>,
         branch_slots: &[ReturnSlot<'ctx>],
         all_slots: &[ReturnSlot<'ctx>],
+        par_result_slots_idx: usize,
+        result_slot_struct_ty: Option<StructType<'ctx>>,
+        branch_result_slot: Option<ResultSlot>,
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -708,6 +827,124 @@ impl<'ctx> super::Codegen<'ctx> {
                         )
                         .unwrap();
                     self.builder.build_store(field_ptr, val).unwrap();
+                }
+            }
+        }
+
+        // Slice 1a (Phase 7 — Par codegen: cancellation and error
+        // propagation, 2026-05-18): emit the Result-slot write for
+        // branches whose let-statement is `Result[T, E]`-typed, and
+        // conditionally store `true` into the per-call cancel flag
+        // when the stored tag is `Err` (== 0). Done BEFORE the
+        // scope-cleanup + `ret void` below so the runtime barrier
+        // inside `karac_par_run` orders the slot-write and the
+        // cancel-flag store against the parent's subsequent reads.
+        //
+        // ABI: result slots live in a parent-allocated dense array of
+        // `Result_t_e` cells, pointer-passed through the env-struct's
+        // `__par_result_slots` field. This branch's array index is the
+        // `array_index` recorded in its `ResultSlot` (assigned by
+        // `compile_par_block`'s detection pass). Cancel-flag pointer is
+        // the branch fn's second parameter, captured into
+        // `self.branch_cancel_ptr` during the entry-time setup above.
+        if stmt_ok {
+            if let (Some(slot), Some(rty)) = (branch_result_slot.as_ref(), result_slot_struct_ty) {
+                if let Some(local) = self.variables.get(&slot.binding_name).copied() {
+                    let env_val = self
+                        .builder
+                        .build_load::<BasicTypeEnum<'ctx>>(
+                            env_struct_ty.into(),
+                            env_ptr,
+                            "__env_for_result_slots",
+                        )
+                        .unwrap();
+                    let slots_ptr_v = self
+                        .builder
+                        .build_extract_value(
+                            env_val.into_struct_value(),
+                            par_result_slots_idx as u32,
+                            "__par_result_slots_ptr",
+                        )
+                        .unwrap();
+                    let slots_ptr = slots_ptr_v.into_pointer_value();
+
+                    // GEP into `slots_ptr[array_index]`. The slot
+                    // array is allocated as `[N x Result_t_e]`; index
+                    // through with a constant array-index pair.
+                    let i64_t = self.context.i64_type();
+                    let zero = i64_t.const_zero();
+                    let arr_idx = i64_t.const_int(slot.array_index as u64, false);
+                    let arr_ty = rty.array_type(0); // length doesn't matter for GEP element-typing
+                    let slot_ptr = unsafe {
+                        self.builder
+                            .build_in_bounds_gep(
+                                arr_ty,
+                                slots_ptr,
+                                &[zero, arr_idx],
+                                &format!("__par_result_slot_{}_ptr", slot.binding_name),
+                            )
+                            .unwrap()
+                    };
+
+                    // Load the just-bound Result value out of the
+                    // branch's local alloca and store it into the slot.
+                    let val = self
+                        .builder
+                        .build_load(
+                            local.ty,
+                            local.ptr,
+                            &format!("__par_result_slot_{}_load", slot.binding_name),
+                        )
+                        .unwrap();
+                    self.builder.build_store(slot_ptr, val).unwrap();
+
+                    // Cancel-flag store on Err: extract tag (field 0
+                    // of the Result struct), compare against 0 (Err
+                    // tag per `seed_builtin_enum_layouts`), and
+                    // store `1u8` into the cancel flag pointer when
+                    // equal. The store is unconditional within the
+                    // is-err arm; sibling branches' next cooperative
+                    // cancel check observes the flip.
+                    if let (BasicValueEnum::StructValue(sv), Some(cancel_ptr)) =
+                        (val, self.branch_cancel_ptr)
+                    {
+                        let tag = self
+                            .builder
+                            .build_extract_value(
+                                sv,
+                                0,
+                                &format!("__par_result_slot_{}_tag", slot.binding_name),
+                            )
+                            .unwrap()
+                            .into_int_value();
+                        let zero_i64 = i64_t.const_zero();
+                        let is_err = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                tag,
+                                zero_i64,
+                                &format!("__par_result_slot_{}_is_err", slot.binding_name),
+                            )
+                            .unwrap();
+                        let set_bb = self.context.append_basic_block(
+                            branch_fn,
+                            &format!("__par_result_{}_set_cancel", slot.binding_name),
+                        );
+                        let cont_bb = self.context.append_basic_block(
+                            branch_fn,
+                            &format!("__par_result_{}_after_cancel", slot.binding_name),
+                        );
+                        self.builder
+                            .build_conditional_branch(is_err, set_bb, cont_bb)
+                            .unwrap();
+                        self.builder.position_at_end(set_bb);
+                        let i8_t = self.context.i8_type();
+                        let one_i8 = i8_t.const_int(1, false);
+                        self.builder.build_store(cancel_ptr, one_i8).unwrap();
+                        self.builder.build_unconditional_branch(cont_bb).unwrap();
+                        self.builder.position_at_end(cont_bb);
+                    }
                 }
             }
         }
