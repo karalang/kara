@@ -1735,6 +1735,50 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // Pointer → integer: forbidden under strict-provenance. The
+        // address bits are still recoverable, but through the dedicated
+        // `ptr.addr` / `ptr.expose` APIs — which preserve provenance
+        // metadata that a raw `as`-cast erases.
+        if matches!(from_ty, Type::Pointer { .. }) && is_integer(to_ty) {
+            self.type_error(
+                format!(
+                    "error[E_PTR_TO_INT_CAST_FORBIDDEN]: cannot cast a \
+                     pointer to an integer; use `ptr.addr(p)` for the \
+                     address bits, or `ptr.expose(p)` if the pointer \
+                     will be round-tripped through integer storage \
+                     (got `{}` to `{}`)",
+                    type_display(from_ty),
+                    type_display(to_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
+        // Integer → pointer: forbidden under strict-provenance. The
+        // valid forms are `ptr.with_addr(base, addr)` (reseats an
+        // existing pointer's address) and `ptr.from_exposed[T](addr)`
+        // (round-trips a previously-exposed address). No automatic
+        // suggested-fix span — the choice between the two depends on
+        // whether a base pointer is in scope.
+        if is_integer(from_ty) && matches!(to_ty, Type::Pointer { .. }) {
+            self.type_error(
+                format!(
+                    "error[E_INT_TO_PTR_CAST_FORBIDDEN]: cannot cast an \
+                     integer to a pointer; use `ptr.with_addr(base, addr)` \
+                     to reseat an existing pointer's address, or \
+                     `ptr.from_exposed[T](addr)` to round-trip a \
+                     previously-exposed address (got `{}` to `{}`)",
+                    type_display(from_ty),
+                    type_display(to_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
         // Anything else falls through to the generic diagnostic.
         self.type_error(
             format!(

@@ -5088,6 +5088,145 @@ fn cast_int_as_int_still_works() {
     typecheck_ok("fn main() { let _ = 300i32 as i8; let _ = (-1i8) as u8; }");
 }
 
+// ── Strict-provenance cast rejections (line 511 slice 1) ────────────
+
+#[test]
+fn provenance_slice1_ptr_const_as_usize_rejected() {
+    let errors = typecheck_errors(
+        "fn caller(p: *const i64) -> usize { p as usize } \
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PTR_TO_INT_CAST_FORBIDDEN")),
+        "expected E_PTR_TO_INT_CAST_FORBIDDEN, got: {errors:?}"
+    );
+}
+
+#[test]
+fn provenance_slice1_ptr_mut_as_usize_rejected() {
+    let errors = typecheck_errors(
+        "fn caller(p: *mut i64) -> usize { p as usize } \
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PTR_TO_INT_CAST_FORBIDDEN")),
+        "expected E_PTR_TO_INT_CAST_FORBIDDEN, got: {errors:?}"
+    );
+}
+
+#[test]
+fn provenance_slice1_ptr_as_i64_also_rejected() {
+    // The forbidden-cast rule covers any integer width, not just usize.
+    // Otherwise a user could circumvent strict-provenance via an
+    // intermediate `as u32` / `as i64` cast.
+    let errors = typecheck_errors(
+        "fn caller(p: *const i64) -> i64 { p as i64 } \
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_PTR_TO_INT_CAST_FORBIDDEN")),
+        "expected E_PTR_TO_INT_CAST_FORBIDDEN, got: {errors:?}"
+    );
+}
+
+#[test]
+fn provenance_slice1_usize_as_ptr_const_rejected() {
+    let errors = typecheck_errors(
+        "fn build(addr: usize) -> *const i64 { addr as *const i64 } \
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_INT_TO_PTR_CAST_FORBIDDEN")),
+        "expected E_INT_TO_PTR_CAST_FORBIDDEN, got: {errors:?}"
+    );
+}
+
+#[test]
+fn provenance_slice1_usize_as_ptr_mut_rejected() {
+    let errors = typecheck_errors(
+        "fn build(addr: usize) -> *mut i64 { addr as *mut i64 } \
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_INT_TO_PTR_CAST_FORBIDDEN")),
+        "expected E_INT_TO_PTR_CAST_FORBIDDEN, got: {errors:?}"
+    );
+}
+
+#[test]
+fn provenance_slice1_int_as_int_still_accepted() {
+    // Regression — the new ptr↔int rejection must not perturb the
+    // existing integer→integer cast acceptance (including the
+    // usize widening / narrowing paths).
+    typecheck_ok(
+        "fn main() { \
+         let a: usize = 1; let _ = a as i64; \
+         let b: i64 = 1; let _ = b as usize; \
+         }",
+    );
+}
+
+#[test]
+fn provenance_slice1_diagnostic_names_ptr_addr_suggestion() {
+    // The E_PTR_TO_INT_CAST_FORBIDDEN message must surface `ptr.addr`
+    // as the default suggestion (the safer operation) and `ptr.expose`
+    // as the round-trip alternative — both names appear so the user
+    // can pick without re-reading the spec.
+    let errors = typecheck_errors(
+        "fn caller(p: *const i64) -> usize { p as usize } \
+         fn main() {}",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("E_PTR_TO_INT_CAST_FORBIDDEN"))
+        .map(|e| e.message.as_str())
+        .unwrap_or("");
+    assert!(
+        msg.contains("ptr.addr"),
+        "diagnostic must name `ptr.addr` as the default suggestion: {msg}"
+    );
+    assert!(
+        msg.contains("ptr.expose"),
+        "diagnostic must also name `ptr.expose` for the round-trip case: {msg}"
+    );
+}
+
+#[test]
+fn provenance_slice1_diagnostic_names_with_addr_and_from_exposed() {
+    // The E_INT_TO_PTR_CAST_FORBIDDEN message must name both
+    // `ptr.with_addr` (reseat-existing-pointer form) and
+    // `ptr.from_exposed` (round-trip form) — the spec deliberately
+    // leaves the choice to the user since the compiler can't reliably
+    // guess which is in scope.
+    let errors = typecheck_errors(
+        "fn build(addr: usize) -> *const i64 { addr as *const i64 } \
+         fn main() {}",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("E_INT_TO_PTR_CAST_FORBIDDEN"))
+        .map(|e| e.message.as_str())
+        .unwrap_or("");
+    assert!(
+        msg.contains("ptr.with_addr"),
+        "diagnostic must name `ptr.with_addr`: {msg}"
+    );
+    assert!(
+        msg.contains("ptr.from_exposed"),
+        "diagnostic must name `ptr.from_exposed`: {msg}"
+    );
+}
+
 // ── @ binding semantics — typechecker coverage ──────────────────────
 
 #[test]
