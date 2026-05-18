@@ -353,6 +353,53 @@ fn hash_no_rc_function_blocks_trigger() {
 
 // ── #[allow(rc_fallback)] suppresses notes ─────────────────────
 
+// Phase-7-codegen.md line 27 — G12 validation. The `rc_fallback` lint
+// must be registered with default level `Warn` so a programmer's first
+// encounter with an RC fallback surfaces as a warning rather than a
+// silent fact. Pins the registry shape so a future refactor can't
+// quietly drop the lint to `Allow` and erase the AI-creep signal the
+// G12 entry is monitoring.
+#[test]
+fn rc_fallback_lint_default_level_is_warn() {
+    use karac::lints::{lint_by_name, LintLevel};
+    let info = lint_by_name("rc_fallback").expect("rc_fallback lint must be registered");
+    assert_eq!(
+        info.default_level,
+        LintLevel::Warn,
+        "rc_fallback's default level must stay Warn — see phase-7-codegen.md line 27",
+    );
+}
+
+// Phase-7-codegen.md line 27 — G12 monitoring surface. The ownership
+// pass must record `#[allow(rc_fallback)]`-bearing functions in the
+// `suppressed_rc_fn_keys` set on the result, so `karac query
+// cost-summary` can distinguish active vs suppressed RC fallback sites.
+#[test]
+fn allow_rc_fallback_records_function_key_for_monitoring() {
+    let src = "struct Data { value: i64 }\n\
+               fn consume(d: Data) { }\n\
+               fn use_d(d: Data) { }\n\
+               #[allow(rc_fallback)]\n\
+               fn process(cond: bool, d: Data) {\n\
+                   if cond { consume(d); }\n\
+                   use_d(d);\n\
+               }";
+    let result = run(src);
+    assert!(result.errors.is_empty());
+    // The function key surfaces on the result so cost-summary can mark
+    // its row as suppressed without re-walking the AST.
+    assert!(
+        result.suppressed_rc_fn_keys.contains("process"),
+        "expected `process` in suppressed_rc_fn_keys; got {:?}",
+        result.suppressed_rc_fn_keys,
+    );
+    // Companion negative: a function without `#[allow]` is not in the
+    // set (consume and use_d don't trigger RC, but neither would they
+    // be in this set even if they did).
+    assert!(!result.suppressed_rc_fn_keys.contains("consume"));
+    assert!(!result.suppressed_rc_fn_keys.contains("use_d"));
+}
+
 #[test]
 fn allow_rc_fallback_suppresses_notes() {
     let src = "struct Data { value: i64 }\n\

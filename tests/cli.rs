@@ -2351,7 +2351,7 @@ fn test_query_cost_summary_clean_program_zeroes() {
     let json = stdout.trim();
     assert!(json.starts_with('{'));
     assert!(json.contains("\"scope\":\"tests/snapshots/clean.kara\""));
-    assert!(json.contains("\"rc_ops\":{\"count\":0,\"rc\":0,\"arc\":0}"));
+    assert!(json.contains("\"rc_ops\":{\"count\":0,\"rc\":0,\"arc\":0,\"suppressed\":0}"));
     assert!(json.contains("\"arc_provider_wraps\":0"));
     assert!(json.contains("\"borrow_flag_fields\":0"));
     assert!(json.contains("\"partition_guard_sites\":0"));
@@ -2376,9 +2376,12 @@ fn test_query_cost_summary_rc_fallback_attributed_to_function() {
     assert!(out.status.success());
     let stdout = String::from_utf8_lossy(&out.stdout);
     let json = stdout.trim();
-    assert!(json.contains("\"rc_ops\":{\"count\":1,\"rc\":1,\"arc\":0}"));
+    assert!(json.contains("\"rc_ops\":{\"count\":1,\"rc\":1,\"arc\":0,\"suppressed\":0}"));
     assert!(json.contains("\"function\":\"process\""));
     assert!(json.contains("\"rc_ops\":1"));
+    // Phase-7-codegen.md line 27 — G12 monitoring surface. Without
+    // `#[allow(rc_fallback)]`, the row is not flagged suppressed.
+    assert!(json.contains("\"rc_ops_suppressed\":false"));
     assert!(
         json.contains("Rc fallback for `d`"),
         "expected derivation reason naming binding `d`, got: {json}"
@@ -2388,6 +2391,71 @@ fn test_query_cost_summary_rc_fallback_attributed_to_function() {
     // struct and no `with_provider` calls.
     assert!(json.contains("\"arc_provider_wraps\":0"));
     assert!(json.contains("\"borrow_flag_fields\":0"));
+}
+
+#[test]
+fn test_query_cost_summary_rc_fallback_suppressed_via_allow_is_surfaced() {
+    // Phase-7-codegen.md line 27 — G12 monitoring surface. When the
+    // function carries `#[allow(rc_fallback)]`, the user-facing perf
+    // note is silenced but the RC entry still flows into cost-summary
+    // — and the entry must now be visible as suppressed so PR review
+    // tooling can spot AI-agent over-use of `#[allow]`.
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-cost-summary-suppressed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("suppressed.kara");
+    let src = "struct Data { value: i64 }\n\
+               fn consume(d: Data) {}\n\
+               fn use_d(d: Data) {}\n\
+               #[allow(rc_fallback)]\n\
+               fn process(d: Data) {\n\
+                   match d.value {\n\
+                       0 => consume(d),\n\
+                       _ => {}\n\
+                   }\n\
+                   use_d(d);\n\
+               }\n\
+               fn main() {\n\
+                   process(Data { value: 0 });\n\
+               }\n";
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "cost-summary", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "expected zero exit; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json = stdout.trim();
+    // Totals expose the suppression count alongside the existing rc/arc
+    // breakdown — `count` and `suppressed` both equal 1 because every
+    // RC entry under the `#[allow]`-bearing function contributes to
+    // both. PR-level alerts can compare these numbers to spot the
+    // "100% suppression" anti-pattern.
+    assert!(
+        json.contains("\"rc_ops\":{\"count\":1,\"rc\":1,\"arc\":0,\"suppressed\":1}"),
+        "expected suppressed:1 in totals; got {json}",
+    );
+    // Per-row flag identifies which function carries the allow.
+    assert!(
+        json.contains("\"function\":\"process\""),
+        "expected `process` row; got {json}",
+    );
+    assert!(
+        json.contains("\"rc_ops_suppressed\":true"),
+        "expected rc_ops_suppressed:true for process; got {json}",
+    );
+    let _ = std::fs::remove_dir_all(&tmp);
 }
 
 #[test]

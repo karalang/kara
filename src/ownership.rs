@@ -559,6 +559,14 @@ pub struct OwnershipCheckResult {
     /// `src/ownership.rs:360`) push `CompilerQuery` values here as
     /// they encounter decision sites with attributable alternatives.
     pub queries: Vec<crate::queries::CompilerQuery>,
+    /// Phase-7-codegen.md line 27 — G12 monitoring surface. Function
+    /// keys (`fn_name` / `Type.method`) that carried `#[allow(rc_fallback)]`
+    /// and therefore had their RC perf notes suppressed. The function's
+    /// entries in `rc_values` are still recorded — only the user-facing
+    /// note is silenced — so `karac query cost-summary` can distinguish
+    /// active vs suppressed fallbacks and surface AI-agent over-use of
+    /// `#[allow]` (vs restructuring for zero-cost ownership).
+    pub suppressed_rc_fn_keys: HashSet<String>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -877,6 +885,7 @@ impl<'a> OwnershipChecker<'a> {
             arc_values: self.arc_values,
             slice_borrow_sources: self.slice_borrow_sources,
             queries: Vec::new(),
+            suppressed_rc_fn_keys: self.suppressed_rc_fn_keys,
         }
     }
 

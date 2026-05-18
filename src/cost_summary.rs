@@ -69,6 +69,13 @@ pub struct RcOpsBreakdown {
     pub count: usize,
     pub rc: usize,
     pub arc: usize,
+    /// Phase-7-codegen.md line 27 — G12 monitoring surface. Subset of
+    /// `count` whose enclosing function carries `#[allow(rc_fallback)]`.
+    /// A high `suppressed` value on a PR is the signal that an AI agent
+    /// reached for `#[allow]` rather than restructuring for zero-cost
+    /// ownership; code review can compare this against `count` to spot
+    /// over-suppression at a glance.
+    pub suppressed: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -78,6 +85,13 @@ pub struct FunctionCostRow {
     pub function: String,
     pub rc_ops: usize,
     pub arc_provider_wraps: usize,
+    /// Phase-7-codegen.md line 27 — G12 monitoring surface. True iff the
+    /// function carries `#[allow(rc_fallback)]`. When set, every entry in
+    /// this row's `rc_ops` count comes from a suppressed site; the row's
+    /// presence in the report (alongside `rc_ops_suppressed: true`) makes
+    /// the suppression visible in `karac query cost-summary` even though
+    /// the user-facing perf note is silenced.
+    pub rc_ops_suppressed: bool,
     pub derivation: Vec<DerivationEntry>,
 }
 
@@ -94,19 +108,30 @@ pub fn build(scope: &str, program: &Program, ownership: &OwnershipCheckResult) -
     // 1. RC ops — drawn from the ownership pass's per-function RC table.
     //    Each entry counts as one rc_op (refcount inc/dec); flavor (Rc vs Arc)
     //    comes from whether the binding got promoted into `arc_values`.
+    //    Each entry whose enclosing function carries `#[allow(rc_fallback)]`
+    //    also contributes to the G12-monitoring `suppressed` total —
+    //    phase-7-codegen.md line 27.
     let mut rc_total = 0usize;
     let mut arc_total = 0usize;
+    let mut suppressed_total = 0usize;
     for (fn_key, rc_map) in &ownership.rc_values {
         let arc_set = ownership.arc_values.get(fn_key);
+        let is_suppressed = ownership.suppressed_rc_fn_keys.contains(fn_key);
         let row = rows
             .entry(fn_key.clone())
             .or_insert_with(|| empty_row(fn_key));
+        if is_suppressed {
+            row.rc_ops_suppressed = true;
+        }
         for (binding, entry) in rc_map {
             let is_arc = arc_set.is_some_and(|s| s.contains(binding));
             if is_arc {
                 arc_total += 1;
             } else {
                 rc_total += 1;
+            }
+            if is_suppressed {
+                suppressed_total += 1;
             }
             row.rc_ops += 1;
             row.derivation.push(rc_derivation(entry, is_arc));
@@ -218,6 +243,7 @@ pub fn build(scope: &str, program: &Program, ownership: &OwnershipCheckResult) -
                 count: rc_total + arc_total,
                 rc: rc_total,
                 arc: arc_total,
+                suppressed: suppressed_total,
             },
             arc_provider_wraps: arc_provider_wraps_total,
             borrow_flag_fields: borrow_flag_total,
@@ -256,6 +282,7 @@ fn empty_row(name: &str) -> FunctionCostRow {
         function: name.to_string(),
         rc_ops: 0,
         arc_provider_wraps: 0,
+        rc_ops_suppressed: false,
         derivation: Vec::new(),
     }
 }

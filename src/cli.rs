@@ -4817,10 +4817,11 @@ fn query_cost_summary(pipeline: &Pipeline) {
 
 fn render_cost_summary_json(s: &crate::cost_summary::CostSummary, filename: &str) -> String {
     let totals = format!(
-        "{{\"rc_ops\":{{\"count\":{},\"rc\":{},\"arc\":{}}},\"arc_provider_wraps\":{},\"borrow_flag_fields\":{},\"partition_guard_sites\":{},\"auto_clone_insertions\":{}}}",
+        "{{\"rc_ops\":{{\"count\":{},\"rc\":{},\"arc\":{},\"suppressed\":{}}},\"arc_provider_wraps\":{},\"borrow_flag_fields\":{},\"partition_guard_sites\":{},\"auto_clone_insertions\":{}}}",
         s.totals.rc_ops.count,
         s.totals.rc_ops.rc,
         s.totals.rc_ops.arc,
+        s.totals.rc_ops.suppressed,
         s.totals.arc_provider_wraps,
         s.totals.borrow_flag_fields,
         s.totals.partition_guard_sites,
@@ -4843,9 +4844,10 @@ fn render_cost_summary_json(s: &crate::cost_summary::CostSummary, filename: &str
                 })
                 .collect();
             format!(
-                "{{\"function\":{},\"rc_ops\":{},\"arc_provider_wraps\":{},\"derivation\":[{}]}}",
+                "{{\"function\":{},\"rc_ops\":{},\"rc_ops_suppressed\":{},\"arc_provider_wraps\":{},\"derivation\":[{}]}}",
                 json_string(&row.function),
                 row.rc_ops,
+                row.rc_ops_suppressed,
                 row.arc_provider_wraps,
                 derivation.join(","),
             )
