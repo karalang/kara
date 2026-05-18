@@ -16974,3 +16974,118 @@ fn union_typecheck_diagnostic_names_wrapper_alternative_in_repr_msg() {
         repr_err.message,
     );
 }
+
+// ── FFI unions slice 2a — E_UNION_READ_REQUIRES_UNSAFE ──────────
+//
+// Reading a union field outside an `unsafe { ... }` block is rejected;
+// the same read wrapped in `unsafe { ... }` is accepted. Field
+// assignment (`u.field = …`) is unconditionally safe per
+// design.md § FFI Unions and must NOT fire the read gate.
+
+#[test]
+fn union_field_read_outside_unsafe_rejected() {
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(u: FloatBits) -> u32 { u.bits }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_READ_REQUIRES_UNSAFE"))
+        .expect("expected E_UNION_READ_REQUIRES_UNSAFE");
+    assert!(
+        diag.message.contains("FloatBits") && diag.message.contains("bits"),
+        "diagnostic should name both the union and the field, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn union_field_read_inside_unsafe_accepted() {
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(u: FloatBits) -> u32 { unsafe { u.bits } }",
+    );
+}
+
+#[test]
+fn union_field_read_through_ref_outside_unsafe_rejected() {
+    // `r: ref FloatBits` — `r.bits` still reads the union storage.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(r: ref FloatBits) -> u32 { r.bits }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_READ_REQUIRES_UNSAFE")),
+        "expected E_UNION_READ_REQUIRES_UNSAFE for ref receiver, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_field_assignment_outside_unsafe_accepted() {
+    // Field assignment `u.field = …` is unconditionally safe per spec;
+    // the read gate must NOT fire on the assignment LHS.
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(u: mut ref FloatBits) {\n\
+             u.bits = 42u32;\n\
+         }",
+    );
+}
+
+#[test]
+fn union_compound_assignment_outside_unsafe_rejected() {
+    // Compound assignment reads u.bits first (to compute u.bits + 1),
+    // then writes — the read half must require unsafe.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(u: mut ref FloatBits) {\n\
+             u.bits += 1u32;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_READ_REQUIRES_UNSAFE")),
+        "compound assignment should trip read gate, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn struct_field_read_outside_unsafe_unaffected() {
+    // Regression: ordinary struct field reads must keep working without
+    // an unsafe block.
+    typecheck_ok(
+        "struct Point { x: i32, y: i32 }\n\
+         fn caller(p: Point) -> i32 { p.x }",
+    );
+}
+
+#[test]
+fn union_undefined_field_diagnostic_names_union() {
+    // Mis-spelt field name produces the standard undefined-field error
+    // but the message must say "union" (not "struct") and list the
+    // available fields.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(u: FloatBits) -> u32 { unsafe { u.bitss } }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("no field 'bitss' on union 'FloatBits'"))
+        .expect("expected undefined-union-field diagnostic");
+    assert!(
+        diag.message.contains("f, bits") || diag.message.contains("bits"),
+        "diagnostic should list available fields, got: {}",
+        diag.message,
+    );
+}

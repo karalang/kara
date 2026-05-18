@@ -1298,7 +1298,14 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+                // Flag the immediate LHS as a place expression so the
+                // union field-read gate (line 549 slice 2a) doesn't fire
+                // on `u.field = ...`. `infer_field_access` captures this
+                // on entry and resets to false for nested reads.
+                let saved = self.assigning_lhs;
+                self.assigning_lhs = true;
                 let target_ty = self.infer_expr(target);
+                self.assigning_lhs = saved;
                 self.check_expr(value, &target_ty);
             }
             StmtKind::CompoundAssign { target, value, .. } => {

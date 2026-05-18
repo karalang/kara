@@ -78,8 +78,70 @@ impl<'a> super::TypeChecker<'a> {
             // every downstream consumer (match scrutinee inference,
             // method dispatch, pattern-binding type recording).
             Type::Shared(name) => name.clone(),
+            // FFI union receivers reached through a `ref U` / `mut ref U`
+            // borrow (line 549 slice 2a) — `r.field` where `r: ref Foo`
+            // is identical to `u.field` where `u: Foo` from the
+            // typechecker's perspective. Peeled here so the union arm
+            // below sees the underlying name. Non-union targets behind
+            // `ref` keep falling through to `Type::Error` so the
+            // struct-field-access-through-ref path (which doesn't exist
+            // yet for arbitrary structs) doesn't accidentally light up.
+            Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                Type::Named { name, .. } if self.env.unions.contains_key(name) => name.clone(),
+                _ => return Type::Error,
+            },
             _ => return Type::Error,
         };
+
+        // Line 549 slice 2a: union receivers route here through the same
+        // `Type::Named { name, ... }` shape that structs do (unions live
+        // in their own `env.unions` map rather than `env.structs`). On
+        // a successful field lookup, fire `E_UNION_READ_REQUIRES_UNSAFE`
+        // unless we're inside an `unsafe { ... }` block OR the access
+        // is the immediate LHS of a `StmtKind::Assign` (field assignment
+        // is unconditionally safe per design.md § FFI Unions). Capture
+        // `is_lhs` at entry and reset it for nested reads — `a.b.c = x`
+        // where `a.b` reads union `a`'s field `b` must still fire.
+        let is_lhs = self.assigning_lhs;
+        self.assigning_lhs = false;
+        let union_fields = self.env.unions.get(&type_name).map(|u| u.fields.clone());
+        if let Some(fields) = union_fields {
+            if !is_lhs && self.unsafe_depth == 0 {
+                self.type_error(
+                    format!(
+                        "error[E_UNION_READ_REQUIRES_UNSAFE]: reading field \
+                         '{field}' of union '{type_name}' must be wrapped in an \
+                         `unsafe {{ ... }}` block — the active variant of a \
+                         union is not tracked by the type system, so the reader \
+                         is asserting they know which interpretation of the \
+                         bytes is valid. Field *assignment* (`u.{field} = ...`) \
+                         is unconditionally safe and does not require unsafe."
+                    ),
+                    span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+            }
+            for (fname, ftype, is_pub) in &fields {
+                if fname == field {
+                    if !*is_pub {
+                        self.check_cross_module_field_access(&type_name, field, span);
+                    }
+                    return ftype.clone();
+                }
+            }
+            let available: Vec<&str> = fields.iter().map(|(n, _, _)| n.as_str()).collect();
+            self.type_error(
+                format!(
+                    "no field '{}' on union '{}', available fields: {}",
+                    field,
+                    type_name,
+                    available.join(", ")
+                ),
+                span.clone(),
+                TypeErrorKind::UndefinedField,
+            );
+            return Type::Error;
+        }
 
         if let Some(struct_info) = self.env.structs.get(&type_name) {
             let struct_info = struct_info.clone();

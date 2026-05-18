@@ -44,7 +44,7 @@ pub mod types;
 
 pub use const_eval::ConstEvalError;
 use const_eval::{binop_glyph, const_value_type, format_const_value, unaryop_glyph};
-pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv};
+pub use env::{EnumInfo, FunctionSig, ImplInfo, StructInfo, TraitInfo, TypeEnv, UnionInfo};
 #[cfg(test)]
 use inference::substitute_type_params;
 pub use types::{
@@ -548,6 +548,12 @@ pub struct TypeCheckResult {
     pub expr_types: HashMap<SpanKey, Type>,
     pub struct_info: HashMap<String, StructInfo>,
     pub enum_info: HashMap<String, EnumInfo>,
+    /// FFI union declarations (`union NAME { ... }`). Mirrors
+    /// `struct_info` / `enum_info` shape. Consumed by `unsafe_lint`
+    /// (slice 2a — `E_UNION_READ_REQUIRES_UNSAFE` field-read gate) and
+    /// downstream phases that need to discriminate union types from
+    /// regular structs (codegen lowering, follow-up use-site rules).
+    pub union_info: HashMap<String, UnionInfo>,
     /// Derived traits for each `distinct type` declaration.
     pub distinct_type_traits: HashMap<String, HashSet<String>>,
     /// For each `?` expression that requires cross-error-type conversion via
@@ -751,6 +757,22 @@ pub struct TypeChecker<'a> {
     pub(super) errors: Vec<TypeError>,
     pub(super) warnings: Vec<TypeError>,
     pub(super) expr_types: HashMap<SpanKey, Type>,
+    /// Lexical depth of enclosing `unsafe { ... }` blocks. Incremented
+    /// on entry to `ExprKind::Unsafe`, decremented on exit. Read at the
+    /// `E_UNION_READ_REQUIRES_UNSAFE` (line 549 slice 2a) field-read
+    /// gate: a union field read with `unsafe_depth == 0` is rejected.
+    /// Future slices for borrow / literal gating consult the same flag.
+    pub(super) unsafe_depth: usize,
+    /// True while typechecking the immediate LHS of a `StmtKind::Assign`
+    /// (`u.f = x`). The flag is set only at the topmost call into
+    /// `infer_expr(target)`; `infer_field_access` captures it on entry
+    /// and resets it to `false` so nested field accesses (`a.b.c = x`,
+    /// where `a.b` is a *read* of `a`) still fire the union read gate.
+    /// Compound assignment (`u.f += 1`) does NOT set the flag — the
+    /// read-modify-write sequence reads `u.f` first, so the gate must
+    /// fire there. Line 549 slice 2a — "field assignment is
+    /// unconditionally safe" per design.md § FFI Unions.
+    pub(super) assigning_lhs: bool,
     pub(super) current_return_type: Option<Type>,
     /// LB3 — per-label collector stack for labeled-block break-with-value
     /// LUB inference. Pushed at labeled-block entry; each `Break { label:
@@ -927,6 +949,8 @@ impl<'a> TypeChecker<'a> {
             errors: Vec::new(),
             warnings: Vec::new(),
             expr_types: HashMap::new(),
+            unsafe_depth: 0,
+            assigning_lhs: false,
             current_return_type: None,
             break_value_types: Vec::new(),
             current_self_type: None,
@@ -1035,6 +1059,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: self.expr_types,
             struct_info: self.env.structs,
             enum_info: self.env.enums,
+            union_info: self.env.unions,
             distinct_type_traits,
             question_conversions: self.question_conversions,
             trait_impls,

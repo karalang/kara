@@ -2135,7 +2135,16 @@ impl<'a> super::TypeChecker<'a> {
                 }
             }
 
-            ExprKind::Unsafe(block) => self.infer_block(block),
+            ExprKind::Unsafe(block) => {
+                // Track lexical unsafe depth so use-site rules like
+                // `E_UNION_READ_REQUIRES_UNSAFE` (slice 2a) and the
+                // upcoming borrow / literal gates can read a single
+                // flag rather than each implementing their own walker.
+                self.unsafe_depth += 1;
+                let ty = self.infer_block(block);
+                self.unsafe_depth -= 1;
+                ty
+            }
 
             ExprKind::Try(block) => {
                 // v1 stub — typechecker pipeline (?-retargeting against

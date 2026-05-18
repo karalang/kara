@@ -838,3 +838,7 @@ fn test_source_allow_beats_cli_deny() {
         "source `#[allow]` should beat CLI `-D`; got: {diags:?}",
     );
 }
+
+// Note: `E_UNION_READ_REQUIRES_UNSAFE` is emitted by the typechecker
+// (not this lint pass) — see `tests/typechecker.rs::union_field_read_*`
+// for the slice-2a coverage.
