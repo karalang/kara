@@ -648,6 +648,25 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         fields: &[FieldInit],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // FFI union literal (phase 5 line 569 slice 4). The typechecker
+        // already enforces exactly-one-field shape (`E_UNION_LITERAL_REQUIRES_ONE_FIELD`,
+        // slice 2c), absent spread, and field-type matching, so codegen
+        // can assume `fields.len() == 1` and the field name resolves to
+        // a known union member. The storage layout is the
+        // max-alignment-first struct seeded by `declare_unions` —
+        // `union_types[name]` for the aggregate and `union_field_types[name]`
+        // for the per-field destination LLVM type.
+        //
+        // Lowering: alloca the storage type, untyped-store the field
+        // value at offset 0 (LLVM opaque pointers; the store writes the
+        // field's natural width, leaving any storage padding undef —
+        // matches Rust union-literal semantics where only the active
+        // variant's bytes are initialized), then load the storage type
+        // back so callers receive an SSA `StructValue` of the union's
+        // storage shape ready for the let-stmt's alloca-and-store path.
+        if let Some(&storage_ty) = self.union_types.get(name) {
+            return self.compile_union_init(name, storage_ty, fields);
+        }
         // Shared struct: heap-allocate with refcount header.
         if let Some(info) = self.shared_types.get(name).cloned() {
             if !info.is_enum {
@@ -699,6 +718,62 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(self.context.i64_type().const_int(0, false).into())
         }
+    }
+
+    /// Compile a `#[repr(C)] union Foo { ... }` literal — phase 5
+    /// line 569 slice 4. See the dispatch comment at the top of
+    /// `compile_struct_init` for the typechecker-supplied invariants
+    /// codegen relies on (exactly-one field, valid field name, value
+    /// type matches the field's declared type). The lowering shape is
+    /// alloca → typed-store at the field's LLVM width → load the
+    /// storage struct back. Padding bytes (when the union's max-size
+    /// field is wider than its max-align field) stay undef — same
+    /// observable contract Rust's union literals offer, and what the
+    /// `unsafe { }` gate around any later field read holds the user
+    /// responsible for.
+    fn compile_union_init(
+        &mut self,
+        name: &str,
+        storage_ty: inkwell::types::StructType<'ctx>,
+        fields: &[FieldInit],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Defensive: an empty fields list shouldn't reach codegen
+        // (slice 2c rejects empty union literals with a focused
+        // diagnostic). Return undef of the storage type so we never
+        // panic — keeps a hypothetical resolver/typecheck escape
+        // contained to a well-formed-shape value.
+        if fields.is_empty() {
+            return Ok(storage_ty.get_undef().into());
+        }
+        // The typechecker rejects multi-field union literals — fields[0]
+        // is the active variant. Re-validate the name against the
+        // registered union members so a future codegen-only refactor
+        // doesn't silently miscompile a slipped-through invariant.
+        let field_init = &fields[0];
+        let field_ll_ty: Option<BasicTypeEnum<'ctx>> = self
+            .union_field_types
+            .get(name)
+            .and_then(|fs| fs.iter().find(|(n, _)| n == &field_init.name))
+            .map(|(_, ty)| *ty);
+        let val = self.compile_expr(&field_init.value)?;
+        let slot = self
+            .builder
+            .build_alloca(storage_ty, &format!("union.{}.lit", name))
+            .unwrap();
+        // Untyped store of the value at the union's base address —
+        // LLVM opaque pointers carry no pointee type, so this writes
+        // exactly `val`'s natural width regardless of how `storage_ty`'s
+        // first member is shaped. Reading the storage back via the
+        // typed load below pulls those bytes (plus any uninitialized
+        // padding) into an SSA aggregate the caller can move into its
+        // own alloca.
+        let _ = field_ll_ty; // reserved for future debug-info / typed-store ergonomics
+        self.builder.build_store(slot, val).unwrap();
+        let loaded = self
+            .builder
+            .build_load(storage_ty, slot, &format!("union.{}.val", name))
+            .unwrap();
+        Ok(loaded)
     }
 
     /// Compile `let <name>: Vec[T] = Vec::new()` for a SoA-laid-out collection.

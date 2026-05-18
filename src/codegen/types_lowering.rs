@@ -751,6 +751,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if let Some(st) = self.struct_types.get(name) {
                     (*st).into()
+                } else if let Some(ut) = self.union_types.get(name) {
+                    // FFI unions are encoded as a storage struct whose
+                    // ABI size / alignment match the union's max-field
+                    // shape (phase 5 line 569 slice 4). Returning the
+                    // storage type here is what makes `size_of[Foo]` /
+                    // `align_of[Foo]` report the correct numbers for
+                    // free, and lets bindings declared as `let u: Foo`
+                    // alloca the right number of bytes.
+                    (*ut).into()
                 } else if let Some(layout) = self.enum_layouts.get(name) {
                     // Enum types are represented as tagged-union structs.
                     layout.llvm_type.into()

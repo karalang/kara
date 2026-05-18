@@ -54,6 +54,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 return Ok(self.compile_primitive_const(cv));
             }
         }
+        // FFI union field read (phase 5 line 569 slice 4). Detect a
+        // union-typed receiver — by-binding via `var_type_names` →
+        // `union_types`, or `self` field access from within an impl
+        // method on the union (the latter is not v1-surface today but
+        // the lookup is symmetric and cheap) — and lower as a typed
+        // load through the storage alloca. The typechecker's slice 2a
+        // `unsafe { }` gate already approves the read at this site; we
+        // simply emit the load using the field's declared LLVM type
+        // (recovered from `union_field_types`) rather than the storage
+        // struct's first-member type, so a union with primary slot
+        // `{ i64 }` accessed via `u.u32val` reads exactly 4 bytes.
+        if let Some(loaded) = self.try_compile_union_field_read(object, field) {
+            return Ok(loaded);
+        }
         // Indexed-shared-struct receiver: `nodes[i].field` where
         // `nodes: Vec[Shared(N)]`. Mirror of `compile_field_store`'s
         // Index branch — load the heap pointer at `nodes[i]`, GEP into
@@ -234,6 +248,97 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(self.context.i64_type().const_int(0, false).into())
     }
 
+    /// FFI union field read helper — phase 5 line 569 slice 4. Returns
+    /// `Some(loaded_value)` when `object` resolves to a known union
+    /// binding (by identifier or by `self` in an impl method on the
+    /// union) and `field` is a registered union member; returns `None`
+    /// otherwise so the caller falls through to the struct / shared /
+    /// generic field-access paths. The helper does NOT enforce the
+    /// `unsafe { }` gate — the typechecker's slice 2a diagnostic
+    /// (`E_UNION_READ_REQUIRES_UNSAFE`) is what holds users to that
+    /// rule; codegen executes the load unconditionally because the
+    /// AST is already gate-cleared by the time we get here.
+    fn try_compile_union_field_read(
+        &mut self,
+        object: &Expr,
+        field: &str,
+    ) -> Option<BasicValueEnum<'ctx>> {
+        let (var_name, type_name, field_ty, storage_ptr) =
+            self.resolve_union_field_access(object, field)?;
+        let load_name = format!("union.{}.{}", type_name, field);
+        let _ = var_name; // reserved for future tracing / diag hooks
+        let loaded = self
+            .builder
+            .build_load(field_ty, storage_ptr, &load_name)
+            .ok()?;
+        Some(loaded)
+    }
+
+    /// Counterpart to `try_compile_union_field_read` for the LHS of an
+    /// assignment (`u.field = expr`). The typechecker permits this
+    /// without an `unsafe { }` block (slice 2a's `assigning_lhs` flag
+    /// — only reads trip the gate); codegen mirrors the read shape but
+    /// stores `new_val` at the union's base address.
+    fn try_compile_union_field_store(
+        &mut self,
+        object: &Expr,
+        field: &str,
+        new_val: BasicValueEnum<'ctx>,
+    ) -> bool {
+        let Some((_, _, _field_ty, storage_ptr)) = self.resolve_union_field_access(object, field)
+        else {
+            return false;
+        };
+        self.builder.build_store(storage_ptr, new_val).unwrap();
+        true
+    }
+
+    /// Common resolver for the union read + write paths. Walks `object`
+    /// to its union storage pointer + field LLVM type. Returns
+    /// `(binding_name, union_type_name, field_llvm_type, storage_ptr)`
+    /// on a hit; `None` for anything outside the recognised receiver
+    /// shapes (identifier-bound or `self`-bound union local). The
+    /// returned pointer is the alloca of the storage struct — opaque
+    /// pointers under LLVM 15+ make a per-field bitcast unnecessary,
+    /// so callers can `build_load` / `build_store` through it directly
+    /// using the field's LLVM type for the read width.
+    fn resolve_union_field_access(
+        &self,
+        object: &Expr,
+        field: &str,
+    ) -> Option<(String, String, BasicTypeEnum<'ctx>, PointerValue<'ctx>)> {
+        let var_name: String = match &object.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            ExprKind::SelfValue => "self".to_string(),
+            _ => return None,
+        };
+        let type_name = self.var_type_names.get(&var_name)?.clone();
+        let storage_ty = self.union_types.get(&type_name).copied()?;
+        let field_ty = self
+            .union_field_types
+            .get(&type_name)
+            .and_then(|fs| fs.iter().find(|(n, _)| n == field))
+            .map(|(_, ty)| *ty)?;
+        let slot = self.variables.get(&var_name)?;
+        // For ref-bound union locals (`ref u: Foo`) the alloca holds a
+        // pointer to the caller's storage rather than the storage
+        // itself — load it through the same shape `get_data_ptr` uses
+        // for ref-struct receivers. Storage type is needed only to
+        // anchor the through-ptr alignment when SSE/ARM hosts care; we
+        // suppress the warning here without using it directly.
+        let _ = storage_ty;
+        let storage_ptr = if self.ref_params.contains_key(&var_name) {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            self.builder
+                .build_load(ptr_ty, slot.ptr, &format!("{}.ref.ptr", var_name))
+                .ok()?
+                .into_pointer_value()
+        } else {
+            slot.ptr
+        };
+        Some((var_name, type_name, field_ty, storage_ptr))
+    }
+
     pub(super) fn compile_field_store(
         &mut self,
         object: &Expr,
@@ -241,6 +346,18 @@ impl<'ctx> super::Codegen<'ctx> {
         new_val: BasicValueEnum<'ctx>,
         rhs_is_fresh: bool,
     ) -> Result<(), String> {
+        // FFI union field store (phase 5 line 569 slice 4). Detect a
+        // union-typed receiver and lower as an untyped store at the
+        // storage base address. Slice 2a's typechecker makes
+        // `u.field = x` unconditionally safe (no `unsafe { }` required
+        // — only reads trip the gate), so the LHS path is reached
+        // outside `unsafe` blocks too. Runs ahead of the
+        // shared-struct / owned-struct branches so a future
+        // struct/union name collision (today blocked at the resolver)
+        // would not silently misroute the store.
+        if self.try_compile_union_field_store(object, field, new_val) {
+            return Ok(());
+        }
         // Indexed-shared-struct receiver: `nodes[i].field = X` where
         // `nodes: Vec[Shared(N)]`. Load the heap pointer at `nodes[i]`
         // (the element slot stores the RC pointer cast to its LLVM

@@ -150,6 +150,38 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
                 return;
+            } else if let SymbolKind::Union { .. } = &sym.kind {
+                // Phase 5 line 569 slice 4: FFI unions reject any
+                // layout-block syntax. A union's bytes are a single
+                // alternation slot — there's no field-set to SoA-split,
+                // grouping doesn't change the C-side ABI we're locked
+                // to, and the cache-locality reasoning that motivates
+                // layout blocks doesn't apply to a one-cell aggregate.
+                // Fires per offending layout item so the user sees
+                // every site they need to remove, not just the first.
+                for item in &layout.items {
+                    let (name, span) = match item {
+                        LayoutItem::Group { name, span, .. } => (name.clone(), span.clone()),
+                        LayoutItem::Cold { span, .. } => ("cold".to_string(), span.clone()),
+                        LayoutItem::SplitByVariant(span) => {
+                            ("split_by_variant".to_string(), span.clone())
+                        }
+                    };
+                    self.errors.push(ResolveError {
+                        message: format!(
+                            "layout block on union '{}' is not allowed — unions are an FFI alternation, not a struct shape with a field-set to lay out",
+                            struct_name
+                        ),
+                        span,
+                        kind: ResolveErrorKind::UndefinedField,
+                        suggestion: Some(format!(
+                            "remove the '{}' layout item; FFI unions inherit their layout from the C side",
+                            name
+                        )),
+                        replacement: None,
+                    });
+                }
+                return;
             } else {
                 self.errors.push(ResolveError {
                     message: format!("'{}' is not a struct", struct_name),

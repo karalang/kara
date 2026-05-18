@@ -1021,6 +1021,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         {
                             let name = name.clone();
                             self.var_type_names.insert(var_name.clone(), name);
+                        } else if let Some((name, _)) =
+                            self.union_types.iter().find(|(_, ty)| **ty == st)
+                        {
+                            // Phase 5 line 569 slice 4: union RHS recognition.
+                            // Union literals return a `StructValue` of the
+                            // union's storage type; without this branch the
+                            // let-bound binding never lands in `var_type_names`
+                            // and downstream `u.field` codegen can't route
+                            // through the union-aware field-access path.
+                            let name = name.clone();
+                            self.var_type_names.insert(var_name.clone(), name);
                         }
                     }
                 }

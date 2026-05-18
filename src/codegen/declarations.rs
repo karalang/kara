@@ -186,6 +186,99 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── Union declaration pass (phase 5 line 569 slice 4) ──────────
+
+    /// FFI union LLVM-type construction. For each `#[repr(C)] union
+    /// Foo { f0: T0, f1: T1, ... }` declaration the slice spec (phase
+    /// 5 line 569 slice 4) requires the storage type to have
+    /// `size = max(field_sizes)` and `align = max(field_aligns)`.
+    /// LLVM has no native union type, so we encode it as a struct
+    /// holding the field-with-max-alignment (tie-break: largest size)
+    /// as its first member, followed by a `[k x i8]` padding tail
+    /// when that field's own size is smaller than the union's total
+    /// size. The resulting struct's alignment is driven by the
+    /// alignment of its first member, which by construction is
+    /// `max(field_aligns)`; its `size_of` is `max(field_sizes)`
+    /// rounded up to that alignment — exactly the C-union rule.
+    ///
+    /// Type-checking (slices 1d / 2 / 3) already rejects unions that
+    /// lack `#[repr(C)]`, carry non-`Copy` fields, or sit inside an
+    /// `impl Drop` block, so this pass operates on a guaranteed-valid
+    /// `UnionDef`. Field-access (`u.field` outside `unsafe { }`) and
+    /// literal-shape (`Foo { multi: ... }`) violations are filtered
+    /// upstream as well; codegen is purely a lowering step.
+    pub(super) fn declare_unions(&mut self, program: &Program) {
+        for item in &program.items {
+            let Item::UnionDef(u) = item else { continue };
+            let llvm_fields: Vec<(String, BasicTypeEnum<'ctx>)> = u
+                .fields
+                .iter()
+                .map(|f| (f.name.clone(), self.llvm_type_for_type_expr(&f.ty)))
+                .collect();
+            // Empty union bodies are rejected at parse time
+            // (`E_EMPTY_UNION`, slice 1b); guard defensively so a
+            // future relaxation doesn't crash the codegen pass.
+            if llvm_fields.is_empty() {
+                continue;
+            }
+            // Scoped target-data borrow: extract per-field (align, size)
+            // up front, then drop the borrow so `self.context` /
+            // `self.union_types` are usable again below. Without the
+            // explicit scope the returned `&TargetData` would live
+            // through `self.context.struct_type(...)` and conflict with
+            // the disjoint-field borrow checker.
+            let metrics: Vec<(u32, u64)> = {
+                let target_data = match self.ensure_target_data() {
+                    Ok(td) => td,
+                    Err(_) => continue,
+                };
+                llvm_fields
+                    .iter()
+                    .map(|(_, ty)| {
+                        (
+                            target_data.get_abi_alignment(ty),
+                            target_data.get_abi_size(ty),
+                        )
+                    })
+                    .collect()
+            };
+            // Pick the field whose alignment is largest (tie-break:
+            // largest size, then earliest source position). That
+            // field becomes the storage struct's first member so
+            // LLVM derives the correct alignment for the aggregate.
+            let mut primary_idx = 0usize;
+            let mut primary_align = metrics[0].0;
+            let mut primary_size = metrics[0].1;
+            let mut max_size = primary_size;
+            for (i, &(a, s)) in metrics.iter().enumerate().skip(1) {
+                if s > max_size {
+                    max_size = s;
+                }
+                let better = a > primary_align || (a == primary_align && s > primary_size);
+                if better {
+                    primary_idx = i;
+                    primary_align = a;
+                    primary_size = s;
+                }
+            }
+            let primary_ty = llvm_fields[primary_idx].1;
+            let pad_bytes = max_size.saturating_sub(primary_size);
+            let storage_ty = if pad_bytes == 0 {
+                self.context.struct_type(&[primary_ty], false)
+            } else {
+                // u64 → u32 narrowing for the array length is safe in
+                // practice (no FFI union spans 4GB), and saturates
+                // defensively if a pathological size ever appears.
+                let pad_len = u32::try_from(pad_bytes).unwrap_or(u32::MAX);
+                let pad_ty = self.context.i8_type().array_type(pad_len);
+                self.context
+                    .struct_type(&[primary_ty, pad_ty.into()], false)
+            };
+            self.union_types.insert(u.name.clone(), storage_ty);
+            self.union_field_types.insert(u.name.clone(), llvm_fields);
+        }
+    }
+
     // ── State-struct type emission (phase 6 line 26 slice 5) ──────────
 
     /// Emit one `%kara.state.<fn_key>` LLVM struct type per entry in

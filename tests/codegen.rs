@@ -731,6 +731,107 @@ fn main() {
         }
     }
 
+    // ── FFI unions slice 4: codegen lowering ─────────────────────────
+    //
+    // E2E pin for `#[repr(C)] union Foo { ... }` LLVM lowering. The
+    // storage struct is built so `size_of[Foo]` = max(field_sizes),
+    // `align_of[Foo]` = max(field_aligns), and an in-place write through
+    // one field followed by a read through another returns the same
+    // bytes (the union semantics the typechecker's `unsafe { }` gate
+    // holds users responsible for).
+
+    #[test]
+    fn test_e2e_size_of_user_union() {
+        // `union FloatBits { f: f32, bits: u32 }` — both fields are
+        // 4 bytes, 4-aligned, so the storage struct collapses to
+        // `{ <primary> }` with no padding tail.
+        let out = run_program(
+            "#[repr(C)] union FloatBits { f: f32, bits: u32 }\n\
+             fn main() { println(size_of[FloatBits]()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4");
+        }
+    }
+
+    #[test]
+    fn test_e2e_align_of_user_union() {
+        let out = run_program(
+            "#[repr(C)] union FloatBits { f: f32, bits: u32 }\n\
+             fn main() { println(align_of[FloatBits]()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4");
+        }
+    }
+
+    #[test]
+    fn test_e2e_union_field_read_write_round_trip() {
+        // Two-field same-shape union pins the literal-construction +
+        // unsafe-read path without dragging the float formatter in
+        // (we want the printed value to match the input verbatim, not
+        // an f32 scientific-notation render). Stores the low slot,
+        // reads back through the high slot — must see the same
+        // 32-bit pattern because both fields share the storage cell.
+        let out = run_program(
+            "#[repr(C)] union BitsLR { l: u32, r: u32 }\n\
+             fn main() {\n\
+                 let u = BitsLR { l: 4242u32 };\n\
+                 let v = unsafe { u.r };\n\
+                 println(v);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4242");
+        }
+    }
+
+    #[test]
+    fn test_e2e_size_of_epoll_data_style_union() {
+        // The design.md `epoll_data` example: four-field FFI union
+        // dominated by the 8-byte / 8-aligned `u64val` field. Storage
+        // collapses to `{ i64 }`; `size_of` / `align_of` both report 8.
+        let out = run_program(
+            "#[repr(C)] union EpollData { ptr: *mut Unit, fd: i32, u32val: u32, u64val: u64 }\n\
+             fn main() { println(size_of[EpollData]()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_align_of_epoll_data_style_union() {
+        let out = run_program(
+            "#[repr(C)] union EpollData { ptr: *mut Unit, fd: i32, u32val: u32, u64val: u64 }\n\
+             fn main() { println(align_of[EpollData]()); }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "8");
+        }
+    }
+
+    #[test]
+    fn test_e2e_union_field_assignment_persists_through_read() {
+        // Slice 2a's `assigning_lhs` flag makes union-field assignment
+        // unconditionally safe (no `unsafe { }` required); the read
+        // back is what trips the gate. Pin the codegen contract that
+        // the store actually persists into the storage slot rather
+        // than landing in a discarded SSA register.
+        let out = run_program(
+            "#[repr(C)] union BitsLR { l: u32, r: u32 }\n\
+             fn main() {\n\
+                 let mut u = BitsLR { l: 1u32 };\n\
+                 u.r = 7u32;\n\
+                 let v = unsafe { u.l };\n\
+                 println(v);\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "7");
+        }
+    }
+
     // ── Strict-provenance ptr APIs (line 511 slice 3) ────────────────
     //
     // Codegen lowering for the seven `ptr.*` module functions per

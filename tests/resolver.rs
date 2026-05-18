@@ -3923,3 +3923,76 @@ fn union_field_non_exhaustive_still_uses_generic_kind() {
         errs.iter().map(|e| &e.kind).collect::<Vec<_>>(),
     );
 }
+
+// ── FFI unions slice 4 — layout-block-on-union rejection ────────
+//
+// A union's bytes are a single alternation slot; the SoA / grouping /
+// cache-locality reasoning that motivates layout blocks doesn't apply,
+// and the C-side ABI we're locked to leaves nothing for the layout
+// surface to influence. The resolver emits per-item diagnostics so a
+// user pasting a multi-group block sees every offending item, not
+// just the first.
+
+#[test]
+fn layout_block_on_union_is_rejected() {
+    let errs = resolve_errors(
+        r#"
+#[repr(C)]
+union FloatBits { f: f32, bits: u32 }
+layout u: Vec[FloatBits] {
+    group bits { bits }
+}
+"#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("union 'FloatBits'")
+                && e.message.contains("FFI alternation")),
+        "expected union-layout rejection, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn layout_block_on_union_fires_per_item() {
+    // Multi-group layout on a union: the diagnostic must fire once per
+    // group so the user lands on every site to remove, not just the
+    // first.
+    let errs = resolve_errors(
+        r#"
+#[repr(C)]
+union BitsLR { l: u32, r: u32 }
+layout u: Vec[BitsLR] {
+    group a { l }
+    group b { r }
+}
+"#,
+    );
+    let count = errs
+        .iter()
+        .filter(|e| e.message.contains("union 'BitsLR'"))
+        .count();
+    assert_eq!(
+        count,
+        2,
+        "expected two per-item rejections, got {} ({:?})",
+        count,
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn layout_block_on_struct_unaffected_by_union_arm() {
+    // Regression: the union arm sits ahead of the struct fallthrough;
+    // adding it must not stop the well-formed struct-layout case from
+    // resolving cleanly.
+    resolve_ok(
+        r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+"#,
+    );
+}

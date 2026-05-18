@@ -291,6 +291,25 @@ pub(super) struct Codegen<'ctx> {
     /// `register_var_from_type_expr`. Populated alongside
     /// `struct_field_type_names` in `declare_structs`.
     pub(crate) struct_field_type_exprs: HashMap<String, Vec<crate::ast::TypeExpr>>,
+    /// FFI union storage types (union name → LLVM struct type used as
+    /// the storage blob). Phase 5 slice 4. The storage struct is sized
+    /// to `max(field_sizes)` and aligned to `max(field_aligns)` per the
+    /// `#[repr(C)] union Foo { ... }` lowering rule: its single LLVM
+    /// field is the union-field with the largest alignment (tie-break
+    /// preferring the largest size), followed by a `[k x i8]` padding
+    /// tail when that field's size is smaller than the full union size.
+    /// Populated by `declare_unions` after `declare_structs`. Read by
+    /// `llvm_type_for_name` (so `size_of[Foo]` / `align_of[Foo]` work
+    /// for free) and by the union-literal / union-field-access codegen
+    /// in `compile_struct_init` / `compile_field_access`.
+    pub(crate) union_types: HashMap<String, inkwell::types::StructType<'ctx>>,
+    /// Per-union field declarations in source order (union name →
+    /// (field_name, field_llvm_type)). Used by union-literal codegen
+    /// to look up the destination LLVM type when storing through the
+    /// alloca, and by union-field-access codegen to bitcast the read
+    /// pointer to the field's LLVM type before loading. Populated
+    /// alongside `union_types`.
+    pub(crate) union_field_types: HashMap<String, Vec<(String, BasicTypeEnum<'ctx>)>>,
     /// Enum layouts for tagged-union codegen (enum name → layout).
     pub(crate) enum_layouts: HashMap<String, EnumLayout<'ctx>>,
     /// Nested loop stack — innermost frame is last.
@@ -1424,6 +1443,8 @@ impl<'ctx> Codegen<'ctx> {
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
+            union_types: HashMap::new(),
+            union_field_types: HashMap::new(),
             enum_layouts: HashMap::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),
@@ -1691,6 +1712,14 @@ impl<'ctx> Codegen<'ctx> {
         // `i64` and losing the payload word.
         self.seed_builtin_enum_layouts();
         self.declare_structs(program);
+        // Phase 5 line 569 slice 4: lower `#[repr(C)] union Foo { ... }`
+        // declarations to LLVM storage types so `size_of[Foo]` /
+        // `align_of[Foo]` resolve correctly and union literals /
+        // field accesses can target the storage struct downstream.
+        // Runs after `declare_structs` so a union field whose type
+        // names a user struct resolves to the right LLVM aggregate
+        // when computing primary-field alignment.
+        self.declare_unions(program);
         self.declare_enums(program);
         // Phase 6 line 26 slice 5: emit one `%kara.state.<fn_key>` LLVM
         // struct per entry in `program.state_struct_layouts` (populated
