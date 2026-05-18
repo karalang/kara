@@ -211,6 +211,14 @@ pub const STARTER_LINTS: &[LintInfo] = &[
              lacks `#[must_use]` — discarding the return drops the work without surfacing.",
     },
     LintInfo {
+        name: "missing_track_caller",
+        default_level: LintLevel::Warn,
+        description:
+            "A stdlib `pub fn` with `panics` in its effect set lacks `#[track_caller]` — \
+             callers will see the panic point at the stdlib frame rather than at their own \
+             call site.",
+    },
+    LintInfo {
         name: "ambiguous_not_comparison",
         default_level: LintLevel::Warn,
         description:

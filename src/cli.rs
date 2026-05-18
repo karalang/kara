@@ -2381,6 +2381,31 @@ fn render_missing_must_use_lint_diag(
     }
 }
 
+fn render_missing_track_caller_lint_diag(
+    diag: &crate::missing_track_caller_lint::LintDiagnostic,
+    filename: &str,
+) {
+    eprintln!(
+        "{}[{}]: {}:{}:{}: {}",
+        if diag.level == crate::missing_track_caller_lint::LintLevel::Error {
+            "error"
+        } else {
+            "warning"
+        },
+        diag.lint_name,
+        filename,
+        diag.span.line,
+        diag.span.column,
+        diag.message
+    );
+    if let Some(note) = &diag.note {
+        eprintln!("   = note: {note}");
+    }
+    if let Some(help) = &diag.help {
+        eprintln!("   = help: {help}");
+    }
+}
+
 fn emit_json_output(pipeline: &Pipeline) {
     let diags = collect_diagnostics(pipeline);
     let effects = program_effects_json(pipeline);
@@ -2728,6 +2753,21 @@ fn cmd_run(
             &pipeline.lint_overrides,
         ) {
             render_missing_must_use_lint_diag(&diag, filename);
+        }
+        // Lint: missing_track_caller (slice 7 of the `#[track_caller]` for
+        // stdlib panic-emitters entry). Reads the effect-checker's
+        // `inferred_effects` map plus each function's declared `panics`
+        // effect to identify stdlib `pub fn`s that panic without
+        // `#[track_caller]`. Pre-codegen-slice-4 surface: the lint fires
+        // even though the codegen pass doesn't yet propagate the
+        // attribute — the slice-6 annotation pass will drive this lint
+        // clean and surface every missing-attribute site mechanically.
+        for diag in crate::missing_track_caller_lint::check_missing_track_caller(
+            &pipeline.parsed.program,
+            pipeline.effects.as_ref(),
+            &pipeline.lint_overrides,
+        ) {
+            render_missing_track_caller_lint_diag(&diag, filename);
         }
         // Lint: ffi_float_eq
         for diag in

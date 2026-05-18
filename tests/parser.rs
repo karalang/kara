@@ -1903,6 +1903,97 @@ fn track_caller_slice1_set_on_non_fn_item_parser_does_not_reject() {
     assert_eq!(s.attributes[0].path[0], "track_caller");
 }
 
+// ── Slice 1 trait-method extension (sub-open closure) ─────────────
+//
+// The slice-1 entry flagged trait-method support as a sub-open blocked
+// on `TraitMethod` not carrying attributes. The AST enabling change
+// (next entry in the tracker) unblocked it; this surface broadens the
+// trait-method test coverage to match the function-level slice-1
+// surface above. The single positive pin in `enabling_change_trait_method_track_caller_attaches`
+// covers the basic attachment; these tests cover negatives + multi-
+// method + idempotence parity.
+
+#[test]
+fn track_caller_slice1_trait_method_without_attribute_has_flag_false() {
+    let prog = parse_ok("pub trait T {\n    fn m(ref self) -> i64;\n}");
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert!(!methods[0].is_track_caller);
+}
+
+#[test]
+fn track_caller_slice1_trait_method_coexists_with_other_attributes() {
+    // The flag is set even when other attributes (deprecation, must_use)
+    // appear in the same trait-method attribute list.
+    let prog = parse_ok(
+        "pub trait T {\n\
+         #[track_caller]\n\
+         #[deprecated]\n\
+         fn m(ref self) -> i64;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert!(methods[0].is_track_caller);
+    assert!(methods[0].deprecation.is_some());
+}
+
+#[test]
+fn track_caller_slice1_trait_method_rejects_paren_args() {
+    let (_prog, errors) = parse_with_errors(
+        "pub trait T {\n\
+         #[track_caller(extra)]\n\
+         fn m(ref self) -> i64;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TRACK_CALLER_ARGS_NOT_PERMITTED")),
+        "Expected E_TRACK_CALLER_ARGS_NOT_PERMITTED on trait method; got: {errors:?}",
+    );
+}
+
+#[test]
+fn track_caller_slice1_trait_method_rejects_string_value() {
+    let (_prog, errors) = parse_with_errors(
+        "pub trait T {\n\
+         #[track_caller = \"oops\"]\n\
+         fn m(ref self) -> i64;\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TRACK_CALLER_ARGS_NOT_PERMITTED")),
+        "Expected E_TRACK_CALLER_ARGS_NOT_PERMITTED on trait method; got: {errors:?}",
+    );
+}
+
+#[test]
+fn track_caller_slice1_trait_method_per_method_independent() {
+    // Mixed presence within a single trait — one method carries the
+    // attribute, the other does not. Pins that the flag is per-method
+    // rather than per-trait.
+    let prog = parse_ok(
+        "pub trait T {\n\
+         #[track_caller]\n\
+         fn a(ref self) -> i64;\n\
+         fn b(ref self) -> i64;\n\
+         }",
+    );
+    let Item::TraitDef(t) = &prog.items[0] else {
+        panic!("Expected TraitDef");
+    };
+    let methods = trait_methods(t);
+    assert!(methods[0].is_track_caller);
+    assert!(!methods[1].is_track_caller);
+}
+
 // ── #[deprecated] slices 1+2 — parser + AST payload ───────────────
 //
 // Three forms per design.md § `#[deprecated]` for Item Deprecation:

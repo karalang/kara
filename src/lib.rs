@@ -24,6 +24,7 @@ pub mod logical_lint;
 pub mod lowering;
 pub mod manifest;
 pub mod missing_must_use_lint;
+pub mod missing_track_caller_lint;
 pub mod module;
 pub mod must_use_lint;
 pub mod ownership;
