@@ -36,12 +36,14 @@ COMMANDS:
                       Query compiler analysis. Per-function kinds take
                       `<file>.<function>` as target; `cost-summary` takes
                       a bare `<file>` (whole-file aggregate).
-                        effects        - inferred and declared effects
-                        ownership      - parameter modes
-                        concurrency    - parallelization opportunities
-                        cost-summary   - static counts of compiler-emitted
-                                         silent runtime costs (RC ops,
-                                         Arc-provider wraps, borrow flags)
+                        effects          - inferred and declared effects
+                        ownership        - parameter modes
+                        concurrency      - parallelization opportunities
+                        cost-summary     - static counts of compiler-emitted
+                                           silent runtime costs (RC ops,
+                                           Arc-provider wraps, borrow flags)
+                        monomorphization - per-generic instantiation counts
+                                           + per-instance type tuples
     explain --concept=NAME
                       Print a concept-level explainer page. Available
                       concepts:
@@ -162,7 +164,8 @@ karac query - Query compiler analysis
 USAGE:
     karac query <kind> [flags] <target>
         <target> = <file.kara>.<function>   for per-function kinds
-                 = <file.kara>              for cost-summary, attributes, queries
+                 = <file.kara>              for cost-summary, attributes, queries,
+                                            monomorphization
 
 KINDS:
     effects            Inferred and declared effects
@@ -189,6 +192,14 @@ KINDS:
                        command surface is stable so external
                        tooling can integrate now. See design.md
                        § Specification Layers > Compiler Queries.
+    monomorphization   Per-generic instantiation table — one entry
+                       per generic function with its distinct
+                       `(T1..Tk)` tuples plus the first call site
+                       that produced each. Surfaces the cost named
+                       in design.md § Effect Polymorphism > Cost
+                       Properties. v1 reports type tuples; the
+                       per-instance `effects` slot is reserved and
+                       always empty in v1.
 
 OPTIONS:
     --tool=PREFIX      attributes only: first-segment match filter

@@ -648,10 +648,10 @@ fn parse_explain_command(args: &[String]) -> Command {
 fn parse_query_command(args: &[String]) -> Command {
     if args.len() < 4 {
         eprintln!(
-            "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes> [flags] <target>"
+            "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes|queries|monomorphization> [flags] <target>"
         );
         eprintln!("       <target> is `<file>.<function>` for the per-function kinds,");
-        eprintln!("                or `<file>` for cost-summary and attributes.");
+        eprintln!("                or `<file>` for cost-summary, attributes, queries, and monomorphization.");
         eprintln!("       attributes accepts `--tool=PREFIX` to filter by first-segment match.");
         process::exit(1);
     }
@@ -691,9 +691,10 @@ fn parse_query_command(args: &[String]) -> Command {
         "cost-summary" => QueryKind::CostSummary,
         "attributes" => QueryKind::Attributes { tool_prefix },
         "queries" => QueryKind::Queries,
+        "monomorphization" => QueryKind::Monomorphization,
         other => {
             eprintln!(
-                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', 'attributes', or 'queries'."
+                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', 'attributes', 'queries', or 'monomorphization'."
             );
             process::exit(1);
         }
@@ -703,9 +704,10 @@ fn parse_query_command(args: &[String]) -> Command {
     // other kinds parse `file.function` via rsplit (multi-dot file
     // paths are fine since Kāra identifiers cannot contain `.`).
     let (file, function) = match &kind {
-        QueryKind::CostSummary | QueryKind::Attributes { .. } | QueryKind::Queries => {
-            (target.clone(), String::new())
-        }
+        QueryKind::CostSummary
+        | QueryKind::Attributes { .. }
+        | QueryKind::Queries
+        | QueryKind::Monomorphization => (target.clone(), String::new()),
         _ => match target.rsplit_once('.') {
             Some((f, func)) => (f.to_string(), func.to_string()),
             None => {

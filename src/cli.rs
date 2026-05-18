@@ -246,6 +246,13 @@ pub enum QueryKind {
     /// tooling can integrate against `karac query queries` without
     /// waiting for catalogue entries.
     Queries,
+    /// Phase-7-codegen.md line 97 + `design.md § Compiler Query API
+    /// — karac query monomorphization`. Walks the typechecker's
+    /// per-call-site type-arg table (`call_type_subs`) and emits one
+    /// JSON record per generic function with its distinct
+    /// `(T1..Tk)` tuples. Whole-file kind — the `function` slot is
+    /// unused.
+    Monomorphization,
 }
 
 // ── Command Execution ───────────────────────────────────────────
@@ -4607,6 +4614,13 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.concurrencycheck();
             query_queries(&pipeline);
         }
+        QueryKind::Monomorphization => {
+            // Reads from `TypeCheckResult.call_type_subs` +
+            // `method_callee_types`; typecheck is the only phase
+            // required.
+            pipeline.typecheck();
+            query_monomorphization(&pipeline);
+        }
     }
 }
 
@@ -4806,6 +4820,73 @@ fn render_attribute_value(v: &crate::query_attributes::AttributeQueryValue) -> S
         }
         AttributeQueryValue::Other => "{\"kind\":\"expr\"}".to_string(),
     }
+}
+
+fn query_monomorphization(pipeline: &Pipeline) {
+    let tc = match pipeline.typed.as_ref() {
+        Some(t) => t,
+        None => {
+            // Typecheck didn't run (resolve errors short-circuited).
+            // Emit an empty envelope so the CLI is still scriptable in
+            // that case.
+            println!(
+                "{{\"scope\":{},\"by_generic\":[],\"totals\":{{\"generic_count\":0,\"instance_count\":0}}}}",
+                json_string(&pipeline.filename),
+            );
+            return;
+        }
+    };
+    let table = crate::monomorphization::analyze(&pipeline.parsed.program, tc);
+    println!(
+        "{}",
+        render_monomorphization_json(&table, &pipeline.filename),
+    );
+}
+
+fn render_monomorphization_json(
+    table: &crate::monomorphization::MonomorphizationTable,
+    filename: &str,
+) -> String {
+    let entries: Vec<String> = table
+        .by_generic
+        .iter()
+        .map(|g| {
+            let instances: Vec<String> = g
+                .instances
+                .iter()
+                .map(|i| render_monomorphization_instance(i, filename))
+                .collect();
+            format!(
+                "{{\"generic\":{},\"instance_count\":{},\"instances\":[{}]}}",
+                json_string(&g.generic),
+                g.instances.len(),
+                instances.join(","),
+            )
+        })
+        .collect();
+    format!(
+        "{{\"scope\":{},\"by_generic\":[{}],\"totals\":{{\"generic_count\":{},\"instance_count\":{}}}}}",
+        json_string(filename),
+        entries.join(","),
+        table.generic_count(),
+        table.instance_count(),
+    )
+}
+
+fn render_monomorphization_instance(
+    instance: &crate::monomorphization::Instance,
+    filename: &str,
+) -> String {
+    let site = format!(
+        "{}:{}:{}",
+        filename, instance.site.line, instance.site.column
+    );
+    format!(
+        "{{\"types\":{},\"effects\":{},\"site\":{}}}",
+        json_string_list(&instance.types),
+        json_string_list(&instance.effects),
+        json_string(&site),
+    )
 }
 
 fn query_cost_summary(pipeline: &Pipeline) {

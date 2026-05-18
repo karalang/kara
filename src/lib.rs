@@ -27,6 +27,7 @@ pub mod manifest;
 pub mod missing_must_use_lint;
 pub mod missing_track_caller_lint;
 pub mod module;
+pub mod monomorphization;
 pub mod must_use_lint;
 pub mod ownership;
 pub mod parser;

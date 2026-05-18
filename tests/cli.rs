@@ -2639,6 +2639,118 @@ fn test_query_unknown_kind_lists_cost_summary_in_hint() {
     );
 }
 
+// ── karac query monomorphization (phase-7-codegen.md line 97) ───
+
+#[test]
+fn test_query_monomorphization_clean_program_is_empty_envelope() {
+    // Clean fixture has no generic calls — the envelope ships with
+    // zero generics and zero instances. Surface lock: external
+    // tooling pinning to the schema must see the same `by_generic`,
+    // `totals` keys even when empty.
+    let out = karac_bin()
+        .args(["query", "monomorphization", "tests/snapshots/clean.kara"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "expected zero exit on clean program: stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json = stdout.trim();
+    assert!(json.starts_with('{'));
+    assert!(json.contains("\"scope\":\"tests/snapshots/clean.kara\""));
+    assert!(json.contains("\"by_generic\":[]"));
+    assert!(json.contains("\"generic_count\":0"));
+    assert!(json.contains("\"instance_count\":0"));
+}
+
+#[test]
+fn test_query_monomorphization_records_each_distinct_type_arg_tuple() {
+    // Two callers at different types produce two instances under
+    // one generic; the envelope renders both with the expected
+    // shape — `types` list, empty `effects` slot, and a string
+    // `site` (per design.md schema).
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-monomorphization-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("generic.kara");
+    let src = r#"
+fn identity[T](x: T) -> T { x }
+fn main() {
+    let _ = identity(7);
+    let _ = identity(true);
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+
+    let out = karac_bin()
+        .args(["query", "monomorphization", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "expected zero exit; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let json = stdout.trim();
+    assert!(json.contains("\"generic\":\"identity\""));
+    assert!(
+        json.contains("\"instance_count\":2"),
+        "expected instance_count:2 for two distinct type args; got {json}",
+    );
+    // Both type tuples surface, each with the v1-empty `effects`
+    // list and a `site` string in `<file>:<line>:<col>` shape.
+    assert!(
+        json.contains("\"types\":[\"i64\"]"),
+        "expected an i64 instance entry; got {json}",
+    );
+    assert!(
+        json.contains("\"types\":[\"bool\"]"),
+        "expected a bool instance entry; got {json}",
+    );
+    assert!(json.contains("\"effects\":[]"));
+    // Site is a string in design.md schema form, not an object.
+    assert!(
+        json.contains(&format!("\"site\":\"{}:", path.to_str().unwrap())),
+        "expected site rendered as `<file>:<line>:<col>` string; got {json}",
+    );
+    // Totals line up — one generic, two instances overall.
+    assert!(json.contains("\"generic_count\":1"));
+    assert!(json.contains("\"instance_count\":2"));
+}
+
+#[test]
+fn test_query_monomorphization_help_and_kind_routing() {
+    // Help text exposes the new kind so external tooling can
+    // discover it; the unknown-kind hint also lists it.
+    let help = karac_bin().args(["query", "--help"]).output().unwrap();
+    assert!(help.status.success());
+    let help_stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        help_stdout.contains("monomorphization"),
+        "expected `monomorphization` documented in query help; got:\n{help_stdout}",
+    );
+
+    let unknown = karac_bin()
+        .args(["query", "garbage", "tests/snapshots/clean.kara"])
+        .output()
+        .unwrap();
+    assert!(!unknown.status.success());
+    let stderr = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        stderr.contains("monomorphization"),
+        "expected `monomorphization` in unknown-kind hint; got: {stderr}",
+    );
+}
+
 // ── karac fix ──────────────────────────────────────────────────
 
 /// Build a temp `.kara` file with the given source. Returns the path so
