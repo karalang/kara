@@ -248,6 +248,14 @@ impl SymbolTable {
         // `env.args()`, `env.var(name)` — lowercase module, capitalized
         // resource name dispatches at interpreter/codegen layer.
         push(self, "env", SymbolKind::Module);
+
+        // `ptr` is a built-in module hosting the strict-provenance pointer
+        // APIs (`ptr.addr`, `ptr.with_addr`, `ptr.expose`, `ptr.from_exposed`,
+        // …) per `design.md § Pointer Provenance` (v60 item 20). Like
+        // `process` / `env`, the entries are programmatically registered
+        // in `env.functions` rather than living in baked `.kara` source —
+        // function names cannot syntactically contain a `.`.
+        push(self, "ptr", SymbolKind::Module);
     }
 
     pub fn push_scope(&mut self, kind: ScopeKind) -> ScopeId {

@@ -509,6 +509,109 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
 
+        // ── ptr namespace — strict-provenance pointer APIs ──────────────────
+        // Spec: `design.md § Pointer Provenance` (v60 item 20). Seven
+        // module-path functions registered programmatically because Kāra
+        // function identifiers cannot syntactically contain `.` —
+        // sibling pattern to `env.var` / `process.exit` above.
+        //
+        // The pair `addr` / `with_addr` operate without escaping the
+        // pointer's provenance metadata; `expose` / `from_exposed`
+        // explicitly escape it (the codegen lowering in slice 3 will
+        // diverge here — `expose` invalidates noalias, `addr` does not).
+        // `from_exposed` / `from_exposed_mut` carry an unsafe precondition
+        // ("the returned pointer must point at a live object of the right
+        // type"); slice 2 enforces this through the existing
+        // unsafe_op_in_unsafe_fn lint (see `unsafe_lint.rs`).
+        let type_param_t = || Type::TypeParam("T".to_string());
+        let const_ptr_t = || Type::Pointer {
+            is_mut: false,
+            inner: Box::new(type_param_t()),
+        };
+        let mut_ptr_t = || Type::Pointer {
+            is_mut: true,
+            inner: Box::new(type_param_t()),
+        };
+        let usize_ty = || Type::UInt(UIntSize::Usize);
+
+        // ptr.addr[T](p: *const T) -> usize
+        self.env.functions.insert(
+            "ptr.addr".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string())],
+                params: vec![const_ptr_t()],
+                return_type: usize_ty(),
+                where_clause: None,
+            },
+        );
+        // ptr.with_addr[T](p: *const T, addr: usize) -> *const T
+        self.env.functions.insert(
+            "ptr.with_addr".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string()), Some("addr".to_string())],
+                params: vec![const_ptr_t(), usize_ty()],
+                return_type: const_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.with_addr_mut[T](p: *mut T, addr: usize) -> *mut T
+        self.env.functions.insert(
+            "ptr.with_addr_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string()), Some("addr".to_string())],
+                params: vec![mut_ptr_t(), usize_ty()],
+                return_type: mut_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.expose[T](p: *const T) -> usize
+        self.env.functions.insert(
+            "ptr.expose".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string())],
+                params: vec![const_ptr_t()],
+                return_type: usize_ty(),
+                where_clause: None,
+            },
+        );
+        // ptr.expose_mut[T](p: *mut T) -> usize
+        self.env.functions.insert(
+            "ptr.expose_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string())],
+                params: vec![mut_ptr_t()],
+                return_type: usize_ty(),
+                where_clause: None,
+            },
+        );
+        // ptr.from_exposed[T](addr: usize) -> *const T   (unsafe)
+        self.env.functions.insert(
+            "ptr.from_exposed".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("addr".to_string())],
+                params: vec![usize_ty()],
+                return_type: const_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.from_exposed_mut[T](addr: usize) -> *mut T   (unsafe)
+        self.env.functions.insert(
+            "ptr.from_exposed_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("addr".to_string())],
+                params: vec![usize_ty()],
+                return_type: mut_ptr_t(),
+                where_clause: None,
+            },
+        );
+
         // ── Stats namespace ──────────────────────────────────────────────────
         // CR-202 slice 6.3: every Stats method now lives in baked source as
         // `impl Stats { #[compiler_builtin] fn ... }`. See

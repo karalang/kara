@@ -522,6 +522,19 @@ fn build_unsafe_fn_registry(program: &Program) -> UnsafeFnRegistry {
     //   - `Vec.get_unchecked(i)`: skips the runtime bounds check — UB on
     //     out-of-range index. Counterpart to the deferred Slice variant.
     impl_method_unsafe.insert(("Vec".to_string(), "get_unchecked".to_string()));
+
+    // Built-in module-path `unsafe fn` functions. Same seeding rationale
+    // as the `impl_method_unsafe` block above — these have no
+    // user-declared `unsafe fn` to carry the flag. Module-path entries
+    // are stored as dotted strings (`"ptr.from_exposed"`) and matched
+    // against `ExprKind::Path` callees in the walker.
+    //   - `ptr.from_exposed[T](addr)` / `ptr.from_exposed_mut[T](addr)`:
+    //     fabricate a pointer from an arbitrary `usize`. UB if the
+    //     resulting pointer is dereferenced and doesn't point at a live
+    //     object of type `T`. Spec: `design.md § Pointer Provenance`
+    //     (v60 item 20).
+    top_level_unsafe.insert("ptr.from_exposed".to_string());
+    top_level_unsafe.insert("ptr.from_exposed_mut".to_string());
     for item in &program.items {
         match item {
             Item::Function(f) if f.is_unsafe => {
@@ -664,8 +677,20 @@ impl OpWalker<'_> {
             }
             ExprKind::Call { callee, args } => {
                 if !in_unsafe {
-                    if let ExprKind::Identifier(name) = &callee.kind {
-                        if self.registry.top_level_unsafe.contains(name) {
+                    // Two callee shapes hit the same registry: bare
+                    // identifier (`foo(...)`) and module-path
+                    // (`ptr.from_exposed(...)`). The path form joins
+                    // segments with `.` to match the dotted keys seeded
+                    // in `build_unsafe_fn_registry`.
+                    let callee_name: Option<String> = match &callee.kind {
+                        ExprKind::Identifier(name) => Some(name.clone()),
+                        ExprKind::Path { segments, .. } if segments.len() >= 2 => {
+                            Some(segments.join("."))
+                        }
+                        _ => None,
+                    };
+                    if let Some(name) = callee_name {
+                        if self.registry.top_level_unsafe.contains(&name) {
                             self.diags.push(LintDiagnostic {
                                 level: LintLevel::Error,
                                 span: expr.span.clone(),
@@ -690,30 +715,71 @@ impl OpWalker<'_> {
                     self.walk_expr(&a.value, in_unsafe);
                 }
             }
-            ExprKind::MethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
                 if !in_unsafe {
-                    if let Some((recv, m)) = self.method_callee(&expr.span) {
-                        if self
-                            .registry
-                            .impl_method_unsafe
-                            .contains(&(recv.clone(), m.clone()))
-                        {
+                    // Module-path call shape — the parser produces
+                    // `MethodCall { object: Ident("ptr"), method: "from_exposed" }`
+                    // for `ptr.from_exposed(addr)` (the leading identifier
+                    // is a magic module, not a value). Match the dotted
+                    // name against the registry's top-level seed so module
+                    // entries like `ptr.from_exposed` participate. The
+                    // typed `method_callee` path below is for true
+                    // receiver-method calls (`v.get_unchecked(0)`); it
+                    // returns the *receiver's type* — not appropriate
+                    // for module-path dispatch where the syntactic object
+                    // is the module name itself.
+                    let mut fired = false;
+                    if let ExprKind::Identifier(mod_name) = &object.kind {
+                        let dotted = format!("{mod_name}.{method}");
+                        if self.registry.top_level_unsafe.contains(&dotted) {
                             self.diags.push(LintDiagnostic {
                                 level: LintLevel::Error,
                                 span: expr.span.clone(),
                                 message: format!(
-                                    "call to `unsafe fn {recv}.{m}` must be wrapped in an \
+                                    "call to `unsafe fn {dotted}` must be wrapped in an \
                                      `unsafe {{ ... }}` block"
                                 ),
                                 lint_name: "unsafe_op_in_unsafe_fn".to_string(),
                                 help: Some(format!(
                                     "wrap the call in `unsafe {{ ... }}` and add a \
                                      `// Safety: ...` comment above the block explaining why \
-                                     `{recv}.{m}`'s preconditions are satisfied (per the \
+                                     `{dotted}`'s preconditions are satisfied (per the \
                                      `undocumented_unsafe` lint)."
                                 )),
                                 note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
                             });
+                            fired = true;
+                        }
+                    }
+                    if !fired {
+                        if let Some((recv, m)) = self.method_callee(&expr.span) {
+                            if self
+                                .registry
+                                .impl_method_unsafe
+                                .contains(&(recv.clone(), m.clone()))
+                            {
+                                self.diags.push(LintDiagnostic {
+                                    level: LintLevel::Error,
+                                    span: expr.span.clone(),
+                                    message: format!(
+                                        "call to `unsafe fn {recv}.{m}` must be wrapped in an \
+                                         `unsafe {{ ... }}` block"
+                                    ),
+                                    lint_name: "unsafe_op_in_unsafe_fn".to_string(),
+                                    help: Some(format!(
+                                        "wrap the call in `unsafe {{ ... }}` and add a \
+                                         `// Safety: ...` comment above the block explaining why \
+                                         `{recv}.{m}`'s preconditions are satisfied (per the \
+                                         `undocumented_unsafe` lint)."
+                                    )),
+                                    note: Some(UNSAFE_TWO_ROLES_NOTE.to_string()),
+                                });
+                            }
                         }
                     }
                 }

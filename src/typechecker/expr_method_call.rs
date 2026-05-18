@@ -497,6 +497,56 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        // Strict-provenance `ptr` module — `ptr.addr(p)`, `ptr.with_addr(p, a)`,
+        // `ptr.from_exposed(a)`, etc. (design.md § Pointer Provenance, v60
+        // item 20). Routes through the generic-aware dispatch path because
+        // every entry is parameterised over `T`: the bare `infer_method_call`
+        // arms below (the `env` arm) use a non-generic `check_assignable`
+        // loop which would silently accept any argument shape against a
+        // `*const T` slot — `(Type::TypeParam(_), _) => true` in
+        // `types_compatible`. The `check_call_args_with_substitution_full`
+        // path instantiates `T` to a fresh metavar so the outer `*const ?T`
+        // shape unifies properly against the supplied argument's type.
+        //
+        // Skipped when a local binding shadows `ptr` — the prelude module
+        // is registered with `SymbolKind::Module` but local-scope wins
+        // by name resolution, mirroring the spec's prelude-shadow rule.
+        if let ExprKind::Identifier(mod_name) = &object.kind {
+            if mod_name == "ptr" && self.local_scope.lookup("ptr").is_none() {
+                let dotted = format!("ptr.{}", method);
+                if let Some(sig) = self.env.functions.get(&dotted).cloned() {
+                    if args.len() != sig.params.len() {
+                        self.type_error(
+                            format!(
+                                "'{}.{}' expects {} argument(s), found {}",
+                                mod_name,
+                                method,
+                                sig.params.len(),
+                                args.len()
+                            ),
+                            span.clone(),
+                            TypeErrorKind::WrongNumberOfArgs,
+                        );
+                        for arg in args {
+                            self.infer_expr(&arg.value);
+                        }
+                        return sig.return_type;
+                    }
+                    return self.check_call_args_with_substitution_full(
+                        args,
+                        &sig.params,
+                        &sig.return_type,
+                        span,
+                        false,
+                        None,
+                        Some(&sig.generic_params),
+                        sig.where_clause.as_ref(),
+                        span,
+                    );
+                }
+            }
+        }
+
         // Lowercase stdlib module aliases: `env.args()`, `env.var(name)`.
         // These use lowercase module names (design.md § I/O), distinct from
         // the capitalized resource names used by the effect system. Map each

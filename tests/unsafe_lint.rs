@@ -653,6 +653,99 @@ fn test_vec_get_unchecked_inside_unsafe_block_silent() {
     assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
 }
 
+// ── ptr.from_exposed / ptr.from_exposed_mut — line 511 slice 2 ──────
+//
+// Built-in module-path `unsafe fn` entries are seeded in
+// `build_unsafe_fn_registry::top_level_unsafe`. The parser produces a
+// `MethodCall { object: Ident("ptr"), method: "from_exposed" }` for
+// `ptr.from_exposed(addr)` (the leading `ptr` is a magic module rather
+// than a value), so the OpWalker's MethodCall arm checks the dotted
+// name against the registry. The same shape rule covers
+// `ptr.from_exposed_mut`. The safe halves of the `ptr` API
+// (`addr`, `with_addr`, `expose`, …) are NOT seeded, so they must
+// remain silent outside an unsafe block.
+
+#[test]
+fn test_ptr_from_exposed_outside_unsafe_block_errors() {
+    let diags = lint_op("fn caller(a: usize) -> *const i64 { ptr.from_exposed(a) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ptr.from_exposed")
+                && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `ptr.from_exposed`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_from_exposed_mut_outside_unsafe_block_errors() {
+    let diags = lint_op("fn caller(a: usize) -> *mut i64 { ptr.from_exposed_mut(a) } fn main() {}");
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.message.contains("ptr.from_exposed_mut")
+                && d.lint_name == "unsafe_op_in_unsafe_fn"),
+        "expected unsafe-op diagnostic naming `ptr.from_exposed_mut`, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_from_exposed_inside_unsafe_block_silent() {
+    let diags = lint_op(
+        "fn caller(a: usize) -> *const i64 { unsafe { ptr.from_exposed(a) } } fn main() {}",
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|d| !d.message.contains("ptr.from_exposed")),
+        "did not expect a ptr.from_exposed diagnostic, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_from_exposed_mut_inside_unsafe_block_silent() {
+    let diags = lint_op(
+        "fn caller(a: usize) -> *mut i64 { unsafe { ptr.from_exposed_mut(a) } } fn main() {}",
+    );
+    assert!(
+        diags
+            .iter()
+            .all(|d| !d.message.contains("ptr.from_exposed_mut")),
+        "did not expect a ptr.from_exposed_mut diagnostic, got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_addr_safe_silent() {
+    // `ptr.addr` is the safe counterpart — does not require unsafe { }.
+    // Regression pin: the registry must NOT have been seeded too widely.
+    let diags = lint_op("fn caller(p: *const i64) -> usize { ptr.addr(p) } fn main() {}");
+    assert!(
+        diags.iter().all(|d| !d.message.contains("ptr.addr")),
+        "ptr.addr is safe; should not produce an unsafe-op diagnostic. got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_with_addr_safe_silent() {
+    let diags = lint_op(
+        "fn caller(p: *const i64, a: usize) -> *const i64 { ptr.with_addr(p, a) } fn main() {}",
+    );
+    assert!(
+        diags.iter().all(|d| !d.message.contains("ptr.with_addr")),
+        "ptr.with_addr is safe; should not produce an unsafe-op diagnostic. got: {diags:?}"
+    );
+}
+
+#[test]
+fn test_ptr_expose_safe_silent() {
+    let diags = lint_op("fn caller(p: *const i64) -> usize { ptr.expose(p) } fn main() {}");
+    assert!(
+        diags.iter().all(|d| !d.message.contains("ptr.expose")),
+        "ptr.expose is safe; should not produce an unsafe-op diagnostic. got: {diags:?}"
+    );
+}
+
 // ── Slice 4b cross-cutting — CLI fall-through ──────────────────
 
 #[test]

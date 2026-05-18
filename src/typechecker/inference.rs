@@ -687,6 +687,22 @@ pub(super) fn unify_types(
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
         | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions, const_substitutions),
+        // Raw pointers — `*const T` / `*mut T` per design.md § Raw
+        // pointers. Mutability is part of the shape; `*const T` does
+        // *not* unify with `*mut T` (slot constness asymmetry — the
+        // strict-provenance `as`-cast rejections at line 511 slice 1
+        // already steer users to the dedicated `ptr.with_addr` /
+        // `ptr.with_addr_mut` pair when they need to change constness).
+        (
+            Type::Pointer {
+                is_mut: xm,
+                inner: xi,
+            },
+            Type::Pointer {
+                is_mut: ym,
+                inner: yi,
+            },
+        ) if xm == ym => unify_types(xi, yi, substitutions, const_substitutions),
         (
             Type::Array {
                 element: xe,

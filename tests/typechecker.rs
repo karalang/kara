@@ -5227,6 +5227,96 @@ fn provenance_slice1_diagnostic_names_with_addr_and_from_exposed() {
     );
 }
 
+// ── Strict-provenance ptr API surface (line 511 slice 2) ────────────
+
+#[test]
+fn provenance_slice2_addr_returns_usize() {
+    typecheck_ok(
+        "fn caller(p: *const i64) -> usize { ptr.addr(p) } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_with_addr_returns_const_ptr() {
+    typecheck_ok(
+        "fn caller(p: *const i64, a: usize) -> *const i64 { ptr.with_addr(p, a) } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_with_addr_mut_returns_mut_ptr() {
+    typecheck_ok(
+        "fn caller(p: *mut i64, a: usize) -> *mut i64 { ptr.with_addr_mut(p, a) } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_expose_returns_usize() {
+    typecheck_ok(
+        "fn caller(p: *const i64) -> usize { ptr.expose(p) } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_expose_mut_returns_usize() {
+    typecheck_ok(
+        "fn caller(p: *mut i64) -> usize { ptr.expose_mut(p) } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_from_exposed_inside_unsafe_typechecks() {
+    // `from_exposed` is unsafe; the unsafe-block enforcement is a lint
+    // (covered separately). At the typechecker level the return type
+    // must be `*const T` and the call must accept a usize.
+    typecheck_ok(
+        "fn caller(a: usize) -> *const i64 { unsafe { ptr.from_exposed(a) } } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_from_exposed_mut_inside_unsafe_typechecks() {
+    typecheck_ok(
+        "fn caller(a: usize) -> *mut i64 { unsafe { ptr.from_exposed_mut(a) } } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_round_trip_addr_then_with_addr() {
+    // Canonical usage pattern — `with_addr(p, addr(p) | 1)` produces a
+    // tagged pointer that still typechecks as `*const T`. End-to-end
+    // shape pinned here so a regression in generic inference surfaces
+    // through this test.
+    typecheck_ok(
+        "fn tag(p: *const i64) -> *const i64 { \
+             ptr.with_addr(p, ptr.addr(p) | 1) \
+         } \
+         fn main() {}",
+    );
+}
+
+#[test]
+fn provenance_slice2_addr_with_wrong_arg_rejected() {
+    // `ptr.addr` requires a pointer; passing a non-pointer should fail
+    // typechecking. Regression pin — without this test, a
+    // signature-shape change that silently widened the param type
+    // wouldn't surface.
+    let errors = typecheck_errors("fn main() { let _: usize = ptr.addr(42i32); }");
+    assert!(
+        !errors.is_empty(),
+        "expected typecheck failure when passing i32 to ptr.addr; got none. \
+         (Hint: this test runs in synthesis mode, so generic-substitution \
+         must surface the slot-vs-arg mismatch.)"
+    );
+}
+
 // ── @ binding semantics — typechecker coverage ──────────────────────
 
 #[test]

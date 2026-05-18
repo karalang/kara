@@ -1020,6 +1020,21 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         }
         (Type::Ref(a), Type::Ref(b)) => types_compatible(a, b),
         (Type::MutRef(a), Type::MutRef(b)) => types_compatible(a, b),
+        // Raw pointers — sibling to the `Ref`/`MutRef` arms above.
+        // Constness is part of the shape; cross-constness compatibility
+        // is the user's responsibility (the strict-provenance APIs at
+        // line 511 provide `ptr.with_addr` / `ptr.with_addr_mut` for the
+        // explicit conversion path).
+        (
+            Type::Pointer {
+                is_mut: a_mut,
+                inner: a_inner,
+            },
+            Type::Pointer {
+                is_mut: b_mut,
+                inner: b_inner,
+            },
+        ) if a_mut == b_mut => types_compatible(a_inner, b_inner),
         (
             Type::Array {
                 element: a_el,
