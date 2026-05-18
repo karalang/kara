@@ -2030,6 +2030,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 }
                 crate::effectchecker::EffectErrorKind::FfiLintHint => ("L0001", "note"),
                 crate::effectchecker::EffectErrorKind::EffectVariableConflict => ("E0406", "error"),
+                crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
+                    ("E0407", "error")
+                }
             };
             let extra_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);

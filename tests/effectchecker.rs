@@ -5579,3 +5579,279 @@ fn state_struct_layout_includes_inner_block_binding_when_yield_inside() {
     let names: Vec<&str> = layout.fields.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(names, vec!["outer", "inner"]);
 }
+
+// ── #[profile(...)] slice 3 — effect-checker integration ────────
+//
+// For each function carrying a non-empty `profile_compat` list, the
+// effect checker walks the transitive (declared + inferred) effect set
+// after inference settles and emits `E_PROFILE_INCOMPATIBLE_EFFECT`
+// (`EffectErrorKind::ProfileIncompatibleEffect`) for any effect that
+// at least one listed profile forbids. Per-profile forbidden table:
+//   - default: forbids nothing
+//   - embedded: forbids allocates(Heap)
+//   - kernel:   forbids allocates(*), panics, blocks, suspends
+// These tests run against the default build profile so the *attribute*
+// is the only constraint source — the build-profile path is covered
+// by the `test_profile_*` tests above.
+
+fn profile_compat_errors(source: &str) -> Vec<EffectError> {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let result = effectcheck(&parsed.program);
+    result
+        .errors
+        .into_iter()
+        .filter(|e| e.kind == EffectErrorKind::ProfileIncompatibleEffect)
+        .collect()
+}
+
+fn profile_compat_ok(source: &str) {
+    let errors = profile_compat_errors(source);
+    assert!(
+        errors.is_empty(),
+        "Expected no profile-compat errors, got: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice3_default_allows_all_effects_via_attribute() {
+    // The `default` profile imposes no restrictions, so the attribute
+    // is satisfied even when the function clearly allocates.
+    profile_compat_ok(
+        "#[profile(default)]\n\
+         pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+}
+
+#[test]
+fn profile_slice3_embedded_accepts_pure_function() {
+    profile_compat_ok(
+        "#[profile(embedded)]\n\
+         pub fn add(x: i64, y: i64) -> i64 { x + y }",
+    );
+}
+
+#[test]
+fn profile_slice3_embedded_rejects_heap_allocates() {
+    let errors = profile_compat_errors(
+        "#[profile(embedded)]\n\
+         pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    let msg = &errors[0].message;
+    assert!(msg.contains("E_PROFILE_INCOMPATIBLE_EFFECT"));
+    assert!(msg.contains("make_vec"));
+    assert!(msg.contains("embedded"));
+    assert!(msg.contains("allocates(Heap)"));
+}
+
+#[test]
+fn profile_slice3_embedded_allows_non_heap_allocates() {
+    // Embedded only forbids `allocates(Heap)`; user-defined resources
+    // pass.
+    profile_compat_ok(
+        "effect resource Arena;\n\
+         #[profile(embedded)]\n\
+         pub fn arena_alloc() with allocates(Arena) {}",
+    );
+}
+
+#[test]
+fn profile_slice3_kernel_rejects_panics() {
+    let errors = profile_compat_errors(
+        "#[profile(kernel)]\n\
+         pub fn might_fail() with panics { todo() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("kernel"));
+    assert!(errors[0].message.contains("panics"));
+}
+
+#[test]
+fn profile_slice3_kernel_rejects_blocks() {
+    // The `blocks` effect is inferred from a call to an `extern "C"` fn
+    // (the C ABI default trust-not-verify set is `{blocks}`).
+    let errors = profile_compat_errors(
+        "unsafe extern \"C\" { fn sleep(secs: i64) -> i64; }\n\
+         #[profile(kernel)]\n\
+         pub fn waits() with blocks { unsafe { sleep(1) } }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("blocks"));
+}
+
+#[test]
+fn profile_slice3_kernel_rejects_suspends() {
+    // The `suspends` effect is inferred from `Receiver.recv()`, which
+    // the effect checker seeds with `suspends`.
+    let errors = profile_compat_errors(
+        "#[profile(kernel)]\n\
+         pub fn yields(r: Receiver[i64]) -> i64 with suspends { r.recv() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("suspends"));
+}
+
+#[test]
+fn profile_slice3_kernel_rejects_allocates_any_resource() {
+    // Kernel forbids `allocates` regardless of resource — unlike
+    // embedded which only catches `allocates(Heap)`.
+    let errors = profile_compat_errors(
+        "effect resource Arena;\n\
+         #[profile(kernel)]\n\
+         pub fn arena_alloc() with allocates(Arena) {}",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("allocates(Arena)"));
+}
+
+#[test]
+fn profile_slice3_intersection_tightens_one_profile_forbids() {
+    // `#[profile(embedded, kernel)]`: `panics` is forbidden by `kernel`
+    // but not by `embedded`. Only `kernel` shows up in the
+    // "forbidden by" list, but the full declared list still appears in
+    // the diagnostic so the user can see the tightening came from the
+    // intersection.
+    let errors = profile_compat_errors(
+        "#[profile(embedded, kernel)]\n\
+         pub fn might_fail() with panics { todo() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    let msg = &errors[0].message;
+    // Full declared list rendered as the attribute payload.
+    assert!(
+        msg.contains("#[profile(embedded, kernel)]"),
+        "diagnostic should echo declared profile list: {msg}",
+    );
+    // The forbidding profile is named explicitly.
+    assert!(msg.contains("the `kernel` profile"));
+}
+
+#[test]
+fn profile_slice3_intersection_tightens_multiple_profiles_forbid() {
+    // `#[profile(embedded, kernel)]`: `allocates(Heap)` is forbidden by
+    // *both* profiles. The diagnostic switches to the "strictest of"
+    // phrasing and lists every profile that forbids the effect.
+    let errors = profile_compat_errors(
+        "#[profile(embedded, kernel)]\n\
+         pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    let msg = &errors[0].message;
+    assert!(
+        msg.contains("strictest"),
+        "expected 'strictest' phrasing when 2+ profiles forbid: {msg}",
+    );
+    assert!(msg.contains("embedded"));
+    assert!(msg.contains("kernel"));
+}
+
+#[test]
+fn profile_slice3_two_offending_effects_yield_two_errors() {
+    // Both `allocates(Heap)` and `panics` are forbidden by `kernel`;
+    // each effect emits its own diagnostic so the user can address them
+    // independently.
+    let errors = profile_compat_errors(
+        "#[profile(kernel)]\n\
+         pub fn dangerous() -> Vec[i64] with allocates(Heap) panics {\n\
+             todo()\n\
+         }",
+    );
+    assert_eq!(errors.len(), 2, "expected two errors: {errors:?}");
+    let combined: String = errors.iter().map(|e| e.message.as_str()).collect();
+    assert!(combined.contains("allocates(Heap)"));
+    assert!(combined.contains("panics"));
+}
+
+#[test]
+fn profile_slice3_inherent_method_checked() {
+    // Method-key lookup uses `Type.method`, matching the lookup
+    // convention `inferred_effects` exposes. An inherent impl with
+    // `#[profile(embedded)]` and an inferred `allocates(Heap)` should
+    // surface the violation.
+    let errors = profile_compat_errors(
+        "struct Buf { data: Vec[i64] }\n\
+         impl Buf {\n\
+             #[profile(embedded)]\n\
+             pub fn fresh() -> Vec[i64] with allocates(Heap) { Vec.new() }\n\
+         }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("fresh"));
+    assert!(errors[0].message.contains("embedded"));
+}
+
+#[test]
+fn profile_slice3_inferred_effect_drives_check() {
+    // No declared `with allocates(Heap)` — the effect is *inferred*
+    // from the `Vec.new()` call. The profile check must consult the
+    // post-inference set, not just the declared set.
+    let errors = profile_compat_errors(
+        "#[profile(embedded)]\n\
+         fn build() -> Vec[i64] { Vec.new() }",
+    );
+    assert_eq!(errors.len(), 1, "expected exactly one error: {errors:?}");
+    assert!(errors[0].message.contains("allocates(Heap)"));
+}
+
+#[test]
+fn profile_slice3_unknown_profile_skips_check() {
+    // The resolver emits E_UNKNOWN_PROFILE for `yolo`; the effect
+    // checker must not pile a stale profile-compat error on top.
+    let parsed = parse(
+        "#[profile(yolo)]\n\
+         pub fn build() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+    let result = effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ProfileIncompatibleEffect),
+        "did not expect profile-compat errors when a name is unknown; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn profile_slice3_dedupe_within_attr() {
+    // `#[profile(embedded, embedded)]` is one constraint contributor,
+    // not two — only one diagnostic per offending effect.
+    let errors = profile_compat_errors(
+        "#[profile(embedded, embedded)]\n\
+         pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "duplicate profile name should not double-emit: {errors:?}",
+    );
+}
+
+#[test]
+fn profile_slice3_diagnostic_uses_dedicated_error_kind() {
+    let errors = profile_compat_errors(
+        "#[profile(embedded)]\n\
+         pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }",
+    );
+    assert!(matches!(
+        errors[0].kind,
+        EffectErrorKind::ProfileIncompatibleEffect
+    ));
+}
+
+#[test]
+fn profile_slice3_absent_attribute_silent() {
+    // No `#[profile]` attribute → no profile-compat diagnostic, even
+    // when the function clearly allocates.
+    profile_compat_ok("pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }");
+}

@@ -15,6 +15,7 @@ use std::collections::{HashMap, HashSet};
 mod bounds;
 mod extern_ffi;
 mod inference;
+mod profile_compat;
 mod subtyping;
 mod verify;
 mod with_e;
@@ -179,6 +180,12 @@ pub enum EffectErrorKind {
     /// `E` is single-assignment per call: the first `with E` slot binds it; later
     /// slots must match. Two `with _` slots, by contrast, are independent.
     EffectVariableConflict,
+    /// A function with `#[profile(P1, P2, ...)]` declared compatibility
+    /// with a set of profiles, but its transitive (declared + inferred)
+    /// effect set includes an effect that at least one listed profile
+    /// forbids. Emitted by `check_profile_compat` after inference
+    /// settles.
+    ProfileIncompatibleEffect,
 }
 
 impl std::fmt::Display for EffectError {
@@ -575,6 +582,7 @@ impl<'a> EffectChecker<'a> {
         self.verify_trait_default_bodies();
         self.check_call_site_subtyping();
         self.check_with_e_unification();
+        self.check_profile_compat();
 
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();
