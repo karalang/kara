@@ -1199,33 +1199,50 @@ impl<'a> Interpreter<'a> {
     }
 
     fn set_index(&mut self, object: &Expr, index: &Expr, val: Value) {
-        if let ExprKind::Identifier(name) = &object.kind {
-            let idx = self.eval_expr_inner(index);
-            match (self.env.get(name), idx) {
-                (Some(Value::Array(rc)), Value::Int(i)) => {
-                    let mut guard = try_write_or_panic(&rc, name);
-                    let i = i as usize;
-                    if i < guard.len() {
-                        guard[i] = val;
-                    }
-                }
-                (
-                    Some(Value::Slice {
-                        storage,
-                        start,
-                        len,
-                        ..
-                    }),
-                    Value::Int(i),
-                ) => {
-                    let mut guard = try_write_or_panic(&storage, name);
-                    let i = i as usize;
-                    if i < len {
-                        guard[start + i] = val;
-                    }
-                }
-                _ => {}
+        let Value::Int(i) = self.eval_expr_inner(index) else {
+            return;
+        };
+        let i = i as usize;
+
+        // Resolve the target Value. For a bare identifier, look it up
+        // in the environment. For a nested index expression
+        // (`rows[cur]` in `rows[cur][end] = val`), eval the outer
+        // index — `Value::Array(rc)` clones the `Arc<RwLock<Vec<Value>>>`,
+        // so a write through the returned rc IS visible at the original
+        // `rows[cur]` slot. Mirrors codegen's
+        // `compile_nested_vec_vec_index_store` shape: walk through to
+        // the inner container's storage, then mutate at `i`.
+        let target = match &object.kind {
+            ExprKind::Identifier(name) => {
+                let Some(v) = self.env.get(name) else {
+                    return;
+                };
+                (v, name.clone())
             }
+            ExprKind::Index { .. } => (self.eval_expr_inner(object), "<nested>".to_string()),
+            _ => return,
+        };
+        let (target_value, label) = target;
+
+        match target_value {
+            Value::Array(rc) => {
+                let mut guard = try_write_or_panic(&rc, &label);
+                if i < guard.len() {
+                    guard[i] = val;
+                }
+            }
+            Value::Slice {
+                storage,
+                start,
+                len,
+                ..
+            } => {
+                let mut guard = try_write_or_panic(&storage, &label);
+                if i < len {
+                    guard[start + i] = val;
+                }
+            }
+            _ => {}
         }
     }
 

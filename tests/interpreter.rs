@@ -400,6 +400,31 @@ fn test_vec_with_capacity_zero_is_legal() {
 }
 
 #[test]
+fn test_vec_nested_indexed_write_round_trip() {
+    // `rows[r][c] = val` on `Vec[Vec[T]]` — the kata-6 _faster
+    // shape that previously needed a flat-layout workaround.
+    // Pre-fix, the interpreter's set_index silently no-op'd on
+    // non-Identifier targets, and codegen errored "Index
+    // assignment target must be a variable". Both now route
+    // through to the leaf slot.
+    let out = run(r#"
+        fn main() {
+            let mut rows: Vec[Vec[i64]] = Vec.new();
+            let r0: Vec[i64] = Vec.filled(3, 0);
+            let r1: Vec[i64] = Vec.filled(3, 0);
+            rows.push(r0);
+            rows.push(r1);
+            rows[0][1] = 42;
+            rows[1][2] = 99;
+            println(rows[0][0]);
+            println(rows[0][1]);
+            println(rows[1][2]);
+        }
+    "#);
+    assert_eq!(out, "0\n42\n99\n");
+}
+
+#[test]
 fn test_vec_with_capacity_untyped_let_inference_from_push() {
     // `let mut v = Vec.with_capacity(n); v.push(x);` — no annotation
     // on the let; element type is inferred from the downstream push.

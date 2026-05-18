@@ -3950,6 +3950,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_nested_indexed_write_round_trip() {
+        // `rows[r][c] = val` on `Vec[Vec[T]]`. Pre-fix this errored
+        // at codegen with "Index assignment target must be a
+        // variable" (the kata 6 _faster.kara workaround uses a flat
+        // single-buffer layout to avoid this). The new arm in
+        // compile_index_store + compile_nested_vec_vec_index_store
+        // GEPs to the inner Vec aggregate, loads its data ptr, GEPs
+        // by the inner index, and stores.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let r0: Vec[i64] = Vec.filled(3, 0);
+    let r1: Vec[i64] = Vec.filled(3, 0);
+    rows.push(r0);
+    rows.push(r1);
+    rows[0][1] = 42;
+    rows[1][2] = 99;
+    println(rows[0][0]);
+    println(rows[0][1]);
+    println(rows[1][2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0\n42\n99");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_with_capacity_untyped_let_infers_from_push() {
         // No `: Vec[T]` annotation on the let — element type comes
         // from the downstream push via the typechecker arm in

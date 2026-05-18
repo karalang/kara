@@ -460,6 +460,35 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_nested_indexed_write_clean() {
+        // `rows[r][c] = val` on Vec[Vec[T]] — nested-index store path
+        // (codegen `compile_nested_vec_vec_index_store`). The leaf
+        // store overwrites a slot inside `rows.data[r].data` (the
+        // pre-filled inner buffer); scope-exit cleanup walks rows
+        // recursively and frees the inner buffers cleanly. Catches
+        // any aliasing bug where the GEP arithmetic stomps past the
+        // inner Vec aggregate (write goes into `rows.data` itself,
+        // not the inner buffer).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let r0: Vec[i64] = Vec.filled(4, 0);
+    let r1: Vec[i64] = Vec.filled(4, 0);
+    rows.push(r0);
+    rows.push(r1);
+    rows[0][2] = 100;
+    rows[1][3] = 200;
+    println(rows[0][2]);
+    println(rows[1][3]);
+}
+"#,
+            &["100", "200"],
+            "vec_nested_indexed_write_clean",
+        );
+    }
+
+    #[test]
     fn asan_vec_extend_from_slice_nested_index_source_clean() {
         // Source is `rows[r]` on Vec[Vec[T]] — the kata-6 case.
         // The codegen fallback path compiles the Index expression

@@ -15,6 +15,7 @@ use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
+use super::helpers::vec_inner_type_expr;
 use super::state::{AssertedIndexBound, SetOpFilter, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -1000,6 +1001,105 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(())
     }
 
+    /// `outer[oi][ii] = val` for `outer: Vec[Vec[T]]`. The outer indexed
+    /// expression is a Vec[T] aggregate (24-byte `{ptr, len, cap}`) living
+    /// inside `outer.data`; we GEP to its address (not a load — we want
+    /// an L-value), pick up the inner data pointer, GEP into it by
+    /// `ii`, and store. Bounds checks on both indices use the same
+    /// `emit_split_bounds_check` helper as the single-level path.
+    ///
+    /// Without this arm, `compile_index_store` falls through to its
+    /// "Index assignment target must be a variable" error, forcing
+    /// users into flat-layout workarounds (see kata 6
+    /// `bench/row_buffers_faster.kara`'s `rows_flat` trick: it
+    /// computes `cur * len + end` by hand because the natural
+    /// `rows[cur][end]` write didn't compile).
+    pub(super) fn compile_nested_vec_vec_index_store(
+        &mut self,
+        outer_name: &str,
+        outer_index: &Expr,
+        inner_index: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) -> Result<(), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+        let outer_elem_ty = self.vec_elem_type_for_var(outer_name);
+        let outer_vec_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
+            format!("Undefined Vec variable '{}' in nested index store", outer_name)
+        })?;
+
+        // Inner element type comes from the outer binding's stored
+        // TypeExpr — for `rows: Vec[Vec[i64]]`, var_elem_type_exprs
+        // holds `Vec[i64]`, from which we extract `i64`. If the outer
+        // element isn't itself a Vec (e.g., `rows: Vec[i64]`, in which
+        // case `rows[i][j]` is a typecheck error anyway), this returns
+        // an error so compilation surfaces the misuse instead of
+        // producing a wild GEP.
+        let inner_elem_te = self
+            .var_elem_type_exprs
+            .get(outer_name)
+            .and_then(vec_inner_type_expr)
+            .ok_or_else(|| {
+                format!(
+                    "Nested index store: outer variable '{outer_name}' is not a Vec[Vec[T]] — \
+                     element type isn't itself a Vec"
+                )
+            })?;
+        let inner_elem_ty = self.llvm_type_for_type_expr(&inner_elem_te);
+
+        // Outer GEP: outer_data + oi * sizeof(Vec_struct) → pointer
+        // to the inner Vec aggregate.
+        let (outer_lo, outer_hi) =
+            self.index_bounds_already_proven(outer_index, outer_name);
+        let oi = self.compile_expr(outer_index)?.into_int_value();
+        let outer_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, outer_vec_ptr, 0, "nvv.outer.data.pp")
+            .unwrap();
+        let outer_data = self
+            .builder
+            .build_load(ptr_ty, outer_data_pp, "nvv.outer.data")
+            .unwrap()
+            .into_pointer_value();
+        self.emit_split_bounds_check(
+            "nvv.outer",
+            oi,
+            vec_ty,
+            outer_vec_ptr,
+            outer_lo,
+            outer_hi,
+        );
+        let inner_vec_ptr = unsafe {
+            self.builder
+                .build_gep(outer_elem_ty, outer_data, &[oi], "nvv.inner.vec.ptr")
+                .unwrap()
+        };
+
+        // Inner GEP: load the inner Vec's data field, then `data + ii`.
+        // The inner bounds-check reads .len from the inner Vec
+        // aggregate via `emit_split_bounds_check`'s struct_gep on
+        // field 1 (vec_ty layout) — works because the inner aggregate
+        // is laid out exactly like an outer Vec, just embedded.
+        let ii = self.compile_expr(inner_index)?.into_int_value();
+        let inner_data_pp = self
+            .builder
+            .build_struct_gep(vec_ty, inner_vec_ptr, 0, "nvv.inner.data.pp")
+            .unwrap();
+        let inner_data = self
+            .builder
+            .build_load(ptr_ty, inner_data_pp, "nvv.inner.data")
+            .unwrap()
+            .into_pointer_value();
+        self.emit_split_bounds_check("nvv.inner", ii, vec_ty, inner_vec_ptr, false, false);
+        let leaf_ptr = unsafe {
+            self.builder
+                .build_gep(inner_elem_ty, inner_data, &[ii], "nvv.leaf.ptr")
+                .unwrap()
+        };
+        self.builder.build_store(leaf_ptr, val).unwrap();
+        Ok(())
+    }
+
     pub(super) fn compile_slice_index_store(
         &mut self,
         var_name: &str,
@@ -1135,6 +1235,30 @@ impl<'ctx> super::Codegen<'ctx> {
                     .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
                 if !slot_is_array {
                     return self.compile_vec_index_store(name, index, val);
+                }
+            }
+        }
+
+        // Nested indexed assignment: `outer[oi][ii] = val` where outer
+        // is a named Vec[Vec[T]] binding. Dispatched before the
+        // "must be a variable" gate below — without this arm the user
+        // is forced into a flat-layout workaround (see kata 6
+        // bench/row_buffers_faster.kara).
+        if let ExprKind::Index {
+            object: outer,
+            index: outer_idx,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier(outer_name) = &outer.kind {
+                let outer_is_vec_of_vec = self
+                    .var_elem_type_exprs
+                    .get(outer_name.as_str())
+                    .and_then(vec_inner_type_expr)
+                    .is_some();
+                if outer_is_vec_of_vec {
+                    return self.compile_nested_vec_vec_index_store(
+                        outer_name, outer_idx, index, val,
+                    );
                 }
             }
         }
