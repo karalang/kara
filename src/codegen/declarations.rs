@@ -24,12 +24,16 @@ use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout
 /// Body-splitting statement classification used by `emit_state_machine_poll_fns`.
 ///
 /// Slice 8h queued only arg-less void free-fn names per arm; slice 8j
-/// generalises to also cover self-and-identifier-receiver method calls
-/// against `Type.method` LLVM symbols. Each variant carries the minimal
-/// data needed to re-emit the call inside the per-arm body.
+/// added self-and-identifier-receiver method calls; slice 8k extends
+/// the free-fn variant with a recognised-arg list so calls like
+/// `helper(42)` and `helper(x)` (where `x` is a captured local) emit.
+/// Each variant carries the minimal data needed to re-emit the call
+/// inside the per-arm body.
 enum BodySplitStmt {
-    /// Slice 8h: `name()` with no args, callee declared as void.
-    FreeFnCall(String),
+    /// Slice 8h + 8k: `name(args...)` with each arg in a recognised
+    /// shape (slice 8k v1: integer literal or captured-local
+    /// identifier). Callee declared as void.
+    FreeFnCall { name: String, args: Vec<BodyArg> },
     /// Slice 8j: `<receiver>.<method>()` with no args, callee declared
     /// as void. `receiver_field` is the state-struct layout field name
     /// to load (`"self"` for impl methods invoked on self, otherwise
@@ -39,6 +43,27 @@ enum BodySplitStmt {
         receiver_field: String,
         callee_key: String,
     },
+}
+
+/// Slice 8k: per-arg shape recognised by the body-splitting walker.
+///
+/// Each user-source call arg gets classified into one of these shapes,
+/// or the whole call is skipped if any arg falls outside the recognised
+/// set (binary expressions, method-call args, field accesses, etc.). The
+/// per-arm emission compiles each variant into a `BasicMetadataValueEnum`
+/// for the `build_call` invocation.
+enum BodyArg {
+    /// Integer literal — emitted as an `i64` constant in v1, matching the
+    /// state-struct primitive fallback. Wider integer suffixes / signed-
+    /// unsigned distinctions stay on a v1 conservative i64 lowering until
+    /// the typechecker's recorded callee param type starts flowing into
+    /// the body-splitting walker.
+    IntLit(i64),
+    /// Captured-local reference — name resolves to a layout field, and
+    /// the per-arm slot map has the alloca `PointerValue` + element
+    /// `BasicTypeEnum`. Emission performs a `build_load(slot_ty, slot_ptr)`
+    /// to pass by value.
+    Slot(String),
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -288,12 +313,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                     match &expr.kind {
-                        // Slice 8h shape: bare-identifier free-fn call
-                        // with no args.
-                        ExprKind::Call { callee, args } if args.is_empty() => {
+                        // Slice 8h + 8k shape: bare-identifier free-fn
+                        // call with zero-or-more args, each arg in a
+                        // recognised shape (integer literal or
+                        // captured-local identifier reference). Calls
+                        // whose args fall outside the recognised set
+                        // are silently skipped — the walker's coverage
+                        // grows incrementally as arg shapes get
+                        // threaded through.
+                        ExprKind::Call { callee, args } => {
                             if let ExprKind::Identifier(name) = &callee.kind {
-                                per_arm_stmts[cur_arm]
-                                    .push(BodySplitStmt::FreeFnCall(name.clone()));
+                                let body_args: Option<Vec<BodyArg>> = args
+                                    .iter()
+                                    .map(|a| recognize_body_arg(&a.value, &layout_field_names))
+                                    .collect();
+                                if let Some(body_args) = body_args {
+                                    per_arm_stmts[cur_arm].push(BodySplitStmt::FreeFnCall {
+                                        name: name.clone(),
+                                        args: body_args,
+                                    });
+                                }
                             }
                         }
                         // Slice 8j shape: `<recv>.method()` with no
@@ -483,16 +522,54 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(arm_stmts) = per_arm_stmts.get(arm_idx) {
                     for stmt in arm_stmts {
                         match stmt {
-                            BodySplitStmt::FreeFnCall(callee_name) => {
-                                let Some(callee_fn) = self.module.get_function(callee_name) else {
+                            BodySplitStmt::FreeFnCall { name, args } => {
+                                let Some(callee_fn) = self.module.get_function(name) else {
                                     continue;
                                 };
                                 if callee_fn.get_type().get_return_type().is_some() {
                                     continue;
                                 }
+                                // Slice 8k: compile each recognised arg
+                                // into a BasicMetadataValueEnum. Skip
+                                // the whole call if any arg can't be
+                                // materialised (e.g. a slot lookup
+                                // failed despite layout_field_names
+                                // saying otherwise — defensive).
+                                let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
+                                    Vec::with_capacity(args.len());
+                                let mut arg_ok = true;
+                                for arg in args {
+                                    match arg {
+                                        BodyArg::IntLit(v) => {
+                                            let val =
+                                                self.context.i64_type().const_int(*v as u64, true);
+                                            compiled.push(val.into());
+                                        }
+                                        BodyArg::Slot(field_name) => {
+                                            let Some((slot_ty, slot_ptr)) =
+                                                slot_map.get(field_name).copied()
+                                            else {
+                                                arg_ok = false;
+                                                break;
+                                            };
+                                            let loaded = self
+                                                .builder
+                                                .build_load(
+                                                    slot_ty,
+                                                    slot_ptr,
+                                                    &format!("{field_name}.arg"),
+                                                )
+                                                .expect("load arg from reloaded slot");
+                                            compiled.push(loaded.into());
+                                        }
+                                    }
+                                }
+                                if !arg_ok {
+                                    continue;
+                                }
                                 self.builder
-                                    .build_call(callee_fn, &[], "")
-                                    .expect("emit slice-8h void user call");
+                                    .build_call(callee_fn, &compiled, "")
+                                    .expect("emit slice-8h/8k void user call");
                             }
                             BodySplitStmt::MethodCall {
                                 receiver_field,
@@ -1343,4 +1420,20 @@ pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Optio
         }
     }
     None
+}
+
+/// Phase 6 line 26 slice 8k: classify a call arg into the recognised
+/// `BodyArg` set. Returns `None` for any shape outside v1's coverage
+/// (binary ops, method-call args, field accesses, struct literals, etc.) —
+/// the body-splitting walker treats the whole call as ineligible when any
+/// arg returns `None`, mirroring the conservative skip behaviour of slice
+/// 8h's "non-emittable-shape silently dropped" rule.
+fn recognize_body_arg(expr: &Expr, layout_field_names: &HashSet<&str>) -> Option<BodyArg> {
+    match &expr.kind {
+        ExprKind::Integer(n, _) => Some(BodyArg::IntLit(*n)),
+        ExprKind::Identifier(name) if layout_field_names.contains(name.as_str()) => {
+            Some(BodyArg::Slot(name.clone()))
+        }
+        _ => None,
+    }
 }

@@ -15451,6 +15451,113 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8k: args-bearing free-fn body-splitting ─
+    //
+    // Extends slice 8h's free-function body-splitting to accept calls
+    // whose args are recognised shapes (integer literal or captured-
+    // local identifier reference). The per-arm slot map from slice 8j
+    // provides the variable backing store for identifier args.
+
+    #[test]
+    fn test_body_splitting_8k_emits_int_literal_arg_call() {
+        // `fn driver() { take(42); fetch(); }` — `take(42)` runs in
+        // state_0; the literal `42` is materialised as an `i64` const
+        // and passed to `@take` ahead of the tag-store.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver() with sends(Network) receives(Network) {
+                 take(42);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("call void @take(i64 42)"),
+            "take(42) literal arg must lower to `call void @take(i64 42)`:\n{body}"
+        );
+        let call_pos = body.find("call void @take(i64 42)").unwrap();
+        let tag_store_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 must store next tag = 1");
+        assert!(
+            call_pos < tag_store_pos,
+            "take(42) call must precede the tag-store in state_0:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8k_emits_identifier_arg_loaded_from_slot() {
+        // `fn driver(n: i64) { take(n); fetch(); }` — `n` is a captured
+        // layout field, reloaded into `%n.slot` by slice 8a, and the
+        // call's arg loads from the slot before passing to `@take`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(x: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 take(n);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // The load from %n.slot into %n.arg, then the call passing %n.arg.
+        assert!(
+            body.contains("load i64, ptr %n.slot"),
+            "identifier arg must load i64 from slice-8a slot:\n{body}"
+        );
+        assert!(
+            body.contains("call void @take(i64 %n.arg)"),
+            "take(n) must pass the loaded slot value as arg:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8k_emits_multi_arg_mix_of_literal_and_identifier() {
+        // `fn driver(n: i64) { mix(n, 7); fetch(); }` — first arg is a
+        // slot-loaded value, second arg is a literal const, both passed
+        // to `@mix` in source order.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn mix(a: i64, b: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 mix(n, 7);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("call void @mix(i64 %n.arg, i64 7)"),
+            "mix(n, 7) must pass slot-load + literal in order:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8k_skips_unrecognised_arg_shape() {
+        // `fn driver(n: i64) { take(n + 1); fetch(); }` — the binary-op
+        // arg shape is outside the slice-8k recognised set (only
+        // IntLit + captured-local Identifier are recognised), so the
+        // whole call is silently skipped. The poll-fn body therefore
+        // emits no `call void @take` between the reload prologue and
+        // the tag-store.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(x: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 take(n + 1);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            !body.contains("call void @take"),
+            "unrecognised arg shape must skip the whole call:\n{body}"
+        );
+    }
+
     #[test]
     fn test_body_splitting_8j_method_call_passes_reloaded_slot_pointer() {
         // Pins that the receiver argument routes through the slice-8a
