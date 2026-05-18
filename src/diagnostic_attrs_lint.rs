@@ -1,11 +1,12 @@
-//! `malformed_diagnostic_attribute` lint — slice 3 of item 36's
+//! `malformed_diagnostic_attribute` lint — slices 3+4 of item 36's
 //! `#[diagnostic::*]` attribute namespace entry.
 //!
 //! Slice 2 ([`crate::attribute_validator`]) accepts every member of the
-//! `diagnostic::*` namespace silently. Slice 3 wires the actual shape
-//! checks for the first compiler-known member,
-//! `#[diagnostic::on_unimplemented(...)]`, producing
-//! `warning[malformed_diagnostic_attribute]` for:
+//! `diagnostic::*` namespace silently. Slices 3 and 4 wire the actual
+//! shape checks for the two compiler-known members,
+//! `#[diagnostic::on_unimplemented(...)]` (slice 3, trait-only) and
+//! `#[diagnostic::do_not_recommend]` (slice 4, impl-block-only, argument-
+//! less). Both produce `warning[malformed_diagnostic_attribute]` for:
 //!
 //! 1. **Off-target** — the attribute is allowed on `trait` declarations
 //!    only; on a function / struct / enum / impl / type-alias / const /
@@ -37,7 +38,7 @@
 //! known names.
 
 use crate::ast::{
-    Attribute, ExprKind, GenericParams, ImplItem, Item, Program, TraitDef, TraitItem,
+    Attribute, ExprKind, GenericParams, ImplBlock, ImplItem, Item, Program, TraitDef, TraitItem,
 };
 use crate::token::Span;
 
@@ -94,66 +95,87 @@ fn is_on_unimplemented_path(attr: &Attribute) -> bool {
     attr.path.len() == 2 && attr.path[0] == "diagnostic" && attr.path[1] == "on_unimplemented"
 }
 
-/// Walk one top-level item: dispatch trait-decl members (which have a
-/// legal target) and emit off-target warnings for every other item kind
-/// that carries an `on_unimplemented` attribute.
+fn is_do_not_recommend_path(attr: &Attribute) -> bool {
+    attr.path.len() == 2 && attr.path[0] == "diagnostic" && attr.path[1] == "do_not_recommend"
+}
+
+/// Walk one top-level item: dispatch the legal-target paths (trait
+/// declarations for `on_unimplemented`; impl blocks for
+/// `do_not_recommend`) and emit off-target warnings for every other
+/// site that carries one of the slice-3/4 diagnostic attributes.
 fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     match item {
         Item::TraitDef(t) => {
+            // on_unimplemented is legal here; do_not_recommend is not.
             check_trait_on_unimplemented(t, level, diags);
-            // Trait-method declarations cannot legally carry
-            // on_unimplemented (the attribute names a trait, not a
-            // method) — off-target warning per method.
+            emit_off_target_for(&t.attributes, "trait", &["on_unimplemented"], level, diags);
+            // Trait-method declarations cannot legally carry either
+            // attribute — off-target warning per method.
             for ti in &t.items {
                 if let TraitItem::Method(m) = ti {
-                    emit_off_target_for(&m.attributes, "trait method", level, diags);
+                    emit_off_target_for(&m.attributes, "trait method", &[], level, diags);
                 }
             }
         }
-        Item::Function(f) => emit_off_target_for(&f.attributes, "function", level, diags),
+        Item::ImplBlock(i) => {
+            // do_not_recommend is legal here; on_unimplemented is not.
+            check_impl_do_not_recommend(i, level, diags);
+            emit_off_target_for(
+                &i.attributes,
+                "impl block",
+                &["do_not_recommend"],
+                level,
+                diags,
+            );
+            // Impl methods do not accept either attribute — the spec
+            // scopes `do_not_recommend` to impl *blocks* (the whole
+            // impl is suppressed or not), not individual methods.
+            for ii in &i.items {
+                if let ImplItem::Method(m) = ii {
+                    emit_off_target_for(&m.attributes, "impl method", &[], level, diags);
+                }
+            }
+        }
+        Item::Function(f) => emit_off_target_for(&f.attributes, "function", &[], level, diags),
         Item::StructDef(s) => {
-            emit_off_target_for(&s.attributes, "struct", level, diags);
+            emit_off_target_for(&s.attributes, "struct", &[], level, diags);
             for field in &s.fields {
-                emit_off_target_for(&field.attributes, "struct field", level, diags);
+                emit_off_target_for(&field.attributes, "struct field", &[], level, diags);
             }
         }
         Item::EnumDef(e) => {
-            emit_off_target_for(&e.attributes, "enum", level, diags);
+            emit_off_target_for(&e.attributes, "enum", &[], level, diags);
             for v in &e.variants {
-                emit_off_target_for(&v.attributes, "enum variant", level, diags);
+                emit_off_target_for(&v.attributes, "enum variant", &[], level, diags);
             }
         }
-        Item::TraitAlias(t) => emit_off_target_for(&t.attributes, "trait alias", level, diags),
-        Item::MarkerTrait(t) => emit_off_target_for(&t.attributes, "marker trait", level, diags),
-        Item::ImplBlock(i) => {
-            emit_off_target_for(&i.attributes, "impl block", level, diags);
-            for ii in &i.items {
-                if let ImplItem::Method(m) = ii {
-                    emit_off_target_for(&m.attributes, "impl method", level, diags);
-                }
-            }
+        Item::TraitAlias(t) => emit_off_target_for(&t.attributes, "trait alias", &[], level, diags),
+        Item::MarkerTrait(t) => {
+            emit_off_target_for(&t.attributes, "marker trait", &[], level, diags)
         }
-        Item::ConstDecl(c) => emit_off_target_for(&c.attributes, "module const", level, diags),
-        Item::TypeAlias(t) => emit_off_target_for(&t.attributes, "type alias", level, diags),
-        Item::DistinctType(d) => emit_off_target_for(&d.attributes, "distinct type", level, diags),
+        Item::ConstDecl(c) => emit_off_target_for(&c.attributes, "module const", &[], level, diags),
+        Item::TypeAlias(t) => emit_off_target_for(&t.attributes, "type alias", &[], level, diags),
+        Item::DistinctType(d) => {
+            emit_off_target_for(&d.attributes, "distinct type", &[], level, diags)
+        }
         Item::ExternFunction(f) => {
-            emit_off_target_for(&f.attributes, "extern function", level, diags)
+            emit_off_target_for(&f.attributes, "extern function", &[], level, diags)
         }
         Item::ExternBlock(b) => {
-            emit_off_target_for(&b.attributes, "extern block", level, diags);
+            emit_off_target_for(&b.attributes, "extern block", &[], level, diags);
             for it in &b.items {
                 use crate::ast::ExternItem;
                 match it {
                     ExternItem::Function(f) => {
-                        emit_off_target_for(&f.attributes, "extern function", level, diags);
+                        emit_off_target_for(&f.attributes, "extern function", &[], level, diags);
                     }
                     ExternItem::OpaqueType(o) => {
-                        emit_off_target_for(&o.attributes, "extern opaque type", level, diags);
+                        emit_off_target_for(&o.attributes, "extern opaque type", &[], level, diags);
                     }
                 }
             }
         }
-        Item::LayoutDef(l) => emit_off_target_for(&l.attributes, "layout block", level, diags),
+        Item::LayoutDef(l) => emit_off_target_for(&l.attributes, "layout block", &[], level, diags),
         // Effect / use / import / alias / independent decls carry no
         // attributes at the AST level (slice 2's namespace dispatch
         // walks the same set of kinds), so there is no surface for an
@@ -168,23 +190,83 @@ fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
     }
 }
 
+/// Emit off-target warnings for every `#[diagnostic::on_unimplemented]`
+/// or `#[diagnostic::do_not_recommend]` on `attrs` whose member name is
+/// not in `legal_here`. Callers pass `&["on_unimplemented"]` on traits
+/// (so the legal-target on_unimplemented gets validated separately by
+/// [`check_trait_on_unimplemented`] without producing a spurious
+/// off-target warning), `&["do_not_recommend"]` on impl blocks (similar
+/// pairing with [`check_impl_do_not_recommend`]), and `&[]` everywhere
+/// else.
 fn emit_off_target_for(
     attrs: &[Attribute],
     target_kind: &str,
+    legal_here: &[&str],
     level: LintLevel,
     diags: &mut Vec<LintDiagnostic>,
 ) {
     for attr in attrs {
-        if is_on_unimplemented_path(attr) {
+        let member = if is_on_unimplemented_path(attr) {
+            "on_unimplemented"
+        } else if is_do_not_recommend_path(attr) {
+            "do_not_recommend"
+        } else {
+            continue;
+        };
+        if legal_here.contains(&member) {
+            continue;
+        }
+        let only_valid_on = match member {
+            "on_unimplemented" => "`trait` declarations",
+            "do_not_recommend" => "`impl` blocks",
+            _ => unreachable!(),
+        };
+        diags.push(LintDiagnostic {
+            level,
+            span: attr.span.clone(),
+            message: format!(
+                "warning[malformed_diagnostic_attribute]: \
+                 `#[diagnostic::{member}]` is only valid on \
+                 {only_valid_on}; applied here to a {target_kind} \
+                 — attribute ignored"
+            ),
+        });
+    }
+}
+
+/// Run validation on every `#[diagnostic::do_not_recommend]` attached
+/// to an impl block. First-occurrence-wins matches the parser scan's
+/// boolean flag; each subsequent occurrence gets a duplicate warning.
+/// The attribute is spec'd as argument-less; any argument-bearing form
+/// (parens or `= "..."`) emits a separate shape warning.
+fn check_impl_do_not_recommend(i: &ImplBlock, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
+    let mut seen_first = false;
+    for attr in &i.attributes {
+        if !is_do_not_recommend_path(attr) {
+            continue;
+        }
+        if seen_first {
             diags.push(LintDiagnostic {
                 level,
                 span: attr.span.clone(),
-                message: format!(
-                    "warning[malformed_diagnostic_attribute]: \
-                     `#[diagnostic::on_unimplemented]` is only valid on \
-                     `trait` declarations; applied here to a {target_kind} \
-                     — attribute ignored"
-                ),
+                message: "warning[malformed_diagnostic_attribute]: \
+                     duplicate `#[diagnostic::do_not_recommend]` on the same \
+                     impl — only the first attribute is observed; remove the \
+                     duplicates"
+                    .to_string(),
+            });
+            continue;
+        }
+        seen_first = true;
+        if !attr.args.is_empty() || attr.string_value.is_some() {
+            diags.push(LintDiagnostic {
+                level,
+                span: attr.span.clone(),
+                message: "warning[malformed_diagnostic_attribute]: \
+                     `#[diagnostic::do_not_recommend]` takes no arguments — \
+                     drop the parenthesised form and write the bare \
+                     `#[diagnostic::do_not_recommend]`"
+                    .to_string(),
             });
         }
     }

@@ -1,9 +1,11 @@
-//! Slice 3 of item 36's `#[diagnostic::*]` attribute namespace entry —
-//! `malformed_diagnostic_attribute` lint surface tests for
-//! `#[diagnostic::on_unimplemented(...)]`.
+//! Slices 3+4 of item 36's `#[diagnostic::*]` attribute namespace entry
+//! — `malformed_diagnostic_attribute` lint surface tests for both
+//! `#[diagnostic::on_unimplemented(...)]` (trait-only) and
+//! `#[diagnostic::do_not_recommend]` (impl-block-only, argument-less).
 //!
-//! Covers off-target, duplicate, bad-arg-shape, and unknown-placeholder
-//! emission, plus CLI cascade plumbing (`-A` suppresses, `-D` promotes).
+//! Covers off-target, duplicate, bad-arg-shape, and (for on_unimplemented)
+//! unknown-placeholder emission, plus CLI cascade plumbing (`-A`
+//! suppresses, `-D` promotes).
 
 use karac::ast::Program;
 use karac::diagnostic_attrs_lint::{check_diagnostic_attributes, LintDiagnostic, LintLevel};
@@ -296,6 +298,187 @@ fn on_unimpl_lint_cli_deny_promotes_to_error() {
 fn on_unimpl_lint_cli_deny_warnings_promotes_to_error() {
     let cli = CliLintOverrides::with_deny_warnings();
     let prog = parse_program("#[diagnostic::on_unimplemented(message: \"x\")]\nfn f() { }");
+    let diags = check_diagnostic_attributes(&prog, &cli);
+    assert_eq!(diags.len(), 1);
+    assert_eq!(diags[0].level, LintLevel::Error);
+}
+
+// ── #[diagnostic::do_not_recommend] — slice 4 ─────────────────────
+
+// Positive (no warnings)
+
+#[test]
+fn do_not_recommend_lint_positive_on_inherent_impl() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
+}
+
+#[test]
+fn do_not_recommend_lint_positive_on_trait_impl() {
+    let diags = lint(
+        "trait T { fn m(self) -> i64; }\n\
+         struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl T for S { fn m(self) -> i64 { 0 } }",
+    );
+    assert!(diags.is_empty(), "expected no diagnostics, got: {diags:?}");
+}
+
+// Off-target
+
+#[test]
+fn do_not_recommend_lint_off_target_function() {
+    let diags = lint("#[diagnostic::do_not_recommend]\nfn f() { }");
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("function"));
+    assert!(diags[0].message.contains("only valid on `impl` blocks"));
+}
+
+#[test]
+fn do_not_recommend_lint_off_target_struct() {
+    let diags = lint("#[diagnostic::do_not_recommend]\nstruct S { x: i64 }");
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("struct"));
+}
+
+#[test]
+fn do_not_recommend_lint_off_target_trait() {
+    let diags = lint("#[diagnostic::do_not_recommend]\ntrait Foo { }");
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("trait"));
+    assert!(diags[0]
+        .message
+        .contains("`#[diagnostic::do_not_recommend]`"));
+}
+
+#[test]
+fn do_not_recommend_lint_off_target_enum() {
+    let diags = lint("#[diagnostic::do_not_recommend]\nenum E { A, B }");
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("enum"));
+}
+
+#[test]
+fn do_not_recommend_lint_off_target_impl_method() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         impl S {\n\
+         #[diagnostic::do_not_recommend]\n\
+         fn m(self) -> i64 { 0 }\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("impl method"));
+}
+
+#[test]
+fn do_not_recommend_lint_off_target_trait_method() {
+    let diags = lint(
+        "trait T {\n\
+         #[diagnostic::do_not_recommend]\n\
+         fn m(self) -> i64;\n\
+         }",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("trait method"));
+}
+
+// Duplicate
+
+#[test]
+fn do_not_recommend_lint_duplicate_emits_one_per_extra() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend]\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("duplicate"));
+}
+
+// Arg-bearing form
+
+#[test]
+fn do_not_recommend_lint_paren_form_rejected() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend(reason: \"x\")]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("takes no arguments"));
+}
+
+#[test]
+fn do_not_recommend_lint_string_value_form_rejected() {
+    let diags = lint(
+        "struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend = \"x\"]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    assert_eq!(diags.len(), 1);
+    assert!(diags[0].message.contains("takes no arguments"));
+}
+
+// Parser flag plumbing
+
+#[test]
+fn do_not_recommend_lint_sets_ast_flag_on_legal_target() {
+    let prog = parse_program(
+        "struct S { x: i64 }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl S { fn m(self) -> i64 { 0 } }",
+    );
+    let impl_block = prog
+        .items
+        .iter()
+        .find_map(|it| match it {
+            karac::ast::Item::ImplBlock(i) => Some(i),
+            _ => None,
+        })
+        .expect("expected an impl block");
+    assert!(impl_block.do_not_recommend);
+}
+
+#[test]
+fn do_not_recommend_lint_absent_attr_leaves_flag_false() {
+    let prog = parse_program("struct S { x: i64 }\nimpl S { fn m(self) -> i64 { 0 } }");
+    let impl_block = prog
+        .items
+        .iter()
+        .find_map(|it| match it {
+            karac::ast::Item::ImplBlock(i) => Some(i),
+            _ => None,
+        })
+        .expect("expected an impl block");
+    assert!(!impl_block.do_not_recommend);
+}
+
+// CLI cascade
+
+#[test]
+fn do_not_recommend_lint_cli_allow_suppresses() {
+    let cli = CliLintOverrides::with_level(
+        "malformed_diagnostic_attribute",
+        karac::lints::LintLevel::Allow,
+    );
+    let prog = parse_program("#[diagnostic::do_not_recommend]\nfn f() { }");
+    let diags = check_diagnostic_attributes(&prog, &cli);
+    assert!(diags.is_empty());
+}
+
+#[test]
+fn do_not_recommend_lint_cli_deny_promotes_to_error() {
+    let cli = CliLintOverrides::with_level(
+        "malformed_diagnostic_attribute",
+        karac::lints::LintLevel::Deny,
+    );
+    let prog = parse_program("#[diagnostic::do_not_recommend]\nfn f() { }");
     let diags = check_diagnostic_attributes(&prog, &cli);
     assert_eq!(diags.len(), 1);
     assert_eq!(diags[0].level, LintLevel::Error);

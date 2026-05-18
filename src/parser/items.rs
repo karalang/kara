@@ -477,6 +477,25 @@ impl super::Parser {
         None
     }
 
+    /// Scan `attributes` for `#[diagnostic::do_not_recommend]` and
+    /// return `true` if any occurrence is present (slice 4 of item 36).
+    /// The attribute is a pure flag — argument-less per spec; the lint
+    /// pass in [`crate::diagnostic_attrs_lint`] warns when an
+    /// argument-bearing form is observed, when the attribute lands on a
+    /// non-impl item, or when it appears multiple times on one impl.
+    /// The parser scan is intentionally lenient: any presence flips the
+    /// flag, so even a malformed-shape `#[diagnostic::do_not_recommend(x)]`
+    /// still skips the impl from the candidate list (the warning fires
+    /// independently). The spec's "purely diagnostic" framing means
+    /// erring on the side of suppression is the safer default.
+    pub(crate) fn scan_do_not_recommend_attr(&mut self, attributes: &[Attribute]) -> bool {
+        attributes.iter().any(|attr| {
+            attr.path.len() == 2
+                && attr.path[0] == "diagnostic"
+                && attr.path[1] == "do_not_recommend"
+        })
+    }
+
     /// Scan `attributes` for the four lint-level attributes —
     /// `#[allow(...)]`, `#[warn(...)]`, `#[deny(...)]`,
     /// `#[expect(...)]` — and produce one `LintLevelOverride`

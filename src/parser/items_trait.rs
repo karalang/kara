@@ -539,6 +539,7 @@ impl super::Parser {
         self.expect(&Token::RightBrace)?;
 
         let lint_overrides = self.scan_lint_level_attrs(&attributes);
+        let do_not_recommend = self.scan_do_not_recommend_attr(&attributes);
         Some(ImplBlock {
             span: self.span_from(&start),
             attributes,
@@ -548,6 +549,7 @@ impl super::Parser {
             where_clause,
             items,
             lint_overrides,
+            do_not_recommend,
         })
     }
 

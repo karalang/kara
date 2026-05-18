@@ -164,6 +164,7 @@ fn impl_block_inherent(target: &str, methods: Vec<Function>) -> Item {
             .map(|m| ImplItem::Method(Box::new(m)))
             .collect(),
         lint_overrides: Vec::new(),
+        do_not_recommend: false,
     })
 }
 
@@ -184,6 +185,7 @@ fn impl_block_trait(trait_name: &str, target: &str, methods: Vec<Function>) -> I
             .map(|m| ImplItem::Method(Box::new(m)))
             .collect(),
         lint_overrides: Vec::new(),
+        do_not_recommend: false,
     })
 }
 

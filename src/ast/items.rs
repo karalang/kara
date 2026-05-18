@@ -495,6 +495,12 @@ pub struct ImplBlock {
     pub items: Vec<ImplItem>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+    /// `#[diagnostic::do_not_recommend]` flag — slice 4 of item 36. The
+    /// attribute is purely diagnostic: it tells the failed-bound
+    /// diagnostic builder to skip this impl when iterating candidate
+    /// impls for the "trait is implemented by …" note (slice 6). Has
+    /// no effect on coherence, lookup, or trait resolution.
+    pub do_not_recommend: bool,
 }
 
 #[derive(Debug, Clone)]
