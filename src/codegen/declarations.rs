@@ -815,33 +815,41 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .expect("emit slice-8j/8l void method call");
                             }
                             BodySplitStmt::Let { name, rhs } => {
-                                // Slice 8m + 8q: arm-local let binding —
-                                // materialise the RHS via the shared
-                                // helper, alloca an i64 slot (v1
-                                // conservative typing), store, and
-                                // register the binding into slot_map so
-                                // subsequent statements in the SAME arm
-                                // can reference it as a captured-local-
-                                // equivalent receiver or arg. Across
-                                // yields the binding is not preserved
-                                // without state-struct write-back — a
-                                // follow-on slice for the capture-then-
-                                // yield case.
+                                // Slice 8m + 8q + 8s: arm-local let
+                                // binding — materialise the RHS via the
+                                // shared helper, alloca a slot whose
+                                // type matches the materialised value
+                                // (slice 8s: was hardcoded i64 prior;
+                                // now derives from `value.get_type()` so
+                                // `let v = items` where items is a Vec
+                                // captured local alloca's the inline
+                                // `{ptr, i64, i64}` shape, not an 8-byte
+                                // i64 region that would silently store
+                                // 24 bytes of Vec data and produce a
+                                // stack-smashing miscompile). Store the
+                                // value, then register (slot type, slot
+                                // ptr) into slot_map so subsequent
+                                // statements in the SAME arm load the
+                                // right width when the binding is read.
+                                // Across yields the arm-local binding
+                                // is not preserved without state-struct
+                                // write-back — a follow-on slice for
+                                // the capture-then-yield case.
                                 let Some(value) =
                                     self.materialize_body_arg(rhs, &slot_map, ".let_rhs")
                                 else {
                                     continue;
                                 };
-                                let i64_ty = self.context.i64_type();
+                                let slot_ty = value.get_type();
                                 let slot_name = format!("{name}.slot");
                                 let slot = self
                                     .builder
-                                    .build_alloca(i64_ty, &slot_name)
+                                    .build_alloca(slot_ty, &slot_name)
                                     .expect("alloca for arm-local let slot");
                                 self.builder
                                     .build_store(slot, value)
                                     .expect("store let RHS into slot");
-                                slot_map.insert(name.clone(), (i64_ty.into(), slot));
+                                slot_map.insert(name.clone(), (slot_ty, slot));
                             }
                             BodySplitStmt::Assign { name, value } => {
                                 // Slice 8p + 8q: assignment to an

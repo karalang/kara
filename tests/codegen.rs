@@ -16175,6 +16175,195 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8s: typed-aware arm-local let slot lowering ─
+    //
+    // `BodySplitStmt::Let` emission now derives the slot type from the
+    // materialised value (`value.get_type()`) rather than hardcoding i64.
+    // Fixes the latent miscompile where `let v = items` with `items: Vec[i64]`
+    // would alloca an 8-byte i64 slot and store 24 bytes of Vec data into
+    // it. Captured-local slots (slice 8a) already carry their state-struct
+    // field type and are unaffected — slice 8s only touches the arm-local
+    // let emission arm.
+
+    #[test]
+    fn test_body_splitting_8s_let_vec_captured_alloca_uses_inline_vec_type() {
+        // `let v = items` where `items: Vec[i64]` is a captured local —
+        // slice 8s makes the `%v.slot` alloca match the inline Vec layout
+        // `{ ptr, i64, i64 }`, not i64. Same width as the loaded value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) with sends(Network) receives(Network) {
+                 fetch();
+                 let v = items;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // `v.slot` alloca must use the inline Vec shape, not i64.
+        assert!(
+            body.contains("%v.slot = alloca { ptr, i64, i64 }")
+                || body.contains("%v.slot = alloca {ptr, i64, i64}"),
+            "let v = items must alloca a Vec-shaped slot, not i64:\n{body}"
+        );
+        // The store and the .let_rhs load must also be Vec-typed.
+        assert!(
+            body.contains("%items.let_rhs = load { ptr, i64, i64 }, ptr %items.slot")
+                || body.contains("%items.let_rhs = load {ptr, i64, i64}, ptr %items.slot"),
+            "let RHS load must read the inline Vec layout from items.slot:\n{body}"
+        );
+        assert!(
+            body.contains("store { ptr, i64, i64 } %items.let_rhs, ptr %v.slot")
+                || body.contains("store {ptr, i64, i64} %items.let_rhs, ptr %v.slot"),
+            "let RHS store must write the inline Vec layout into v.slot:\n{body}"
+        );
+        // Regression guard: no i64 alloca for `v.slot`.
+        assert!(
+            !body.contains("%v.slot = alloca i64"),
+            "v.slot must NOT be an i64 alloca (slice 8s widening regression):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8s_let_string_captured_alloca_uses_string_type() {
+        // `let s = name` where `name: String` is a captured local —
+        // String is an inline `{ ptr, i64, i64 }` shape (same as Vec).
+        // Slice 8s makes the slot alloca match.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(name: String) with sends(Network) receives(Network) {
+                 fetch();
+                 let s = name;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%s.slot = alloca { ptr, i64, i64 }")
+                || body.contains("%s.slot = alloca {ptr, i64, i64}"),
+            "let s = name must alloca a String-shaped slot:\n{body}"
+        );
+        assert!(
+            !body.contains("%s.slot = alloca i64"),
+            "s.slot must NOT be an i64 alloca:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8s_let_shared_struct_captured_alloca_uses_ptr() {
+        // `let r = h` where `h: Hub` is a captured shared struct —
+        // shared structs collapse to a pointer-sized handle. Slice 8s
+        // makes the slot alloca a `ptr`, not i64.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             shared struct Hub { count: i64 }
+             fn driver(h: Hub) with sends(Network) receives(Network) {
+                 fetch();
+                 let r = h;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%r.slot = alloca ptr"),
+            "let r = h must alloca a ptr slot for shared-struct handle:\n{body}"
+        );
+        assert!(
+            !body.contains("%r.slot = alloca i64"),
+            "r.slot must NOT be an i64 alloca:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8s_let_int_lit_alloca_stays_i64() {
+        // Regression guard: integer-literal RHS still alloca's i64 —
+        // slice 8s is value-driven, and IntLit materialises to i64
+        // const, so the slot type stays i64. Reuses slice 8m's
+        // `let x = 42` shape.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() with sends(Network) receives(Network) {
+                 fetch();
+                 let x = 42;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%x.slot = alloca i64"),
+            "let x = 42 must still alloca an i64 slot (IntLit defaults to i64):\n{body}"
+        );
+        assert!(
+            body.contains("store i64 42, ptr %x.slot"),
+            "let x = 42 must store the i64 literal:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8s_let_integer_binary_alloca_stays_i64() {
+        // Regression guard: `let m = n + 1` where n is i64 —
+        // materialise_body_arg's Binary arm emits an i64 add, so
+        // value.get_type() is i64 and the slot stays i64. Reuses
+        // slice 8q's shape.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 fetch();
+                 let m = n + 1;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%m.slot = alloca i64"),
+            "let m = n + 1 must alloca an i64 slot (binary result is i64):\n{body}"
+        );
+        assert!(
+            body.contains("%binop.let_rhs = add i64 %n.let_rhs, 1"),
+            "binary RHS must materialise as `add i64`:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %binop.let_rhs, ptr %m.slot"),
+            "binary result must store into m.slot as i64:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8s_chained_let_with_vec_propagates_type() {
+        // `let v = items; let w = v;` — the second let consumes the
+        // first's typed slot. Slice 8s must put the Vec type into
+        // slot_map for `v` so that the `let w = v` Slot-load reads the
+        // Vec width, and the `w.slot` alloca matches. Without slice 8s,
+        // v.slot is i64, the load reads 8 bytes of Vec data as i64, and
+        // w.slot alloca's i64 — silent corruption chain.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) with sends(Network) receives(Network) {
+                 fetch();
+                 let v = items;
+                 let w = v;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Both slots Vec-typed.
+        assert!(
+            body.contains("%v.slot = alloca { ptr, i64, i64 }")
+                || body.contains("%v.slot = alloca {ptr, i64, i64}"),
+            "v.slot must be Vec-shaped:\n{body}"
+        );
+        assert!(
+            body.contains("%w.slot = alloca { ptr, i64, i64 }")
+                || body.contains("%w.slot = alloca {ptr, i64, i64}"),
+            "w.slot must propagate the Vec type from v:\n{body}"
+        );
+        // Chained Slot load reads Vec width from v.slot.
+        assert!(
+            body.contains("%v.let_rhs = load { ptr, i64, i64 }, ptr %v.slot")
+                || body.contains("%v.let_rhs = load {ptr, i64, i64}, ptr %v.slot"),
+            "let w = v must load Vec width from v.slot:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
     //
     // The terminal-arm store into the state-struct terminal field now
