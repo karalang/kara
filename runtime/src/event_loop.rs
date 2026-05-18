@@ -831,6 +831,174 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
     0
 }
 
+// ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
+//
+// A background dispatcher thread that drains the background poller's
+// wakeup queue and invokes `(task.poll_fn)(task.state, cancel)` on
+// each wakeup. The `parked` field of each `KaracWakeup` is interpreted
+// as `*const KaracParkedTask` — this is the convention that codegen
+// (when state-machine lowering for network-boundary functions lands —
+// phase-6 line 18) will follow when registering fds with the event
+// loop.
+//
+// **Pairing with the background poller.** The dispatcher is opt-in
+// and requires the background poller to be running. Calling
+// `karac_runtime_scheduler_start_dispatcher` will auto-start the
+// poller if it isn't already running — see the body.
+//
+// **Cancel routing.** v1 ships with a single process-global "never
+// cancelled" `AtomicBool` that the dispatcher passes to each
+// `poll_fn` invocation. Per-par-block cancel routing (so a parked
+// task inside a fail-fast `par {}` observes its block's cancel flag)
+// is later integration work — the FFI surface stays stable because
+// the cancel pointer comes from the task's own state, not from the
+// dispatcher's signature.
+//
+// **Lifetime convention.** The codegen is responsible for keeping the
+// `KaracParkedTask` alive — and its `state` struct alive — from the
+// `register_fd` call until `poll_fn` returns `Ready` or `Err`. The
+// dispatcher does no allocation or freeing of task / state structs;
+// it only invokes `poll_fn` through the type-erased pointers.
+
+/// Internal dispatcher state. Held inside `Arc` so the spawned thread
+/// can share it with the global slot.
+struct SchedulerDispatcher {
+    shutdown: AtomicBool,
+    /// Per-process "never cancelled" flag. v1 placeholder — passed to
+    /// every `poll_fn` invocation. When per-par-block cancel routing
+    /// lands, parked tasks will carry the appropriate per-block flag
+    /// in their `state` struct and `poll_fn` will read it from there
+    /// instead of (or in addition to) this arg.
+    cancel: AtomicBool,
+    /// Counters for test verification + diagnostics. Updated unsynchronized
+    /// (Relaxed) — they only need monotonic-write visibility, not strict
+    /// ordering against other operations.
+    polls: std::sync::atomic::AtomicU64,
+    ready_observations: std::sync::atomic::AtomicU64,
+    err_observations: std::sync::atomic::AtomicU64,
+    pending_observations: std::sync::atomic::AtomicU64,
+    handle: Mutex<Option<thread::JoinHandle<()>>>,
+}
+
+static SCHEDULER_DISPATCHER: Mutex<Option<Arc<SchedulerDispatcher>>> = Mutex::new(None);
+
+fn lock_scheduler_dispatcher_slot(
+) -> std::sync::MutexGuard<'static, Option<Arc<SchedulerDispatcher>>> {
+    SCHEDULER_DISPATCHER
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
+    // Drain wakeups in small batches; a short timeout makes shutdown
+    // responsive without busy-spinning.
+    let mut buf: [KaracWakeup; 16] = unsafe { std::mem::zeroed() };
+    while !disp.shutdown.load(Ordering::Acquire) {
+        // 100ms timeout — bounded enough that shutdown takes effect
+        // within a poll cycle, brief enough that the dispatcher
+        // doesn't wake up needlessly when idle. The background poller
+        // delivers wakeups via the queue's Condvar, so this isn't a
+        // busy-loop.
+        let n = unsafe {
+            karac_runtime_event_loop_take_wakeups(buf.as_mut_ptr(), buf.len(), 100_000_000)
+        };
+        for i in 0..n {
+            // SAFETY: indices 0..n were written by take_wakeups.
+            let w = unsafe { std::ptr::read(buf.as_ptr().add(i)) };
+            if w.parked.is_null() {
+                // Wakeup with no associated parked task — e.g., a
+                // pre-dispatcher-era test that registered with a raw
+                // marker. Skip rather than crash.
+                continue;
+            }
+            // SAFETY: the codegen convention is that `parked` carries
+            // a `*const KaracParkedTask` whose state struct lives
+            // until `poll_fn` returns Ready / Err. The dispatcher
+            // invokes `poll_fn` but never derefs `state` itself.
+            let task = unsafe { &*(w.parked as *const KaracParkedTask) };
+            let result = unsafe { (task.poll_fn)(task.state, &disp.cancel) };
+            disp.polls.fetch_add(1, Ordering::Relaxed);
+            match result {
+                0 => {
+                    disp.pending_observations.fetch_add(1, Ordering::Relaxed);
+                }
+                1 => {
+                    disp.ready_observations.fetch_add(1, Ordering::Relaxed);
+                }
+                2 => {
+                    disp.err_observations.fetch_add(1, Ordering::Relaxed);
+                }
+                _ => {
+                    // Unknown discriminant — treat as Err for
+                    // accounting purposes.
+                    disp.err_observations.fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        }
+    }
+}
+
+/// Start the scheduler dispatcher thread.
+///
+/// Auto-starts the background poller if it isn't already running —
+/// the dispatcher's `take_wakeups` calls would otherwise return 0
+/// forever. Idempotent: a second call while running returns 0
+/// without re-spawning.
+///
+/// Returns 0 on success.
+#[no_mangle]
+pub extern "C" fn karac_runtime_scheduler_start_dispatcher() -> i32 {
+    let mut slot = lock_scheduler_dispatcher_slot();
+    if slot.is_some() {
+        return 0;
+    }
+    // Auto-start the background poller — take_wakeups depends on it.
+    let _ = karac_runtime_event_loop_start_background_thread();
+
+    let disp = Arc::new(SchedulerDispatcher {
+        shutdown: AtomicBool::new(false),
+        cancel: AtomicBool::new(false),
+        polls: std::sync::atomic::AtomicU64::new(0),
+        ready_observations: std::sync::atomic::AtomicU64::new(0),
+        err_observations: std::sync::atomic::AtomicU64::new(0),
+        pending_observations: std::sync::atomic::AtomicU64::new(0),
+        handle: Mutex::new(None),
+    });
+    let disp_for_thread = Arc::clone(&disp);
+    let join = thread::Builder::new()
+        .name("karac-scheduler-dispatcher".to_string())
+        .spawn(move || dispatcher_thread_main(disp_for_thread))
+        .expect("karac_runtime: failed to spawn scheduler dispatcher thread");
+    *disp.handle.lock().unwrap_or_else(|p| p.into_inner()) = Some(join);
+    *slot = Some(disp);
+    0
+}
+
+/// Signal the dispatcher to stop, join the thread, clear the global
+/// slot. Returns 0 on success, -1 if no dispatcher is running.
+///
+/// Does NOT stop the background poller; the poller has its own
+/// shutdown FFI and may be used independently of the dispatcher.
+#[no_mangle]
+pub extern "C" fn karac_runtime_scheduler_shutdown_dispatcher() -> i32 {
+    let disp = {
+        let mut slot = lock_scheduler_dispatcher_slot();
+        match slot.take() {
+            Some(d) => d,
+            None => return -1,
+        }
+    };
+    disp.shutdown.store(true, Ordering::Release);
+    // The dispatcher's `take_wakeups` call has a 100ms timeout, so
+    // shutdown takes effect within one poll cycle without further
+    // signaling. (No need to wake or notify here.)
+    let join = disp.handle.lock().unwrap_or_else(|p| p.into_inner()).take();
+    if let Some(h) = join {
+        let _ = h.join();
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1338,5 +1506,162 @@ mod tests {
             elapsed < Duration::from_millis(100),
             "direct poll should return immediately, took {elapsed:?}"
         );
+    }
+
+    // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ─────────────────
+
+    /// Test-only guard that shuts down the scheduler dispatcher AND
+    /// the background poller on drop. Holds the FFI test lock so
+    /// dispatcher tests serialize against the rest of the FFI tests.
+    struct SchedulerTestGuard {
+        _ffi: std::sync::MutexGuard<'static, ()>,
+    }
+
+    impl Drop for SchedulerTestGuard {
+        fn drop(&mut self) {
+            // Dispatcher first (depends on the poller's queue), then
+            // poller. Both are idempotent on already-stopped state.
+            let _ = karac_runtime_scheduler_shutdown_dispatcher();
+            let _ = karac_runtime_event_loop_shutdown_background_thread();
+        }
+    }
+
+    fn start_scheduler_for_test() -> SchedulerTestGuard {
+        let _ffi = ffi_test_guard();
+        // Ensure clean start.
+        let _ = karac_runtime_scheduler_shutdown_dispatcher();
+        let _ = karac_runtime_event_loop_shutdown_background_thread();
+        let rc = karac_runtime_scheduler_start_dispatcher();
+        assert_eq!(rc, 0, "scheduler dispatcher should start");
+        SchedulerTestGuard { _ffi }
+    }
+
+    /// State for the end-to-end scheduler test. The state machine has
+    /// two states: state 0 registers the listener's fd and returns
+    /// Pending; state 1 sets `completed = true` and returns Ready.
+    /// The initial poll (state 0) is invoked by the test thread; the
+    /// re-poll (state 1) is invoked by the dispatcher.
+    #[cfg(unix)]
+    #[repr(C)]
+    struct SchedulerTestState {
+        tag: u8,
+        listener_fd: i32,
+        token: u64,
+        completed: std::sync::atomic::AtomicBool,
+    }
+
+    #[cfg(unix)]
+    unsafe extern "C" fn scheduler_test_poll_fn(
+        state_ptr: *mut c_void,
+        _cancel: *const std::sync::atomic::AtomicBool,
+    ) -> u8 {
+        // SAFETY: caller passes a valid `*mut SchedulerTestState` that
+        // lives across both invocations. Both sequential, never
+        // concurrent (initial call from test thread returns Pending
+        // before the dispatcher starts polling).
+        let state = unsafe { &mut *(state_ptr as *mut SchedulerTestState) };
+        match state.tag {
+            0 => {
+                // Register the fd; the `parked` pointer points to the
+                // KaracParkedTask wrapping this state — that's the
+                // codegen convention slice 4 implements.
+                let task_ptr = state as *mut SchedulerTestState as *mut c_void;
+                // The actual parked pointer passed to register_fd
+                // points to the KaracParkedTask, not the state. The
+                // caller (test thread) supplies that pointer; we just
+                // store the registration token so we can deregister
+                // on Ready.
+                state.tag = 1;
+                let _ = task_ptr; // silence unused (used by caller via FFI)
+                KaracPollResult::Pending as u8
+            }
+            1 => {
+                // Cleanup: deregister the fd, signal completion.
+                let _ = karac_runtime_event_loop_deregister_fd(state.listener_fd, state.token);
+                state.completed.store(true, Ordering::Release);
+                KaracPollResult::Ready as u8
+            }
+            _ => KaracPollResult::Err as u8,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dispatcher_drives_parked_task_to_completion_on_wakeup() {
+        let _guard = start_scheduler_for_test();
+        use std::os::fd::AsRawFd;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let local = listener.local_addr().unwrap();
+        let listener_fd = listener.as_raw_fd();
+
+        // Build state + parked task. Box pins them so their address
+        // doesn't move while the dispatcher holds the pointer.
+        let mut state = Box::new(SchedulerTestState {
+            tag: 0,
+            listener_fd,
+            token: 0,
+            completed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let task = Box::new(KaracParkedTask {
+            poll_fn: scheduler_test_poll_fn,
+            state: &mut *state as *mut SchedulerTestState as *mut c_void,
+        });
+        let task_ptr = &*task as *const KaracParkedTask as *mut c_void;
+
+        // Register the listener fd with `parked = &task` per the
+        // dispatcher convention.
+        let token = karac_runtime_event_loop_register_fd(listener_fd, 0, task_ptr);
+        assert_ne!(token, 0, "register should succeed");
+        state.token = token;
+
+        // Initial poll (state 0): just bumps tag to 1. (We register
+        // BEFORE this in the test because the hand-rolled state-machine
+        // doesn't have a tag-0 register step in this layout — the test
+        // owns registration. In a real codegen-emitted state machine,
+        // the tag-0 case would do the register itself.)
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let initial = unsafe { (task.poll_fn)(task.state, &cancel) };
+        assert_eq!(initial, KaracPollResult::Pending as u8);
+
+        // Trigger fd readability.
+        let connector = thread::spawn(move || {
+            let _stream = std::net::TcpStream::connect(local).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        });
+
+        // Spin-wait for the dispatcher to drive completion. Bounded
+        // by 2s so a broken dispatcher fails the test instead of
+        // hanging it.
+        let start = Instant::now();
+        while !state.completed.load(Ordering::Acquire) {
+            if start.elapsed() > Duration::from_secs(2) {
+                panic!("dispatcher did not drive task to completion within 2s");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        connector.join().unwrap();
+
+        // Drop order: connector joined → state still pinned → task
+        // still pinned. Now safe to drop in test cleanup.
+        drop(task);
+        drop(state);
+    }
+
+    #[test]
+    fn dispatcher_start_is_idempotent() {
+        let _guard = start_scheduler_for_test();
+        let rc = karac_runtime_scheduler_start_dispatcher();
+        assert_eq!(rc, 0);
+    }
+
+    #[test]
+    fn dispatcher_shutdown_returns_minus_one_when_not_running() {
+        let _guard = ffi_test_guard();
+        let _ = karac_runtime_scheduler_shutdown_dispatcher();
+        let rc = karac_runtime_scheduler_shutdown_dispatcher();
+        assert_eq!(rc, -1);
     }
 }
