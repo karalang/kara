@@ -1025,7 +1025,10 @@ impl<'ctx> super::Codegen<'ctx> {
         let vec_ty = self.vec_struct_type();
         let outer_elem_ty = self.vec_elem_type_for_var(outer_name);
         let outer_vec_ptr = self.get_data_ptr(outer_name).ok_or_else(|| {
-            format!("Undefined Vec variable '{}' in nested index store", outer_name)
+            format!(
+                "Undefined Vec variable '{}' in nested index store",
+                outer_name
+            )
         })?;
 
         // Inner element type comes from the outer binding's stored
@@ -1049,8 +1052,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Outer GEP: outer_data + oi * sizeof(Vec_struct) → pointer
         // to the inner Vec aggregate.
-        let (outer_lo, outer_hi) =
-            self.index_bounds_already_proven(outer_index, outer_name);
+        let (outer_lo, outer_hi) = self.index_bounds_already_proven(outer_index, outer_name);
         let oi = self.compile_expr(outer_index)?.into_int_value();
         let outer_data_pp = self
             .builder
@@ -1061,14 +1063,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(ptr_ty, outer_data_pp, "nvv.outer.data")
             .unwrap()
             .into_pointer_value();
-        self.emit_split_bounds_check(
-            "nvv.outer",
-            oi,
-            vec_ty,
-            outer_vec_ptr,
-            outer_lo,
-            outer_hi,
-        );
+        self.emit_split_bounds_check("nvv.outer", oi, vec_ty, outer_vec_ptr, outer_lo, outer_hi);
         let inner_vec_ptr = unsafe {
             self.builder
                 .build_gep(outer_elem_ty, outer_data, &[oi], "nvv.inner.vec.ptr")
@@ -1256,9 +1251,8 @@ impl<'ctx> super::Codegen<'ctx> {
                     .and_then(vec_inner_type_expr)
                     .is_some();
                 if outer_is_vec_of_vec {
-                    return self.compile_nested_vec_vec_index_store(
-                        outer_name, outer_idx, index, val,
-                    );
+                    return self
+                        .compile_nested_vec_vec_index_store(outer_name, outer_idx, index, val);
                 }
             }
         }

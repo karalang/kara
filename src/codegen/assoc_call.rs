@@ -891,12 +891,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // `Vec.from_slice(src: Slice[T]) -> Vec[T]` — bulk-copy a slice
         // (also accepts Array / Vec via the existing `coerce_to_slice`
         // shape recognition) into a freshly-allocated Vec. One malloc +
-        // one memcpy, vs the `Vec.new() + push-in-loop` shape which
-        // grow-and-reallocs ~log2(n) times. Element type comes from the
-        // source's compile-time element registry, so the arg must be a
-        // named local (slice / vec / array binding); arbitrary expression
-        // args are deferred to a follow-up since we'd need to consult the
-        // typechecker's expr-type table to recover the element type.
+        // one memcpy/clone-loop, vs the `Vec.new() + push-in-loop` shape
+        // which grow-and-reallocs ~log2(n) times. Two source shapes are
+        // supported:
+        //   1. Identifier (`Vec.from_slice(src)`) — element type comes
+        //      from the source binding's `slice_elem_types` /
+        //      `vec_elem_types` registration or its Array slot type.
+        //   2. Nested-Index (`Vec.from_slice(rows[r])`) on
+        //      `Vec[Vec[T]]` — element type comes from the outer
+        //      binding's `var_elem_type_exprs` entry (unwraps one
+        //      Vec layer to get the inner T). Mirrors the same
+        //      fallback shape in `Vec.extend_from_slice` (commit
+        //      9d9c3ce) so kata 6's `rows[r]` usage works uniformly.
+        // Other shapes (Index on Array, MethodCall returning a slice,
+        // etc.) fall through to the existing "could not coerce" error.
         if type_name == "Vec" && method == "from_slice" {
             if args.len() != 1 {
                 return Err(format!(
@@ -905,57 +913,120 @@ impl<'ctx> super::Codegen<'ctx> {
                 ));
             }
             let arg = &args[0].value;
-            let ExprKind::Identifier(src_name) = &arg.kind else {
-                return Err(
-                    "Vec.from_slice: source must currently be a named slice / vec / array variable"
-                        .to_string(),
-                );
-            };
 
-            // Recover element LLVM type from the source's binding.
-            let elem_ty: BasicTypeEnum<'ctx> =
-                if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
-                    t
-                } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
-                    t
-                } else if let Some(slot) = self.variables.get(src_name.as_str()).copied() {
-                    if let BasicTypeEnum::ArrayType(at) = slot.ty {
-                        at.get_element_type()
-                    } else {
-                        return Err(format!(
-                            "Vec.from_slice: source '{}' is not a slice / vec / array",
-                            src_name
-                        ));
+            // Element type recovery — bare Identifier path first, then
+            // nested-Index path for Vec[Vec[T]] sources. Returns
+            // (LLVM elem type, optional elem TypeExpr for the
+            // RC-clone path below, label for diagnostics).
+            let (elem_ty, src_elem_te, src_label): (BasicTypeEnum<'ctx>, Option<TypeExpr>, String) =
+                match &arg.kind {
+                    ExprKind::Identifier(src_name) => {
+                        let t = if let Some(&t) = self.slice_elem_types.get(src_name.as_str()) {
+                            t
+                        } else if let Some(&t) = self.vec_elem_types.get(src_name.as_str()) {
+                            t
+                        } else if let Some(slot) = self.variables.get(src_name.as_str()).copied() {
+                            if let BasicTypeEnum::ArrayType(at) = slot.ty {
+                                at.get_element_type()
+                            } else {
+                                return Err(format!(
+                                    "Vec.from_slice: source '{}' is not a slice / vec / array",
+                                    src_name
+                                ));
+                            }
+                        } else {
+                            return Err(format!(
+                                "Vec.from_slice: source '{}' not found in scope",
+                                src_name
+                            ));
+                        };
+                        let te = self.var_elem_type_exprs.get(src_name.as_str()).cloned();
+                        (t, te, src_name.clone())
                     }
-                } else {
-                    return Err(format!(
-                        "Vec.from_slice: source '{}' not found in scope",
-                        src_name
-                    ));
+                    ExprKind::Index {
+                        object: outer,
+                        index: _,
+                    } => {
+                        let ExprKind::Identifier(outer_name) = &outer.kind else {
+                            return Err(
+                                "Vec.from_slice: nested-index source must root at a named variable"
+                                    .to_string(),
+                            );
+                        };
+                        let inner_te = self
+                            .var_elem_type_exprs
+                            .get(outer_name.as_str())
+                            .and_then(super::helpers::vec_inner_type_expr)
+                            .ok_or_else(|| {
+                                format!(
+                                "Vec.from_slice: nested-index source `{outer_name}[i]` requires \
+                                 outer to be Vec[Vec[T]]"
+                            )
+                            })?;
+                        (
+                            self.llvm_type_for_type_expr(&inner_te),
+                            Some(inner_te),
+                            format!("{outer_name}[i]"),
+                        )
+                    }
+                    _ => {
+                        return Err(
+                            "Vec.from_slice: source must be a named slice / vec / array variable, \
+                         or a nested index expression on a Vec[Vec[T]]"
+                                .to_string(),
+                        );
+                    }
                 };
 
-            // Coerce arg into a slice header `{data, len}` — reuses the same
-            // path-mapping that the rest of codegen uses for slice-typed
-            // params (Array → slice header with stack-pointer + array len,
-            // Vec → slice header with data-ptr + len field, Slice →
-            // passthrough load).
-            let slice_val = self.coerce_to_slice(arg, elem_ty)?.ok_or_else(|| {
-                format!(
-                    "Vec.from_slice: could not coerce '{}' to a slice header",
-                    src_name
-                )
-            })?;
-            let slice_sv = slice_val.into_struct_value();
-            let src_data = self
-                .builder
-                .build_extract_value(slice_sv, 0, "from_slice.src.data")
-                .unwrap()
-                .into_pointer_value();
-            let src_len = self
-                .builder
-                .build_extract_value(slice_sv, 1, "from_slice.src.len")
-                .unwrap()
-                .into_int_value();
+            // Get src {data, len}. Identifier path uses `coerce_to_slice`;
+            // Index path compiles the expression directly to get the
+            // inner Vec aggregate value and extracts its first two
+            // fields (same fallback shape as `extend_from_slice`).
+            let (src_data, src_len) = if matches!(arg.kind, ExprKind::Identifier(_)) {
+                let slice_val = self.coerce_to_slice(arg, elem_ty)?.ok_or_else(|| {
+                    format!(
+                        "Vec.from_slice: could not coerce '{}' to a slice header",
+                        src_label
+                    )
+                })?;
+                let slice_sv = slice_val.into_struct_value();
+                let data = self
+                    .builder
+                    .build_extract_value(slice_sv, 0, "from_slice.src.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(slice_sv, 1, "from_slice.src.len")
+                    .unwrap()
+                    .into_int_value();
+                (data, len)
+            } else {
+                let compiled = self.compile_expr(arg)?;
+                let BasicValueEnum::StructValue(sv) = compiled else {
+                    return Err(format!(
+                        "Vec.from_slice: nested-index source did not produce a struct value (got {compiled:?})"
+                    ));
+                };
+                let n_fields = sv.get_type().count_fields();
+                if n_fields != 2 && n_fields != 3 {
+                    return Err(format!(
+                        "Vec.from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
+                    ));
+                }
+                let data = self
+                    .builder
+                    .build_extract_value(sv, 0, "from_slice.src.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_extract_value(sv, 1, "from_slice.src.len")
+                    .unwrap()
+                    .into_int_value();
+                (data, len)
+            };
+            let _ = src_label; // retained for diagnostic clarity in errors above
 
             let elem_size = elem_ty.size_of().unwrap();
             let alloc_bytes = self
@@ -980,7 +1051,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // pointers — first scope-exit free wins, second
             // double-frees (ASAN-flagged in `tests/memory_sanitizer
             // .rs :: asan_vec_from_slice_string_elements_independent`).
-            let elem_te = self.var_elem_type_exprs.get(src_name).cloned();
+            let elem_te = src_elem_te;
             let trivial = elem_te
                 .as_ref()
                 .map(super::vec_method::is_trivially_copyable_te)

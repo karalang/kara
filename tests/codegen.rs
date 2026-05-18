@@ -4109,6 +4109,36 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_from_slice_nested_index_source() {
+        // Sibling to `extend_from_slice_nested_index_source` —
+        // `Vec.from_slice(rows[r])` where rows is `Vec[Vec[T]]`.
+        // Pre-fix this errored "source must currently be a named
+        // slice / vec / array variable"; the new branch in
+        // assoc_call.rs unwraps the outer Vec via vec_inner_type_expr
+        // for the element type and compiles the Index expression
+        // directly for the {data, len} extraction.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new();
+    r0.push(7);
+    r0.push(8);
+    r0.push(9);
+    rows.push(r0);
+    let copy: Vec[i64] = Vec.from_slice(rows[0]);
+    println(copy.len());
+    println(copy[0]);
+    println(copy[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n7\n9");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_push_back_len_is_empty() {
         // VecDeque codegen v1 surface: `new` + `push_back` + `len` +
         // `is_empty` mirror Vec's `{ptr, len, cap}` layout exactly.

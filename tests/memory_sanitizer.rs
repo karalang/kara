@@ -460,6 +460,33 @@ fn main() {
     }
 
     #[test]
+    fn asan_vec_from_slice_nested_index_source_clean() {
+        // `Vec.from_slice(rows[r])` on Vec[Vec[T]] — symmetric to the
+        // extend_from_slice nested-index test. The new codegen branch
+        // compiles `rows[r]` directly, extracts {data, len}, and
+        // routes through the standard alloc + memcpy/clone path.
+        // Catches RC-aliasing bugs that would surface if the per-
+        // element clone path missed the new entry shape.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new();
+    r0.push(11);
+    r0.push(22);
+    rows.push(r0);
+    let copy: Vec[i64] = Vec.from_slice(rows[0]);
+    println(copy.len());
+    println(copy[0]);
+    println(copy[1]);
+}
+"#,
+            &["2", "11", "22"],
+            "vec_from_slice_nested_index_source_clean",
+        );
+    }
+
+    #[test]
     fn asan_vec_nested_indexed_write_clean() {
         // `rows[r][c] = val` on Vec[Vec[T]] — nested-index store path
         // (codegen `compile_nested_vec_vec_index_store`). The leaf
