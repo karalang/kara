@@ -34,14 +34,17 @@ enum BodySplitStmt {
     /// shape (slice 8k v1: integer literal or captured-local
     /// identifier). Callee declared as void.
     FreeFnCall { name: String, args: Vec<BodyArg> },
-    /// Slice 8j: `<receiver>.<method>()` with no args, callee declared
-    /// as void. `receiver_field` is the state-struct layout field name
-    /// to load (`"self"` for impl methods invoked on self, otherwise
-    /// the source binding name). `callee_key` is the `Type.method`
-    /// symbol name as emitted by the impl-block declaration pass.
+    /// Slice 8j + 8l: `<receiver>.<method>(args...)` with each arg in a
+    /// recognised shape (same `BodyArg` set as `FreeFnCall`). Callee
+    /// declared as void. `receiver_field` is the state-struct layout
+    /// field name to load (`"self"` for impl methods invoked on self,
+    /// otherwise the source binding name). `callee_key` is the
+    /// `Type.method` symbol name as emitted by the impl-block
+    /// declaration pass.
     MethodCall {
         receiver_field: String,
         callee_key: String,
+        args: Vec<BodyArg>,
     },
 }
 
@@ -335,13 +338,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 }
                             }
                         }
-                        // Slice 8j shape: `<recv>.method()` with no
-                        // args. Receiver must resolve to a layout field
-                        // (so slice 8a's reload prologue has already
-                        // alloca'd a slot for it); callee must resolve
-                        // through `method_callee_types` to a stable
-                        // `Type.method` symbol.
-                        ExprKind::MethodCall { object, args, .. } if args.is_empty() => {
+                        // Slice 8j + 8l shape: `<recv>.method(args...)`
+                        // with zero-or-more recognised args. Receiver
+                        // must resolve to a layout field (so slice 8a's
+                        // reload prologue has already alloca'd a slot
+                        // for it); callee must resolve through
+                        // `method_callee_types` to a stable
+                        // `Type.method` symbol; each arg must match the
+                        // slice-8k `BodyArg` recognised set (any
+                        // unrecognised arg → whole call skipped).
+                        ExprKind::MethodCall { object, args, .. } => {
                             let receiver_field = match &object.kind {
                                 ExprKind::SelfValue => Some("self".to_string()),
                                 ExprKind::Identifier(name)
@@ -355,12 +361,17 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .method_callee_types
                                 .get(&(expr.span.offset, expr.span.length))
                                 .cloned();
-                            if let (Some(receiver_field), Some(callee_key)) =
-                                (receiver_field, callee_key)
+                            let body_args: Option<Vec<BodyArg>> = args
+                                .iter()
+                                .map(|a| recognize_body_arg(&a.value, &layout_field_names))
+                                .collect();
+                            if let (Some(receiver_field), Some(callee_key), Some(body_args)) =
+                                (receiver_field, callee_key, body_args)
                             {
                                 per_arm_stmts[cur_arm].push(BodySplitStmt::MethodCall {
                                     receiver_field,
                                     callee_key,
+                                    args: body_args,
                                 });
                             }
                         }
@@ -574,6 +585,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             BodySplitStmt::MethodCall {
                                 receiver_field,
                                 callee_key,
+                                args,
                             } => {
                                 let Some(callee_fn) = self.module.get_function(callee_key) else {
                                     continue;
@@ -612,9 +624,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .expect("load receiver from reloaded slot");
                                     loaded.into()
                                 };
+                                // Slice 8l: compile method args via the
+                                // same slice-8k `BodyArg` discipline as
+                                // free-fn calls. The receiver claims
+                                // arg position 0; method args follow at
+                                // 1..=N matching the source order.
+                                let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
+                                    Vec::with_capacity(args.len() + 1);
+                                compiled.push(recv_arg);
+                                let mut arg_ok = true;
+                                for arg in args {
+                                    match arg {
+                                        BodyArg::IntLit(v) => {
+                                            let val =
+                                                self.context.i64_type().const_int(*v as u64, true);
+                                            compiled.push(val.into());
+                                        }
+                                        BodyArg::Slot(field_name) => {
+                                            let Some((arg_slot_ty, arg_slot_ptr)) =
+                                                slot_map.get(field_name).copied()
+                                            else {
+                                                arg_ok = false;
+                                                break;
+                                            };
+                                            let loaded = self
+                                                .builder
+                                                .build_load(
+                                                    arg_slot_ty,
+                                                    arg_slot_ptr,
+                                                    &format!("{field_name}.marg"),
+                                                )
+                                                .expect("load method arg from reloaded slot");
+                                            compiled.push(loaded.into());
+                                        }
+                                    }
+                                }
+                                if !arg_ok {
+                                    continue;
+                                }
                                 self.builder
-                                    .build_call(callee_fn, &[recv_arg], "")
-                                    .expect("emit slice-8j void method call");
+                                    .build_call(callee_fn, &compiled, "")
+                                    .expect("emit slice-8j/8l void method call");
                             }
                         }
                     }

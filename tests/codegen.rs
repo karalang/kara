@@ -15458,6 +15458,109 @@ fn main() {
     // local identifier reference). The per-arm slot map from slice 8j
     // provides the variable backing store for identifier args.
 
+    // ── Phase 6 line 26 slice 8l: args-bearing method-call body-splitting ─
+    //
+    // Mirrors slice 8k's free-fn arg compilation for `MethodCall` shapes:
+    // method args go through the same `BodyArg` recognition (literal int
+    // or captured-local identifier) and the same per-arm slot map. The
+    // receiver claims call position 0; args follow at 1..=N.
+
+    #[test]
+    fn test_body_splitting_8l_emits_method_with_int_literal_arg() {
+        // `fn driver() { let h = Hub { count: 0 }; h.take(42); fetch(); }`
+        // — `h.take(42)` lowers to `call void @Hub.take(ptr %h.slot, i64 42)`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn take(ref self, n: i64) {} }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.take(42);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("call void @Hub.take(ptr %h.slot, i64 42)"),
+            "h.take(42) must pass receiver + literal arg in order:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8l_emits_method_with_identifier_arg_from_slot() {
+        // `fn driver(n: i64) { let h = Hub { count: 0 }; h.take(n); fetch(); }`
+        // — `n` is a captured layout field, loaded from `%n.slot` and
+        // passed as the second arg to the method.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn take(ref self, x: i64) {} }
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.take(n);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Load of n from its slot; call passes the loaded value.
+        assert!(
+            body.contains("load i64, ptr %n.slot"),
+            "method-call arg must load i64 from slice-8a slot:\n{body}"
+        );
+        assert!(
+            body.contains("call void @Hub.take(ptr %h.slot, i64 %n.marg)"),
+            "h.take(n) must pass receiver + slot-loaded arg:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8l_emits_method_with_multi_arg_mix() {
+        // `fn driver(n: i64) { let h = Hub { count: 0 }; h.mix(n, 7); fetch(); }`
+        // — receiver + slot-loaded + literal in source order.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn mix(ref self, a: i64, b: i64) {} }
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.mix(n, 7);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("call void @Hub.mix(ptr %h.slot, i64 %n.marg, i64 7)"),
+            "h.mix(n, 7) must order receiver + slot + literal:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8l_skips_method_with_unrecognised_arg() {
+        // `fn driver(n: i64) { let h = Hub { count: 0 }; h.take(n + 1); fetch(); }`
+        // — the binary-op arg shape is outside the recognised set, so
+        // the whole method call is silently skipped at body-splitting
+        // time. No `call void @Hub.take` appears in the poll-fn body.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn take(ref self, x: i64) {} }
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.take(n + 1);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            !body.contains("call void @Hub.take"),
+            "unrecognised method-call arg must skip the whole call:\n{body}"
+        );
+    }
+
     #[test]
     fn test_body_splitting_8k_emits_int_literal_arg_call() {
         // `fn driver() { take(42); fetch(); }` — `take(42)` runs in
