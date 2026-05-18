@@ -400,6 +400,29 @@ fn test_vec_with_capacity_zero_is_legal() {
 }
 
 #[test]
+fn test_vec_with_capacity_untyped_let_inference_from_push() {
+    // `let mut v = Vec.with_capacity(n); v.push(x);` — no annotation
+    // on the let; element type is inferred from the downstream push.
+    // Mirrors `let mut v = Vec.new(); v.push(x);`. Without the
+    // typechecker arm in expr_call.rs, the call returned
+    // Type::Error, the binding's inner-type table stayed empty, and
+    // codegen errored "element type unknown — requires `let v:
+    // Vec[T] = ...` annotation".
+    let out = run(r#"
+        fn main() {
+            let mut v = Vec.with_capacity(5);
+            v.push(10);
+            v.push(20);
+            v.push(30);
+            println(v.len());
+            println(v[0]);
+            println(v[2]);
+        }
+    "#);
+    assert_eq!(out, "3\n10\n30\n");
+}
+
+#[test]
 fn test_vec_with_capacity_negative_runtime_error() {
     // Mirrors `Vec.filled`'s negative-length guard. Kāra has no
     // usize, so the typechecker accepts `i64` and the runtime

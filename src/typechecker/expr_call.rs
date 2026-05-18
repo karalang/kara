@@ -13,7 +13,7 @@ use crate::ast::*;
 use crate::token::Span;
 
 use super::inference::{expr_as_type_expr, is_literal_const_arg_expr};
-use super::types::{type_display, Type, UIntSize};
+use super::types::{type_display, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -342,6 +342,39 @@ impl<'a> super::TypeChecker<'a> {
                     _ => None,
                 };
                 if let Some(ty) = result_ty {
+                    self.record_expr_type(span, &ty);
+                    return ty;
+                }
+            }
+        }
+
+        // `Vec.with_capacity(n)` — pairs with the `Vec.new()` arm above.
+        // Same fresh-typevar return so an untyped `let mut v =
+        // Vec.with_capacity(8); v.push(x);` can pin `?T` from the
+        // downstream push, and codegen's let-statement
+        // `pattern_binding_inner_types` lookup populates `vec_elem_types[v]`
+        // — which `pending_let_elem_type` then threads into the
+        // `Vec.with_capacity` codegen arm. Without this typechecker arm,
+        // the call falls through to the bottom of `infer_call` and
+        // returns `Type::Error`, the binding's inner-type table stays
+        // empty, codegen sees no pending element type, and errors with
+        // "element type unknown — requires a `let v: Vec[T] = ...`
+        // annotation". Mirrors `Vec.new`'s shape but checks the
+        // capacity arg's type while we're here.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "with_capacity" && args.len() == 1 {
+                let collection = segments[0].as_str();
+                if collection == "Vec" || collection == "VecDeque" {
+                    let cap_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(
+                        &Type::Int(IntSize::I64),
+                        &cap_ty,
+                        args[0].value.span.clone(),
+                    );
+                    let ty = Type::Named {
+                        name: collection.to_string(),
+                        args: vec![self.env.fresh_type_var()],
+                    };
                     self.record_expr_type(span, &ty);
                     return ty;
                 }

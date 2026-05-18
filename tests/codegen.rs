@@ -3910,6 +3910,31 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_with_capacity_untyped_let_infers_from_push() {
+        // No `: Vec[T]` annotation on the let — element type comes
+        // from the downstream push via the typechecker arm in
+        // expr_call.rs that returns `Vec[?T]` for
+        // `Vec.with_capacity(n)`. Pre-fix this errored at codegen
+        // with "element type unknown".
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v = Vec.with_capacity(5);
+    v.push(7);
+    v.push(11);
+    v.push(13);
+    println(v.len());
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n7\n13");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_with_capacity_exceeds_grows_correctly() {
         // Push N+1 elements into a `with_capacity(N)` Vec — the
         // (N+1)-th push must trigger a grow and the final state
