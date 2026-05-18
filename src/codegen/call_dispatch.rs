@@ -199,6 +199,97 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_closure_call(&name, args);
         }
 
+        // Phase 6 line 26 slice 8d: network-boundary callee intercept.
+        // When the callee is a network-boundary function (one with a
+        // state-struct constructor + poll-fn emitted by slices 6 / 8c),
+        // replace the direct `call @<name>(args)` with the state-machine
+        // invocation shape:
+        //
+        //   %state  = call ptr @__kara_state_new_<name>()
+        //   br label %kara.poll_loop_<n>
+        // kara.poll_loop_<n>:
+        //   %result = call i8 @__kara_poll_<name>(ptr %state, ptr null)
+        //   %pending = icmp eq i8 %result, 0
+        //   br i1 %pending, label %kara.poll_loop_<n>, label %kara.poll_done_<n>
+        // kara.poll_done_<n>:
+        //   call void @free(ptr %state)
+        //   ; subsequent IR continues here
+        //
+        // The synchronous spin-loop is a v1 placeholder — slice 8e+
+        // replaces the busy-loop with a yield to the line-17 runtime
+        // scheduler dispatcher, so a Pending observation parks the
+        // parent task until the event loop signals readiness. Args are
+        // silently dropped at this slice (v1 user-program callers
+        // overwhelmingly use no-arg shapes for network-boundary fns —
+        // `driver()`, `fetch()`, …); a follow-on slice threads args
+        // through the state-struct's captured-local fields at
+        // constructor invocation time. Return value is `i64 0` — the
+        // user-level return type for v1 network-boundary fns is unit;
+        // when callees gain non-unit returns, the value lives in the
+        // state struct's terminal field and is loaded after the loop.
+        if let Some(ctor_fn) = self.state_machine_state_constructors.get(&name).copied() {
+            let poll_fn = self
+                .state_machine_poll_fns
+                .get(&name)
+                .copied()
+                .expect("poll-fn co-emitted with state-machine constructor");
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i8_ty = self.context.i8_type();
+            let cur_fn = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+                .expect("compile_call inside a function context");
+            // Allocate the state struct via the constructor helper.
+            let state_call = self
+                .builder
+                .build_call(ctor_fn, &[], "kara.state")
+                .expect("call state-struct constructor");
+            let state_ptr = state_call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            // Branch into the poll loop.
+            let loop_bb = self.context.append_basic_block(cur_fn, "kara.poll_loop");
+            let done_bb = self.context.append_basic_block(cur_fn, "kara.poll_done");
+            self.builder
+                .build_unconditional_branch(loop_bb)
+                .expect("br to poll loop");
+            // Loop body: invoke poll-fn, check discriminant.
+            self.builder.position_at_end(loop_bb);
+            let null_cancel = ptr_ty.const_null();
+            let poll_call = self
+                .builder
+                .build_call(
+                    poll_fn,
+                    &[state_ptr.into(), null_cancel.into()],
+                    "kara.poll_result",
+                )
+                .expect("call poll-fn");
+            let poll_result = poll_call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_pending = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    poll_result,
+                    i8_ty.const_int(0, false),
+                    "kara.is_pending",
+                )
+                .expect("icmp eq i8 result, 0");
+            self.builder
+                .build_conditional_branch(is_pending, loop_bb, done_bb)
+                .expect("br on poll discriminant");
+            // Done: release the state struct, position for downstream IR.
+            self.builder.position_at_end(done_bb);
+            self.builder
+                .build_call(self.free_fn, &[state_ptr.into()], "")
+                .expect("call free on state struct");
+            return Ok(self.context.i64_type().const_int(0, false).into());
+        }
+
         let func = match self.module.get_function(&name) {
             Some(f) => f,
             None => {

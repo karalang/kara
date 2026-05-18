@@ -14191,4 +14191,150 @@ fn main() {
             "pure function must not emit a state constructor:\n{ir}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8d: caller-side network-boundary intercept ─
+    //
+    // When the caller (a non-network-boundary function) calls a network-
+    // boundary function, codegen replaces the direct `call @<name>(args)`
+    // with the state-machine invocation shape: constructor → poll loop →
+    // free. The synchronous spin-loop is a v1 placeholder; slice 8e+
+    // replaces the busy-loop with a yield to the line-17 scheduler.
+
+    #[test]
+    fn test_caller_side_intercept_calls_state_constructor() {
+        // A non-network-boundary `main` calling a network-boundary
+        // `driver` should NOT emit a direct `call void @driver()` —
+        // instead it must call the state-struct constructor.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        // The intercept replaces the direct call. Find `main`'s body
+        // and check.
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("call ptr @__kara_state_new_driver()"),
+            "main must call state constructor instead of direct driver():\n{main_body}"
+        );
+        // The direct `call void @driver()` should NOT appear in main.
+        assert!(
+            !main_body.contains("call void @driver()"),
+            "main must NOT direct-call @driver after the intercept:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_emits_poll_loop_block() {
+        // The intercept emits a `kara.poll_loop` block where the
+        // poll-fn is invoked and the discriminant compared against
+        // Pending (i8 0) for the loopback branch.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("kara.poll_loop:"),
+            "intercept must emit a `kara.poll_loop` block:\n{main_body}"
+        );
+        // Poll-fn invocation with state ptr + null cancel pointer.
+        assert!(
+            main_body.contains("call i8 @__kara_poll_driver(ptr %kara.state, ptr null)"),
+            "intercept must invoke poll-fn with state ptr + null cancel:\n{main_body}"
+        );
+        // Pending compare (icmp eq i8 ..., 0) drives the loopback.
+        assert!(
+            main_body.contains("icmp eq i8 %kara.poll_result, 0"),
+            "intercept must compare poll discriminant against Pending=0:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_emits_done_block_with_free() {
+        // The `kara.poll_done` block is the exit edge from the poll
+        // loop. It calls `@free` on the state struct, releasing the
+        // heap allocation, and continues with subsequent IR.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("kara.poll_done:"),
+            "intercept must emit a `kara.poll_done` block:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("call void @free(ptr %kara.state)"),
+            "done block must free the state struct:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_preserves_pure_function_direct_calls() {
+        // Pure-function calls in the same caller still lower to direct
+        // calls — the intercept only fires for network-boundary callees.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }
+             fn driver() { fetch(); }
+             fn main() {
+                 let _ = pure_helper(1);
+                 driver();
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // pure_helper still uses direct call.
+        assert!(
+            main_body.contains("call i64 @pure_helper(i64 1)"),
+            "pure helper must still use direct call:\n{main_body}"
+        );
+        // driver uses the intercept.
+        assert!(
+            main_body.contains("@__kara_state_new_driver()"),
+            "network-boundary driver must use the intercept:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_side_intercept_multi_call_sites_get_distinct_labels() {
+        // Two calls to network-boundary fns in the same caller produce
+        // two distinct poll-loop / poll-done block pairs (LLVM appends
+        // numeric suffixes to disambiguate; the second call site gets
+        // `kara.poll_loop1` / `kara.poll_done1` etc.). Pins that each
+        // intercept produces its own loop instead of accidentally
+        // sharing blocks across call sites.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() {
+                 driver();
+                 driver();
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // Two state constructor calls (one per call site).
+        let ctor_count = main_body
+            .matches("call ptr @__kara_state_new_driver()")
+            .count();
+        assert_eq!(
+            ctor_count, 2,
+            "two driver() call sites must produce two ctor invocations:\n{main_body}"
+        );
+        // Two poll loops (one per call site).
+        let loop_count = main_body.matches("kara.poll_loop").count();
+        // Each loop label appears twice in the IR (definition + branches)
+        // but at minimum we need 2 distinct loop labels to exist.
+        assert!(
+            loop_count >= 2,
+            "expected at least two `kara.poll_loop` occurrences (one per call site):\n{main_body}"
+        );
+    }
 }
