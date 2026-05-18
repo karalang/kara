@@ -1125,8 +1125,9 @@ fn step6_closure_created_inside_par_still_promotes_capture() {
 // `inside_parallel_region` when traversing into a `Sender.send(...)`
 // argument expression. Captures of any RC-marked closure passed
 // through the channel get promoted to Arc by the same machinery that
-// handles `par { h(); }`. The `spawn(closure)` boundary stays
-// deferred to Phase 6.3 / v1.1 user syntax.
+// handles `par { h(); }`. The `spawn(closure)` boundary lands as a
+// sibling slice — see the `Phase 2 boundary: spawn(closure)`
+// section below.
 
 #[test]
 fn phase2_send_closure_promotes_capture_to_arc() {
@@ -1325,6 +1326,191 @@ fn phase2_send_non_sender_method_does_not_promote() {
     assert!(
         !result.arc_values.contains_key("make_handler"),
         "expected no Arc promotion for non-Sender .send(); got arc={:?}",
+        result.arc_values.get("make_handler")
+    );
+}
+
+// ── Phase 2 boundary: spawn(closure) ────────────────────────────
+//
+// Closes phase-7-codegen.md line 63 (2026-05-18). When `spawn(...)`
+// is the callee, the closure argument's live range extends into the
+// spawned task — every RC-marked capture must be promoted from Rc
+// to Arc. The Call-arm helper `is_spawn_callee` flips
+// `inside_parallel_region` for the args subtree, mirroring the
+// `tx.send(...)` shape. Recognized callee shapes: bare identifier
+// `spawn` and single-segment path `spawn`.
+
+#[test]
+fn phase2_spawn_closure_promotes_capture_to_arc() {
+    // Positive base case: closure h captures cfg (RC-marked from
+    // trigger 2 — capture + outer use), then the closure binding
+    // flows through `spawn(h)`. The walker propagates the capture
+    // promotion via the round-12.34 closure_bindings table — same
+    // path as `tx.send(h)` and `par { h(); }`. The `fn spawn`
+    // stub stands in for the v1.1 prelude entry; the walker
+    // recognizes the name regardless of resolution target.
+    let src = "struct Config { name: i64 }\n\
+               fn spawn(c: Fn() -> ()) { }\n\
+               fn apply(c: Config) { }\n\
+               fn log(c: Config) { }\n\
+               fn make_handler(cfg: Config) {\n\
+                   let h = || apply(cfg);\n\
+                   log(cfg);\n\
+                   spawn(h);\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    let entry = rc_entry(&result, "make_handler", "cfg");
+    assert_eq!(entry.trigger, RcTrigger::ClosureCaptureWithOuterUse);
+    let arc = result
+        .arc_values
+        .get("make_handler")
+        .expect("expected an Arc set for make_handler");
+    assert!(
+        arc.contains("cfg"),
+        "expected 'cfg' to be Arc-promoted via spawn(h); got arc={:?}",
+        arc,
+    );
+}
+
+#[test]
+fn phase2_spawn_inline_closure_invoking_let_bound_promotes_capture() {
+    // Inline-closure form that wraps a let-bound closure call:
+    // `spawn(|| h())`. The walker descends into the inline closure
+    // body under `inside_parallel_region=true`, sees Identifier(h),
+    // and follows the round-12.34 closure_bindings lookup to
+    // promote each capture of h (cfg) — exercising both the
+    // Closure-descent and closure_bindings paths in one shape.
+    // This is the load-bearing case for spawn() at v1.1 when
+    // wrappers around let-bound work items are the common pattern.
+    let src = "struct Config { name: i64 }\n\
+               fn spawn(c: Fn() -> ()) { }\n\
+               fn apply(c: Config) { }\n\
+               fn log(c: Config) { }\n\
+               fn make_handler(cfg: Config) {\n\
+                   let h = || apply(cfg);\n\
+                   log(cfg);\n\
+                   spawn(|| h());\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    rc_entry(&result, "make_handler", "cfg");
+    let arc = result
+        .arc_values
+        .get("make_handler")
+        .expect("expected an Arc set for make_handler");
+    assert!(
+        arc.contains("cfg"),
+        "expected 'cfg' to be Arc-promoted via spawn(|| h()) — closure_bindings path through inline wrapper; got arc={:?}",
+        arc,
+    );
+}
+
+#[test]
+fn phase2_no_par_no_send_no_spawn_keeps_rc() {
+    // Negative control: closure h captures cfg (RC-marked) but is
+    // only invoked locally — no par, no send, no spawn. cfg stays
+    // at Rc. Pins that the spawn boundary fires only at the
+    // spawn-call site, not for arbitrary closure invocation.
+    let src = "struct Config { name: i64 }\n\
+               fn apply(c: Config) { }\n\
+               fn log(c: Config) { }\n\
+               fn make_handler(cfg: Config) {\n\
+                   let h = || apply(cfg);\n\
+                   log(cfg);\n\
+                   h();\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    rc_entry(&result, "make_handler", "cfg");
+    assert!(
+        !result.arc_values.contains_key("make_handler"),
+        "expected no Arc promotion (no par, no send, no spawn); got arc={:?}",
+        result.arc_values.get("make_handler")
+    );
+}
+
+#[test]
+fn phase2_spawn_and_send_consistent_decision() {
+    // Closure h1 sent via `tx.send(h1)` AND a separate closure h2
+    // handed to `spawn(h2)` — both capture cfg. The monotonic
+    // property: any single parallel-region sighting promotes cfg
+    // to Arc; multiple sightings (including spawn alongside the
+    // pre-existing channel-send boundary) produce one consistent
+    // decision (cfg in arc_values, exactly once).
+    let src = "struct Config { name: i64 }\n\
+               fn spawn(c: Fn() -> ()) { }\n\
+               fn apply(c: Config) { }\n\
+               fn log(c: Config) { }\n\
+               fn make_handler(cfg: Config) {\n\
+                   let (tx, rx) = Channel.new();\n\
+                   let h1 = || apply(cfg);\n\
+                   let h2 = || apply(cfg);\n\
+                   log(cfg);\n\
+                   tx.send(h1);\n\
+                   spawn(h2);\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    rc_entry(&result, "make_handler", "cfg");
+    let arc = result
+        .arc_values
+        .get("make_handler")
+        .expect("expected an Arc set for make_handler");
+    assert!(
+        arc.contains("cfg"),
+        "expected 'cfg' to be Arc-promoted (consistent decision across spawn + send); got arc={:?}",
+        arc,
+    );
+}
+
+#[test]
+fn phase2_user_spawn_method_does_not_promote() {
+    // Negative gate: a method named `spawn` on a user-defined
+    // receiver is NOT the builtin `spawn` callee. The Call-arm
+    // detection in `is_spawn_callee` only matches bare-identifier /
+    // single-segment-path callees; method calls flow through the
+    // MethodCall arm which has its own (Sender-only) boundary
+    // gate. Pins that the recognition surface is load-bearing —
+    // otherwise any user method named `spawn` would over-promote
+    // captures spuriously.
+    let src = "struct Config { name: i64 }\n\
+               struct Pool { x: i64 }\n\
+               impl Pool { fn spawn(ref self, c: Fn() -> ()) { } }\n\
+               fn apply(c: Config) { }\n\
+               fn log(c: Config) { }\n\
+               fn make_handler(cfg: Config) {\n\
+                   let pool = Pool { x: 1 };\n\
+                   let h = || apply(cfg);\n\
+                   log(cfg);\n\
+                   pool.spawn(h);\n\
+               }";
+    let result = run(src);
+    assert!(
+        result.errors.is_empty(),
+        "expected no errors, got {:?}",
+        result.errors
+    );
+    rc_entry(&result, "make_handler", "cfg");
+    assert!(
+        !result.arc_values.contains_key("make_handler"),
+        "expected no Arc promotion for non-builtin .spawn() method; got arc={:?}",
         result.arc_values.get("make_handler")
     );
 }

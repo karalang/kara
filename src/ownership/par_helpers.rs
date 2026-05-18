@@ -1,12 +1,13 @@
-//! Channel + par-block helpers used by the Rc → Arc promotion pass.
+//! Channel + spawn + par-block helpers used by the Rc → Arc promotion pass.
 //!
 //! Houses the small attribute / channel-type recognition helpers
 //! (`has_attr`, `collect_channel_param_types`, `type_expr_root_name`,
-//! `recognize_channel_new`, `resolve_receiver_is_sender`) plus the
-//! big three-way par-block walker (`scan_block_for_par_uses`,
-//! `scan_stmt_for_par_uses`, `scan_expr_for_par_uses`) that finds
-//! all bindings referenced inside `par {…}` regions so they can be
-//! promoted from Rc to Arc in Phase 2.
+//! `recognize_channel_new`, `resolve_receiver_is_sender`,
+//! `is_spawn_callee`) plus the big three-way par-block walker
+//! (`scan_block_for_par_uses`, `scan_stmt_for_par_uses`,
+//! `scan_expr_for_par_uses`) that finds all bindings referenced inside
+//! a parallel region — `par {…}`, `tx.send(...)` arg, or `spawn(...)`
+//! arg — so they can be promoted from Rc to Arc in Phase 2.
 //!
 //! Free functions (no `Self` reference); the `Phase 2` driver in
 //! ownership.rs holds them under `pub(crate)` use-imports.
@@ -72,6 +73,28 @@ pub(crate) fn recognize_channel_new(value: &Expr) -> bool {
             ExprKind::Path { segments, .. }
                 if segments.len() == 2 && segments[0] == "Channel" && segments[1] == "new"
         ),
+        _ => false,
+    }
+}
+
+/// Detect a bare-identifier `spawn` callee shape. Recognized:
+/// - `ExprKind::Identifier("spawn")` — the common parsed form.
+/// - single-segment `ExprKind::Path { segments: ["spawn"] }` — the
+///   path-callee form. Qualified stdlib paths (e.g. `std.task.spawn`)
+///   extend this when stdlib introduces the symbol.
+///
+/// When the callee matches, the par-walker flips
+/// `inside_parallel_region` for the args subtree. The closure handed
+/// to `spawn` runs in another task whose live range extends beyond
+/// the spawn call, so every RC-marked capture (or, equivalently via
+/// the closure_bindings lookup in the Identifier arm, each capture
+/// of a let-bound closure passed as the spawn arg) gets promoted
+/// from `Rc` to `Arc`. Mirrors `provider_escape::check_spawn_escape`'s
+/// recognition surface.
+pub(crate) fn is_spawn_callee(callee: &Expr) -> bool {
+    match &callee.kind {
+        ExprKind::Identifier(n) => n == "spawn",
+        ExprKind::Path { segments, .. } => segments.as_slice() == ["spawn"],
         _ => false,
     }
 }
@@ -334,13 +357,12 @@ pub(crate) fn scan_expr_for_par_uses(
         // RC-marked capture of any closure bound to that name. The
         // captures-via-closure-binding propagation realises design.md §
         // Closures Rule 2's "live range of closure value = live range of
-        // each capture for the escape sub-case" for the v1-realisable
-        // parallel-region escape routes: `par { h(); }`, `par { f(h); }`,
-        // and (Theme 2 of wip-list2, 2026-05-08) `tx.send(h)` where `tx`
-        // is a `Sender[T]` — the channel-send boundary flips
-        // `inside_parallel_region` for its argument subtree, mirroring
-        // the same shape `par {}` uses. The `spawn(closure)` boundary
-        // stays deferred to Phase 6.3 / v1.1 user syntax.
+        // each capture for the escape sub-case" for every v1 parallel-
+        // region escape route: `par { h(); }`, `par { f(h); }`,
+        // `tx.send(h)` where `tx` is a `Sender[T]` (Theme 2 of
+        // wip-list2, 2026-05-08), and `spawn(h)` (closes phase-7
+        // line 63, 2026-05-18) — every boundary flips
+        // `inside_parallel_region` for the same arg subtree shape.
         ExprKind::Identifier(name) if inside_parallel_region => {
             if candidates.contains(name) {
                 promoted.insert(name.clone());
@@ -413,6 +435,12 @@ pub(crate) fn scan_expr_for_par_uses(
             );
         }
         ExprKind::Call { callee, args } => {
+            // `spawn(closure)` flips the parallel-region flag for its
+            // args subtree only — the callee position is just the
+            // builtin name and never holds a candidate. Mirrors the
+            // `tx.send(...)` boundary in the MethodCall arm: the
+            // recognition surface lives in `is_spawn_callee`.
+            let spawn_boundary = is_spawn_callee(callee);
             scan_expr_for_par_uses(
                 callee,
                 inside_parallel_region,
@@ -425,7 +453,7 @@ pub(crate) fn scan_expr_for_par_uses(
             for arg in args {
                 scan_expr_for_par_uses(
                     &arg.value,
-                    inside_parallel_region,
+                    inside_parallel_region || spawn_boundary,
                     candidates,
                     closure_captures,
                     closure_bindings,
