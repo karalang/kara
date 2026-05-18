@@ -15733,6 +15733,249 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8q: arithmetic binary expressions in arm bodies ─
+    //
+    // `recognize_body_arg` widens to accept `lhs OP rhs` where `OP` is
+    // one of the five integer arithmetic ops (`+` / `-` / `*` / `/` /
+    // `%`) and each operand is itself a recognised `BodyArg`. The shared
+    // `materialize_body_arg` helper lowers `Binary` to LLVM
+    // `build_int_*` calls; the four emission paths (let RHS, assign RHS,
+    // call args, terminal return) consume the helper uniformly so the
+    // new `Binary` variant lights up everywhere at once. Unblocks
+    // compound-assign (`+=` / `-=` / `*=` / …) which lowers as
+    // `Assign { name, value: Binary { Slot(name), <rhs> } }` once the
+    // parser surface threads compound-assign through the walker.
+
+    #[test]
+    fn test_body_splitting_8q_binary_in_let_rhs() {
+        // `let m = n + 1;` — binary expression as let RHS. The helper
+        // materialises a slot load for `n`, an i64 const for `1`, and
+        // an `add nsw` (or unsigned `add`) producing the result that
+        // gets stored into the arm-local `m.slot`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn helper(_x: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 fetch();
+                 let m = n + 1;
+                 helper(m);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // The binary result name is `binop.let_rhs`; lhs loads via
+        // `.let_rhs` suffix → `%n.let_rhs`.
+        assert!(
+            body.contains("%n.let_rhs = load i64, ptr %n.slot"),
+            "let-rhs binary lhs must load n.slot via .let_rhs:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.let_rhs = add i64 %n.let_rhs, 1"),
+            "let-rhs binary must emit `add i64 %n.let_rhs, 1`:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %binop.let_rhs, ptr %m.slot"),
+            "let-rhs binary result must be stored into m.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8q_binary_in_assign_rhs() {
+        // `n = n + 1;` — assignment whose RHS is a binary expression.
+        // The slot for `n` is the captured-local slot from slice 8a;
+        // the binary result stores back into the same slot; slice 8n's
+        // writeback then transfers the post-arm value to the state
+        // struct before the yield.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 n = n + 1;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.assign_rhs = load i64, ptr %n.slot"),
+            "assign-rhs binary lhs must load n.slot via .assign_rhs:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.assign_rhs = add i64 %n.assign_rhs, 1"),
+            "assign-rhs binary must emit `add i64 %n.assign_rhs, 1`:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %binop.assign_rhs, ptr %n.slot"),
+            "assign-rhs binary result must be stored into n.slot:\n{body}"
+        );
+        // Writeback should observe the post-binop value.
+        let assign_pos = body
+            .find("store i64 %binop.assign_rhs, ptr %n.slot")
+            .expect("assignment store missing");
+        let writeback_pos = body
+            .find("%n.writeback = load i64, ptr %n.slot")
+            .expect("writeback load missing");
+        assert!(
+            assign_pos < writeback_pos,
+            "assignment must precede the writeback load:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8q_binary_in_call_arg() {
+        // `helper(n + 1);` — binary expression as a free-fn call arg.
+        // The helper materialises the binary into a value and threads
+        // it into the `build_call` arg list.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn helper(_x: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 helper(n + 1);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.arg = load i64, ptr %n.slot"),
+            "call-arg binary lhs must load n.slot via .arg:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.arg = add i64 %n.arg, 1"),
+            "call-arg binary must emit `add i64 %n.arg, 1`:\n{body}"
+        );
+        assert!(
+            body.contains("call void @helper(i64 %binop.arg)"),
+            "helper must be called with the binary result as arg:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8q_binary_in_terminal_return() {
+        // `fn driver(n: i64) -> i64 { fetch(); n + 99 }` — terminal-arm
+        // final expression is a binary. Slice 8q's helper widening
+        // makes the terminal-return path consult the same materialiser,
+        // so the binary value flows into the state-struct terminal
+        // field instead of slice 8i's `i64 0` placeholder.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) {
+                 fetch();
+                 n + 99
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.return = load i64, ptr %n.slot"),
+            "terminal-return binary lhs must load n.slot via .return:\n{body}"
+        );
+        assert!(
+            body.contains("%binop.return = add i64 %n.return, 99"),
+            "terminal-return binary must emit `add i64 %n.return, 99`:\n{body}"
+        );
+        // The binary result lands in the state-struct terminal field.
+        assert!(
+            body.contains("store i64 %binop.return, ptr %kara.return.field_ptr"),
+            "terminal-return binary result must be stored into kara.return field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8q_binary_all_five_arith_ops() {
+        // Pin the lowering of all five recognised arithmetic ops:
+        // Add → `add i64`, Sub → `sub i64`, Mul → `mul i64`, Div →
+        // `sdiv i64`, Mod → `srem i64`. One driver per op so the
+        // assertions stay readable and each op exercises the full
+        // materialisation pipeline.
+        for (src_op, llvm_pat) in [
+            ("+", "add i64"),
+            ("-", "sub i64"),
+            ("*", "mul i64"),
+            ("/", "sdiv i64"),
+            ("%", "srem i64"),
+        ] {
+            let src = format!(
+                "effect resource Network;
+                 pub fn fetch() with sends(Network) receives(Network) {{}}
+                 fn driver(a: i64, b: i64) with sends(Network) receives(Network) {{
+                     a = a {src_op} b;
+                     fetch();
+                 }}"
+            );
+            let ir = ir_for_with_state_struct_layouts(&src);
+            let body = extract_fn_ir(&ir, "__kara_poll_driver");
+            let expected = format!("%binop.assign_rhs = {llvm_pat} %a.assign_rhs, %b.assign_rhs");
+            assert!(
+                body.contains(&expected),
+                "op `{src_op}` must emit `{expected}`:\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_body_splitting_8q_nested_binary() {
+        // `a = (a + b) * 2;` — a binary whose lhs is itself a binary.
+        // The materialiser recurses; LLVM auto-suffixes the inner
+        // `binop.assign_rhs` name to keep the two int-arith results
+        // distinct in the IR.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: i64, b: i64) with sends(Network) receives(Network) {
+                 a = (a + b) * 2;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Inner add: a + b. LLVM auto-suffixes the inner name → the
+        // first `binop.assign_rhs` instance gets the bare name and the
+        // outer gets `binop.assign_rhs1` (or vice versa depending on
+        // emission order — both are valid). Assert by counting.
+        let add_count = body.matches("add i64 %a.assign_rhs, %b.assign_rhs").count();
+        assert_eq!(
+            add_count, 1,
+            "nested binary inner-add `a + b` must appear exactly once:\n{body}"
+        );
+        let mul_count = body.matches("mul i64 %binop.assign_rhs").count();
+        assert_eq!(
+            mul_count, 1,
+            "nested binary outer-mul over the inner add result must appear once:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8q_unrecognised_binop_skips() {
+        // Comparison / logical / bitwise binops stay outside the
+        // recognised set — `recognize_body_arg` returns `None`, the
+        // walker drops the whole statement, and codegen emits no
+        // body-level alloca for it. Use a let introduced AFTER the
+        // yield so the binding isn't picked up by the layout's reload
+        // prologue (which would alloca a slot regardless of whether
+        // the per-arm let-emission ran).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: i64, b: i64) with sends(Network) receives(Network) {
+                 fetch();
+                 let cmp = a == b;
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // No `cmp.slot` alloca should appear — the let was silently
+        // skipped by the walker, and `cmp` post-dates the fetch so it
+        // isn't a captured-local either.
+        assert!(
+            !body.contains("%cmp.slot"),
+            "unrecognised comparison RHS must skip the let entirely:\n{body}"
+        );
+        // No body-level `icmp` either — the comparison Call wasn't
+        // queued for emission.
+        assert!(
+            !body.contains("icmp"),
+            "skipped let must not lower to an icmp:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
     //
     // The terminal-arm store into the state-struct terminal field now
@@ -15809,13 +16052,17 @@ fn main() {
 
     #[test]
     fn test_terminal_return_8o_unrecognised_final_expr_keeps_zero_fallback() {
-        // `fn driver(n: i64) -> i64 ... { fetch(); n + 1 }` — binary-op
-        // final expr is outside the recognised `BodyArg` set, so slice
-        // 8o falls back to slice-8i's placeholder `i64 0`.
+        // `fn driver(n: i64) -> i64 ... { fetch(); ident(n) }` — the
+        // user-function-call final expression is outside the recognised
+        // `BodyArg` set (slice 8q widens recognition to integer
+        // arithmetic via `Path`-callee Calls, but Identifier-callee
+        // user-fn calls remain unrecognised). So slice 8o falls back
+        // to slice-8i's placeholder `i64 0`.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
-             fn driver(n: i64) -> i64 with sends(Network) receives(Network) { fetch(); n + 1 }",
+             fn ident(x: i64) -> i64 { x }
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) { fetch(); ident(n) }",
         );
         let body = extract_fn_ir(&ir, "__kara_poll_driver");
         assert!(
@@ -16027,18 +16274,22 @@ fn main() {
 
     #[test]
     fn test_body_splitting_8l_skips_method_with_unrecognised_arg() {
-        // `fn driver(n: i64) { let h = Hub { count: 0 }; h.take(n + 1); fetch(); }`
-        // — the binary-op arg shape is outside the recognised set, so
-        // the whole method call is silently skipped at body-splitting
-        // time. No `call void @Hub.take` appears in the poll-fn body.
+        // `fn driver(n: i64) { let h = ...; h.take(ident(n)); fetch(); }`
+        // — the user-function-call arg shape is outside the
+        // recognised `BodyArg` set (slice 8q widens recognition to
+        // integer arithmetic via `Path`-callee Calls, but Identifier-
+        // callee user-fn calls remain unrecognised). So the whole
+        // method call is silently skipped at body-splitting time.
+        // No `call void @Hub.take` appears in the poll-fn body.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
              struct Hub { count: i64 }
              impl Hub { fn take(ref self, x: i64) {} }
+             fn ident(x: i64) -> i64 { x }
              fn driver(n: i64) with sends(Network) receives(Network) {
                  let h = Hub { count: 0 };
-                 h.take(n + 1);
+                 h.take(ident(n));
                  fetch();
              }",
         );
@@ -16127,18 +16378,20 @@ fn main() {
 
     #[test]
     fn test_body_splitting_8k_skips_unrecognised_arg_shape() {
-        // `fn driver(n: i64) { take(n + 1); fetch(); }` — the binary-op
-        // arg shape is outside the slice-8k recognised set (only
-        // IntLit + captured-local Identifier are recognised), so the
-        // whole call is silently skipped. The poll-fn body therefore
-        // emits no `call void @take` between the reload prologue and
-        // the tag-store.
+        // `fn driver(n: i64) { take(ident(n)); fetch(); }` — the user-
+        // function-call arg shape is outside the recognised `BodyArg`
+        // set (slice 8q widened recognition to integer arithmetic
+        // lowered to `Path` callees, but Identifier-callee Calls stay
+        // unrecognised). So the whole `take` call is silently skipped.
+        // The poll-fn body therefore emits no `call void @take`
+        // between the reload prologue and the tag-store.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
              fn take(x: i64) {}
+             fn ident(x: i64) -> i64 { x }
              fn driver(n: i64) with sends(Network) receives(Network) {
-                 take(n + 1);
+                 take(ident(n));
                  fetch();
              }",
         );

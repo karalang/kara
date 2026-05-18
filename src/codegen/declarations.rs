@@ -73,7 +73,7 @@ enum BodySplitStmt {
 ///
 /// Each user-source call arg gets classified into one of these shapes,
 /// or the whole call is skipped if any arg falls outside the recognised
-/// set (binary expressions, method-call args, field accesses, etc.). The
+/// set (method-call args, field accesses, struct literals, etc.). The
 /// per-arm emission compiles each variant into a `BasicMetadataValueEnum`
 /// for the `build_call` invocation.
 enum BodyArg {
@@ -88,6 +88,39 @@ enum BodyArg {
     /// `BasicTypeEnum`. Emission performs a `build_load(slot_ty, slot_ptr)`
     /// to pass by value.
     Slot(String),
+    /// Slice 8q: arithmetic binary expression where each operand is
+    /// itself a recognised `BodyArg`. v1 recognises only the five integer
+    /// arithmetic ops (`+` / `-` / `*` / `/` / `%`) over i64 operands,
+    /// produced via `build_int_add` / `build_int_sub` / `build_int_mul` /
+    /// `build_int_signed_div` / `build_int_signed_rem`. Comparison /
+    /// logical / bitwise / float / mixed-width arithmetic stays outside
+    /// the recognised set (returns `None` from `recognize_body_arg`) —
+    /// follow-on slices widen the recognition as the typed-aware
+    /// lowering work proceeds. Unblocks compound-assign (`+=` / `-=`
+    /// / `*=` / …) which lowers as `Assign { name, value: Binary { op,
+    /// lhs: Slot(name), rhs: <recognised> } }` once the parser surface
+    /// for compound-assign reaches the body-splitting walker.
+    Binary {
+        op: BinaryArithOp,
+        lhs: Box<BodyArg>,
+        rhs: Box<BodyArg>,
+    },
+}
+
+/// Slice 8q: the closed integer-arithmetic op set the body-splitting
+/// walker accepts inside a `BodyArg::Binary` node. Mirrors the five
+/// arms of `BinOp` that lower to LLVM `build_int_*` calls under v1's
+/// i64-only assumption. Kept separate from the AST's `BinOp` so the
+/// recognition path stays bounded — adding a new arm here forces an
+/// explicit recognition+emission pair rather than silently picking up
+/// future AST extensions.
+#[derive(Copy, Clone)]
+enum BinaryArithOp {
+    Add,
+    Sub,
+    Mul,
+    Div,
+    Mod,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -642,40 +675,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                 if callee_fn.get_type().get_return_type().is_some() {
                                     continue;
                                 }
-                                // Slice 8k: compile each recognised arg
-                                // into a BasicMetadataValueEnum. Skip
-                                // the whole call if any arg can't be
-                                // materialised (e.g. a slot lookup
-                                // failed despite layout_field_names
-                                // saying otherwise — defensive).
+                                // Slice 8k + 8q: compile each recognised
+                                // arg into a BasicMetadataValueEnum via
+                                // the shared `materialize_body_arg`
+                                // helper. Skip the whole call if any arg
+                                // can't be materialised (e.g. a slot
+                                // lookup failed, or a binary operand
+                                // didn't lower to an int value).
                                 let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
                                     Vec::with_capacity(args.len());
                                 let mut arg_ok = true;
                                 for arg in args {
-                                    match arg {
-                                        BodyArg::IntLit(v) => {
-                                            let val =
-                                                self.context.i64_type().const_int(*v as u64, true);
-                                            compiled.push(val.into());
-                                        }
-                                        BodyArg::Slot(field_name) => {
-                                            let Some((slot_ty, slot_ptr)) =
-                                                slot_map.get(field_name).copied()
-                                            else {
-                                                arg_ok = false;
-                                                break;
-                                            };
-                                            let loaded = self
-                                                .builder
-                                                .build_load(
-                                                    slot_ty,
-                                                    slot_ptr,
-                                                    &format!("{field_name}.arg"),
-                                                )
-                                                .expect("load arg from reloaded slot");
-                                            compiled.push(loaded.into());
-                                        }
-                                    }
+                                    let Some(val) =
+                                        self.materialize_body_arg(arg, &slot_map, ".arg")
+                                    else {
+                                        arg_ok = false;
+                                        break;
+                                    };
+                                    compiled.push(val.into());
                                 }
                                 if !arg_ok {
                                     continue;
@@ -726,40 +743,23 @@ impl<'ctx> super::Codegen<'ctx> {
                                         .expect("load receiver from reloaded slot");
                                     loaded.into()
                                 };
-                                // Slice 8l: compile method args via the
-                                // same slice-8k `BodyArg` discipline as
-                                // free-fn calls. The receiver claims
-                                // arg position 0; method args follow at
+                                // Slice 8l + 8q: compile method args via
+                                // the shared `materialize_body_arg`
+                                // helper. The receiver claims arg
+                                // position 0; method args follow at
                                 // 1..=N matching the source order.
                                 let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
                                     Vec::with_capacity(args.len() + 1);
                                 compiled.push(recv_arg);
                                 let mut arg_ok = true;
                                 for arg in args {
-                                    match arg {
-                                        BodyArg::IntLit(v) => {
-                                            let val =
-                                                self.context.i64_type().const_int(*v as u64, true);
-                                            compiled.push(val.into());
-                                        }
-                                        BodyArg::Slot(field_name) => {
-                                            let Some((arg_slot_ty, arg_slot_ptr)) =
-                                                slot_map.get(field_name).copied()
-                                            else {
-                                                arg_ok = false;
-                                                break;
-                                            };
-                                            let loaded = self
-                                                .builder
-                                                .build_load(
-                                                    arg_slot_ty,
-                                                    arg_slot_ptr,
-                                                    &format!("{field_name}.marg"),
-                                                )
-                                                .expect("load method arg from reloaded slot");
-                                            compiled.push(loaded.into());
-                                        }
-                                    }
+                                    let Some(val) =
+                                        self.materialize_body_arg(arg, &slot_map, ".marg")
+                                    else {
+                                        arg_ok = false;
+                                        break;
+                                    };
+                                    compiled.push(val.into());
                                 }
                                 if !arg_ok {
                                     continue;
@@ -769,79 +769,54 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .expect("emit slice-8j/8l void method call");
                             }
                             BodySplitStmt::Let { name, rhs } => {
-                                // Slice 8m: arm-local let binding —
-                                // alloca an i64 slot (v1 conservative
-                                // typing), compute the RHS via the same
-                                // `BodyArg` discipline as call args,
-                                // store, and register the binding into
-                                // slot_map so subsequent statements in
-                                // the SAME arm can reference it as a
-                                // captured-local-equivalent receiver or
-                                // arg. Across yields the binding is not
-                                // preserved without state-struct write-
-                                // back — a follow-on slice for the
-                                // capture-then-yield case.
+                                // Slice 8m + 8q: arm-local let binding —
+                                // materialise the RHS via the shared
+                                // helper, alloca an i64 slot (v1
+                                // conservative typing), store, and
+                                // register the binding into slot_map so
+                                // subsequent statements in the SAME arm
+                                // can reference it as a captured-local-
+                                // equivalent receiver or arg. Across
+                                // yields the binding is not preserved
+                                // without state-struct write-back — a
+                                // follow-on slice for the capture-then-
+                                // yield case.
+                                let Some(value) =
+                                    self.materialize_body_arg(rhs, &slot_map, ".let_rhs")
+                                else {
+                                    continue;
+                                };
                                 let i64_ty = self.context.i64_type();
                                 let slot_name = format!("{name}.slot");
                                 let slot = self
                                     .builder
                                     .build_alloca(i64_ty, &slot_name)
                                     .expect("alloca for arm-local let slot");
-                                let value = match rhs {
-                                    BodyArg::IntLit(v) => i64_ty.const_int(*v as u64, true).into(),
-                                    BodyArg::Slot(src_field) => {
-                                        let Some((src_ty, src_ptr)) =
-                                            slot_map.get(src_field).copied()
-                                        else {
-                                            continue;
-                                        };
-                                        self.builder
-                                            .build_load(
-                                                src_ty,
-                                                src_ptr,
-                                                &format!("{src_field}.let_rhs"),
-                                            )
-                                            .expect("load let RHS from slot")
-                                    }
-                                };
                                 self.builder
                                     .build_store(slot, value)
                                     .expect("store let RHS into slot");
                                 slot_map.insert(name.clone(), (i64_ty.into(), slot));
                             }
                             BodySplitStmt::Assign { name, value } => {
-                                // Slice 8p: assignment to an existing
-                                // in-scope binding (captured-local OR
-                                // arm-local let). Look up the slot in
-                                // `slot_map` (DON'T alloca a new one),
-                                // compute the value via the slice-8k
-                                // discipline, and store. Across yields:
-                                // when the target is a captured local,
-                                // slice 8n's writeback before the next
-                                // yield picks up the new value and
-                                // writes it to the state-struct field
-                                // so the post-yield reload sees it.
+                                // Slice 8p + 8q: assignment to an
+                                // existing in-scope binding (captured-
+                                // local OR arm-local let). Look up the
+                                // slot in `slot_map` (DON'T alloca a
+                                // new one), materialise the value via
+                                // the shared helper, and store. Across
+                                // yields: when the target is a captured
+                                // local, slice 8n's writeback before
+                                // the next yield picks up the new value
+                                // and writes it to the state-struct
+                                // field so the post-yield reload sees
+                                // it.
                                 let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() else {
                                     continue;
                                 };
-                                let new_val: inkwell::values::BasicValueEnum<'ctx> = match value {
-                                    BodyArg::IntLit(v) => {
-                                        self.context.i64_type().const_int(*v as u64, true).into()
-                                    }
-                                    BodyArg::Slot(src_field) => {
-                                        let Some((src_ty, src_ptr)) =
-                                            slot_map.get(src_field).copied()
-                                        else {
-                                            continue;
-                                        };
-                                        self.builder
-                                            .build_load(
-                                                src_ty,
-                                                src_ptr,
-                                                &format!("{src_field}.assign_rhs"),
-                                            )
-                                            .expect("load assign RHS from slot")
-                                    }
+                                let Some(new_val) =
+                                    self.materialize_body_arg(value, &slot_map, ".assign_rhs")
+                                else {
+                                    continue;
                                 };
                                 self.builder
                                     .build_store(slot_ptr, new_val)
@@ -948,36 +923,21 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "kara.return.field_ptr",
                             )
                             .expect("GEP terminal return-value field");
-                        // Slice 8o: when the walker captured the user's
-                        // final-expression value via `terminal_return`,
-                        // use that instead of slice 8i's `i64 0`
-                        // placeholder. `IntLit(v)` lowers to an i64
-                        // const; `Slot(name)` loads from the per-arm
-                        // slot map (populated by slice 8a reload +
-                        // slice 8m let emissions). If `terminal_return`
-                        // is `None` (final expr not recognised, or no
-                        // trailing expr), fall back to the slice-8i
-                        // placeholder.
-                        let return_val: inkwell::values::BasicValueEnum<'ctx> =
-                            match &terminal_return {
-                                Some(BodyArg::IntLit(v)) => {
-                                    self.context.i64_type().const_int(*v as u64, true).into()
-                                }
-                                Some(BodyArg::Slot(name)) => {
-                                    if let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() {
-                                        self.builder
-                                            .build_load(
-                                                slot_ty,
-                                                slot_ptr,
-                                                &format!("{name}.return"),
-                                            )
-                                            .expect("load slot for terminal return")
-                                    } else {
-                                        self.context.i64_type().const_int(0, false).into()
-                                    }
-                                }
-                                None => self.context.i64_type().const_int(0, false).into(),
-                            };
+                        // Slice 8o + 8q: when the walker captured the
+                        // user's final-expression value via
+                        // `terminal_return`, materialise it via the
+                        // shared helper (`IntLit` → i64 const, `Slot`
+                        // → load from per-arm slot map, `Binary` →
+                        // recursive int arithmetic). If
+                        // `terminal_return` is `None` (final expr not
+                        // recognised, or no trailing expr) or the
+                        // helper bails (slot lookup miss, non-IntValue
+                        // binary operand), fall back to the slice-8i
+                        // `i64 0` placeholder.
+                        let return_val: inkwell::values::BasicValueEnum<'ctx> = terminal_return
+                            .as_ref()
+                            .and_then(|arg| self.materialize_body_arg(arg, &slot_map, ".return"))
+                            .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
                         self.builder
                             .build_store(terminal_ptr, return_val)
                             .expect("store terminal return value");
@@ -1084,6 +1044,80 @@ impl<'ctx> super::Codegen<'ctx> {
 
             self.state_machine_state_constructors
                 .insert(fn_key.clone(), ctor_fn);
+        }
+    }
+
+    /// Phase 6 line 26 slice 8q: materialize a `BodyArg` into a
+    /// `BasicValueEnum` at the current builder position. v1 lowers
+    /// integer arithmetic only: `IntLit` → `i64` constant; `Slot` →
+    /// `build_load` from the per-arm slot map; `Binary` → recursive
+    /// materialization of both sides + `build_int_*` op. `name_hint`
+    /// is the LLVM-name suffix the caller wants on emitted instructions
+    /// — slot loads name as `"{slot_name}{name_hint}"` (preserves the
+    /// existing `.arg` / `.marg` / `.let_rhs` / `.assign_rhs` / `.return`
+    /// shapes from slices 8h-8p), binary results name as
+    /// `"binop{name_hint}"`. Returns `None` if any nested `Slot` lookup
+    /// fails OR a `Binary` operand resolves to a non-IntValue — the
+    /// caller treats `None` as "skip this statement" matching the
+    /// conservative-skip discipline of the prior slices.
+    fn materialize_body_arg(
+        &self,
+        arg: &BodyArg,
+        slot_map: &HashMap<String, (BasicTypeEnum<'ctx>, PointerValue<'ctx>)>,
+        name_hint: &str,
+    ) -> Option<inkwell::values::BasicValueEnum<'ctx>> {
+        match arg {
+            BodyArg::IntLit(v) => Some(self.context.i64_type().const_int(*v as u64, true).into()),
+            BodyArg::Slot(slot_name) => {
+                let (slot_ty, slot_ptr) = slot_map.get(slot_name).copied()?;
+                let load_name = format!("{slot_name}{name_hint}");
+                let loaded = self
+                    .builder
+                    .build_load(slot_ty, slot_ptr, &load_name)
+                    .expect("load slot for body-arg materialization");
+                Some(loaded)
+            }
+            BodyArg::Binary { op, lhs, rhs } => {
+                let lhs_val = self.materialize_body_arg(lhs, slot_map, name_hint)?;
+                let rhs_val = self.materialize_body_arg(rhs, slot_map, name_hint)?;
+                // v1 assumes i64 operands — IntLit lowers to i64; Slot
+                // loads carry their slot's element type (currently i64
+                // across the board since `pattern_binding_types` doesn't
+                // record primitives at slice 8q). Non-IntValue operands
+                // (e.g. a future Vec / String slot) fall through to
+                // `None` so the call site skips emission rather than
+                // emitting ill-typed IR.
+                let inkwell::values::BasicValueEnum::IntValue(lhs_int) = lhs_val else {
+                    return None;
+                };
+                let inkwell::values::BasicValueEnum::IntValue(rhs_int) = rhs_val else {
+                    return None;
+                };
+                let result_name = format!("binop{name_hint}");
+                let result = match op {
+                    BinaryArithOp::Add => self
+                        .builder
+                        .build_int_add(lhs_int, rhs_int, &result_name)
+                        .expect("build_int_add for body-arg binary"),
+                    BinaryArithOp::Sub => self
+                        .builder
+                        .build_int_sub(lhs_int, rhs_int, &result_name)
+                        .expect("build_int_sub for body-arg binary"),
+                    BinaryArithOp::Mul => self
+                        .builder
+                        .build_int_mul(lhs_int, rhs_int, &result_name)
+                        .expect("build_int_mul for body-arg binary"),
+                    BinaryArithOp::Div => self
+                        .builder
+                        .build_int_signed_div(lhs_int, rhs_int, &result_name)
+                        .expect("build_int_signed_div for body-arg binary"),
+                    BinaryArithOp::Mod => self
+                        .builder
+                        .build_int_signed_rem(lhs_int, rhs_int, &result_name)
+                        .expect("build_int_signed_rem for body-arg binary"),
+                };
+                Some(result.into())
+            }
         }
     }
 
@@ -1724,15 +1758,68 @@ pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Optio
 
 /// Phase 6 line 26 slice 8k: classify a call arg into the recognised
 /// `BodyArg` set. Returns `None` for any shape outside v1's coverage
-/// (binary ops, method-call args, field accesses, struct literals, etc.) —
-/// the body-splitting walker treats the whole call as ineligible when any
-/// arg returns `None`, mirroring the conservative skip behaviour of slice
-/// 8h's "non-emittable-shape silently dropped" rule.
+/// (method-call args, field accesses, struct literals, comparison /
+/// logical / bitwise / float ops, etc.) — the body-splitting walker
+/// treats the whole call as ineligible when any arg returns `None`,
+/// mirroring the conservative skip behaviour of slice 8h's
+/// "non-emittable-shape silently dropped" rule.
+///
+/// Slice 8q: arithmetic binary expressions (`+` / `-` / `*` / `/` / `%`)
+/// reach this point in their *lowered* form. The lowering pass
+/// (`src/lowering.rs`) rewrites every `Binary { op, left, right }` over
+/// a primitive type into a `Call { callee: Path { segments: ["<int_ty>",
+/// "<method>"] }, args: [lhs, rhs] }` so codegen sees the same shape
+/// for every arithmetic site. The recognition path here matches on that
+/// post-lowering form: callee path is `[<i*|u*|usize|isize>, <add|sub|
+/// mul|div|rem>]`, args are unwrapped from their `CallArg` envelope,
+/// and both operands recurse through `recognize_body_arg`. Comparison
+/// (`eq`/`ne`/`lt`/`le`/`gt`/`ge`), logical (`bitand`/`bitor`/`bitxor`/
+/// `shl`/`shr`), and float arithmetic stay outside the recognised set
+/// — slice 8q's scope is integer arithmetic that unblocks compound-
+/// assign.
 fn recognize_body_arg(expr: &Expr, in_scope_names: &HashSet<String>) -> Option<BodyArg> {
     match &expr.kind {
         ExprKind::Integer(n, _) => Some(BodyArg::IntLit(*n)),
         ExprKind::Identifier(name) if in_scope_names.contains(name) => {
             Some(BodyArg::Slot(name.clone()))
+        }
+        ExprKind::Call { callee, args } => {
+            // Lowered binary arithmetic surface — see
+            // `src/lowering.rs::rewrite_binary`. Match the
+            // two-segment `Path` callee shape, restrict to integer
+            // primitive types, and accept the five arithmetic
+            // method names that map onto v1's LLVM int-arith ops.
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 {
+                return None;
+            }
+            let int_primitive = matches!(
+                segments[0].as_str(),
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
+            );
+            if !int_primitive {
+                return None;
+            }
+            let arith_op = match segments[1].as_str() {
+                "add" => BinaryArithOp::Add,
+                "sub" => BinaryArithOp::Sub,
+                "mul" => BinaryArithOp::Mul,
+                "div" => BinaryArithOp::Div,
+                "rem" => BinaryArithOp::Mod,
+                _ => return None,
+            };
+            if args.len() != 2 {
+                return None;
+            }
+            let lhs = recognize_body_arg(&args[0].value, in_scope_names)?;
+            let rhs = recognize_body_arg(&args[1].value, in_scope_names)?;
+            Some(BodyArg::Binary {
+                op: arith_op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            })
         }
         _ => None,
     }
