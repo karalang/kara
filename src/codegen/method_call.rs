@@ -156,6 +156,26 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Strict-provenance `ptr` module — `ptr.addr(p)` /
+        // `ptr.with_addr(p, a)` / `ptr.expose(p)` / `ptr.from_exposed(a)`
+        // (and the `_mut` variants), per `design.md § Pointer
+        // Provenance` (v60 item 20). Skipped when a local binding
+        // shadows `ptr` — the prelude module loses to a user-scope
+        // binding by the standard shadow rule. The seven entries are
+        // also registered in `env.functions` for the typechecker (see
+        // `src/typechecker/env_build.rs`), so the dispatch shapes line
+        // up between the two phases. Helper's docstring covers the
+        // pragmatic-lowering rationale under the current i64-pointer
+        // ABI plus the follow-up path to a provenance-preserving
+        // variant.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if name == "ptr" && !self.variables.contains_key("ptr") {
+                if let Some(value) = self.compile_ptr_module_call(method, args)? {
+                    return Ok(value);
+                }
+            }
+        }
+
         // Slice OR (2026-05-16): Option/Result `unwrap`/`expect`/`is_*`
         // dispatch is receiver-shape-agnostic — the receiver may be any
         // Option-/Result-valued expression (identifier, method chain,
@@ -548,5 +568,93 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// Slice 3 of the strict-provenance work (line 511). Lower one of
+    /// the seven `ptr.*` module functions to its LLVM cast counterpart.
+    /// Returns `Ok(None)` for an unknown method so the caller's
+    /// fall-through diagnostic stays in place; the typechecker has
+    /// already accepted only the seven valid names so reaching `None`
+    /// here means a real codegen bug rather than a user error.
+    ///
+    /// **ABI note.** The current codegen lowers `*const T` / `*mut T`
+    /// to LLVM `i64` at function-signature and binding-slot boundaries
+    /// (see `llvm_type_for_type_expr` — raw pointer kinds fall through
+    /// to the `i64` default). Under that ABI all four ptr↔int casts in
+    /// the strict-provenance API are *identity at the LLVM level*: the
+    /// address bits already round-trip losslessly through the i64 slot
+    /// that holds the raw pointer. The pragmatic lowering here mirrors
+    /// that — emit a no-op (when both sides are already i64) or a
+    /// `ptrtoint` (when the receiver happens to flow as an LLVM
+    /// pointer-typed SSA, which can happen for some intermediate
+    /// values). The provenance-preserving lowering the spec describes
+    /// (`ptrtoint`+`!provenance.preserve` markers; `inttoptr` with
+    /// `noalias` invalidation for the `expose` family) requires
+    /// raw-pointer-typed LLVM slots end-to-end — that uplift is
+    /// tracked as a follow-up. Tests in `tests/codegen.rs` pin the
+    /// runtime round-trip; the IR-shape pins live alongside.
+    fn compile_ptr_module_call(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        let i64_ty = self.context.i64_type();
+        // Helper: coerce a compiled receiver / argument value to i64,
+        // regardless of whether it flows as `PointerValue` (rare with
+        // the current ABI but possible for an intermediate result) or
+        // `IntValue`. Matches the same pattern used by
+        // `call_dispatch::coerce_to_i64` for the message-payload path.
+        let to_i64 =
+            |this: &mut Self, v: BasicValueEnum<'ctx>, label: &str| -> BasicValueEnum<'ctx> {
+                match v {
+                    BasicValueEnum::PointerValue(pv) => this
+                        .builder
+                        .build_ptr_to_int(pv, i64_ty, label)
+                        .unwrap()
+                        .into(),
+                    BasicValueEnum::IntValue(_) => v,
+                    _ => v,
+                }
+            };
+        match method {
+            // p: *_ T -> usize  (ptr.addr / ptr.expose / ptr.expose_mut)
+            "addr" | "expose" | "expose_mut" if args.len() == 1 => {
+                let p = self.compile_expr(&args[0].value)?;
+                let label = match method {
+                    "addr" => "ptr.addr",
+                    "expose" => "ptr.expose",
+                    _ => "ptr.expose_mut",
+                };
+                Ok(Some(to_i64(self, p, label)))
+            }
+            // (p: *_ T, addr: usize) -> *_ T  (ptr.with_addr / ptr.with_addr_mut)
+            //
+            // Compile the first arg for side effects only — a
+            // provenance-aware lowering would consult `p`'s
+            // `!provenance` metadata to reseat the address bits;
+            // current ABI represents both ptr and usize as i64, so the
+            // result is just `addr` coerced to i64.
+            "with_addr" | "with_addr_mut" if args.len() == 2 => {
+                let _ = self.compile_expr(&args[0].value)?;
+                let a = self.compile_expr(&args[1].value)?;
+                let label = if method == "with_addr" {
+                    "ptr.with_addr"
+                } else {
+                    "ptr.with_addr_mut"
+                };
+                Ok(Some(to_i64(self, a, label)))
+            }
+            // addr: usize -> *_ T  (ptr.from_exposed / ptr.from_exposed_mut)
+            "from_exposed" | "from_exposed_mut" if args.len() == 1 => {
+                let a = self.compile_expr(&args[0].value)?;
+                let label = if method == "from_exposed" {
+                    "ptr.from_exposed"
+                } else {
+                    "ptr.from_exposed_mut"
+                };
+                Ok(Some(to_i64(self, a, label)))
+            }
+            _ => Ok(None),
+        }
     }
 }
