@@ -35,6 +35,15 @@ tokio = { version = "1", features = ["rt-multi-thread", "net", "macros"] }
 http-body-util = "0.1"
 bytes = "1"
 
+# Phase 6 line 15 (`event_loop`): cross-platform fd-readiness primitives
+# (epoll on Linux, kqueue on macOS / BSD, IOCP on Windows) plus the
+# cross-thread `Waker` (eventfd / pipe pair / IOCP post). `mio` is the
+# canonical Rust crate for this exact problem and already wraps all three
+# OS substrates behind a single API. Already in our lockfile transitively
+# through tokio; promoting to a direct dep so the substrate choice is
+# explicit and the API surface is self-contained.
+mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
+
 # Note: the runtime's release-profile `panic = "abort"` setting lives in
 # the workspace root `Cargo.toml` (cargo ignores `[profile.*]` in
 # non-root manifests with a warning). See the workspace Cargo.toml's

@@ -33,6 +33,7 @@
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
 mod clone;
+pub mod event_loop;
 mod map;
 
 use std::cell::Cell;
