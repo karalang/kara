@@ -91,6 +91,16 @@ pub struct Classification {
     /// inside a closure body (`ClosureCapture`) or as the
     /// owned-arg of a `mut ref self` method call (`ContainerStore`).
     pub consume_origins: HashMap<SpanKey, ConsumeOrigin>,
+    /// Per-closure-expression body consume index — phase-7-codegen.md
+    /// line 45. Outer key is the closure expression's `SpanKey`; inner
+    /// map is `binding name → first consume span seen inside that body`
+    /// among identifier-leaves walked while `consume_origin_ctx ==
+    /// ClosureCapture`. Lets the ownership pass's `Closure` arm decide
+    /// each capture's mode (`Own` if consumed) without consulting the
+    /// legacy state-machine's `ValueState::Moved` post-walk state.
+    /// Includes consumes of inner-locals too — consumers filter against
+    /// their `pre_live` set (only outer captures matter for mode).
+    pub closure_capture_consumes: HashMap<SpanKey, HashMap<String, Span>>,
 }
 
 /// A basic block in the CFG. Statements are not stored — only the use

@@ -971,27 +971,42 @@ impl<'a> super::OwnershipChecker<'a> {
                 // the closure-local, not the outer binding. Detection
                 // runs after the outer-scope restore so `states[N]`
                 // for non-shadowed names reflects the body walk's
-                // effect (consumed → `Moved`); shadowed names'
-                // outer-scope state was restored to its pre-walk
-                // value, which is what we want (body did not consume
-                // the outer binding, the closure-local has gone out
-                // of scope). Read/mutate signals come from
-                // `classify_capture_body_uses`'s AST walk; consume
-                // signals come from `states[N] == Moved`. Detection
-                // happens before the K2 retag loop so the legacy
-                // retag behavior (Direct → ClosureCapture state
-                // transition for non-K2-error captures) does not
-                // confuse the consume check — the kind variant
-                // doesn't matter, only that the state is `Moved`.
+                // effect (consumed → `Moved`) for legacy fallback
+                // purposes; shadowed names' outer-scope state was
+                // restored to its pre-walk value, which is what we
+                // want (body did not consume the outer binding, the
+                // closure-local has gone out of scope). Read/mutate
+                // signals come from `classify_capture_body_uses`'s AST
+                // walk. Consume signals — phase-7-codegen.md line 45
+                // — come from the use-classifier's
+                // `closure_capture_consumes` map keyed on the closure
+                // expression's `SpanKey`. The map already filters out
+                // closure-param shadowing (the classifier sees the
+                // outer scope; closure params don't appear in
+                // `pre_live`) but we re-filter via `closure_param_set`
+                // below for defense in depth.
                 let captures_usage = self.classify_capture_body_uses(body, &pre_live);
                 let closure_param_set: HashSet<String> =
                     closure_param_names.iter().cloned().collect();
+                let closure_key = SpanKey::from_span(&expr.span);
+                // Snapshot the classifier's per-closure consume map for
+                // this expression. Cloning sidesteps the borrow of
+                // `self.current_classification` so the surrounding K2
+                // emission + `push_closure_capture_borrows` mutations
+                // remain unrestricted. The map is small (one entry per
+                // captured name) so the clone is negligible.
+                let captured_consumes: HashMap<String, Span> = self
+                    .current_classification
+                    .as_ref()
+                    .and_then(|c| c.closure_capture_consumes.get(&closure_key))
+                    .cloned()
+                    .unwrap_or_default();
                 let mut captures: Vec<(String, OwnershipMode)> = Vec::new();
                 for name in &pre_live {
                     if closure_param_set.contains(name) {
                         continue;
                     }
-                    let consumed = matches!(states.get(name), Some(ValueState::Moved { .. }));
+                    let consumed = captured_consumes.contains_key(name);
                     let body_usage = captures_usage.get(name).copied().unwrap_or_default();
                     if !body_usage.referenced && !consumed {
                         continue;
@@ -1043,8 +1058,11 @@ impl<'a> super::OwnershipChecker<'a> {
                 let mut path_modes: Vec<(CapturePath, OwnershipMode)> =
                     Vec::with_capacity(capture_paths.len());
                 for path in &capture_paths {
-                    let root_consumed =
-                        matches!(states.get(&path.root), Some(ValueState::Moved { .. }));
+                    // Phase-7-codegen.md line 45 — root-consume signal
+                    // routes through the classifier's per-closure
+                    // consume map for parity with the per-name mode
+                    // path above.
+                    let root_consumed = captured_consumes.contains_key(&path.root);
                     let mode = if path.projection.is_empty() && root_consumed {
                         OwnershipMode::Own
                     } else if path_mutations.contains(path) {
@@ -1146,7 +1164,20 @@ impl<'a> super::OwnershipChecker<'a> {
                     }
                 }
                 for name in pre_live {
-                    if let Some(ValueState::Moved { at }) = states.get(&name) {
+                    // Phase-7-codegen.md line 45 — closure-param
+                    // shadowing filter. The classifier walks the body
+                    // and tags Consume identifier-leaves by name; if
+                    // an outer binding `N` is shadowed by a closure
+                    // param of the same name, the classifier's
+                    // capture-consume entry actually refers to the
+                    // closure-local, not the outer binding. The
+                    // legacy state machine handled this implicitly
+                    // via the post-walk outer-scope restore (states
+                    // come back to Live); we filter explicitly.
+                    if closure_param_set.contains(&name) {
+                        continue;
+                    }
+                    if let Some(at) = captured_consumes.get(&name) {
                         // A consume that happened inside the closure body
                         // is a closure-capture-by-move from the outer
                         // function's perspective. Round 12.42 removed
@@ -1161,6 +1192,9 @@ impl<'a> super::OwnershipChecker<'a> {
                         // below fires the explicit-ref / mut-ref-mode
                         // diagnostic, which is the only ownership-side
                         // action remaining for this pre-live walk.
+                        // Phase-7-codegen.md line 45 — `at` now comes
+                        // from the classifier's `closure_capture_consumes`
+                        // map instead of `ValueState::Moved { at }`.
                         let at = at.clone();
                         // K2 enforcement (design.md § Closure Behavior,
                         // Rule 2½): an explicit `ref` / `mut ref` prefix

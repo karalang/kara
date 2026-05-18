@@ -777,6 +777,15 @@ pub struct OwnershipChecker<'a> {
     /// `slice_borrow_sources` entry. Drives the drop-of-borrowed
     /// trigger comparison.
     pub(crate) slice_binding_scope_depth: HashMap<String, usize>,
+    /// Phase-7-codegen.md line 45 — the use-classifier's `Classification`
+    /// for the function currently being checked. Populated by
+    /// `check_function` before walking the body; consulted by
+    /// `check_expr_consuming`'s `Closure` arm to decide each capture's
+    /// mode (`Own` if the body has a `ConsumeOrigin::ClosureCapture`-
+    /// tagged consume of the binding) without consulting the legacy
+    /// state-machine's post-walk `ValueState::Moved` state. `None`
+    /// outside a `check_function` invocation.
+    pub(crate) current_classification: Option<crate::cfg::Classification>,
 }
 
 impl<'a> OwnershipChecker<'a> {
@@ -815,6 +824,7 @@ impl<'a> OwnershipChecker<'a> {
             current_scope_depth: 0,
             binding_scope_depth: HashMap::new(),
             slice_binding_scope_depth: HashMap::new(),
+            current_classification: None,
         }
     }
 
@@ -1208,8 +1218,27 @@ impl<'a> OwnershipChecker<'a> {
         // signal — see round 12.20).
         self.populate_predicate_outputs(f, &fn_key);
 
+        // Phase-7-codegen.md line 45 — compute the use-classifier's
+        // `Classification` once per function and stash it on `self`
+        // so `check_expr_consuming`'s `Closure` arm can decide each
+        // capture's mode from the classifier's per-closure-body
+        // consume map instead of the legacy state-machine's post-
+        // walk `ValueState::Moved` table. The classification is
+        // cleared at function-exit so it doesn't leak to peer
+        // functions.
+        let param_types_for_classifier =
+            crate::use_classifier::param_types_for_function(f, self.typecheck_result);
+        self.current_classification = Some(crate::use_classifier::classify_function_body(
+            self.program,
+            self.typecheck_result,
+            &f.body,
+            param_types_for_classifier,
+        ));
+
         // Walk the body
         self.check_block(&f.body, &mut states, &param_types, &mut param_usage);
+
+        self.current_classification = None;
 
         // Round 12.35–12.39 — Closure ownership Step 7: detect ref-
         // captured values that escape their borrow's lifetime. A

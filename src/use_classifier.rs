@@ -72,6 +72,7 @@ pub fn classify_function_body(
         classification: Classification::default(),
         consume_origin_ctx: ConsumeOrigin::Direct,
         once_callable_closures: HashSet::new(),
+        closure_span_stack: Vec::new(),
     };
     classifier.walk_block(body, Mode::Reading);
     classifier.classification
@@ -116,6 +117,12 @@ struct UseClassifier<'a> {
     /// call-site as `UseKind::Consume` so the UAM predicate fires on
     /// `f(); f();` shapes — mirrors `OwnershipChecker::once_callable_closures`.
     once_callable_closures: HashSet<String>,
+    /// Phase-7-codegen.md line 45 — stack of currently-active closure
+    /// expression `SpanKey`s. Pushed on entry to a `Closure { body, .. }`
+    /// arm and popped on exit. The innermost entry is the closure whose
+    /// `closure_capture_consumes` row each Consume identifier-leaf
+    /// inside the body contributes to.
+    closure_span_stack: Vec<SpanKey>,
 }
 
 impl<'a> UseClassifier<'a> {
@@ -153,6 +160,39 @@ impl<'a> UseClassifier<'a> {
                 .consume_origins
                 .insert(key, self.consume_origin_ctx);
         }
+    }
+
+    /// Phase-7-codegen.md line 45 — when an identifier-leaf is
+    /// recorded as `Consume` while walking inside a closure body
+    /// (`consume_origin_ctx == ClosureCapture`), record the
+    /// `(closure_expr_span, binding_name → leaf_span)` mapping so the
+    /// ownership pass's closure-capture-mode classifier can decide
+    /// `Own` mode without consulting the legacy state machine's post-
+    /// walk `ValueState::Moved` table. First-seen wins (`or_insert`)
+    /// so the recorded span identifies the earliest consume site for
+    /// each binding — same shape K2's error diagnostic wants.
+    fn record_closure_capture_consume(
+        &mut self,
+        binding: &str,
+        kind: UseKind,
+        span: &crate::token::Span,
+    ) {
+        if kind != UseKind::Consume {
+            return;
+        }
+        if self.consume_origin_ctx != ConsumeOrigin::ClosureCapture {
+            return;
+        }
+        let closure_key = match self.closure_span_stack.last() {
+            Some(k) => *k,
+            None => return,
+        };
+        self.classification
+            .closure_capture_consumes
+            .entry(closure_key)
+            .or_default()
+            .entry(binding.to_string())
+            .or_insert_with(|| span.clone());
     }
 
     fn mark_sink_arg(&mut self, span: &crate::token::Span) {
@@ -260,10 +300,12 @@ impl<'a> UseClassifier<'a> {
             ExprKind::Identifier(name) => {
                 let kind = self.classify_identifier(name, &expr.span, mode);
                 self.record(&expr.span, kind);
+                self.record_closure_capture_consume(name, kind, &expr.span);
             }
             ExprKind::SelfValue => {
                 let kind = self.classify_identifier("self", &expr.span, mode);
                 self.record(&expr.span, kind);
+                self.record_closure_capture_consume("self", kind, &expr.span);
             }
 
             ExprKind::Integer(..)
@@ -297,6 +339,7 @@ impl<'a> UseClassifier<'a> {
                 if let ExprKind::Identifier(name) = &callee.kind {
                     if self.once_callable_closures.contains(name) {
                         self.record(&callee.span, UseKind::Consume);
+                        self.record_closure_capture_consume(name, UseKind::Consume, &callee.span);
                     } else {
                         self.walk_expr(callee, Mode::Reading);
                     }
@@ -495,7 +538,13 @@ impl<'a> UseClassifier<'a> {
             ExprKind::Closure { body, .. } => {
                 let saved = self.consume_origin_ctx;
                 self.consume_origin_ctx = ConsumeOrigin::ClosureCapture;
+                // Phase-7-codegen.md line 45 — push this closure's
+                // expression span onto the stack so Consume identifier-
+                // leaves walked inside `body` route into the right
+                // `closure_capture_consumes` row.
+                self.closure_span_stack.push(SpanKey::from_span(&expr.span));
                 self.walk_expr(body, Mode::Reading);
+                self.closure_span_stack.pop();
                 self.consume_origin_ctx = saved;
             }
 
