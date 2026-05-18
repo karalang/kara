@@ -1396,6 +1396,53 @@ mod tests {
     }
 
     #[test]
+    fn defer_body_inner_local_does_not_fire_formal_rc() {
+        // Round 12.41 lowers each defer body per-exit-site. Inner-
+        // locals introduced inside the body are duplicated across
+        // cleanup blocks (one per exit edge). Without per-cleanup-site
+        // alpha-renaming in `cfg.rs`, those duplicates would pair as
+        // dominance-incomparable Consume sites and spuriously fire
+        // the formal RC predicate for an inner-local that has only
+        // one live instance per cleanup-site emission. The renaming
+        // gives each emission its own binding name so no pairing
+        // occurs.
+        let src = "struct Data { value: i64 }\n\
+                   fn use_data(d: Data) {}\n\
+                   fn main() {\n\
+                       let x = 1;\n\
+                       defer { let local = Data { value: 0 }; use_data(local); }\n\
+                       if x > 0 { return; }\n\
+                   }";
+        let parsed = parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = resolve(&parsed.program);
+        assert!(
+            resolved.errors.is_empty(),
+            "resolve errors: {:?}",
+            resolved.errors
+        );
+        let tc = crate::typecheck(&parsed.program, &resolved);
+        let by_fn = predicate_rc_candidates_for_program(&parsed.program, &tc);
+        if let Some(main) = by_fn.get("main") {
+            assert!(
+                !main.contains_key("local"),
+                "defer-body inner-local `local` must not produce an RC witness; got {:?}",
+                main.keys().collect::<Vec<_>>()
+            );
+            for k in main.keys() {
+                assert!(
+                    !k.starts_with("local@"),
+                    "no mangled `local@cuN` may produce an RC witness; got {k:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn loop_of_consume_yields_to_uam_on_same_binding() {
         // Pre-loop consume + in-loop consume → formal UAM fires for
         // `d`. The loop-of-consume rule must yield (UAM is a hard

@@ -253,6 +253,26 @@ struct DeferFrame<'a> {
     items: Vec<DeferItem<'a>>,
 }
 
+/// One cleanup-rename frame pushed in `emit_scope_cleanup` around
+/// each per-exit-site lowering of a defer/errdefer body. Inner-local
+/// bindings introduced inside the body (via `let`, `let-uninit`,
+/// `let-else`) are recorded in `bindings`; subsequent uses of those
+/// names get `suffix` appended at `record_use` time so the formal RC
+/// predicate sees each per-exit-site lowering's inner-locals as a
+/// distinct binding. Without this, the duplicate Consume sites across
+/// cleanup blocks would pair as dominance-incomparable and spuriously
+/// fire RC for an inner-local that has only one live instance per
+/// cleanup-site emission. Outer captures (referenced from the body but
+/// defined in the enclosing scope) match no frame and keep their bare
+/// name — the predicate correctly retains their cross-cleanup-block
+/// identity, which is the legitimate defer-body shape per design.md
+/// "defer/errdefer may only read outer captures".
+#[derive(Default)]
+struct CleanupRenameFrame {
+    suffix: String,
+    bindings: HashSet<String>,
+}
+
 struct CfgBuilder<'a> {
     blocks: Vec<BasicBlock>,
     classification: &'a Classification,
@@ -261,6 +281,16 @@ struct CfgBuilder<'a> {
     /// `lower_block` call pushes one frame. At any point the frame
     /// at the top of the stack is the innermost active scope.
     defer_stack: Vec<DeferFrame<'a>>,
+    /// Stack of cleanup-rename frames; one is pushed in
+    /// `emit_scope_cleanup` around each defer/errdefer body
+    /// re-lowering and popped after. Inner-locals introduced inside
+    /// the body get mangled per-cleanup-site so duplicate Consume
+    /// sites don't pair across exit-edge cleanup blocks.
+    cleanup_rename_stack: Vec<CleanupRenameFrame>,
+    /// Monotonic counter used to mint a unique suffix per pushed
+    /// cleanup-rename frame. Each per-exit-site emission of a defer
+    /// body draws a fresh id; the suffix is `@cuN`.
+    next_cleanup_id: usize,
 }
 
 impl<'a> CfgBuilder<'a> {
@@ -269,7 +299,44 @@ impl<'a> CfgBuilder<'a> {
             blocks: Vec::new(),
             classification,
             defer_stack: Vec::new(),
+            cleanup_rename_stack: Vec::new(),
+            next_cleanup_id: 0,
         }
+    }
+
+    fn push_cleanup_rename_frame(&mut self) {
+        let id = self.next_cleanup_id;
+        self.next_cleanup_id += 1;
+        self.cleanup_rename_stack.push(CleanupRenameFrame {
+            suffix: format!("@cu{id}"),
+            bindings: HashSet::new(),
+        });
+    }
+
+    fn pop_cleanup_rename_frame(&mut self) {
+        self.cleanup_rename_stack.pop();
+    }
+
+    /// Register a binding as an inner-local introduction inside the
+    /// active cleanup-rename frame (no-op when none is active — the
+    /// function body's own introductions are not renamed).
+    fn note_local_introduced(&mut self, name: &str) {
+        if let Some(top) = self.cleanup_rename_stack.last_mut() {
+            top.bindings.insert(name.to_string());
+        }
+    }
+
+    /// Innermost-first lookup: if any active cleanup-rename frame
+    /// introduced this binding, return the mangled form; else return
+    /// the bare name. The deepest frame wins, matching scope shadow
+    /// semantics for nested defer-in-defer.
+    fn mangle_binding(&self, name: &str) -> String {
+        for frame in self.cleanup_rename_stack.iter().rev() {
+            if frame.bindings.contains(name) {
+                return format!("{}{}", name, frame.suffix);
+            }
+        }
+        name.to_string()
     }
 
     fn classify(&self, span: &Span) -> UseKind {
@@ -312,7 +379,23 @@ impl<'a> CfgBuilder<'a> {
     }
 
     fn record_use(&mut self, block: BlockId, use_site: UseSite) {
-        self.blocks[block].uses.push(use_site);
+        let UseSite {
+            binding,
+            kind,
+            span,
+            consume_origin,
+        } = use_site;
+        // Inner-locals of an active cleanup-site lowering get mangled
+        // here so the formal RC predicate doesn't pair their
+        // duplicated Consume sites across per-exit-site cleanup
+        // blocks. Outer captures match no frame and are unchanged.
+        let binding = self.mangle_binding(&binding);
+        self.blocks[block].uses.push(UseSite {
+            binding,
+            kind,
+            span,
+            consume_origin,
+        });
     }
 
     /// Walk a statement-block, returning the block id where execution
@@ -388,7 +471,9 @@ impl<'a> CfgBuilder<'a> {
                 if item.kind == DeferKind::ErrDefer {
                     let body_entry = self.new_block();
                     self.add_edge(cur, body_entry);
+                    self.push_cleanup_rename_frame();
                     cur = self.lower_block(item.body, body_entry, exit, loops);
+                    self.pop_cleanup_rename_frame();
                 }
             }
         }
@@ -396,7 +481,9 @@ impl<'a> CfgBuilder<'a> {
             if item.kind == DeferKind::Defer {
                 let body_entry = self.new_block();
                 self.add_edge(cur, body_entry);
+                self.push_cleanup_rename_frame();
                 cur = self.lower_block(item.body, body_entry, exit, loops);
+                self.pop_cleanup_rename_frame();
             }
         }
         cur
@@ -435,20 +522,35 @@ impl<'a> CfgBuilder<'a> {
         loops: &[LoopFrame],
     ) -> BlockId {
         match &stmt.kind {
-            StmtKind::Let {
-                pattern: _, value, ..
-            } => {
+            StmtKind::Let { pattern, value, .. } => {
                 // Lower the RHS — it may consume / read bindings — then
                 // the let binding is just a definition (no use of itself).
-                self.lower_expr(value, cur, exit, loops)
+                let after = self.lower_expr(value, cur, exit, loops);
+                // Register the introduced bindings against the active
+                // cleanup-rename frame (if any). The function body's
+                // own introductions are no-ops; only defer/errdefer
+                // body lowerings push a cleanup frame.
+                for name in pattern_bindings(pattern) {
+                    self.note_local_introduced(&name);
+                }
+                after
             }
-            StmtKind::LetUninit { .. } => cur,
+            StmtKind::LetUninit { name, .. } => {
+                self.note_local_introduced(name);
+                cur
+            }
             StmtKind::LetElse {
-                value, else_block, ..
+                pattern,
+                value,
+                else_block,
+                ..
             } => {
                 // `let pat = expr else { diverge }` — the else branch
                 // diverges (returns / break) and never falls through.
                 let after = self.lower_expr(value, cur, exit, loops);
+                for name in pattern_bindings(pattern) {
+                    self.note_local_introduced(&name);
+                }
                 let else_entry = self.new_block();
                 self.add_edge(after, else_entry);
                 // The else block diverges — we still walk it for
@@ -973,9 +1075,9 @@ fn resolve_loop_frame<'f>(loops: &'f [LoopFrame], label: Option<&str>) -> Option
 }
 
 /// Helper: extract the binding names introduced by a pattern. Used by
-/// the integrated dataflow pass; exposed here because the CFG builder
-/// needs to know what bindings come into scope at a `let pat = ...`.
-#[allow(dead_code)]
+/// the cleanup-rename pass (defer/errdefer body lowering) to register
+/// inner-local introductions, and exposed for the integrated dataflow
+/// pass.
 pub(crate) fn pattern_bindings(pattern: &Pattern) -> Vec<String> {
     fn walk(p: &Pattern, out: &mut Vec<String>) {
         match &p.kind {
@@ -1518,6 +1620,81 @@ mod tests {
         assert!(
             x_reads >= 1,
             "errdefer body must place a read of `x` in the ?-error cleanup chain, got {x_reads}"
+        );
+    }
+
+    #[test]
+    fn defer_body_inner_locals_alpha_renamed_per_cleanup_site() {
+        // Round 12.41 lowers each defer body per-exit-site. Inner-
+        // locals introduced inside the body (here `local`) appear in
+        // every cleanup block — without per-cleanup-site renaming
+        // those duplicates would pair as dominance-incomparable
+        // Consume sites and spuriously fire the formal RC predicate
+        // for a binding that has only one live instance per emission.
+        // The CFG builder mangles each inner-local with a suffix
+        // unique to its cleanup-site lowering.
+        let cfg = cfg_of(
+            "struct Box { v: i64 }\n\
+             fn use_local(b: ref Box) { }\n\
+             fn main() {\n\
+                 let x = 1;\n\
+                 defer { let local = Box { v: 0 }; use_local(local); }\n\
+                 if x > 0 { return; }\n\
+             }",
+        );
+        let mut local_bare = 0;
+        let mut local_mangled: HashSet<String> = HashSet::new();
+        for block in &cfg.blocks {
+            for u in &block.uses {
+                if u.binding == "local" {
+                    local_bare += 1;
+                } else if u.binding.starts_with("local@") {
+                    local_mangled.insert(u.binding.clone());
+                }
+            }
+        }
+        assert_eq!(
+            local_bare, 0,
+            "bare `local` must not appear in any UseSite after renaming"
+        );
+        assert!(
+            local_mangled.len() >= 2,
+            "at least two distinct mangled `local` names must appear (one per cleanup site); got {local_mangled:?}"
+        );
+    }
+
+    #[test]
+    fn defer_body_outer_capture_keeps_bare_name() {
+        // The renaming targets inner-locals introduced inside the
+        // body; outer captures (referenced from the body but defined
+        // in the enclosing scope) keep their bare name. The formal
+        // RC predicate must continue to see all cleanup-block reads
+        // of the same outer capture as one binding.
+        let cfg = cfg_of(
+            "struct Box { v: i64 }\n\
+             fn use_x(b: ref Box) { }\n\
+             fn main() {\n\
+                 let x = Box { v: 0 };\n\
+                 defer { use_x(x); }\n\
+                 if x.v > 0 { return; }\n\
+             }",
+        );
+        let mut x_bare = 0;
+        for block in &cfg.blocks {
+            for u in &block.uses {
+                if u.binding == "x" {
+                    x_bare += 1;
+                }
+                assert!(
+                    !u.binding.starts_with("x@"),
+                    "outer capture `x` must not be renamed; got `{}`",
+                    u.binding
+                );
+            }
+        }
+        assert!(
+            x_bare > 0,
+            "outer-capture `x` reads must appear under their bare name"
         );
     }
 
