@@ -711,6 +711,63 @@ impl<'ctx> super::Codegen<'ctx> {
                 // consistent so re-entry to grow logic always picks the
                 // same multipliers.
                 self.builder.position_at_end(grow_bb);
+
+                // Overlap guard. When the source slice points into the
+                // receiver's own heap buffer (`v.extend_from_slice(v
+                // .as_slice())` and any expression that produces a
+                // slice over `data..data+cap*elem_size`), the grow
+                // path is about to `free(data)` before reading from
+                // `src_data` — which would dangle. `push` / `push_str`
+                // don't carry this hazard (source is a by-value element
+                // / static-storage byte slice). The cost is paid only
+                // in the rare grow case, already the cold path. Use
+                // ptrtoint+i64 compares so the predicate is portable
+                // across address spaces and target widths.
+                let src_int = self
+                    .builder
+                    .build_ptr_to_int(src_data, i64_t, "efs.src.int")
+                    .unwrap();
+                let data_int = self
+                    .builder
+                    .build_ptr_to_int(data, i64_t, "efs.data.int")
+                    .unwrap();
+                let cap_bytes_grow = self
+                    .builder
+                    .build_int_mul(cap, elem_size, "efs.cap.bytes")
+                    .unwrap();
+                let data_end = self
+                    .builder
+                    .build_int_add(data_int, cap_bytes_grow, "efs.data.end")
+                    .unwrap();
+                let ge_start = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGE,
+                        src_int,
+                        data_int,
+                        "efs.ge.start",
+                    )
+                    .unwrap();
+                let lt_end = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::ULT, src_int, data_end, "efs.lt.end")
+                    .unwrap();
+                let overlap = self
+                    .builder
+                    .build_and(ge_start, lt_end, "efs.overlap")
+                    .unwrap();
+                let panic_bb = self.context.append_basic_block(fn_val, "efs.alias.panic");
+                let no_overlap_bb = self.context.append_basic_block(fn_val, "efs.no_overlap");
+                self.builder
+                    .build_conditional_branch(overlap, panic_bb, no_overlap_bb)
+                    .unwrap();
+                self.builder.position_at_end(panic_bb);
+                self.emit_panic(
+                    "Vec.extend_from_slice: source slice aliases destination buffer (use a distinct source when grow is required)",
+                );
+                self.builder.build_unreachable().unwrap();
+                self.builder.position_at_end(no_overlap_bb);
+
                 let two = i64_t.const_int(2, false);
                 let four = i64_t.const_int(4, false);
                 let doubled = self.builder.build_int_mul(cap, two, "efs.doubled").unwrap();

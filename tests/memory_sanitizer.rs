@@ -130,6 +130,38 @@ mod memory_sanitizer_tests {
         }
     }
 
+    /// Assert a program panics under ASAN (exit code 1) with `emit_panic`'s
+    /// `printf + exit(1)` shape, and that the panic message appears on
+    /// stdout. Skips on hosts lacking ASAN. Counterpart to
+    /// `assert_clean_asan_run` for runtime-guard tests (e.g. the
+    /// `extend_from_slice` source-alias guard) where the codegen
+    /// deliberately rejects a misuse rather than silently corrupting.
+    fn assert_asan_panics_with(src: &str, expected_substring: &str, label: &str) {
+        if !asan_available() {
+            eprintln!("[{label}] ASAN unavailable on this host — skipping");
+            return;
+        }
+        let Some((stdout, status)) = run_under_asan(src, label) else {
+            eprintln!("[{label}] setup failed — skipping");
+            return;
+        };
+        // `emit_panic` exits with code 1. `success()` is false; ASAN's own
+        // exit code (23) would indicate a memory error rather than the
+        // expected panic, so check for exactly 1 to disambiguate.
+        assert_eq!(
+            status.code(),
+            Some(1),
+            "[{label}] expected exit code 1 from emit_panic; got {:?}. \
+             stdout was: {stdout:?}",
+            status.code(),
+        );
+        assert!(
+            stdout.contains(expected_substring),
+            "[{label}] panic message missing {expected_substring:?}; \
+             stdout was: {stdout:?}",
+        );
+    }
+
     /// Assert a program runs cleanly under ASAN and produces the expected
     /// stdout. Skips (prints a notice, passes the test) if the host can't
     /// support ASAN — see `asan_available` for the rationale.
@@ -549,6 +581,56 @@ fn main() {
 "#,
             &["3"],
             "vec_extend_from_slice_nested_index_source_clean",
+        );
+    }
+
+    // ── extend_from_slice: source-alias rejection (grow path) ────
+    // When the source slice points into the receiver's own heap
+    // buffer (e.g. `v.extend_from_slice(v.as_slice())`) and grow
+    // fires, the grow path frees the old buffer before reading
+    // from `src_data` — a use-after-free that previously silently
+    // corrupted the extended elements (the read returned whatever
+    // the allocator handed back from the recycled slot, often the
+    // freshly-malloc'd new buffer's tail). The runtime overlap
+    // guard in `extend_from_slice` detects the case before the
+    // free and `emit_panic`s instead. Test verifies (a) the
+    // guard fires with the expected message, and (b) the
+    // disjoint-source counterpart still runs cleanly.
+
+    #[test]
+    fn asan_vec_extend_from_slice_self_alias_rejects() {
+        assert_asan_panics_with(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(2);
+    v.push(1);
+    v.push(2);
+    v.extend_from_slice(v.as_slice());
+    println(v.len());
+}
+"#,
+            "source slice aliases destination buffer",
+            "vec_extend_from_slice_self_alias_rejects",
+        );
+    }
+
+    #[test]
+    fn asan_vec_extend_from_slice_disjoint_source_no_panic() {
+        // Disjoint src/dst — guard must NOT fire even when the grow
+        // path runs. dst cap=2, push one element so grow is required
+        // mid-extend. Counterpart to the rejection test above.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 5);
+    let mut dst: Vec[i64] = Vec.with_capacity(2);
+    dst.push(1);
+    dst.extend_from_slice(src);
+    println(dst.len());
+}
+"#,
+            &["5"],
+            "vec_extend_from_slice_disjoint_source_no_panic",
         );
     }
 
