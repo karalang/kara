@@ -13715,4 +13715,131 @@ fn main() {
             "pure function must not emit a poll-fn:\n{ir}"
         );
     }
+
+    // ── Phase 6 line 26 slice 7: switch-on-tag dispatch ────────────────
+    //
+    // Slice 6 emitted a poll-fn stub that loaded the yield-point tag and
+    // unconditionally returned Pending. Slice 7 replaces that
+    // unconditional return with a `switch i32 %tag` against N+1 arm
+    // labels (entry state + one post-yield state per yield point). Each
+    // arm still returns Pending — slice 8 fills in the per-arm
+    // captured-locals reload + actual user-code resume.
+
+    /// Extract the textual LLVM IR for a named function from a module
+    /// dump. Returns the substring starting at `define internal ... @<name>(`
+    /// and ending at the matching closing `}`. Used by slice-7+ tests to
+    /// assert against per-function shapes without grepping a global IR
+    /// blob (where arm blocks from other functions could collide).
+    fn extract_fn_ir<'a>(ir: &'a str, fn_name: &str) -> &'a str {
+        let needle = format!("@{fn_name}(");
+        let start = ir.find(&needle).unwrap_or_else(|| {
+            panic!("function @{fn_name} not found in IR:\n{ir}");
+        });
+        // Find the start of the `define` line so we capture the full
+        // signature, not just from the @-name.
+        let line_start = ir[..start].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        // End: scan forward for the standalone `}` that closes the fn.
+        let tail = &ir[line_start..];
+        let end_rel = tail.find("\n}\n").unwrap_or(tail.len());
+        &tail[..end_rel + 3]
+    }
+
+    #[test]
+    fn test_poll_fn_emits_switch_on_tag() {
+        // The slice-7 dispatch replaces the unconditional `ret i8 0`
+        // with `switch i32 %tag, ...`. Pin the instruction shape so a
+        // future slice that changes the dispatch mechanism (e.g. an
+        // indirect branch through a function-pointer table) forces a
+        // deliberate test update.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("switch i32 %tag"),
+            "poll-fn must dispatch via `switch i32 %tag`:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_switch_has_n_plus_one_arms_for_n_yields() {
+        // A function with one yield point has 2 arms (state_0 + state_1):
+        // state_0 is the initial-call entry state (before any yield),
+        // state_1 is the post-yield resume state. Slice 7 emits both as
+        // Pending-return stubs; slice 8 fills them in.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("state_0:"),
+            "poll-fn must have a `state_0:` arm (initial-call state):\n{body}"
+        );
+        assert!(
+            body.contains("state_1:"),
+            "poll-fn must have a `state_1:` arm (post-yield-1 state):\n{body}"
+        );
+        assert!(
+            !body.contains("state_2:"),
+            "poll-fn with 1 yield must NOT have a `state_2:` arm:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_switch_default_is_unreachable() {
+        // The default switch arm goes to a `tag_unreachable` block that
+        // contains a single `unreachable` instruction. Tells LLVM the
+        // out-of-range tag path is impossible and unlocks downstream
+        // optimizations of the switch (e.g. jump-table compaction).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("tag_unreachable:"),
+            "poll-fn must have a `tag_unreachable:` default arm:\n{body}"
+        );
+        // Make sure the unreachable instruction itself is present (not
+        // just the label) — the label without the instruction would
+        // produce malformed IR LLVM would reject at module-verify time.
+        assert!(
+            body.contains("unreachable"),
+            "default arm must end in the `unreachable` instruction:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_switch_multi_yield_arm_count() {
+        // Three yield points → 4 arms (state_0 through state_3). Pins
+        // that the arm count scales with the yield-point count per the
+        // N+1 spec.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             pub fn upload() with sends(Network) {}
+             fn driver() {
+                 fetch();
+                 upload();
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        for i in 0..4 {
+            let label = format!("state_{i}:");
+            assert!(
+                body.contains(&label),
+                "poll-fn with 3 yields must have arm `{label}`:\n{body}"
+            );
+        }
+        assert!(
+            !body.contains("state_4:"),
+            "poll-fn with 3 yields must NOT have `state_4:` arm:\n{body}"
+        );
+    }
 }

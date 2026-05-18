@@ -233,22 +233,69 @@ impl<'ctx> super::Codegen<'ctx> {
                 .builder
                 .build_struct_gep(state_struct, state_ptr, 0, "tag_ptr")
                 .expect("state struct field 0 (tag) GEP must succeed");
-            // Load the tag — unused in the slice-6 stub but the load
-            // pins the GEP at -O0 so the IR text shows the type-ref.
-            // Subsequent sub-slices feed the loaded value into the
-            // dispatch switch.
-            let _tag = self
+            // Load the tag — drives the slice-7 switch dispatch. The
+            // GEP + load are the prologue every subsequent sub-slice
+            // keeps; slice 7 adds the switch arms; slice 8 fills in
+            // per-yield-arm captured-locals reload + user-code resume.
+            let tag = self
                 .builder
                 .build_load(i32_ty, tag_ptr, "tag")
-                .expect("load tag from state struct");
+                .expect("load tag from state struct")
+                .into_int_value();
 
-            // Return `KaracPollResult.Pending` (discriminant 0). The
-            // line-17 slice-2 ABI fixed Pending=0 and tested it via
-            // `karac_poll_result_discriminants_match_codegen_abi`, so
-            // the literal-0 stub is self-consistent.
+            // Slice 7: switch the tag against one arm per (initial-call
+            // state + per-yield post-resume state). For N yield points
+            // recorded on the function, emit N+1 arms — state 0 is the
+            // initial call (before any yield); states 1..=N are the
+            // post-yield resume points. The default arm is `unreachable`
+            // since the runtime never invokes the poll-fn with an
+            // out-of-range tag (the state-struct initializer pins tag=0
+            // at allocation time, and tag transitions are codegen-
+            // controlled). Slice 6's stub returned Pending
+            // unconditionally; slice 7 keeps each arm at Pending so the
+            // observable per-arm behavior is unchanged — slice 8 fills
+            // the arms with actual resume logic.
+            let yield_count = program
+                .yield_points
+                .get(fn_key)
+                .map(|v| v.len())
+                .unwrap_or(0);
+            let arm_count = yield_count + 1;
+            let default_block = self.context.append_basic_block(poll_fn, "tag_unreachable");
+            let arm_blocks: Vec<_> = (0..arm_count)
+                .map(|i| {
+                    self.context
+                        .append_basic_block(poll_fn, &format!("state_{i}"))
+                })
+                .collect();
+            let cases: Vec<_> = arm_blocks
+                .iter()
+                .enumerate()
+                .map(|(i, bb)| (i32_ty.const_int(i as u64, false), *bb))
+                .collect();
             self.builder
-                .build_return(Some(&i8_ty.const_int(0, false)))
-                .expect("return from poll-fn stub");
+                .build_switch(tag, default_block, &cases)
+                .expect("build switch on state tag");
+
+            // Slice-7 stub bodies — each arm returns Pending. Slice 8
+            // replaces these returns with the per-yield-arm logic:
+            // state_0 runs the function body until the first yield,
+            // state_i (1..N) reloads captured locals from the state
+            // struct and resumes from the i-th yield point.
+            for arm_bb in &arm_blocks {
+                self.builder.position_at_end(*arm_bb);
+                self.builder
+                    .build_return(Some(&i8_ty.const_int(0, false)))
+                    .expect("return Pending from state-machine arm");
+            }
+            // Default block — unreachable, since the runtime never
+            // produces out-of-range tags. The `unreachable` instruction
+            // signals to LLVM that this path is impossible, enabling
+            // downstream optimizations to drop the default case.
+            self.builder.position_at_end(default_block);
+            self.builder
+                .build_unreachable()
+                .expect("unreachable tag default");
 
             // Restore the outer builder state.
             if let Some(bb) = saved_bb {
