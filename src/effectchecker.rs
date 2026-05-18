@@ -435,6 +435,7 @@ impl<'a> EffectChecker<'a> {
         // Path-call constructors: `Type.new()` form.
         for stdlib_fn in [
             "Vec.new",
+            "Vec.with_capacity",
             "Vec.from_slice",
             "Vec.push",
             // `VecDeque[T]`'s mutating method surface — seeded as

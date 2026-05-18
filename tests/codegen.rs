@@ -3766,6 +3766,79 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_with_capacity_len_zero_then_push_fills() {
+        // `Vec.with_capacity(N)` malloc's the buffer but reports
+        // `len == 0`. Subsequent push N times fills it; observable
+        // behavior matches `Vec.new()` plus reserve. The realloc-
+        // free guarantee is a perf property and isn't directly
+        // testable from kara code without IR inspection — this test
+        // covers the value-level contract.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(5);
+    println(v.len());
+    let mut i = 0i64;
+    while i < 5 {
+        v.push(i * 10);
+        i = i + 1;
+    }
+    println(v.len());
+    println(v[0]);
+    println(v[4]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0\n5\n0\n40");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_with_capacity_zero_push_grows() {
+        // Degenerate `with_capacity(0)` — same shape as `Vec.new()`.
+        // Push grows from there.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(0);
+    println(v.len());
+    v.push(42);
+    println(v.len());
+    println(v[0]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "0\n1\n42");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_with_capacity_exceeds_grows_correctly() {
+        // Push N+1 elements into a `with_capacity(N)` Vec — the
+        // (N+1)-th push must trigger a grow and the final state
+        // must be correct (no data corruption from the grow path
+        // copying out of the malloc'd buffer).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(2);
+    v.push(10);
+    v.push(20);
+    v.push(30);
+    println(v.len());
+    println(v[0]);
+    println(v[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n10\n30");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_push_back_len_is_empty() {
         // VecDeque codegen v1 surface: `new` + `push_back` + `len` +
         // `is_empty` mirror Vec's `{ptr, len, cap}` layout exactly.

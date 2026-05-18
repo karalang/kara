@@ -830,7 +830,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `StructLiteral` match the base case directly.
                 let is_fresh_construction = rhs_yields_fresh_ref(value);
                 let rhs_is_fstring = matches!(&value.kind, ExprKind::InterpolatedStringLit(_));
+                // Thread the binding's Vec element type through to
+                // `Vec.with_capacity(n)` in the RHS — the zero-arg
+                // constructor can't recover `T` from arguments, but
+                // `vec_elem_types[var_name]` is already populated above
+                // from the annotation (or pattern_binding_inner_types
+                // for the no-annotation path). Cleared after compile.
+                let saved_pending_let_elem = self.pending_let_elem_type.take();
+                if let PatternKind::Binding(var_name) = &pattern.kind {
+                    if let Some(&elem_ty) = self.vec_elem_types.get(var_name.as_str()) {
+                        self.pending_let_elem_type = Some(elem_ty);
+                    }
+                }
                 let val = self.compile_expr(value)?;
+                self.pending_let_elem_type = saved_pending_let_elem;
                 // Sibling to the Assign arm's f-string staged-acc capture.
                 // The slot is consumed below at the tracked-Vec/String let-
                 // binding site (it transfers ownership of the buffer to

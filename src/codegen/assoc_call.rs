@@ -722,6 +722,67 @@ impl<'ctx> super::Codegen<'ctx> {
             };
         }
 
+        // `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec (len=0)
+        // with pre-allocated capacity n, so subsequent push calls don't
+        // grow until the (n+1)-th. Element type recovery: with_capacity
+        // has no value arg, so `T` must come from the destination
+        // binding's annotation — `compile_stmt` (stmts.rs around the
+        // `compile_expr(value)` call) threads the binding's
+        // `vec_elem_types[var]` lookup through `pending_let_elem_type`
+        // for exactly this case. Untyped usage (`let v = Vec.with_capacity(8); v.push(...)`)
+        // would need the typechecker's inferred-type table; not
+        // supported here — requires an explicit `let v: Vec[T] = ...`
+        // annotation.
+        if type_name == "Vec" && method == "with_capacity" {
+            if args.len() != 1 {
+                return Err(format!(
+                    "Vec.with_capacity expects 1 argument (capacity), got {}",
+                    args.len()
+                ));
+            }
+            let elem_ty = self.pending_let_elem_type.ok_or_else(|| {
+                "Vec.with_capacity: element type unknown — requires a `let v: Vec[T] = ...` annotation"
+                    .to_string()
+            })?;
+            let n = self.compile_expr(&args[0].value)?.into_int_value();
+            let elem_size = elem_ty.size_of().unwrap();
+            let alloc_bytes = self
+                .builder
+                .build_int_mul(n, elem_size, "with_cap.alloc_bytes")
+                .unwrap();
+            let buf = self
+                .builder
+                .build_call(self.malloc_fn, &[alloc_bytes.into()], "with_cap.buf")
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            // Build {data=buf, len=0, cap=n} aggregate. `len = 0` is the
+            // key difference from `Vec.filled`: capacity is reserved but
+            // the Vec is logically empty, so the first n pushes hit the
+            // pre-allocated slots without triggering grow.
+            let vec_ty = self.vec_struct_type();
+            let zero = self.context.i64_type().const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, buf, 0, "vec.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "vec.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, n, 2, "vec.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
+
         // `Vec.filled(n: i64, val: T) -> Vec[T]` — produces n copies of
         // val. Spec at design.md:1631. Codegen: malloc(n * sizeof(elem)),
         // loop i=0..n filling each slot with `val`, return

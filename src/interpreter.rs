@@ -1265,6 +1265,30 @@ impl<'a> Interpreter<'a> {
         Value::array_of(items)
     }
 
+    /// `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec (len=0) with
+    /// pre-allocated capacity n. Codegen relies on this for realloc-
+    /// free push-N runs; here in the interpreter the underlying
+    /// `Vec<Value>` honors the capacity hint, so the observable shape
+    /// matches `Vec.new()` + reserve. Element type is erased at the
+    /// Value layer (same as `Vec.new`).
+    pub(crate) fn eval_vec_with_capacity(&mut self, args: &[CallArg], span: &Span) -> Value {
+        let Some(n_arg) = args.first() else {
+            return self.record_runtime_error(
+                "Vec.with_capacity expects 1 argument (capacity), found 0",
+                span,
+            );
+        };
+        let n_val = self.eval_expr_inner(&n_arg.value);
+        let Value::Int(n) = n_val else {
+            return self.record_runtime_error("Vec.with_capacity capacity must be i64", span);
+        };
+        if n < 0 {
+            return self
+                .record_runtime_error("Vec.with_capacity capacity must be non-negative", span);
+        }
+        Value::array_of(Vec::with_capacity(n as usize))
+    }
+
     /// `VecDeque[T]` mutation methods — `push_back` / `push_front` /
     /// `pop_back` / `pop_front`. Caller already verified the receiver
     /// is `Value::Array`. Extracted so its locals don't bloat

@@ -158,6 +158,14 @@ impl<'a> super::Interpreter<'a> {
                 // overflowed `test_e2e_fibonacci`, same shape as the
                 // `and`/`or` short-circuit fix).
                 "Vec.filled" => return self.eval_vec_filled(args, span),
+                // `Vec.with_capacity(n: i64) -> Vec[T]` — empty Vec
+                // (len=0) with pre-allocated capacity n. In the
+                // tree-walk interpreter capacity is a hint to the
+                // underlying `Vec<Value>` so subsequent pushes up to n
+                // are realloc-free; every observable behavior matches
+                // `Vec.new()`. Element type is erased at the Value layer
+                // (matches `Vec.new`'s treatment).
+                "Vec.with_capacity" => return self.eval_vec_with_capacity(args, span),
                 // `Vec.from_slice(src) -> Vec[T]` — clone the source's
                 // elements into a fresh Vec. Mirrors codegen's bulk-copy
                 // shape; here the storage isn't shared so a fresh clone

@@ -358,6 +358,67 @@ fn test_vec_filled_negative_length_runtime_error() {
     );
 }
 
+// ── `Vec.with_capacity(n)` ──────────────────────────────────────
+
+#[test]
+fn test_vec_with_capacity_len_is_zero_then_push_works() {
+    // `Vec.with_capacity(N)` returns an empty Vec — `len() == 0`
+    // — but the underlying buffer is sized for at least N pushes
+    // without reallocating. Test verifies the observable contract:
+    // initial len is 0, push fills slots 0..N correctly.
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[i64] = Vec.with_capacity(5);
+            println(v.len());
+            let mut i = 0i64;
+            while i < 5 {
+                v.push(i * 10);
+                i = i + 1;
+            }
+            println(v.len());
+            println(v[0]);
+            println(v[4]);
+        }
+    "#);
+    assert_eq!(out, "0\n5\n0\n40\n");
+}
+
+#[test]
+fn test_vec_with_capacity_zero_is_legal() {
+    // `Vec.with_capacity(0)` is the degenerate case — same shape as
+    // `Vec.new()`. Subsequent push grows from there.
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[i64] = Vec.with_capacity(0);
+            println(v.len());
+            v.push(42);
+            println(v.len());
+            println(v[0]);
+        }
+    "#);
+    assert_eq!(out, "0\n1\n42\n");
+}
+
+#[test]
+fn test_vec_with_capacity_negative_runtime_error() {
+    // Mirrors `Vec.filled`'s negative-length guard. Kāra has no
+    // usize, so the typechecker accepts `i64` and the runtime
+    // rejects negatives.
+    let errs = runtime_errors(
+        r#"
+        fn main() {
+            let v: Vec[i64] = Vec.with_capacity(-1);
+            println(v.len());
+        }
+    "#,
+    );
+    assert!(
+        errs.iter()
+            .any(|e| format!("{e:?}").contains("Vec.with_capacity capacity must be non-negative")),
+        "expected non-negative-capacity runtime error; got: {errs:?}"
+    );
+}
+
 #[test]
 fn test_comparison() {
     assert_eq!(run("fn main() { println(3 > 2); }"), "true\n");

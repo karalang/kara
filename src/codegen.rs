@@ -382,6 +382,12 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) asserted_index_bounds: Vec<AssertedIndexBound>,
     /// Per-variable Vec element type tracking (variable name → element LLVM type).
     pub(crate) vec_elem_types: HashMap<String, BasicTypeEnum<'ctx>>,
+    /// Element type for the let-binding currently being compiled, threaded
+    /// through `compile_expr(rhs)` so zero-arg `Vec.with_capacity(n)` can
+    /// recover `T` from the annotation. Set just before compiling the let's
+    /// RHS, cleared just after. Read by `Vec.with_capacity` in
+    /// `compile_assoc_call`.
+    pub(crate) pending_let_elem_type: Option<BasicTypeEnum<'ctx>>,
     /// Per-variable Slice element type tracking (variable name → element LLVM type).
     /// Entries only exist for values whose LLVM representation is the
     /// 2-field slice struct `{ptr, i64}`; used to dispatch indexing and
@@ -1420,6 +1426,7 @@ impl<'ctx> Codegen<'ctx> {
             len_alias: HashMap::new(),
             asserted_index_bounds: Vec::new(),
             vec_elem_types: HashMap::new(),
+            pending_let_elem_type: None,
             slice_elem_types: HashMap::new(),
             fn_param_slice_elem: HashMap::new(),
             ref_params: HashMap::new(),

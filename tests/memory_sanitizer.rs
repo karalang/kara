@@ -220,6 +220,77 @@ fn main() {
         );
     }
 
+    // ── Vec.with_capacity: scope-exit free of pre-allocated buffer ─
+    // `with_capacity(N)` malloc's a buffer up front; the scope-exit
+    // cleanup must free it once, even though `len == 0` and no push
+    // ever fired. Catches a regression where the free path keys off
+    // `len > 0` instead of `cap > 0` and leaks the entire buffer.
+
+    #[test]
+    fn asan_vec_with_capacity_unused_buffer_freed() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let v: Vec[i64] = Vec.with_capacity(16);
+    println(v.len());
+}
+"#,
+            &["0"],
+            "vec_with_capacity_unused_buffer_freed",
+        );
+    }
+
+    // `with_capacity(N)` + push exactly N times — every slot fits in
+    // the pre-allocated buffer, no realloc fires, scope-exit frees
+    // the single original allocation. Counterpart to
+    // `asan_vec_growth_multiple_reallocs` which verifies the grow
+    // path; this one verifies the no-grow path.
+
+    #[test]
+    fn asan_vec_with_capacity_push_exact_n_no_grow() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(16);
+    let mut i = 0;
+    while i < 16 {
+        v.push(i);
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+            &["16"],
+            "vec_with_capacity_push_exact_n_no_grow",
+        );
+    }
+
+    // `with_capacity(N)` + push more than N times — forces a grow
+    // mid-flight, so both the original `with_capacity` malloc'd
+    // buffer AND the grown buffer need to be tracked correctly
+    // (old freed on grow, new freed on scope-exit). Catches a
+    // double-free if the grow path doesn't free the original
+    // before swapping the data pointer.
+
+    #[test]
+    fn asan_vec_with_capacity_push_past_n_grows_once() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.with_capacity(4);
+    let mut i = 0;
+    while i < 16 {
+        v.push(i);
+        i = i + 1;
+    }
+    println(v.len());
+}
+"#,
+            &["16"],
+            "vec_with_capacity_push_past_n_grows_once",
+        );
+    }
+
     // ── String: push_str + scope-exit free ────────────────────────
     // String shares the Vec-shaped layout; scope-exit cleanup should free
     // the UTF-8 buffer. Static literals have cap=0 and must NOT be freed —
