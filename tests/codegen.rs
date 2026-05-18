@@ -15613,6 +15613,126 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8p: assignment statements inside arm bodies ─
+    //
+    // `name = value` assignments where `name` is already in `current_names`
+    // (a captured local OR an arm-local let) store the recognised value
+    // into the binding's existing slot — no new alloca. Composes with
+    // slice 8n writeback: assigning to a captured local in arm 0 makes
+    // the new value land in the state-struct field at yield, so arm 1's
+    // reload sees the updated value.
+
+    #[test]
+    fn test_body_splitting_8p_assigns_literal_to_captured_local() {
+        // `fn driver(n: i64) with sends(Network) { n = 99; fetch(); }`
+        // — assign before yield; writeback in slice 8n sees the new
+        // value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 n = 99;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 99, ptr %n.slot"),
+            "assignment n = 99 must store into existing n.slot:\n{body}"
+        );
+        // Slice 8n writeback should now load n.slot (post-99) and
+        // store into the state-struct field before the yield.
+        let assign_pos = body
+            .find("store i64 99, ptr %n.slot")
+            .expect("assignment store missing");
+        let writeback_pos = body
+            .find("%n.writeback = load i64, ptr %n.slot")
+            .expect("writeback load missing");
+        assert!(
+            assign_pos < writeback_pos,
+            "assignment must precede the writeback load:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8p_assigns_captured_to_captured() {
+        // `fn driver(a: i64, b: i64) with sends(Network) { b = a; fetch(); }`
+        // — assign one captured local from another. Both slots are
+        // already in slot_map from slice 8a; the assignment loads from
+        // `a.slot` and stores into `b.slot`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: i64, b: i64) with sends(Network) receives(Network) {
+                 b = a;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%a.assign_rhs = load i64, ptr %a.slot"),
+            "RHS read must load from a.slot via .assign_rhs:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %a.assign_rhs, ptr %b.slot"),
+            "LHS write must store into b.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8p_assigns_in_terminal_arm_no_writeback() {
+        // Assignment in the terminal arm — no yield follows, so no
+        // writeback emits. The assignment still stores into the slot
+        // (visible to the final-expression read in slice 8o).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) {
+                 fetch();
+                 n = 42;
+                 n
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 42, ptr %n.slot"),
+            "terminal-arm assignment must store into n.slot:\n{body}"
+        );
+        // The slice-8o final-expression read should see the new value.
+        assert!(
+            body.contains("%n.return = load i64, ptr %n.slot"),
+            "terminal final-expression must load from updated n.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8p_assignment_to_unknown_name_silently_dropped() {
+        // Assignment whose target isn't in `current_names` (here:
+        // assignment to a non-existent variable would fail at the
+        // typechecker; this test instead uses a field assignment which
+        // has a non-Identifier target, demonstrating the
+        // non-identifier-target skip path).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.count = 7;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // FieldAccess target (h.count = 7) is non-Identifier — the
+        // walker drops it. No new store-into-arm-local sites should
+        // arise; `h.slot` itself isn't even emitted because struct-
+        // literal RHS isn't recognised by slice 8m.
+        assert!(
+            !body.contains("store i64 7, ptr %h.slot"),
+            "field-assign target must not store into any arm-local slot:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
     //
     // The terminal-arm store into the state-struct terminal field now

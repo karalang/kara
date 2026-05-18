@@ -56,6 +56,17 @@ enum BodySplitStmt {
     /// types stay deferred until typed-aware lowering threads
     /// param/let-type information into the walker.
     Let { name: String, rhs: BodyArg },
+    /// Slice 8p: `name = <recognised-value>` assignment to an in-scope
+    /// binding (captured-local OR arm-local let). The walker accepts
+    /// `StmtKind::Assign { target, value }` where `target` is an
+    /// `ExprKind::Identifier(name)` with `name` in `current_names` and
+    /// `value` matches `BodyArg`. Emission compiles the value and
+    /// stores it into the binding's existing slot — does NOT alloca a
+    /// new slot. Composes with slice 8n writeback: an assignment to a
+    /// captured local in a non-terminal arm is written back to the
+    /// state-struct field before the yield, so the post-yield reload
+    /// sees the updated value.
+    Assign { name: String, value: BodyArg },
 }
 
 /// Slice 8k: per-arg shape recognised by the body-splitting walker.
@@ -345,6 +356,28 @@ impl<'ctx> super::Codegen<'ctx> {
                                     rhs,
                                 });
                                 current_names.insert(name.clone());
+                            }
+                        }
+                        continue;
+                    }
+                    // Slice 8p: `name = value` assignment. Walker
+                    // accepts targets that are bare identifiers
+                    // already in `current_names` (i.e. captured-local
+                    // params OR arm-local lets); value must match the
+                    // recognised `BodyArg` set. Non-identifier targets
+                    // (field assignments, index assignments) and
+                    // unrecognised values are silently skipped — same
+                    // conservative rule.
+                    if let StmtKind::Assign { target, value } = &stmt.kind {
+                        if let ExprKind::Identifier(name) = &target.kind {
+                            if current_names.contains(name) {
+                                if let Some(body_value) = recognize_body_arg(value, &current_names)
+                                {
+                                    per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
+                                        name: name.clone(),
+                                        value: body_value,
+                                    });
+                                }
                             }
                         }
                         continue;
@@ -775,6 +808,49 @@ impl<'ctx> super::Codegen<'ctx> {
                                     .build_store(slot, value)
                                     .expect("store let RHS into slot");
                                 slot_map.insert(name.clone(), (i64_ty.into(), slot));
+                            }
+                            BodySplitStmt::Assign { name, value } => {
+                                // Slice 8p: assignment to an existing
+                                // in-scope binding (captured-local OR
+                                // arm-local let). Look up the slot in
+                                // `slot_map` (DON'T alloca a new one),
+                                // compute the value via the slice-8k
+                                // discipline, and store. Across yields:
+                                // when the target is a captured local,
+                                // slice 8n's writeback before the next
+                                // yield picks up the new value and
+                                // writes it to the state-struct field
+                                // so the post-yield reload sees it.
+                                let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() else {
+                                    continue;
+                                };
+                                let new_val: inkwell::values::BasicValueEnum<'ctx> = match value {
+                                    BodyArg::IntLit(v) => {
+                                        self.context.i64_type().const_int(*v as u64, true).into()
+                                    }
+                                    BodyArg::Slot(src_field) => {
+                                        let Some((src_ty, src_ptr)) =
+                                            slot_map.get(src_field).copied()
+                                        else {
+                                            continue;
+                                        };
+                                        self.builder
+                                            .build_load(
+                                                src_ty,
+                                                src_ptr,
+                                                &format!("{src_field}.assign_rhs"),
+                                            )
+                                            .expect("load assign RHS from slot")
+                                    }
+                                };
+                                self.builder
+                                    .build_store(slot_ptr, new_val)
+                                    .expect("store assignment value into slot");
+                                // Silence unused — slot_ty currently
+                                // not consulted; future typed-aware
+                                // lowering will use it to coerce the
+                                // const width.
+                                let _ = slot_ty;
                             }
                         }
                     }
