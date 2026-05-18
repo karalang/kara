@@ -147,6 +147,118 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── State-machine poll-function emission (line 26 slice 6) ────────
+
+    /// Emit one stub poll function per entry in
+    /// `program.state_struct_layouts` (slice 4 output, slice 5 emitted
+    /// the state struct type itself). Each poll function carries the ABI
+    /// from line-17 sub-item-2 `KaracParkedTask.poll_fn` — `i8 fn(ptr
+    /// state, ptr cancel)` returning the `KaracPollResult` discriminant
+    /// (`0=Pending`, `1=Ready`, `2=Err`) — so caller-side allocate-
+    /// state-struct-then-invoke-poll work in slice 7+ can wire against
+    /// a stable signature without waiting for the full switch-on-tag
+    /// transform to land.
+    ///
+    /// Slice 6's body is a **stub**: loads the yield-point tag from
+    /// `state[0]` via a typed GEP into `state_struct_types[fn_key]`
+    /// (which keeps the named state-struct type referenced from a real
+    /// instruction — the slice-5 anchor global stays in place as
+    /// belt-and-suspenders for now), then unconditionally returns
+    /// Pending. Subsequent sub-slices replace the unconditional return
+    /// with the dispatch switch (one arm per yield point + the entry
+    /// state for the first poll), the per-yield-arm captured-locals
+    /// reload + actual user-code resume, and the Ready/Err return
+    /// paths.
+    ///
+    /// Must run after `emit_state_struct_types` (the GEP type operand
+    /// requires the state struct type to exist). Runs before
+    /// `collect_soa_layouts` to slot alongside the other line-26
+    /// codegen pieces, though the ordering doesn't matter — the SOA
+    /// pass doesn't touch state structs.
+    pub(super) fn emit_state_machine_poll_fns(&mut self, program: &Program) {
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Poll-fn ABI: `i8 fn(ptr state, ptr cancel)`.
+        let fn_type = i8_ty.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty),
+                BasicMetadataTypeEnum::from(ptr_ty),
+            ],
+            false,
+        );
+        // Sort the keys for deterministic emission order — HashMap
+        // iteration order is randomized, and we want the IR text to be
+        // stable across runs so test grep is reproducible (the existing
+        // per-fn IR-grep tests don't depend on ordering, but ASAN /
+        // FileCheck-style invariants would).
+        let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
+        keys.sort();
+        for fn_key in keys {
+            let state_struct = match self.state_struct_types.get(fn_key) {
+                Some(st) => *st,
+                // Defensive: layout entry without a corresponding LLVM
+                // struct type means slice-5 emit didn't run or the key
+                // shapes diverged. Skip rather than crash — the test
+                // suite will surface the divergence before users do.
+                None => continue,
+            };
+            let poll_name = format!("__kara_poll_{fn_key}");
+            let poll_fn = self.module.add_function(&poll_name, fn_type, None);
+            // `Internal` rather than `Private`: both restrict visibility
+            // to the current module, but `Internal` is the conventional
+            // LLVM choice for codegen-synthesized helpers (the function
+            // appears as `define internal i8 @__kara_poll_<fn_key>`),
+            // while `Private` is reserved for symbols the linker should
+            // strip outright. Caller-side wiring in slice 7+ will load
+            // the FunctionValue through the side-table; the symbol need
+            // not be link-visible.
+            poll_fn.set_linkage(Linkage::Internal);
+
+            // Save outer builder position — slice 6 is invoked before
+            // function-body lowering runs, so there's no insert block
+            // to save, but the save/restore is cheap and future-proofs
+            // against re-ordering.
+            let saved_bb = self.builder.get_insert_block();
+
+            let entry = self.context.append_basic_block(poll_fn, "entry");
+            self.builder.position_at_end(entry);
+
+            // Typed GEP into the state struct's field 0 (the i32 tag).
+            // Keeps the named `%kara.state.<fn_key>` type referenced from
+            // a real instruction so LLVM's `print_to_string` retains the
+            // type-definition line.
+            let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(state_struct, state_ptr, 0, "tag_ptr")
+                .expect("state struct field 0 (tag) GEP must succeed");
+            // Load the tag — unused in the slice-6 stub but the load
+            // pins the GEP at -O0 so the IR text shows the type-ref.
+            // Subsequent sub-slices feed the loaded value into the
+            // dispatch switch.
+            let _tag = self
+                .builder
+                .build_load(i32_ty, tag_ptr, "tag")
+                .expect("load tag from state struct");
+
+            // Return `KaracPollResult.Pending` (discriminant 0). The
+            // line-17 slice-2 ABI fixed Pending=0 and tested it via
+            // `karac_poll_result_discriminants_match_codegen_abi`, so
+            // the literal-0 stub is self-consistent.
+            self.builder
+                .build_return(Some(&i8_ty.const_int(0, false)))
+                .expect("return from poll-fn stub");
+
+            // Restore the outer builder state.
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+
+            self.state_machine_poll_fns.insert(fn_key.clone(), poll_fn);
+        }
+    }
+
     pub(super) fn collect_soa_layouts(&mut self, program: &Program) {
         for item in &program.items {
             if let Item::LayoutDef(layout) = item {

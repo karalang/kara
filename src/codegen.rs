@@ -224,6 +224,23 @@ pub(super) struct Codegen<'ctx> {
     /// type at body-rewrite time. Empty when no network-boundary
     /// functions exist (the common case for non-network programs).
     pub(crate) state_struct_types: HashMap<String, StructType<'ctx>>,
+    /// State-machine poll functions for the network-event-loop transform
+    /// (phase 6 line 26 slice 6). Key: same function key shape as
+    /// `state_struct_types` (`name` / `Type.method`). Value:
+    /// `define internal i8 @__kara_poll_<fn_key>(ptr %state, ptr %cancel)`
+    /// FunctionValue carrying the poll-fn ABI per `KaracParkedTask.poll_fn`
+    /// (state-struct pointer + cancel `AtomicBool` pointer; returns the
+    /// `KaracPollResult` discriminant `0=Pending / 1=Ready / 2=Err`).
+    /// Slice 6 ships only the **stub body** (loads the tag via GEP into
+    /// the state struct's field 0, unconditionally returns Pending) —
+    /// the actual switch-on-tag dispatch + per-yield-arm lowering land
+    /// in subsequent sub-slices. The stub already makes the ABI concrete
+    /// in the IR so caller-side allocate-state-struct-then-invoke-poll
+    /// work in slice 7+ can wire against a stable signature. Populated
+    /// by `emit_state_machine_poll_fns` immediately after
+    /// `emit_state_struct_types`. Empty when no network-boundary
+    /// functions exist.
+    pub(crate) state_machine_poll_fns: HashMap<String, FunctionValue<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
     /// Field type-names in declaration order (struct name → per-field
@@ -1344,6 +1361,7 @@ impl<'ctx> Codegen<'ctx> {
             snprintf_fn,
             struct_types: HashMap::new(),
             state_struct_types: HashMap::new(),
+            state_machine_poll_fns: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
@@ -1620,6 +1638,13 @@ impl<'ctx> Codegen<'ctx> {
         // up the struct type at body-rewrite time. Empty when no
         // network-boundary functions exist (the common case).
         self.emit_state_struct_types(program);
+        // Phase 6 line 26 slice 6: emit a stub poll function per
+        // state-struct entry, declaring the line-17 `KaracParkedTask`
+        // poll-fn ABI (`i8 fn(ptr state, ptr cancel)`) for caller-side
+        // wiring in subsequent sub-slices. Body is a Pending-return
+        // stub at this slice; the dispatch switch + yield-arm lowering
+        // land in slice 7+.
+        self.emit_state_machine_poll_fns(program);
         self.collect_soa_layouts(program);
         self.declare_extern_functions(program)?;
 

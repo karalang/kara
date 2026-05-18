@@ -13571,4 +13571,148 @@ fn main() {
             "expected two inline Vec layouts in unioned state struct: {line}"
         );
     }
+
+    // ── Phase 6 line 26 slice 6: poll-function stub emission ───────────
+    //
+    // For each entry in `state_struct_layouts`, codegen emits a stub
+    // poll function carrying the `KaracParkedTask.poll_fn` ABI from
+    // line-17 sub-item-2 (`i8 fn(ptr state, ptr cancel)`). Slice 6's
+    // body is the minimal shape: load the yield-point tag via typed
+    // GEP into `state_struct_types[fn_key]`, then return Pending
+    // (discriminant 0) unconditionally. Subsequent sub-slices replace
+    // the unconditional return with the switch-on-tag dispatch and
+    // the per-yield-arm captured-locals reload + user-code resume.
+
+    #[test]
+    fn test_poll_fn_emitted_for_network_boundary_function() {
+        // A free function calling a `sends(Network)` callee gets a
+        // `define internal i8 @__kara_poll_driver(ptr, ptr)` stub poll
+        // function. The leading `__kara_poll_` prefix is the codegen-
+        // internal naming convention; the poll-fn is private linkage
+        // (module-local) so the `internal` qualifier appears on the
+        // define line.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let define_line = ir
+            .lines()
+            .find(|l| l.contains("@__kara_poll_driver"))
+            .unwrap_or_else(|| panic!("expected @__kara_poll_driver in IR:\n{ir}"));
+        assert!(
+            define_line.contains("define"),
+            "poll-fn should be defined, not just declared: {define_line}"
+        );
+        assert!(
+            define_line.contains("internal"),
+            "poll-fn should have internal linkage (private to module): {define_line}"
+        );
+        // Return type is i8 (KaracPollResult discriminant); two ptr
+        // params (state + cancel) per the line-17 KaracParkedTask ABI.
+        assert!(
+            define_line.contains("i8 @__kara_poll_driver(ptr"),
+            "poll-fn signature must be `i8 @__kara_poll_driver(ptr, ptr)`: {define_line}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_loads_tag_via_typed_gep() {
+        // The slice-6 stub body loads the yield-point tag from state
+        // struct field 0 via a typed GEP into `%kara.state.<fn_key>`.
+        // The GEP's type operand keeps the named state-struct type
+        // referenced from a real instruction, independent of the slice-5
+        // anchor global.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        // The GEP line looks like
+        //   `%tag_ptr = getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 0`
+        // with LLVM's exact spacing — match on the substring that's
+        // robust against the SSA-name variant LLVM picks for the
+        // anonymous `%0` state param (which is `%state` if inkwell
+        // names it; LLVM may renumber).
+        assert!(
+            ir.contains("getelementptr inbounds %kara.state.driver"),
+            "poll-fn stub must GEP into the state struct's typed field 0:\n{ir}"
+        );
+        assert!(
+            ir.contains("load i32"),
+            "poll-fn stub must load the i32 tag from the GEP result:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_returns_pending_stub() {
+        // The slice-6 stub returns `KaracPollResult.Pending` (discriminant
+        // 0) unconditionally — the dispatch switch lands in slice 7+.
+        // Pin the `ret i8 0` shape inside the poll function so a future
+        // slice that changes the return value forces a deliberate test
+        // update.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        // Carve out the poll-fn body by finding the define line and
+        // taking everything until the next closing brace at column 1.
+        let mut in_body = false;
+        let mut body = String::new();
+        for line in ir.lines() {
+            if line.contains("define internal i8 @__kara_poll_driver") {
+                in_body = true;
+            }
+            if in_body {
+                body.push_str(line);
+                body.push('\n');
+                if line == "}" {
+                    break;
+                }
+            }
+        }
+        assert!(!body.is_empty(), "could not find poll-fn body in IR:\n{ir}");
+        assert!(
+            body.contains("ret i8 0"),
+            "poll-fn stub must return Pending (i8 0):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_uses_dot_separated_name_for_methods() {
+        // Impl-method poll-fns carry the `Type.method` key shape with
+        // a literal `.` in the LLVM symbol — LLVM accepts dots in
+        // function names. Matches the existing impl-method symbol-
+        // mangling convention (`Hub.run` for the user method) and the
+        // `__kara_state_type_anchor_Hub.run` anchor naming from slice 5.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+             }",
+        );
+        assert!(
+            ir.contains("@__kara_poll_Hub.run"),
+            "expected @__kara_poll_Hub.run for impl method:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_not_emitted_for_pure_function() {
+        // A pure function (no network-effect calls) has no entry in
+        // `state_struct_layouts` per slice 4's presence rule and
+        // therefore no `__kara_poll_*` symbol in the IR.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }",
+        );
+        assert!(
+            !ir.contains("@__kara_poll_pure_helper"),
+            "pure function must not emit a poll-fn:\n{ir}"
+        );
+    }
 }
