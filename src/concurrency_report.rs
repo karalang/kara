@@ -327,6 +327,7 @@ mod tests {
             function_visibility: HashMap::new(),
             public_effects_policy: PublicEffectsPolicy::Declared,
             errors: Vec::new(),
+            queries: Vec::new(),
         }
     }
 
@@ -335,6 +336,7 @@ mod tests {
     fn test_render_concurrency_report_empty_analysis() {
         let analysis = ConcurrencyAnalysis {
             function_decisions: HashMap::new(),
+            queries: Vec::new(),
         };
         let effects = empty_effects();
         let program = Program::default();
@@ -362,6 +364,7 @@ mod tests {
         );
         let analysis = ConcurrencyAnalysis {
             function_decisions: decisions,
+            queries: Vec::new(),
         };
         let effects = empty_effects();
         // The renderer also needs the function in the program AST to render

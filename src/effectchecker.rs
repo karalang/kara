@@ -235,6 +235,10 @@ pub struct EffectCheckResult {
     pub public_effects_policy: PublicEffectsPolicy,
     /// Errors and warnings.
     pub errors: Vec<EffectError>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
+    /// Empty in v1; future catalogue entries originating from the
+    /// effect checker push `CompilerQuery` values here.
+    pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
 // ── Effect Checker ──────────────────────────────────────────────
@@ -584,6 +588,7 @@ impl<'a> EffectChecker<'a> {
             function_visibility: self.function_visibility,
             public_effects_policy: self.public_effects_policy,
             errors: self.errors,
+            queries: Vec::new(),
         }
     }
 

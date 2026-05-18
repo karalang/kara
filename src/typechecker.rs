@@ -641,6 +641,11 @@ pub struct TypeCheckResult {
     /// `method_callee_types` / `bare_assoc_fn_targets`). Consumed by
     /// the discard-site walker in `src/must_use_lint.rs`.
     pub must_use_functions: HashMap<String, Option<String>>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
+    /// Empty in v1; future P1.2 catalogue entry (generic
+    /// specialization on monomorphization tuple) pushes
+    /// `CompilerQuery` values here.
+    pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
 // ── Cross-module visibility helpers (CR-24 slice 6) ─────────────
@@ -1020,6 +1025,7 @@ impl<'a> TypeChecker<'a> {
             pattern_binding_borrow_modes: self.pattern_binding_borrow_modes,
             compiler_builtins,
             must_use_functions,
+            queries: Vec::new(),
         }
     }
 

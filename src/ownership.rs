@@ -554,6 +554,11 @@ pub struct OwnershipCheckResult {
     /// Populated by Phase-5 Theme 1 Slice 1 (borrow source attribution);
     /// consumed by Slice 2's conflict detector.
     pub slice_borrow_sources: HashMap<SpanKey, (PlaceExpr, bool)>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
+    /// Empty in v1; future P1.x catalogue entries (P1.1 RC fallback at
+    /// `src/ownership.rs:360`) push `CompilerQuery` values here as
+    /// they encounter decision sites with attributable alternatives.
+    pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -871,6 +876,7 @@ impl<'a> OwnershipChecker<'a> {
             rc_values: self.rc_values,
             arc_values: self.arc_values,
             slice_borrow_sources: self.slice_borrow_sources,
+            queries: Vec::new(),
         }
     }
 

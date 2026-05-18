@@ -155,6 +155,10 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
 pub struct ConcurrencyAnalysis {
     /// Per-function parallelization decisions.
     pub function_decisions: HashMap<String, FunctionConcurrency>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
+    /// Empty in v1; future P1.6 catalogue entry (auto-concurrency
+    /// fork threshold) pushes `CompilerQuery` values here.
+    pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
 /// Parallelization analysis for a single function.
@@ -326,6 +330,7 @@ impl<'a> ConcurrencyChecker<'a> {
 
         ConcurrencyAnalysis {
             function_decisions: decisions,
+            queries: Vec::new(),
         }
     }
 

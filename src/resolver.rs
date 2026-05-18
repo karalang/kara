@@ -567,6 +567,18 @@ pub struct ResolveResult {
     pub resolutions: HashMap<SpanKey, SymbolId>,
     pub symbol_table: SymbolTable,
     pub errors: Vec<ResolveError>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 1.
+    /// Stable item identity index: top-level item name → its `DefPath`.
+    /// Built during item collection at single-file resolve time;
+    /// project-mode multi-module assembly prepends module segments
+    /// at the cli.rs pipeline level. Surface lock — future query
+    /// catalogue entries consume this to mint stable `QueryId`s
+    /// that survive unrelated source edits.
+    pub def_paths: HashMap<String, crate::def_path::DefPath>,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 2.
+    /// Empty in v1; future catalogue entries push `CompilerQuery`
+    /// values from the resolver here.
+    pub queries: Vec<crate::queries::CompilerQuery>,
 }
 
 // ── Cross-module lookup helpers (CR-24 slice 5) ─────────────────
@@ -778,6 +790,8 @@ impl<'a> Resolver<'a> {
             resolutions: self.resolutions,
             symbol_table: self.table,
             errors: self.errors,
+            def_paths: crate::def_path::collect_item_def_paths(self.program),
+            queries: Vec::new(),
         }
     }
 

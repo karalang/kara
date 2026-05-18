@@ -3398,3 +3398,68 @@ fn attr_slice2_unknown_attribute_message_suggests_namespaced_form() {
         "expected tool-namespace suggestion; got: {msg}"
     );
 }
+
+// ── Phase-8 stdlib-floor § Compiler queries channel sub-item 1 ──
+
+#[test]
+fn def_paths_top_level_function_single_segment() {
+    let result = resolve_ok("fn sort_inplace() {}\nfn main() {}\n");
+    use karac::def_path::DefPath;
+    assert_eq!(
+        result.def_paths.get("sort_inplace"),
+        Some(&DefPath::item("sort_inplace")),
+    );
+    assert_eq!(result.def_paths.get("main"), Some(&DefPath::item("main")),);
+}
+
+#[test]
+fn def_paths_impl_method_uses_target_then_method_segments() {
+    let result = resolve_ok(
+        "struct Point { x: i64 }\n\
+         impl Point { fn new() -> Point { Point { x: 0 } } }\n\
+         fn main() {}\n",
+    );
+    use karac::def_path::DefPath;
+    // Impl methods key on the qualified `Type.method` name in the
+    // resolver index, with `DefPath` segments [target, method] so the
+    // human-readable form is `Point::new` (matches the path syntax
+    // users see in error messages and `karac query` output).
+    let dp = result
+        .def_paths
+        .get("Point.new")
+        .expect("expected DefPath for Point.new");
+    assert_eq!(
+        dp,
+        &DefPath::new(vec!["Point".to_string(), "new".to_string()]),
+    );
+    assert_eq!(dp.render(), "Point::new");
+}
+
+#[test]
+fn def_paths_stable_under_unrelated_insertion() {
+    // The motivating property: SpanKey-based identity invalidates
+    // every downstream key when a line is inserted at the top.
+    // DefPath-based identity must NOT.
+    let v1 = resolve_ok("fn alpha() {}\nfn beta() {}\nfn main() {}\n");
+    let v2 = resolve_ok(
+        "// unrelated leading comment\n\
+         const SEED_VALUE: i64 = 1;\n\
+         fn alpha() {}\n\
+         fn beta() {}\n\
+         fn main() {}\n",
+    );
+    assert_eq!(v1.def_paths.get("alpha"), v2.def_paths.get("alpha"));
+    assert_eq!(v1.def_paths.get("beta"), v2.def_paths.get("beta"));
+    assert_eq!(v1.def_paths.get("main"), v2.def_paths.get("main"));
+}
+
+#[test]
+fn def_paths_stable_under_unrelated_item_rename() {
+    let v1 = resolve_ok("fn alpha() {}\nfn beta() {}\n");
+    let v2 = resolve_ok("fn renamed_alpha() {}\nfn beta() {}\n");
+    // `beta` survives the rename of `alpha` to `renamed_alpha`.
+    assert_eq!(v1.def_paths.get("beta"), v2.def_paths.get("beta"));
+    // `alpha` is gone in v2; `renamed_alpha` is now keyed.
+    assert!(!v2.def_paths.contains_key("alpha"));
+    assert!(v2.def_paths.contains_key("renamed_alpha"));
+}
