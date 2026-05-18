@@ -582,6 +582,230 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `extend_from_slice(other: mut Slice[T])` — bulk-append all
+            // elements of `other` to `self`. Same shape as `push_str`
+            // but parameterized over the receiver's element type (rather
+            // than byte-typed). Source may be a Slice / Vec / Array,
+            // resolved via `coerce_to_slice` which returns a 2-field
+            // `{data, len}` slice header.
+            //
+            // Memcpy is sound only because both source and dest hold
+            // independent storage in the simple-element case. For RC-
+            // bearing element types (Vec[String], Vec[Vec[T]]), this
+            // bit-copies the inner aggregates — same shape as
+            // `Vec.from_slice`'s codegen path (see assoc_call.rs:911-913)
+            // and inherits the same v1 limitation: source and dest
+            // observers will both see the inner pointers. A follow-up
+            // slice should emit per-element clone for non-trivially-
+            // copyable element types via the synth_clone machinery.
+            "extend_from_slice" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "extend_from_slice expects 1 argument (source), got {}",
+                        args.len()
+                    ));
+                }
+                // Source coercion: try the Identifier / Range fast paths
+                // via `coerce_to_slice` first, then fall back to
+                // compile_expr-and-extract for arbitrary expressions
+                // that produce a Vec (`{ptr, len, cap}`) or Slice
+                // (`{ptr, len}`) struct — `rows[r]` on `Vec[Vec[T]]`,
+                // `vec.clone()`, etc. Keeping the fallback local so
+                // `coerce_to_slice` doesn't grow a compile-then-discard
+                // path that would double-emit allocations for its other
+                // callers (call_dispatch slice-param coercion).
+                let src_data;
+                let src_len;
+                if let Some(slice_val) = self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    let slice_sv = slice_val.into_struct_value();
+                    src_data = self
+                        .builder
+                        .build_extract_value(slice_sv, 0, "efs.src.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    src_len = self
+                        .builder
+                        .build_extract_value(slice_sv, 1, "efs.src.len")
+                        .unwrap()
+                        .into_int_value();
+                } else {
+                    let compiled = self.compile_expr(&args[0].value)?;
+                    let sv = match compiled {
+                        BasicValueEnum::StructValue(sv) => sv,
+                        _ => {
+                            return Err(format!(
+                                "extend_from_slice: source expression does not produce a slice or vec value (got {compiled:?})"
+                            ))
+                        }
+                    };
+                    let n_fields = sv.get_type().count_fields();
+                    if n_fields != 2 && n_fields != 3 {
+                        return Err(format!(
+                            "extend_from_slice: source struct has {n_fields} fields; expected 2 (Slice) or 3 (Vec)"
+                        ));
+                    }
+                    src_data = self
+                        .builder
+                        .build_extract_value(sv, 0, "efs.src.data")
+                        .unwrap()
+                        .into_pointer_value();
+                    src_len = self
+                        .builder
+                        .build_extract_value(sv, 1, "efs.src.len")
+                        .unwrap()
+                        .into_int_value();
+                }
+                let elem_size = elem_ty.size_of().unwrap();
+                let src_bytes = self
+                    .builder
+                    .build_int_mul(src_len, elem_size, "efs.src.bytes")
+                    .unwrap();
+
+                // Load target fields.
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "efs.t.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "efs.t.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "efs.t.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "efs.t.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "efs.t.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "efs.t.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                let new_len = self
+                    .builder
+                    .build_int_add(len, src_len, "efs.new_len")
+                    .unwrap();
+
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "efs.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "efs.copy");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "efs.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                // Grow: new_cap = max(new_len, max(4, cap * 2)). Identical
+                // policy to `push` / `push_str` — keeps capacity geometry
+                // consistent so re-entry to grow logic always picks the
+                // same multipliers.
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self.builder.build_int_mul(cap, two, "efs.doubled").unwrap();
+                let cmp1 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "efs.cmp1")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(cmp1, doubled, four, "efs.growth_min")
+                    .unwrap()
+                    .into_int_value();
+                let cmp2 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, growth_min, "efs.cmp2")
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp2, new_len, growth_min, "efs.new_cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Allocate new buffer sized by new_cap * elem_size.
+                let new_alloc_bytes = self
+                    .builder
+                    .build_int_mul(new_cap, elem_size, "efs.new.bytes")
+                    .unwrap();
+                let new_data = self
+                    .builder
+                    .build_call(self.malloc_fn, &[new_alloc_bytes.into()], "efs.new_data")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // Copy existing elements over (len * elem_size bytes).
+                let old_bytes = self
+                    .builder
+                    .build_int_mul(len, elem_size, "efs.old.bytes")
+                    .unwrap();
+                self.builder
+                    .build_memcpy(new_data, 8, data, 8, old_bytes)
+                    .unwrap();
+                // Free old buffer if cap > 0 (heap-allocated).
+                let zero_val = i64_t.const_int(0, false);
+                let was_heap = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "efs.was_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "efs.free");
+                let after_free_bb = self.context.append_basic_block(fn_val, "efs.after_free");
+                self.builder
+                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(after_free_bb);
+
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                // Copy src elements to data + len * elem_size (i.e., GEP
+                // by len in elem_ty stride).
+                self.builder.position_at_end(copy_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "efs.cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "efs.cur_len")
+                    .unwrap()
+                    .into_int_value();
+                let dest = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, cur_data, &[cur_len], "efs.dest")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(dest, 8, src_data, 8, src_bytes)
+                    .unwrap();
+                let updated_len = self
+                    .builder
+                    .build_int_add(cur_len, src_len, "efs.updated_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, updated_len).unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             "is_empty" => {
                 let len_ptr = self
                     .builder

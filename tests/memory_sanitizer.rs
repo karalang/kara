@@ -291,6 +291,87 @@ fn main() {
         );
     }
 
+    // ── extend_from_slice ─────────────────────────────────────────
+    // Memcpy + grow path; both source and destination get a
+    // scope-exit free, neither is freed twice, no leak in the
+    // grown-buffer hand-off.
+
+    #[test]
+    fn asan_vec_extend_from_slice_no_grow_clean() {
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 7);
+    let mut dst: Vec[i64] = Vec.with_capacity(8);
+    dst.push(1);
+    dst.push(2);
+    dst.extend_from_slice(src);
+    println(dst.len());
+}
+"#,
+            &["6"],
+            "vec_extend_from_slice_no_grow_clean",
+        );
+    }
+
+    #[test]
+    fn asan_vec_extend_from_slice_triggers_grow_clean() {
+        // Forces a grow mid-extend (dst cap=2, src len=4). The
+        // grow path replaces dst's data pointer; the old buffer
+        // must be freed on grow (not on scope exit), and the new
+        // buffer must be freed on scope exit (not on grow).
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 5);
+    let mut dst: Vec[i64] = Vec.with_capacity(2);
+    dst.push(1);
+    dst.extend_from_slice(src);
+    println(dst.len());
+}
+"#,
+            &["5"],
+            "vec_extend_from_slice_triggers_grow_clean",
+        );
+    }
+
+    #[test]
+    fn asan_vec_extend_from_slice_nested_index_source_clean() {
+        // Source is `rows[r]` on Vec[Vec[T]] — the kata-6 case.
+        // The codegen fallback path compiles the Index expression
+        // and reads its {ptr, len}. Memcpy aliases the source
+        // pointer into the destination's buffer for the duration
+        // of the memcpy, but the destination has independent
+        // storage afterwards. Scope-exit cleanup of `rows`
+        // recursively frees each inner Vec's buffer; `out`'s own
+        // buffer is freed independently. Catches double-free if
+        // the codegen accidentally aliases the source's buffer
+        // into the destination's data pointer instead of memcpy.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new();
+    r0.push(10);
+    r0.push(20);
+    rows.push(r0);
+    let mut r1: Vec[i64] = Vec.new();
+    r1.push(30);
+    rows.push(r1);
+    let mut out: Vec[i64] = Vec.with_capacity(8);
+    let mut i = 0i64;
+    while i < 2 {
+        out.extend_from_slice(rows[i]);
+        i = i + 1;
+    }
+    println(out.len());
+}
+"#,
+            &["3"],
+            "vec_extend_from_slice_nested_index_source_clean",
+        );
+    }
+
     // ── String: push_str + scope-exit free ────────────────────────
     // String shares the Vec-shaped layout; scope-exit cleanup should free
     // the UTF-8 buffer. Static literals have cap=0 and must NOT be freed —

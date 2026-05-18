@@ -438,6 +438,7 @@ impl<'a> EffectChecker<'a> {
             "Vec.with_capacity",
             "Vec.from_slice",
             "Vec.push",
+            "Vec.extend_from_slice",
             // `VecDeque[T]`'s mutating method surface — seeded as
             // `allocates(Heap)` so the auto-parallelizer's
             // `method_effects_imply_receiver_mutation` lookup

@@ -1032,6 +1032,62 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec[T].extend_from_slice(other)` — `other` may be
+        // `Slice[T]`, `Vec[T]`, or `Array[T, N]`. We unify the
+        // receiver's element type with the source's element type so
+        // that an unsolved typevar on the receiver (e.g. `let mut v =
+        // Vec.new(); v.extend_from_slice(other);`) gets pinned to the
+        // source's element type, mirroring `push`'s behavior.
+        if method == "extend_from_slice" && args.len() == 1 {
+            let element_ty = match &obj_ty {
+                Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args } if name == "Vec" && args.len() == 1 => {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = element_ty {
+                let arg_ty = self.infer_expr(&args[0].value);
+                // Peel one layer of Ref/MutRef from the source — the
+                // arg may arrive as `ref Slice[T]` / `ref Vec[T]` /
+                // `mut Slice[T]` depending on the call site.
+                let arg_inner = match &arg_ty {
+                    Type::Ref(inner) | Type::MutRef(inner) => (**inner).clone(),
+                    other => other.clone(),
+                };
+                let src_elem = match &arg_inner {
+                    Type::Named { name, args }
+                        if (name == "Slice" || name == "Vec") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    Type::Array { element, .. } => Some((**element).clone()),
+                    _ => None,
+                };
+                if let Some(src) = src_elem {
+                    unify_types(
+                        &elem,
+                        &src,
+                        &mut self.env.substitutions,
+                        &mut self.env.const_substitutions,
+                    );
+                    let resolved_elem = resolve_type_var_top(&elem, &self.env.substitutions);
+                    let resolved_src = resolve_type_var_top(&src, &self.env.substitutions);
+                    self.check_assignable(
+                        &resolved_elem,
+                        &resolved_src,
+                        args[0].value.span.clone(),
+                    );
+                    return Type::Unit;
+                }
+            }
+        }
+
         // `Vec[T].pop()` / `Vec[T].pop_back()` and `VecDeque[T]`'s
         // `pop_front` / `pop_back` all return `Option[T]` per design.md.
         // The codegen-side pop arm builds an `Option[T]` aggregate via

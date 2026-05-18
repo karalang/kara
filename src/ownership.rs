@@ -1711,9 +1711,23 @@ pub(crate) fn stdlib_method_self_borrow_kind(key: &str) -> Option<BorrowKind> {
     use BorrowKind::*;
     let kind = match key {
         // Vec[T] mutating methods — `mut ref self` / write borrow.
-        "Vec.push" | "Vec.pop" | "Vec.insert" | "Vec.remove" | "Vec.swap_remove" | "Vec.clear"
-        | "Vec.truncate" | "Vec.resize" | "Vec.retain" | "Vec.extend" | "Vec.sort"
-        | "Vec.sort_by" | "Vec.reverse" | "Vec.fill" | "Vec.swap" | "Vec.as_slice_mut" => MutRef,
+        "Vec.push"
+        | "Vec.pop"
+        | "Vec.insert"
+        | "Vec.remove"
+        | "Vec.swap_remove"
+        | "Vec.clear"
+        | "Vec.truncate"
+        | "Vec.resize"
+        | "Vec.retain"
+        | "Vec.extend"
+        | "Vec.extend_from_slice"
+        | "Vec.sort"
+        | "Vec.sort_by"
+        | "Vec.reverse"
+        | "Vec.fill"
+        | "Vec.swap"
+        | "Vec.as_slice_mut" => MutRef,
         // Vec[T] read methods — `ref self` / read borrow.
         "Vec.len" | "Vec.is_empty" | "Vec.first" | "Vec.last" | "Vec.get" | "Vec.get_unchecked"
         | "Vec.contains" | "Vec.iter" | "Vec.binary_search" | "Vec.split_at" | "Vec.chunks"

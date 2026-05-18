@@ -461,6 +461,7 @@ impl<'a> super::EffectChecker<'a> {
                 // Conservative over-approximation is acceptable; false negatives are not.
                 const STDLIB_METHOD_MAP: &[(&str, &str)] = &[
                     ("push", "Vec.push"),
+                    ("extend_from_slice", "Vec.extend_from_slice"),
                     // `VecDeque[T]` mutating method surface — paired with
                     // the matching `inferred_effects` seeds in
                     // `effectchecker.rs::seed_builtin_effects`. Without

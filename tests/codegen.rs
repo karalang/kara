@@ -3839,6 +3839,86 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_extend_from_slice_basic() {
+        // Append a Vec[i64] to another Vec[i64]. Memcpy path —
+        // single allocation, no per-element work.
+        let out = run_program(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(3, 7);
+    let mut dst: Vec[i64] = Vec.with_capacity(8);
+    dst.push(1);
+    dst.push(2);
+    dst.extend_from_slice(src);
+    println(dst.len());
+    println(dst[0]);
+    println(dst[2]);
+    println(dst[4]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n1\n7\n7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_extend_from_slice_triggers_grow() {
+        // dst has cap=2 and 1 element, src has 4 elems — extend
+        // must grow mid-flight and copy elements correctly.
+        let out = run_program(
+            r#"
+fn main() {
+    let src: Vec[i64] = Vec.filled(4, 5);
+    let mut dst: Vec[i64] = Vec.with_capacity(2);
+    dst.push(1);
+    dst.extend_from_slice(src);
+    println(dst.len());
+    println(dst[0]);
+    println(dst[4]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5\n1\n5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_extend_from_slice_nested_index_source() {
+        // The kata-6 use case: source is `rows[r]` on
+        // Vec[Vec[T]]. The fallback path in the extend_from_slice
+        // arm compiles the Index expression directly, extracts
+        // the inner Vec's {ptr, len} fields, and memcpys.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut rows: Vec[Vec[i64]] = Vec.new();
+    let mut r0: Vec[i64] = Vec.new();
+    r0.push(10);
+    r0.push(20);
+    rows.push(r0);
+    let mut r1: Vec[i64] = Vec.new();
+    r1.push(30);
+    rows.push(r1);
+    let mut out: Vec[i64] = Vec.with_capacity(8);
+    let mut i = 0i64;
+    while i < 2 {
+        out.extend_from_slice(rows[i]);
+        i = i + 1;
+    }
+    println(out.len());
+    println(out[0]);
+    println(out[2]);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3\n10\n30");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_push_back_len_is_empty() {
         // VecDeque codegen v1 surface: `new` + `push_back` + `len` +
         // `is_empty` mirror Vec's `{ptr, len, cap}` layout exactly.

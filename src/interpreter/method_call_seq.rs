@@ -13,6 +13,7 @@ use crate::token::Span;
 
 use super::helpers::{eval_http_get, value_compare};
 use super::value::{try_write_or_panic, EnumData, IteratorSource, OrdValue, Value};
+use crate::interpreter::deep_clone_value;
 
 impl<'a> super::Interpreter<'a> {
     pub(super) fn try_eval_seq_method(
@@ -109,6 +110,40 @@ impl<'a> super::Interpreter<'a> {
                         _ => "<value>".to_string(),
                     };
                     try_write_or_panic(rc, &label).push(val);
+                    return Some(Value::Unit);
+                }
+            }
+            // `extend_from_slice(other: Slice[T] / Vec[T] / Array[T,N])`
+            // — bulk-append source elements to self. Mirrors codegen's
+            // memcpy shape. Uses `deep_clone_value` per element so
+            // nested-collection sources (Vec[Vec[T]]) don't alias the
+            // source's inner storage into the destination — analog of
+            // `Vec.filled`'s nested-independent-storage fix.
+            "extend_from_slice" => {
+                if let Value::Array(rc) = &obj {
+                    let src_val = if let Some(arg) = args.first() {
+                        self.eval_expr_inner(&arg.value)
+                    } else {
+                        Value::Unit
+                    };
+                    let elements: Vec<Value> = match src_val {
+                        Value::Array(src_rc) => src_rc.read().unwrap().clone(),
+                        Value::Slice {
+                            storage,
+                            start,
+                            len,
+                            ..
+                        } => storage.read().unwrap()[start..start + len].to_vec(),
+                        _ => Vec::new(),
+                    };
+                    let label = match &object.kind {
+                        ExprKind::Identifier(n) => n.clone(),
+                        _ => "<value>".to_string(),
+                    };
+                    let mut dest = try_write_or_panic(rc, &label);
+                    for e in elements {
+                        dest.push(deep_clone_value(&e));
+                    }
                     return Some(Value::Unit);
                 }
             }

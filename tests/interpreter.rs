@@ -419,6 +419,76 @@ fn test_vec_with_capacity_negative_runtime_error() {
     );
 }
 
+// ── `vec.extend_from_slice(other)` ──────────────────────────────
+
+#[test]
+fn test_vec_extend_from_slice_from_vec() {
+    // Append all elements of `src: Vec[i64]` to `dst: Vec[i64]`.
+    let out = run(r#"
+        fn main() {
+            let src: Vec[i64] = Vec.filled(3, 7);
+            let mut dst: Vec[i64] = Vec.new();
+            dst.push(1);
+            dst.push(2);
+            dst.extend_from_slice(src);
+            println(dst.len());
+            println(dst[0]);
+            println(dst[1]);
+            println(dst[2]);
+            println(dst[4]);
+        }
+    "#);
+    assert_eq!(out, "5\n1\n2\n7\n7\n");
+}
+
+#[test]
+fn test_vec_extend_from_slice_into_empty() {
+    // Extending an empty `dst` should just clone source elements.
+    let out = run(r#"
+        fn main() {
+            let src: Vec[i64] = Vec.filled(4, 9);
+            let mut dst: Vec[i64] = Vec.new();
+            dst.extend_from_slice(src);
+            println(dst.len());
+            println(dst[0]);
+            println(dst[3]);
+        }
+    "#);
+    assert_eq!(out, "4\n9\n9\n");
+}
+
+#[test]
+fn test_vec_extend_from_slice_nested_index_source() {
+    // `rows[r]` (Index expr on Vec[Vec[T]]) as source — the
+    // kata-6 use case. The interpreter resolves the Index to a
+    // fresh Vec value; per-element `deep_clone_value` keeps source
+    // and dest independent.
+    let out = run(r#"
+        fn main() {
+            let mut rows: Vec[Vec[i64]] = Vec.new();
+            let mut r0: Vec[i64] = Vec.new();
+            r0.push(10);
+            r0.push(20);
+            rows.push(r0);
+            let mut r1: Vec[i64] = Vec.new();
+            r1.push(30);
+            rows.push(r1);
+
+            let mut out: Vec[i64] = Vec.with_capacity(8);
+            let mut i = 0i64;
+            while i < 2 {
+                out.extend_from_slice(rows[i]);
+                i = i + 1;
+            }
+            println(out.len());
+            println(out[0]);
+            println(out[1]);
+            println(out[2]);
+        }
+    "#);
+    assert_eq!(out, "3\n10\n20\n30\n");
+}
+
 #[test]
 fn test_comparison() {
     assert_eq!(run("fn main() { println(3 > 2); }"), "true\n");
