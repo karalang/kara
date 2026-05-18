@@ -41,6 +41,7 @@
 
 use crate::ast::*;
 use crate::resolver::{ResolveError, ResolveErrorKind};
+use crate::token::Span;
 
 /// The closed v1 list of bare-name attributes the compiler recognises.
 /// Any single-segment attribute path whose name is not in this list
@@ -108,7 +109,48 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // parser already accepts the syntactic shape (one of the test
     // fixtures uses it as a generic two-arg attribute example).
     "rc_budget",
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 4 —
+    // future query-resolving attributes reserved at v1 freeze.
+    // Recognized so they propagate through resolver / typechecker /
+    // ownership without information loss; per-attribute semantics
+    // land alongside their P1.x catalogue entries:
+    //   * `prefer_rc` — P1.1 (resolution surface for the RC fallback
+    //     query at `src/ownership.rs:360`). Companion to `no_rc`.
+    //   * `specialize` — P1.2 (resolution surface for generic
+    //     specialization on monomorphization tuple).
+    //   * `fork_at` — P1.6 (resolution surface for auto-concurrency
+    //     fork threshold).
+    "prefer_rc",
+    "specialize",
+    "fork_at",
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5 —
+    // P1.3 codegen-query resolution surface (phase-7-codegen.md
+    // line 25). Recognized + reserved at v1; semantic enforcement
+    // lands with the codegen hooks in P1.3. Pairs with `cold` in
+    // the [`QUERY_RESOLUTION_CONFLICT_PAIRS`] table for the
+    // multi-resolution-conflict diagnostic.
+    "inline",
+    "cold",
+    "likely",
+    "unlikely",
+    "inline(never)",
 ];
+
+/// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
+/// Pairs of bare-name attributes that resolve the same query in
+/// conflicting ways. When both appear on the same item, the resolver
+/// emits `error[E_QUERY_RESOLUTION_CONFLICT]` anchored at the second
+/// attribute's span. Order within each pair is canonical (`a` < `b`
+/// lexicographically) so the resolver's detection walk doesn't need
+/// to consider permutations.
+///
+/// Conflict pairs at v1:
+///   * `cold` ↔ `inline` — inlining-decision query. P1.3 catalogue
+///     entry, phase-7-codegen.md line 25.
+///   * `no_rc` ↔ `prefer_rc` — RC-fallback query. P1.1 catalogue
+///     entry, src/ownership.rs:360.
+const QUERY_RESOLUTION_CONFLICT_PAIRS: &[(&str, &str)] =
+    &[("cold", "inline"), ("no_rc", "prefer_rc")];
 
 /// Compiler-reserved namespaces — the *first segment* of a multi-segment
 /// attribute path that the compiler claims for its own use. Members of
@@ -202,6 +244,51 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
             // Tool-namespaced path (`#[karafmt::skip]`, …). Silently
             // accepted; item 37 formalises the rule + the
             // `karac query attributes` read surface.
+        }
+    }
+
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
+    // Detect any conflict pair from QUERY_RESOLUTION_CONFLICT_PAIRS
+    // co-occurring on this item. Anchored at the second attribute's
+    // span (the one that introduced the conflict). One error per pair
+    // per item — if the same pair appears multiple times (which
+    // shouldn't, but parse-error recovery can produce duplicates),
+    // each later occurrence emits its own diagnostic.
+    let names_on_item: Vec<(&str, &Span)> = attrs
+        .iter()
+        .filter_map(|a| {
+            if a.path.len() == 1 {
+                Some((a.path[0].as_str(), &a.span))
+            } else {
+                None
+            }
+        })
+        .collect();
+    for (a, b) in QUERY_RESOLUTION_CONFLICT_PAIRS {
+        let has_a = names_on_item.iter().any(|(n, _)| n == a);
+        let has_b = names_on_item.iter().any(|(n, _)| n == b);
+        if has_a && has_b {
+            // Pick the later span — whichever attribute appears
+            // second in source order. attrs are in source order
+            // already, so the second-occurring one in the filtered
+            // list is what we want.
+            let conflict_span = names_on_item
+                .iter()
+                .filter(|(n, _)| n == a || n == b)
+                .nth(1)
+                .map(|(_, s)| (*s).clone())
+                .unwrap_or_else(|| names_on_item[0].1.clone());
+            errors.push(ResolveError {
+                message: format!(
+                    "error[E_QUERY_RESOLUTION_CONFLICT]: `#[{a}]` and `#[{b}]` resolve \
+                     the same compiler query in conflicting ways — only one may apply \
+                     to this item. Drop whichever does not match the intent."
+                ),
+                span: conflict_span,
+                kind: ResolveErrorKind::QueryResolutionConflict,
+                suggestion: None,
+                replacement: None,
+            });
         }
     }
 }

@@ -92,6 +92,32 @@ fn test_subcommand_help_query() {
     assert!(stdout.contains("effects"));
     assert!(stdout.contains("ownership"));
     assert!(stdout.contains("concurrency"));
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 3 —
+    // the `queries` kind shows up in help.
+    assert!(stdout.contains("queries"));
+}
+
+#[test]
+fn test_query_queries_empty_envelope() {
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 3.
+    // v1 catalogue is empty; the envelope shape `{"queries":[]}`
+    // is the contract for external tooling pinning to the command.
+    // Surface lock — populating queries from any phase must not
+    // break the envelope schema.
+    let out = karac_bin()
+        .args(["query", "queries", "tests/snapshots/clean.kara"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "karac query queries should exit 0 on a clean program; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"queries\":[]"),
+        "expected empty queries envelope; got stdout={stdout}",
+    );
 }
 
 #[test]

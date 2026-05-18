@@ -3463,3 +3463,158 @@ fn def_paths_stable_under_unrelated_item_rename() {
     assert!(!v2.def_paths.contains_key("alpha"));
     assert!(v2.def_paths.contains_key("renamed_alpha"));
 }
+
+#[test]
+fn query_resolving_attribute_propagates_through_pipeline_without_diagnostic() {
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 4 —
+    // regression that a future query-resolving attribute (the v1-
+    // reserved `#[specialize(...)]` is the canonical placeholder)
+    // carrying nested args parses, attaches to the item, and survives
+    // resolve + typecheck + ownership without any diagnostic. The
+    // surface is the lever that lets P1.x catalogue entries ship
+    // resolution attributes without parser changes.
+    use karac::{ownershipcheck, typecheck};
+
+    let src = "#[specialize(T = i64, mode: \"x\")]\nfn make() {}\n";
+    let parsed = parse(src);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors should be absent for a v1-reserved query-resolving attribute; got: {:?}",
+        parsed.errors,
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "Resolve errors should be absent — `specialize` is in the v1 reserved registry; got: {:?}",
+        resolved
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>(),
+    );
+    let typed = typecheck(&parsed.program, &resolved);
+    assert!(
+        typed.errors.is_empty(),
+        "Type errors should be absent; got: {:?}",
+        typed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>(),
+    );
+    let ownership = ownershipcheck(&parsed.program, &typed);
+    assert!(
+        ownership.errors.is_empty(),
+        "Ownership errors should be absent; got: {:?}",
+        ownership
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>(),
+    );
+
+    // The attribute must be attached intact, with args preserved.
+    use karac::ast::{ExprKind, Item};
+    let make_fn = parsed
+        .program
+        .items
+        .iter()
+        .find_map(|i| match i {
+            Item::Function(f) if f.name == "make" => Some(f),
+            _ => None,
+        })
+        .expect("expected fn `make`");
+    let attr = make_fn
+        .attributes
+        .iter()
+        .find(|a| a.path == ["specialize".to_string()])
+        .expect("expected #[specialize(...)] on `make`");
+    assert_eq!(attr.args.len(), 2, "expected two attr args: {attr:?}");
+    let t_arg = &attr.args[0];
+    assert_eq!(t_arg.name.as_deref(), Some("T"));
+    let t_val = t_arg.value.as_ref().expect("expected value for T").clone();
+    // `T = i64` lowers to an Identifier expression — the parser
+    // doesn't know about types here; only that an identifier value
+    // followed the `=`.
+    match t_val.kind {
+        ExprKind::Identifier(ref n) => assert_eq!(n, "i64"),
+        other => panic!("expected Identifier(\"i64\") for T arg; got {other:?}"),
+    }
+    let mode_arg = &attr.args[1];
+    assert_eq!(mode_arg.name.as_deref(), Some("mode"));
+    let mode_val = mode_arg
+        .value
+        .as_ref()
+        .expect("expected value for mode")
+        .clone();
+    match mode_val.kind {
+        ExprKind::StringLit(ref s) => assert_eq!(s, "x"),
+        other => panic!("expected StringLit(\"x\") for mode arg; got {other:?}"),
+    }
+}
+
+#[test]
+fn query_resolution_conflict_inline_and_cold_on_same_fn() {
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
+    // `#[inline]` + `#[cold]` resolve the same compiler query (the
+    // inlining-decision query, P1.3) in conflicting ways. Both
+    // attributes are individually recognized at v1 (reserved for
+    // semantic enforcement when P1.3 ships); the conflict diagnostic
+    // fires regardless.
+    let errors = resolve_errors("#[inline]\n#[cold]\nfn hot() {}\n");
+    let conflict = errors
+        .iter()
+        .find(|e| matches!(e.kind, ResolveErrorKind::QueryResolutionConflict))
+        .expect("expected E_QUERY_RESOLUTION_CONFLICT for #[inline] + #[cold]");
+    assert!(
+        conflict.message.contains("`#[cold]`") && conflict.message.contains("`#[inline]`"),
+        "diagnostic should name both attributes; got: {}",
+        conflict.message,
+    );
+    assert!(
+        conflict.message.contains("E_QUERY_RESOLUTION_CONFLICT"),
+        "diagnostic should carry its error code in the message text; got: {}",
+        conflict.message,
+    );
+}
+
+#[test]
+fn query_resolution_conflict_no_rc_and_prefer_rc_on_same_fn() {
+    // Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
+    // `#[no_rc]` (existing) + `#[prefer_rc]` (v1-reserved) resolve
+    // the RC-fallback query (P1.1) in conflicting ways.
+    let errors = resolve_errors("#[no_rc]\n#[prefer_rc]\nfn never_rcs() {}\n");
+    let conflict = errors
+        .iter()
+        .find(|e| matches!(e.kind, ResolveErrorKind::QueryResolutionConflict))
+        .expect("expected E_QUERY_RESOLUTION_CONFLICT for #[no_rc] + #[prefer_rc]");
+    assert!(
+        conflict.message.contains("`#[no_rc]`") && conflict.message.contains("`#[prefer_rc]`"),
+        "diagnostic should name both attributes; got: {}",
+        conflict.message,
+    );
+}
+
+#[test]
+fn query_resolution_conflict_does_not_fire_on_single_attribute() {
+    // Sanity — having just one half of a conflict pair must NOT
+    // emit the diagnostic. `#[inline]` alone is legitimate (a
+    // future P1.3 query-resolution attribute); `#[cold]` alone
+    // likewise. The conflict only exists when both appear together.
+    let result = resolve_ok("#[inline]\nfn hot() {}\n");
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, ResolveErrorKind::QueryResolutionConflict)),
+        "lone #[inline] must not trigger the conflict diagnostic",
+    );
+    let result = resolve_ok("#[cold]\nfn rare() {}\n");
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(e.kind, ResolveErrorKind::QueryResolutionConflict)),
+        "lone #[cold] must not trigger the conflict diagnostic",
+    );
+}

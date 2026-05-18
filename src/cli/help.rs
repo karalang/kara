@@ -162,7 +162,7 @@ karac query - Query compiler analysis
 USAGE:
     karac query <kind> [flags] <target>
         <target> = <file.kara>.<function>   for per-function kinds
-                 = <file.kara>              for cost-summary, attributes
+                 = <file.kara>              for cost-summary, attributes, queries
 
 KINDS:
     effects            Inferred and declared effects
@@ -182,6 +182,13 @@ KINDS:
                        `--tool=PREFIX` to filter by first-segment
                        match (`--tool=karafmt` returns every
                        `#[karafmt::*]` occurrence).
+    queries            Compiler queries channel — JSON envelope
+                       collating every pipeline-phase-emitted
+                       `CompilerQuery`. v1 ships an empty array
+                       while the catalogue is being populated; the
+                       command surface is stable so external
+                       tooling can integrate now. See design.md
+                       § Specification Layers > Compiler Queries.
 
 OPTIONS:
     --tool=PREFIX      attributes only: first-segment match filter

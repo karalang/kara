@@ -690,19 +690,22 @@ fn parse_query_command(args: &[String]) -> Command {
         "concurrency" => QueryKind::Concurrency,
         "cost-summary" => QueryKind::CostSummary,
         "attributes" => QueryKind::Attributes { tool_prefix },
+        "queries" => QueryKind::Queries,
         other => {
             eprintln!(
-                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', or 'attributes'."
+                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', 'attributes', or 'queries'."
             );
             process::exit(1);
         }
     };
     let target = &args[target_idx];
-    // cost-summary and attributes take a bare file path. The other
-    // kinds parse `file.function` via rsplit (multi-dot file paths
-    // are fine since Kāra identifiers cannot contain `.`).
+    // cost-summary, attributes, and queries take a bare file path. The
+    // other kinds parse `file.function` via rsplit (multi-dot file
+    // paths are fine since Kāra identifiers cannot contain `.`).
     let (file, function) = match &kind {
-        QueryKind::CostSummary | QueryKind::Attributes { .. } => (target.clone(), String::new()),
+        QueryKind::CostSummary | QueryKind::Attributes { .. } | QueryKind::Queries => {
+            (target.clone(), String::new())
+        }
         _ => match target.rsplit_once('.') {
             Some((f, func)) => (f.to_string(), func.to_string()),
             None => {

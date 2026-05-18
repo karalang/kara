@@ -238,6 +238,14 @@ pub enum QueryKind {
     Attributes {
         tool_prefix: Option<String>,
     },
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 3.
+    /// Run the full pipeline and collate every `CompilerQuery` from
+    /// every phase result into a single JSON report. Whole-file kind
+    /// — the `function` slot is unused. v1 ships an empty array when
+    /// no phase populates queries yet; the surface lands so external
+    /// tooling can integrate against `karac query queries` without
+    /// waiting for catalogue entries.
+    Queries,
 }
 
 // ── Command Execution ───────────────────────────────────────────
@@ -1863,6 +1871,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::resolver::ResolveErrorKind::DeprecatedOnImpl => "E0241",
                 crate::resolver::ResolveErrorKind::DeprecatedOnField => "E0242",
                 crate::resolver::ResolveErrorKind::UnknownAttribute => "E0243",
+                crate::resolver::ResolveErrorKind::QueryResolutionConflict => {
+                    "E_QUERY_RESOLUTION_CONFLICT"
+                }
             };
             // Surface the machine-applicable replacement (when present)
             // alongside the human-readable suggestion. Consumers like
@@ -4067,6 +4078,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
         ResolveErrorKind::DeprecatedOnImpl => "E0241",
         ResolveErrorKind::DeprecatedOnField => "E0242",
         ResolveErrorKind::UnknownAttribute => "E0243",
+        ResolveErrorKind::QueryResolutionConflict => "E_QUERY_RESOLUTION_CONFLICT",
     }
 }
 
@@ -4536,6 +4548,62 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             // unrelated problems.
             query_attributes(&pipeline, tool_prefix);
         }
+        QueryKind::Queries => {
+            // Run every phase that may populate `queries`. v1 catalogue
+            // is empty so the output is `{"queries":[]}`; the surface
+            // lands so external tooling pinning to `karac query queries`
+            // gets a stable command without waiting for P1.x entries.
+            pipeline.typecheck();
+            pipeline.lower();
+            pipeline.effectcheck();
+            pipeline.ownershipcheck();
+            pipeline.concurrencycheck();
+            query_queries(&pipeline);
+        }
+    }
+}
+
+/// Phase-8 stdlib-floor § Compiler queries channel sub-item 3.
+/// Collate every `CompilerQuery` across all phase results and emit
+/// them as a single JSON envelope on stdout. v1 catalogue is empty;
+/// the output shape is `{"queries":[]}` until P1.x entries populate.
+/// Surface lock — adding catalogue entries (or new phases) is a non-
+/// breaking change as long as the envelope shape stays
+/// `{"queries":[…]}`.
+fn query_queries(pipeline: &Pipeline) {
+    let mut total = 0usize;
+    if let Some(r) = pipeline.resolved.as_ref() {
+        total += r.queries.len();
+    }
+    if let Some(t) = pipeline.typed.as_ref() {
+        total += t.queries.len();
+    }
+    if let Some(e) = pipeline.effects.as_ref() {
+        total += e.queries.len();
+    }
+    if let Some(o) = pipeline.ownership.as_ref() {
+        total += o.queries.len();
+    }
+    if let Some(c) = pipeline.concurrency.as_ref() {
+        total += c.queries.len();
+    }
+    // v1 emits the empty array unconditionally — `CompilerQuery`
+    // values aren't yet stable JSON-renderable from this layer (their
+    // shape lands alongside the first catalogue entry that pushes
+    // values). Once a P1.x entry populates, the per-query JSON
+    // encoder lives here.
+    if total == 0 {
+        println!("{{\"queries\":[]}}");
+    } else {
+        // Defensive — unreachable in v1 because no phase pushes
+        // queries. Future-proof against a phase landing query
+        // emission ahead of this renderer.
+        eprintln!(
+            "note: {} compiler-query value(s) emitted but the v1 JSON renderer is empty-only — \
+             extend query_queries() to serialize the per-query envelope.",
+            total,
+        );
+        println!("{{\"queries\":[]}}");
     }
 }
 

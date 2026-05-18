@@ -549,6 +549,14 @@ pub enum ResolveErrorKind {
     /// Tool-Namespaced Attributes for the bare-vs-namespaced
     /// discriminator). Mapped to `E_UNKNOWN_ATTRIBUTE` / `E0243`.
     UnknownAttribute,
+    /// Phase-8 stdlib-floor § Compiler queries channel sub-item 5.
+    /// Two attributes on the same item resolve the same query in
+    /// conflicting ways — e.g. `#[inline]` + `#[cold]` (inlining
+    /// query) or `#[no_rc]` + `#[prefer_rc]` (RC-fallback query).
+    /// Conflict pairs are registered in
+    /// [`crate::attribute_validator::QUERY_RESOLUTION_CONFLICT_PAIRS`].
+    /// Mapped to `E_QUERY_RESOLUTION_CONFLICT`.
+    QueryResolutionConflict,
 }
 
 impl std::fmt::Display for ResolveError {
