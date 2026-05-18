@@ -468,12 +468,98 @@ pub extern "C" fn karac_runtime_event_loop_wake() -> i32 {
     }
 }
 
+// ── Parked-task ABI (Phase 6 line 17 slice 2) ──────────────────────────────
+//
+// Repr-C ABI codegen-emitted state machines populate at the network-effect
+// call boundary. `KaracParkedTask` mirrors `KaracBranch`'s shape — a
+// function pointer + an opaque state pointer — but the function returns a
+// `KaracPollResult` tag so the runtime can distinguish "task wants to be
+// re-polled later" from "task is done." See design.md § Network Event
+// Loop and State-Machine Transform > State-Machine Transform —
+// Network-Boundary Functions for the lowering shape this ABI implements.
+
+/// Discriminator returned by codegen-emitted poll functions.
+///
+/// `repr(u8)` pins the discriminant width for the codegen ABI: poll
+/// functions return one of `0`, `1`, `2` and Kāra-side code (the future
+/// scheduler integration) maps it back to this enum. `#[non_exhaustive]`
+/// signals that variants may be added — `Cancelled` is a likely future
+/// addition once cooperative cancellation lowering matures — without a
+/// breaking ABI change (existing 0 / 1 / 2 keep their discriminants).
+#[repr(u8)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum KaracPollResult {
+    /// Task wants to be re-polled later. The poll function has registered
+    /// itself with the event loop (or a channel, or whatever it is
+    /// waiting on) and stored the registration in its state struct.
+    Pending = 0,
+    /// Task completed successfully. The state struct's return-slot
+    /// holds the task's value; the runtime can free the state struct.
+    Ready = 1,
+    /// Task completed with an error. The state struct's return-slot
+    /// holds the error; the runtime can free the state struct.
+    Err = 2,
+}
+
+/// Parked-task ABI value carrying a state machine's poll function plus
+/// the opaque state pointer it operates on.
+///
+/// Codegen emits this struct at every network-effect call boundary as
+/// part of the state-machine lowering (phase 6 line 18). The runtime
+/// drives the task by calling `poll_fn(state, cancel)` and inspecting
+/// the returned [`KaracPollResult`] discriminant. The state struct's
+/// lifetime spans from the network-boundary function's entry until
+/// `poll_fn` returns `Ready` or `Err` (or the task is cancelled —
+/// codegen emits the state-struct destructor on every exit path).
+///
+/// **Field layout.** Two pointer-width fields, no padding, `repr(C)`
+/// — matches `KaracBranch`'s shape exactly so the runtime can share
+/// dispatch machinery between the two task representations when the
+/// scheduler integration lands.
+///
+/// **Cancellation.** The `*const AtomicBool` cancel pointer passed at
+/// each poll mirrors the [`KaracBranch::func`] convention. The poll
+/// function reads it at every yield point to observe cooperative
+/// cancellation; on a true read, the function unwinds via the state
+/// struct's destructor and returns `Err` (or a future `Cancelled`
+/// variant — see [`KaracPollResult`]'s `non_exhaustive`).
+#[repr(C)]
+pub struct KaracParkedTask {
+    pub poll_fn: unsafe extern "C" fn(*mut c_void, *const std::sync::atomic::AtomicBool) -> u8,
+    pub state: *mut c_void,
+}
+
+// SAFETY: KaracParkedTask is `Send` because the codegen-emitted state
+// struct's captured locals are subject to the cross-task-safe check
+// when the surrounding network-boundary function is itself called
+// from a `par {}` / `spawn()` boundary (the existing structural
+// cross-task-safe enumeration covers this — see design.md §
+// Structured Concurrency Lifetime Guarantees). The state pointer is
+// type-erased here; soundness comes from the codegen check, not from
+// runtime inspection.
+unsafe impl Send for KaracParkedTask {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use mio::net::TcpListener;
     use std::net::SocketAddr;
     use std::thread;
+
+    /// Serializes FFI tests within a single test binary. The FFI entry
+    /// points go through the **process-global** event loop, so two FFI
+    /// tests running in parallel race on its state. Acquire this lock
+    /// at the start of any test that touches the global event loop
+    /// (`karac_runtime_event_loop_*` entries or the parked-task driver
+    /// loop below).
+    static FFI_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn ffi_test_guard() -> std::sync::MutexGuard<'static, ()> {
+        FFI_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
 
     #[test]
     fn new_succeeds() {
@@ -582,15 +668,16 @@ mod tests {
 
     // ── FFI surface (Phase 6 line 17 slice 1) ─────────────────────────
     //
-    // The FFI fns go through the **process-global** event loop. A single
-    // comprehensive test exercises register / poll / deregister / wake
-    // round-trip — multiple FFI tests in the same binary would interfere
-    // on the shared global. Internal-API tests above use locally
-    // constructed `EventLoop` instances so they don't touch the global.
+    // The FFI fns go through the **process-global** event loop. Multiple
+    // FFI tests share that global, so each acquires `FFI_TEST_LOCK` at
+    // entry to serialize within the test binary. Internal-API tests
+    // above use locally constructed `EventLoop` instances so they don't
+    // need the lock.
 
     #[cfg(unix)]
     #[test]
     fn ffi_round_trip_register_poll_deregister_wake() {
+        let _guard = ffi_test_guard();
         use std::os::fd::AsRawFd;
 
         // Bind a std-lib listener so we can pull a raw fd; set it
@@ -693,5 +780,143 @@ mod tests {
             elapsed < Duration::from_millis(100),
             "non-blocking poll should return immediately, took {elapsed:?}"
         );
+    }
+
+    // ── Parked-task ABI (Phase 6 line 17 slice 2) ─────────────────────
+
+    #[test]
+    fn karac_poll_result_discriminants_match_codegen_abi() {
+        // Discriminants are part of the codegen ABI — codegen emits raw
+        // `u8` returns that the runtime maps back through this enum.
+        // Pinning them here catches accidental reordering.
+        assert_eq!(KaracPollResult::Pending as u8, 0);
+        assert_eq!(KaracPollResult::Ready as u8, 1);
+        assert_eq!(KaracPollResult::Err as u8, 2);
+        assert_eq!(std::mem::size_of::<KaracPollResult>(), 1);
+    }
+
+    #[test]
+    fn karac_parked_task_layout_pinned() {
+        // Two pointer-width fields, no padding — `repr(C)` shape that
+        // codegen will emit a struct literal against.
+        let ptr = std::mem::size_of::<usize>();
+        assert_eq!(std::mem::size_of::<KaracParkedTask>(), 2 * ptr);
+        assert_eq!(std::mem::align_of::<KaracParkedTask>(), ptr);
+    }
+
+    // ── End-to-end driver test ────────────────────────────────────────
+    //
+    // Hand-rolls a 2-state machine that simulates what codegen will emit
+    // for a network-boundary function. State 0: register a fd with the
+    // event loop, return `Pending`. State 1: deregister, return `Ready`.
+    // The test drives the state machine through the FFI surface in a
+    // tight loop, proving the full ABI works end-to-end without needing
+    // a production scheduler integration.
+
+    #[cfg(unix)]
+    #[repr(C)]
+    struct HandRolledState {
+        tag: u8,
+        listener_fd: i32,
+        token: u64,
+        ready_observed: bool,
+    }
+
+    #[cfg(unix)]
+    unsafe extern "C" fn hand_rolled_poll_fn(
+        state_ptr: *mut c_void,
+        _cancel: *const std::sync::atomic::AtomicBool,
+    ) -> u8 {
+        // SAFETY: the test constructs `state_ptr` as the address of a
+        // valid `HandRolledState` stack value living through the entire
+        // driver loop below.
+        let state = unsafe { &mut *(state_ptr as *mut HandRolledState) };
+        match state.tag {
+            0 => {
+                // Register the listener fd for read readiness.
+                let token = karac_runtime_event_loop_register_fd(
+                    state.listener_fd,
+                    0,
+                    std::ptr::null_mut(),
+                );
+                assert_ne!(token, 0, "register should succeed");
+                state.token = token;
+                state.tag = 1;
+                KaracPollResult::Pending as u8
+            }
+            1 => {
+                // The driver has observed readiness and re-polled us.
+                state.ready_observed = true;
+                let dereg = karac_runtime_event_loop_deregister_fd(state.listener_fd, state.token);
+                assert_eq!(dereg, 0, "deregister should succeed");
+                KaracPollResult::Ready as u8
+            }
+            _ => KaracPollResult::Err as u8,
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn parked_task_drives_to_completion_through_ffi_surface() {
+        let _guard = ffi_test_guard();
+        use std::os::fd::AsRawFd;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let local = listener.local_addr().unwrap();
+        let listener_fd = listener.as_raw_fd();
+
+        let mut state = HandRolledState {
+            tag: 0,
+            listener_fd,
+            token: 0,
+            ready_observed: false,
+        };
+        let task = KaracParkedTask {
+            poll_fn: hand_rolled_poll_fn,
+            state: &mut state as *mut HandRolledState as *mut c_void,
+        };
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+
+        let connector = thread::spawn(move || {
+            // Give the driver a moment to register before the connect
+            // makes the listener readable.
+            thread::sleep(Duration::from_millis(50));
+            let _stream = std::net::TcpStream::connect(local).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        });
+
+        // Test-only driver loop: invoke poll_fn, pump the event loop on
+        // Pending, repeat until Ready / Err. Bounded by an iteration
+        // count so a broken state machine fails the test rather than
+        // hanging it forever.
+        let mut wakeup_buf: [KaracWakeup; 4] = unsafe { std::mem::zeroed() };
+        let mut iterations = 0;
+        let final_result = loop {
+            iterations += 1;
+            assert!(iterations <= 8, "driver loop ran more than 8 iterations");
+
+            // SAFETY: poll_fn / state pair is valid for the lifetime of
+            // this test fn; `cancel` lives on the stack throughout.
+            let raw = unsafe { (task.poll_fn)(task.state, &cancel) };
+            if raw == KaracPollResult::Ready as u8 || raw == KaracPollResult::Err as u8 {
+                break raw;
+            }
+            // Pending — drive the event loop. SAFETY: wakeup_buf has
+            // 4 entries; bound passed matches.
+            let _ = unsafe {
+                karac_runtime_event_loop_poll(
+                    2_000_000_000,
+                    wakeup_buf.as_mut_ptr(),
+                    wakeup_buf.len(),
+                )
+            };
+        };
+
+        assert_eq!(final_result, KaracPollResult::Ready as u8);
+        assert!(state.ready_observed, "state machine reached the ready arm");
+        assert_eq!(state.tag, 1, "state machine ended in state 1");
+
+        connector.join().unwrap();
     }
 }
