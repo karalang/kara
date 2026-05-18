@@ -28,6 +28,37 @@ fn effect_set_has_nonpure_verb(set: &EffectSet) -> bool {
     })
 }
 
+/// `true` iff this statement does ~zero work — a `let`/`assign` whose
+/// RHS is a literal or bare identifier, or a `let uninit` (which only
+/// allocates an empty stack slot). The classification is structural
+/// (not effect-based) so a side-effecting RHS like `let x = call()`
+/// is NOT considered constant-init even when `call()` is pure.
+///
+/// Used by `find_parallel_groups`'s cost-model gate: a parallel
+/// group where N−1 of N stmts are constant-init can produce no
+/// parallelism (one branch holds all the work, the others idle) so
+/// the `karac_par_run` spawn cost is pure overhead. Marking those
+/// groups trivial routes them through sequential codegen instead.
+/// See `StmtInfo::is_constant_init` for the failure-mode this
+/// closes.
+fn stmt_is_constant_init(stmt: &Stmt) -> bool {
+    let value = match &stmt.kind {
+        StmtKind::Let { value, .. } => value,
+        StmtKind::Assign { target: _, value } => value,
+        StmtKind::LetUninit { .. } => return true,
+        _ => return false,
+    };
+    matches!(
+        value.kind,
+        ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+    )
+}
+
 /// `true` iff this statement contains a `return`, `break`, or
 /// `continue` that escapes a directly-nested expression's control flow
 /// — i.e., that would, at codegen time, emit a `ret X` (or branch to a
@@ -193,6 +224,18 @@ struct StmtInfo {
     /// from inside the branch produces invalid IR ("return instr that
     /// returns non-void in Function of void return type").
     has_early_exit: bool,
+    /// Whether this statement is a constant-cost initializer — a
+    /// `let`/`assign` of a literal or bare identifier, or a `let
+    /// uninit`. These are O(1) and run in ~zero time. Used by the
+    /// cost-model gate in `find_parallel_groups`: a parallel group
+    /// where N−1 of N stmts are constant-init has zero structural
+    /// parallelism (one branch does all the work, others idle) and is
+    /// marked trivial so codegen skips the `karac_par_run` dispatch.
+    /// Without this, the auto-parallelizer pays per-spawn cost (~70μs
+    /// on macOS) for groups that can produce no speedup — the
+    /// dominant hot-path overhead surfaced by the kata 6 zigzag bench
+    /// (2.5× slowdown vs sequential codegen, 2026-05-17).
+    is_constant_init: bool,
 }
 
 /// An effect associated with a statement.
@@ -333,6 +376,7 @@ impl<'a> ConcurrencyChecker<'a> {
             calls_polymorphic: false,
             is_seq,
             has_early_exit: stmt_has_early_exit(stmt),
+            is_constant_init: stmt_is_constant_init(stmt),
         };
 
         match &stmt.kind {
@@ -573,11 +617,28 @@ impl<'a> ConcurrencyChecker<'a> {
             // Only emit groups with more than 1 statement (parallelism requires >= 2)
             if group_indices.len() > 1 {
                 let reason = self.describe_group_reason(infos, &group_indices);
-                // A group is trivial if all statements are pure (no effects).
-                // Trivial groups aren't worth the overhead of thread dispatch.
-                let is_trivial = group_indices
+                // A group is trivial when running it in parallel can produce
+                // no measurable speedup, so the `karac_par_run` spawn cost
+                // (~70μs per dispatch on macOS) is pure overhead. Two cases:
+                //
+                // 1. All stmts are pure (no effects, no polymorphic calls) —
+                //    the codegen could eliminate them, no point parallelizing.
+                // 2. At most one stmt does meaningful work — the rest are
+                //    constant-init lets/assigns that produce ~zero work for
+                //    a par branch. The structural parallelism is zero (one
+                //    branch holds all the work, the others idle through a
+                //    join). Surfaced by the kata 6 zigzag bench 2026-05-17,
+                //    where `convert_off` was forking three par groups per
+                //    call (each shaped "one big loop + N let-binds"), adding
+                //    2.2s of system-call time over 10K calls for no speedup.
+                let all_pure = group_indices
                     .iter()
                     .all(|&i| infos[i].effects.is_empty() && !infos[i].calls_polymorphic);
+                let non_constant_count = group_indices
+                    .iter()
+                    .filter(|&&i| !infos[i].is_constant_init)
+                    .count();
+                let is_trivial = all_pure || non_constant_count <= 1;
                 // Union of (defines − let_introduced) across the group's
                 // stmts. Names in this set name *captured* locals that
                 // some branch will mutate without introducing them as a

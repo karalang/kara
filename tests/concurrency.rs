@@ -459,6 +459,138 @@ fn test_reason_different_resources() {
     );
 }
 
+// ── Cost-model gate: zero-parallelism shapes are marked trivial ─
+
+#[test]
+fn test_cost_model_one_expensive_plus_lets_marked_trivial() {
+    // One effectful stmt + N constant-init lets has zero structural
+    // parallelism: one par branch holds all the work, the others
+    // idle. Pre-fix the analyzer still emitted the group as
+    // non-trivial and the codegen paid `karac_par_run` spawn cost
+    // (~70μs/dispatch on macOS) for no speedup. Post-fix the
+    // cost-model gate routes these through `is_trivial = true` so
+    // codegen skips the par dispatch.
+    let analysis = analyze(
+        r#"
+        effect resource R;
+        fn worker() writes(R) {}
+        fn main() {
+            let mut x = 0i64;
+            worker();
+            let mut y = 0i64;
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.parallel_groups.len(), 1);
+    let group = &main_fc.parallel_groups[0];
+    assert_eq!(group.statement_indices.len(), 3);
+    assert!(
+        group.is_trivial,
+        "Group with 1 effectful stmt + 2 constant-init lets should be \
+         marked trivial (zero structural parallelism)"
+    );
+}
+
+#[test]
+fn test_cost_model_hot_loop_plus_let_init_marked_trivial() {
+    // Distillation of the kata 6 zigzag failure mode: the analyzer
+    // groups a hot push loop with a let-init for the next phase's
+    // counter (`let mut r2 = 0i64`). Both stmts are independent
+    // (no shared vars, no effect conflict on the loop's
+    // `allocates(Heap)`), so the analyzer correctly identifies
+    // them as a parallelizable pair — but parallelizing yields
+    // no speedup since one branch sits on the let-of-literal and
+    // the other does all the work. Drove the kata 6 bench's 2.5×
+    // gap vs sequential codegen (2026-05-17).
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            let mut i = 0i64;
+            while i < 10 {
+                v.push(i);
+                i = i + 1;
+            }
+            let mut r2 = 0i64;
+            let last = v.len() - 1;
+            println(v[last]);
+            println(r2);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Every group that survives the cost-model gate must have
+    // 2+ stmts that do real work. The kata 6 shape only produces
+    // "one-big + N-cheap" groups, so all must be trivial.
+    for group in &main_fc.parallel_groups {
+        assert!(
+            group.is_trivial,
+            "Group {:?} (reason: {:?}) should be marked trivial — \
+             only one of its stmts does meaningful work",
+            group.statement_indices, group.reason
+        );
+    }
+}
+
+#[test]
+fn test_cost_model_two_effectful_calls_still_parallelized() {
+    // Control case: two effectful calls on independent resources
+    // have real structural parallelism. The cost-model gate must
+    // NOT mark them trivial — codegen should still dispatch the
+    // par_run so both calls run concurrently.
+    let analysis = analyze(
+        r#"
+        effect resource R1;
+        effect resource R2;
+        fn w1() writes(R1) {}
+        fn w2() writes(R2) {}
+        fn main() {
+            w1();
+            w2();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.parallel_groups.len(), 1);
+    let group = &main_fc.parallel_groups[0];
+    assert_eq!(group.statement_indices.len(), 2);
+    assert!(
+        !group.is_trivial,
+        "Two effectful calls on independent resources have real \
+         structural parallelism — must not be marked trivial"
+    );
+}
+
+#[test]
+fn test_cost_model_let_with_effectful_rhs_counts_as_work() {
+    // Control case: a `let x = call()` stmt where the RHS is a
+    // function call (not a literal/identifier) counts as work.
+    // Two such lets in a group have real parallelism and must
+    // not be filtered out.
+    let analysis = analyze(
+        r#"
+        effect resource R1;
+        effect resource R2;
+        fn compute1() -> i64 writes(R1) { 0 }
+        fn compute2() -> i64 writes(R2) { 0 }
+        fn main() {
+            let x = compute1();
+            let y = compute2();
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.parallel_groups.len(), 1);
+    let group = &main_fc.parallel_groups[0];
+    assert_eq!(group.statement_indices.len(), 2);
+    assert!(
+        !group.is_trivial,
+        "Two let-bindings whose RHS calls effectful functions have \
+         work-bearing RHS expressions — must not be marked trivial"
+    );
+}
+
 // ── CLI query test ─────────────────────────────────────────────
 
 #[test]
