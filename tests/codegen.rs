@@ -13814,6 +13814,137 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8a: captured-locals reload prologue ──────
+    //
+    // Each state arm emits a uniform reload prologue: for every captured
+    // local in the slice-4 layout, GEP into the state-struct field at
+    // `idx+1` (skipping the tag at field 0), load the value, alloca a
+    // slot, and store the loaded value into the slot. Bodies still
+    // terminate with the Pending stub; slice 8b's body-splitting walks
+    // these allocas for the actual user-code resume.
+
+    #[test]
+    fn test_poll_fn_reload_prologue_emits_gep_load_alloca_store_per_captured_local() {
+        // A function with one captured local (`items: Vec[i64]`) has
+        // one GEP+load+alloca+store quadruple per state arm. The GEP
+        // targets field 1 (skipping the i32 tag at field 0); the load
+        // reads the inline Vec layout (`{ ptr, i64, i64 }`); the alloca
+        // reserves a slot of the same type; the store deposits the
+        // reloaded value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // GEP into state-struct field 1 (captured-local `items` slot).
+        // Match the inbounds GEP shape with the `, i32 0, i32 1` indices
+        // that step from struct-base to field 1.
+        assert!(
+            body.contains("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 1"),
+            "reload prologue must GEP into state struct field 1 for `items`:\n{body}"
+        );
+        // Load the inline Vec shape from the GEP'd field pointer.
+        assert!(
+            body.contains("load { ptr, i64, i64 }") || body.contains("load {ptr, i64, i64}"),
+            "reload prologue must load the inline Vec layout for `items`:\n{body}"
+        );
+        // Alloca a slot for the reloaded local.
+        assert!(
+            body.contains("alloca { ptr, i64, i64 }") || body.contains("alloca {ptr, i64, i64}"),
+            "reload prologue must alloca a slot for the reloaded `items`:\n{body}"
+        );
+        // The store transfers the loaded value into the alloca'd slot.
+        // LLVM renders this as `store { ptr, i64, i64 } %items.reload, ptr %items.slot`.
+        assert!(
+            body.contains("store { ptr, i64, i64 }") || body.contains("store {ptr, i64, i64}"),
+            "reload prologue must store the loaded value into the slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_reload_prologue_appears_in_every_state_arm() {
+        // The reload prologue is uniform across all state arms — both
+        // state_0 (initial call) and state_1 (post-yield resume) emit
+        // the same GEP+load+alloca+store sequence. Pin this by counting
+        // the GEP occurrences against the arm count.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // 1 yield point → 2 arms (state_0, state_1) → 2 GEPs into
+        // field 1 (one per arm, one captured local).
+        let gep_count = body
+            .matches("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 1")
+            .count();
+        assert_eq!(
+            gep_count, 2,
+            "expected 2 GEPs for `items` (one per state arm) in 1-yield function:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_reload_prologue_multi_field_layout() {
+        // Two captured locals across the union (`a` from the param,
+        // `b` from a let between yields) produce two GEP+load+alloca+
+        // store quadruples per state arm — field 1 for `a`, field 2
+        // for `b`. Pins that the field-index increment scales with the
+        // layout's field count.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: Vec[i64]) {
+                 fetch();
+                 let b: Vec[i64] = a;
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // GEP for `a` (field 1) and `b` (field 2) should both appear.
+        let gep_field_1 = body
+            .matches("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 1")
+            .count();
+        let gep_field_2 = body
+            .matches("getelementptr inbounds %kara.state.driver, ptr %0, i32 0, i32 2")
+            .count();
+        // 2 yield points → 3 arms (state_0, state_1, state_2). Each arm
+        // reloads both fields → 3 GEPs per field.
+        assert_eq!(
+            gep_field_1, 3,
+            "expected 3 GEPs to field 1 (one per arm) in 2-yield function:\n{body}"
+        );
+        assert_eq!(
+            gep_field_2, 3,
+            "expected 3 GEPs to field 2 (one per arm) in 2-yield function:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_reload_prologue_empty_for_no_captured_locals() {
+        // A function with no captured locals (no params, no in-scope
+        // lets at the yield point) has an empty layout — the reload
+        // loop iterates zero times, so each state arm has just the
+        // unconditional `ret i8 0`. No GEPs into captured-local fields.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Only the tag GEP (field 0) is present; no field-1+ GEPs.
+        assert!(
+            !body.contains("ptr %0, i32 0, i32 1"),
+            "no-capture function must not GEP into captured-local fields:\n{body}"
+        );
+        // Tag GEP still exists at field 0.
+        assert!(
+            body.contains("ptr %0, i32 0, i32 0"),
+            "tag GEP at field 0 must still be present:\n{body}"
+        );
+    }
+
     #[test]
     fn test_poll_fn_switch_multi_yield_arm_count() {
         // Three yield points → 4 arms (state_0 through state_3). Pins

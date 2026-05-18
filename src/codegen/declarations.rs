@@ -203,6 +203,10 @@ impl<'ctx> super::Codegen<'ctx> {
                 // suite will surface the divergence before users do.
                 None => continue,
             };
+            let layout = program
+                .state_struct_layouts
+                .get(fn_key)
+                .expect("layout exists for sorted key");
             let poll_name = format!("__kara_poll_{fn_key}");
             let poll_fn = self.module.add_function(&poll_name, fn_type, None);
             // `Internal` rather than `Private`: both restrict visibility
@@ -277,13 +281,63 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_switch(tag, default_block, &cases)
                 .expect("build switch on state tag");
 
-            // Slice-7 stub bodies — each arm returns Pending. Slice 8
-            // replaces these returns with the per-yield-arm logic:
-            // state_0 runs the function body until the first yield,
-            // state_i (1..N) reloads captured locals from the state
-            // struct and resumes from the i-th yield point.
+            // Slice-8a per-arm body: each state arm emits a uniform
+            // reload prologue — for every captured local in the
+            // layout, GEP into the corresponding state-struct field
+            // (`field_idx + 1` to skip the tag at field 0), load the
+            // value, alloca a slot for it, and store the loaded value
+            // into the slot. Slice 8b's body-splitting walks these
+            // allocas via the existing `variables` registry so the
+            // resumed user code references the reloaded values through
+            // the same alloca-load machinery as ordinary stack-bound
+            // locals.
+            //
+            // The reload runs uniformly across all state arms (state_0
+            // through state_N). For state_0 (initial call) some fields
+            // are uninitialized — only the locals live at the entry
+            // point (function parameters) carry meaningful data, the
+            // rest are zero from the caller-side state-struct
+            // allocator. Slice 8b's body-splitting won't reference the
+            // not-yet-bound locals at state_0, so the load-of-zero is
+            // harmless; uniform per-arm shape simplifies the codegen
+            // and matches the over-approximation from slice 4.
+            //
+            // Each arm still terminates with `ret i8 0` (Pending stub).
+            // Slice 8c+ replaces the unconditional return with the
+            // actual per-arm logic (run user code until next yield,
+            // store captured locals back, return Pending; or at the
+            // terminal arm return Ready with the result).
             for arm_bb in &arm_blocks {
                 self.builder.position_at_end(*arm_bb);
+                for (field_idx, field) in layout.fields.iter().enumerate() {
+                    let struct_field_idx = (field_idx + 1) as u32;
+                    let field_ty = state_struct
+                        .get_field_type_at_index(struct_field_idx)
+                        .expect("state struct field type at captured-local index");
+                    let field_ptr_name = format!("{}.field_ptr", field.name);
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            struct_field_idx,
+                            &field_ptr_name,
+                        )
+                        .expect("GEP captured-local field in state struct");
+                    let reload_name = format!("{}.reload", field.name);
+                    let loaded = self
+                        .builder
+                        .build_load(field_ty, field_ptr, &reload_name)
+                        .expect("load captured-local value from state struct");
+                    let slot_name = format!("{}.slot", field.name);
+                    let slot = self
+                        .builder
+                        .build_alloca(field_ty, &slot_name)
+                        .expect("alloca for reloaded captured-local slot");
+                    self.builder
+                        .build_store(slot, loaded)
+                        .expect("store reloaded captured-local into slot");
+                }
                 self.builder
                     .build_return(Some(&i8_ty.const_int(0, false)))
                     .expect("return Pending from state-machine arm");
