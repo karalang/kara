@@ -23,7 +23,30 @@ impl super::Parser {
                 if let Some(attr) = self.parse_at_attribute() {
                     attrs.push(attr);
                 }
-            } else if let Some(attr) = self.parse_attribute() {
+            } else if let Some(attr) = self.parse_attribute(false) {
+                attrs.push(attr);
+            }
+        }
+        attrs
+    }
+
+    /// Parse module-level inner attributes — `#![name(args)]` lines at
+    /// the top of the source file. Mirrors `parse_attributes` shape but
+    /// requires the `#!` prefix. Stops at the first non-inner-attribute
+    /// token; subsequent outer-attribute (`#[...]`) lines belong to the
+    /// first item that follows.
+    ///
+    /// Phase-7 line 43 lands the first consumer, `#![rc_budget(max: N)]`.
+    /// Other inner-attribute names parse here and are surfaced as
+    /// unknown-attribute diagnostics by later passes — no parser
+    /// allow-list, so the surface is extensible.
+    pub(crate) fn parse_inner_attributes(&mut self) -> Vec<Attribute> {
+        let mut attrs = Vec::new();
+        while self.check(&Token::Pound)
+            && matches!(self.peek_token_at(1), Token::Bang)
+            && matches!(self.peek_token_at(2), Token::LeftBracket)
+        {
+            if let Some(attr) = self.parse_attribute(true) {
                 attrs.push(attr);
             }
         }
@@ -46,9 +69,14 @@ impl super::Parser {
         })
     }
 
-    fn parse_attribute(&mut self) -> Option<Attribute> {
+    fn parse_attribute(&mut self, is_inner: bool) -> Option<Attribute> {
         let start = self.current_span();
         self.expect(&Token::Pound)?;
+        if is_inner {
+            // Inner-attribute prefix `#!` — `#[...]` would have already
+            // bailed at the call site if the next token isn't `[`.
+            self.expect(&Token::Bang)?;
+        }
         self.expect(&Token::LeftBracket)?;
 
         // `#[unsafe(...)]` wrap (design.md § Linker Control Attributes)

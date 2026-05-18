@@ -421,6 +421,17 @@ pub enum OwnershipErrorKind {
     /// the consume site, the closure creation site, and the captured
     /// path's borrow mode (`ref` / `mut ref`).
     ClosureCaptureBorrowConflict,
+    /// Phase-7 line 43 — the module-level `#![rc_budget(max: N)]`
+    /// attribute declared a ceiling of `N` RC-promoted bindings, but
+    /// ownership analysis produced more. The diagnostic carries the
+    /// budget value + observed count; the suggestion lists every
+    /// contributing `<function>.<binding>` so the author can pick which
+    /// to restructure first. Fires once per module, at the attribute's
+    /// span.
+    RcBudgetExceeded {
+        budget: usize,
+        observed: usize,
+    },
 }
 
 impl std::fmt::Display for OwnershipError {
@@ -805,6 +816,7 @@ impl<'a> OwnershipChecker<'a> {
         self.promote_rc_to_arc();
         self.emit_rc_fallback_notes();
         self.enforce_no_rc_attrs();
+        self.enforce_rc_budget();
 
         // Build representations: parameter modes first, then overlay RC/Arc
         // for any binding (parameter or local) flagged by Phase 1/2.

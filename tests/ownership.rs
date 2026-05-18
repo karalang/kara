@@ -5753,3 +5753,143 @@ fn impl_trait_slice4_iterator_outliving_its_vec_source_rejected() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Phase-7 line 43 — module-level `#![rc_budget(max: N)]` ─────
+
+/// Build a Kāra source that triggers exactly `n` RC fallbacks via
+/// the closure-capture-with-outer-use pattern (RC trigger 2). Each
+/// function `f<i>` has its own RC binding `o`, so the total count
+/// across `rc_values` is `n`.
+fn rc_budget_source(prefix: &str, n: usize) -> String {
+    let mut src = String::from(prefix);
+    src.push_str("struct Owned { x: i64 }\nfn take(o: Owned) { }\n");
+    for i in 0..n {
+        src.push_str(&format!(
+            "fn f{i}() {{\n    let o = Owned {{ x: {i} }};\n    let _g = || take(o);\n    let _u = o;\n}}\n",
+        ));
+    }
+    src.push_str("fn main() {}\n");
+    src
+}
+
+#[test]
+fn rc_budget_under_passes() {
+    // `#![rc_budget(max: 5)]` with 2 RC bindings — under budget, no
+    // error. The 2 RC bindings come from `f0` and `f1`, each rooted
+    // in a closure-capture-with-outer-use trigger.
+    let src = rc_budget_source("#![rc_budget(max: 5)]\n", 2);
+    let res = ownership_ok(&src);
+    let total: usize = res.rc_values.values().map(|m| m.len()).sum();
+    assert_eq!(
+        total, 2,
+        "fixture should produce exactly 2 RC bindings; got rc_values = {:?}",
+        res.rc_values
+    );
+}
+
+#[test]
+fn rc_budget_exceeded_emits_error_with_contributing_list() {
+    // 3 RC bindings under a `max: 1` budget — error fires once,
+    // names every contributing `<function>.<binding>` in source-
+    // sorted order so authors can pick which to restructure first.
+    let src = rc_budget_source("#![rc_budget(max: 1)]\n", 3);
+    let errors = ownership_errors(&src);
+    let budget_errors: Vec<_> = errors
+        .iter()
+        .filter(|e| matches!(e.kind, OwnershipErrorKind::RcBudgetExceeded { .. }))
+        .collect();
+    assert_eq!(
+        budget_errors.len(),
+        1,
+        "expected exactly one RcBudgetExceeded error; got {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>(),
+    );
+    let err = budget_errors[0];
+    let OwnershipErrorKind::RcBudgetExceeded { budget, observed } = err.kind else {
+        unreachable!()
+    };
+    assert_eq!(budget, 1, "budget value should be threaded through");
+    assert_eq!(observed, 3, "observed count should match the fixture");
+    let suggestion = err.suggestion.as_deref().unwrap_or("");
+    for fn_name in ["f0", "f1", "f2"] {
+        assert!(
+            suggestion.contains(&format!("{fn_name}.o")),
+            "suggestion should list `{fn_name}.o` so author can pick which to restructure; got `{suggestion}`",
+        );
+    }
+}
+
+#[test]
+fn rc_budget_absent_attr_does_not_enforce() {
+    // No `#![rc_budget(...)]` at the top — even 3 RC bindings should
+    // not error. Confirms enforcement is opt-in.
+    let src = rc_budget_source("", 3);
+    let res = ownership_ok(&src);
+    let total: usize = res.rc_values.values().map(|m| m.len()).sum();
+    assert_eq!(total, 3);
+}
+
+#[test]
+fn rc_budget_max_zero_rejects_any_rc() {
+    // `#![rc_budget(max: 0)]` with even one RC binding — error.
+    let src = rc_budget_source("#![rc_budget(max: 0)]\n", 1);
+    let errors = ownership_errors(&src);
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            OwnershipErrorKind::RcBudgetExceeded {
+                budget: 0,
+                observed: 1
+            }
+        )),
+        "expected RcBudgetExceeded {{ budget: 0, observed: 1 }}; got {:?}",
+        errors.iter().map(|e| &e.kind).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn rc_budget_bare_attr_no_args_is_ignored() {
+    // `#![rc_budget]` with no `max:` arg — treated as absent for v1
+    // (no default ceiling). 3 RC bindings still pass.
+    let src = rc_budget_source("#![rc_budget]\n", 3);
+    let res = ownership_ok(&src);
+    let total: usize = res.rc_values.values().map(|m| m.len()).sum();
+    assert_eq!(total, 3);
+}
+
+#[test]
+fn rc_budget_attr_parses_onto_program_inner_attrs() {
+    // Sanity that the parser surface puts `#![rc_budget(max: 5)]`
+    // onto `Program.inner_attrs` with the parsed `max: 5` arg.
+    let parsed = parse("#![rc_budget(max: 5)]\nfn main() {}\n");
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {:?}",
+        parsed.errors
+    );
+    let inner = &parsed.program.inner_attrs;
+    assert_eq!(
+        inner.len(),
+        1,
+        "expected one inner attribute; got {inner:?}"
+    );
+    let attr = &inner[0];
+    assert_eq!(attr.path, vec!["rc_budget".to_string()]);
+    let max_arg = attr
+        .args
+        .iter()
+        .find(|a| a.name.as_deref() == Some("max"))
+        .expect("expected `max:` named arg");
+    let val_kind = &max_arg
+        .value
+        .as_ref()
+        .expect("expected value on `max:` arg")
+        .kind;
+    let karac::ast::ExprKind::Integer(n, _) = val_kind else {
+        panic!("expected integer literal for max; got {val_kind:?}");
+    };
+    assert_eq!(*n, 5);
+}

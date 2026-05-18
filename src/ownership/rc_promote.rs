@@ -332,4 +332,78 @@ impl<'a> super::OwnershipChecker<'a> {
             }
         }
     }
+
+    // ── Module-level `#![rc_budget(max: N)]` Enforcement ─────────
+    //
+    // Phase-7 line 43. The author declares a per-module ceiling on RC-
+    // promoted bindings via `#![rc_budget(max: N)]` at the top of the
+    // source. After Phase 1+2 land (`rc_values` populated, with Phase 2
+    // promotion folded in), count the total RC bindings and emit one
+    // `RcBudgetExceeded` error if the count exceeds the budget. The
+    // diagnostic lists every contributing `<function>.<binding>` so
+    // the author knows which one to restructure first.
+    pub(crate) fn enforce_rc_budget(&mut self) {
+        // Find the `#![rc_budget(max: N)]` attribute, if any. Bare-
+        // form `#![rc_budget]` with no `max` arg is treated as absent
+        // for v1 (a future slice could land a default ceiling).
+        let Some(attr) = self
+            .program
+            .inner_attrs
+            .iter()
+            .find(|a| a.path.len() == 1 && a.path[0] == "rc_budget")
+        else {
+            return;
+        };
+        let Some(max) = parse_rc_budget_max(attr) else {
+            return;
+        };
+
+        // Count every RC binding occurrence across every function.
+        // Different functions may carry a binding of the same name;
+        // each is its own RC instance and contributes to the budget.
+        let mut contributing: Vec<String> = Vec::new();
+        for (fn_name, rc_map) in &self.rc_values {
+            for binding in rc_map.keys() {
+                contributing.push(format!("{}.{}", fn_name, binding));
+            }
+        }
+        contributing.sort();
+
+        if contributing.len() > max {
+            self.errors.push(OwnershipError {
+                message: format!(
+                    "module `#![rc_budget(max: {})]` exceeded: {} RC binding(s) inferred",
+                    max,
+                    contributing.len(),
+                ),
+                span: attr.span.clone(),
+                kind: OwnershipErrorKind::RcBudgetExceeded {
+                    budget: max,
+                    observed: contributing.len(),
+                },
+                suggestion: Some(format!(
+                    "RC-promoted bindings (restructure or raise the budget): {}",
+                    contributing.join(", "),
+                )),
+                replacement: None,
+                consume_span: None,
+            });
+        }
+    }
+}
+
+/// Parse the `max: N` named argument from a `#![rc_budget(max: N)]`
+/// attribute. Returns `None` when the attribute is missing the named
+/// argument or the value isn't a non-negative integer literal — the
+/// caller treats the absence as "no budget enforced for this module."
+fn parse_rc_budget_max(attr: &Attribute) -> Option<usize> {
+    let arg = attr
+        .args
+        .iter()
+        .find(|a| a.name.as_deref() == Some("max"))?;
+    let value = arg.value.as_ref()?;
+    let ExprKind::Integer(n, _) = &value.kind else {
+        return None;
+    };
+    usize::try_from(*n).ok()
 }

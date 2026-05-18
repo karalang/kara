@@ -232,6 +232,12 @@ impl Parser {
             Some(module_doc_lines.join("\n"))
         };
 
+        // Phase-7 line 43 — module-level inner attributes
+        // (`#![rc_budget(max: N)]`, etc.). Must appear before any
+        // top-level item; subsequent outer attributes (`#[...]`)
+        // belong to the first item that follows.
+        let inner_attrs = self.parse_inner_attributes();
+
         let mut items = Vec::new();
         while !self.is_at_end() {
             match self.parse_item() {
@@ -245,6 +251,7 @@ impl Parser {
         Program {
             items,
             module_doc_comment,
+            inner_attrs,
             ..Program::default()
         }
     }

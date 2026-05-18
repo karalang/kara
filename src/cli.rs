@@ -2072,6 +2072,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ClosureCaptureBorrowConflict => {
                     "E_CLOSURE_CAPTURE_BORROW_CONFLICT"
                 }
+                crate::ownership::OwnershipErrorKind::RcBudgetExceeded { .. } => {
+                    "E_RC_BUDGET_EXCEEDED"
+                }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

@@ -251,6 +251,12 @@ pub struct Program {
     /// Lines from a single run of `//!` are concatenated with `\n`.
     /// `None` when the file has no leading `//!` lines.
     pub module_doc_comment: Option<String>,
+    /// Module-level inner attributes — `#![name(args)]` lines at the
+    /// top of the source file. Parsed before any top-level item. v1
+    /// recognizes `#![rc_budget(max: N)]` (phase-7 line 43); other
+    /// names are accepted by the parser and surfaced as unknown-
+    /// attribute diagnostics by later passes.
+    pub inner_attrs: Vec<Attribute>,
     /// Set by the lowering pass; empty before lowering runs.
     pub question_conversions: QuestionConversionTable,
     /// Set by the cli pipeline after effectcheck; empty otherwise.
