@@ -36,6 +36,126 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // Phase 6 line 26 slice 8g: method-call network-boundary intercept.
+        // Mirrors slice 8d's free-function intercept (`compile_call`) for
+        // `obj.method(args)` shapes where the resolved `Type.method` key
+        // is in `state_machine_state_constructors`. The receiver `obj`
+        // becomes `self` and stores into state struct field 1 (slice 4's
+        // layout puts `self` at position 0). Method args follow at
+        // fields 2..K. Runs ahead of every other method-call dispatch
+        // path so the intercept fires before any receiver-shape
+        // shortcuts (Option/Result, indexed-receiver, field-receiver,
+        // entry-chain, clone-on-collection) — for a network-boundary
+        // method those shortcuts would emit an inappropriate direct
+        // call. Receiver compilation routes through the standard
+        // `compile_expr` path, matching slice 8f's arg-store handling.
+        if let Some(ref key) = callee_key {
+            if let Some(ctor_fn) = self.state_machine_state_constructors.get(key).copied() {
+                let poll_fn = self
+                    .state_machine_poll_fns
+                    .get(key)
+                    .copied()
+                    .expect("poll-fn co-emitted with state-machine constructor");
+                let state_struct = self
+                    .state_struct_types
+                    .get(key)
+                    .copied()
+                    .expect("state struct type co-emitted with constructor");
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                let i8_ty = self.context.i8_type();
+                let cur_fn = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .expect("compile_method_call inside a function context");
+                // Compile the receiver into an SSA value. Mirrors
+                // slice 8f's arg-store handling, just for `self`.
+                let recv_val = self.compile_expr(object)?;
+                // Allocate the state struct via the constructor.
+                let state_call = self
+                    .builder
+                    .build_call(ctor_fn, &[], "kara.state")
+                    .expect("call state-struct constructor");
+                let state_ptr = state_call
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // Store the receiver into state struct field 1 (self
+                // is at layout position 0 → state struct field 1
+                // after the i32 tag at field 0).
+                let self_field_ptr = self
+                    .builder
+                    .build_struct_gep(state_struct, state_ptr, 1, "kara.self.field_ptr")
+                    .expect("GEP state struct field 1 for self");
+                self.builder
+                    .build_store(self_field_ptr, recv_val)
+                    .expect("store self into state struct field 1");
+                // Method args follow at fields 2..K.
+                for (i, arg) in args.iter().enumerate() {
+                    let arg_val = self.compile_expr(&arg.value)?;
+                    let field_idx = (i + 2) as u32;
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            field_idx,
+                            &format!("kara.arg{i}.field_ptr"),
+                        )
+                        .expect("GEP state struct field for method arg");
+                    self.builder
+                        .build_store(field_ptr, arg_val)
+                        .expect("store method arg into state struct field");
+                }
+                // Poll loop + cooperative yield + done + free — same
+                // shape as slice 8d/8e for the free-function intercept.
+                let loop_bb = self.context.append_basic_block(cur_fn, "kara.poll_loop");
+                let yield_bb = self.context.append_basic_block(cur_fn, "kara.poll_yield");
+                let done_bb = self.context.append_basic_block(cur_fn, "kara.poll_done");
+                self.builder
+                    .build_unconditional_branch(loop_bb)
+                    .expect("br to poll loop");
+                self.builder.position_at_end(loop_bb);
+                let null_cancel = ptr_ty.const_null();
+                let poll_call = self
+                    .builder
+                    .build_call(
+                        poll_fn,
+                        &[state_ptr.into(), null_cancel.into()],
+                        "kara.poll_result",
+                    )
+                    .expect("call poll-fn");
+                let poll_result = poll_call
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let is_pending = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        poll_result,
+                        i8_ty.const_int(0, false),
+                        "kara.is_pending",
+                    )
+                    .expect("icmp eq i8 result, 0");
+                self.builder
+                    .build_conditional_branch(is_pending, yield_bb, done_bb)
+                    .expect("br on poll discriminant");
+                self.builder.position_at_end(yield_bb);
+                self.builder
+                    .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                    .expect("call sched_yield");
+                self.builder
+                    .build_unconditional_branch(loop_bb)
+                    .expect("br back to poll loop after yield");
+                self.builder.position_at_end(done_bb);
+                self.builder
+                    .build_call(self.free_fn, &[state_ptr.into()], "")
+                    .expect("call free on state struct");
+                return Ok(self.context.i64_type().const_int(0, false).into());
+            }
+        }
+
         // Slice OR (2026-05-16): Option/Result `unwrap`/`expect`/`is_*`
         // dispatch is receiver-shape-agnostic — the receiver may be any
         // Option-/Result-valued expression (identifier, method chain,

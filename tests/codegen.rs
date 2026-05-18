@@ -14714,4 +14714,145 @@ fn main() {
             "arg-store must precede `br label %kara.poll_loop`:\n{main_body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8g: method-call network-boundary intercept ─
+    //
+    // Mirrors slice 8d's free-function intercept for `obj.method(args)`
+    // calls where the resolved `Type.method` key is in
+    // `state_machine_state_constructors`. The receiver `obj` becomes
+    // `self` and stores into state struct field 1 (layout position 0);
+    // method args follow at fields 2..K.
+
+    #[test]
+    fn test_method_call_intercept_emits_state_machine_invocation() {
+        // A method call to a network-boundary method must emit the
+        // state-machine invocation shape (ctor + poll loop) instead
+        // of a direct method dispatch.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+             }
+             fn main() {
+                 let h = Hub { count: 0 };
+                 h.run();
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains("call ptr @__kara_state_new_Hub.run()"),
+            "method intercept must call Hub.run's state constructor:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("kara.poll_loop:"),
+            "method intercept must emit kara.poll_loop:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("call i8 @__kara_poll_Hub.run(ptr %kara.state, ptr null)"),
+            "method intercept must invoke Hub.run's poll-fn:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_method_call_intercept_stores_receiver_into_field_1() {
+        // The receiver (`obj` in `obj.run()`) becomes `self` and stores
+        // into state struct field 1 — `self` is at layout position 0
+        // per slice 4, so field 1 in the struct (after the i32 tag).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+             }
+             fn main() {
+                 let h = Hub { count: 0 };
+                 h.run();
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.Hub.run, ptr %kara.state, i32 0, i32 1"
+            ),
+            "method intercept must GEP into state struct field 1 for self:\n{main_body}"
+        );
+        // The receiver SSA value is stored into field 1.
+        assert!(
+            main_body.contains("store") && main_body.contains(", ptr %kara.self.field_ptr"),
+            "method intercept must store the receiver into the self.field_ptr:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_method_call_intercept_preserves_non_network_methods() {
+        // Non-network method calls still use direct dispatch — the
+        // intercept fires only when the resolved Type.method key is
+        // in state_machine_state_constructors.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+                 fn pure_count(self) -> i64 { self.count }
+             }
+             fn main() {
+                 let h = Hub { count: 5 };
+                 let _ = h.pure_count();
+                 h.run();
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // pure_count uses direct dispatch — no state constructor.
+        assert!(
+            !main_body.contains("@__kara_state_new_Hub.pure_count"),
+            "pure method must not be intercepted:\n{main_body}"
+        );
+        // run still gets intercepted.
+        assert!(
+            main_body.contains("@__kara_state_new_Hub.run()"),
+            "network-boundary method must use the intercept:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_method_call_intercept_multi_arg_stores_args_after_receiver() {
+        // A method with additional args: receiver into field 1, args
+        // into fields 2..K. Pins that the receiver claims field 1 and
+        // method args shift past it.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self, n: i64) { fetch(); }
+             }
+             fn main() {
+                 let h = Hub { count: 0 };
+                 h.run(42);
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // Receiver stored into field 1.
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.Hub.run, ptr %kara.state, i32 0, i32 1"
+            ),
+            "receiver must GEP into field 1:\n{main_body}"
+        );
+        // Arg n=42 stored into field 2.
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.Hub.run, ptr %kara.state, i32 0, i32 2"
+            ),
+            "first method arg must GEP into field 2 (after receiver):\n{main_body}"
+        );
+        assert!(
+            main_body.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "method arg literal 42 must be stored into field 2:\n{main_body}"
+        );
+    }
 }
