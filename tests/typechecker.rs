@@ -17353,3 +17353,67 @@ fn struct_literal_unchanged_by_union_arm() {
          fn caller() -> Point { Point { x: 1, y: 2 } }",
     );
 }
+
+// ── FFI unions slice 3a — E_UNION_DROP_FORBIDDEN ────────────────
+//
+// `impl Drop for U` is rejected when `U` names a registered union.
+// Per design.md § FFI Unions: the field-`Copy` rule means the
+// compiler never emits a destructor for union storage; a hand-
+// written `Drop` impl would silently never run, so this focused
+// diagnostic catches the foot-gun at the impl site.
+
+#[test]
+fn union_drop_impl_rejected() {
+    // Declare `Drop` inline so resolver name resolution succeeds —
+    // karac does not bake a `Drop` trait into stdlib today, and the
+    // resolver rejects `impl <unknown> for ...` ahead of typechecker.
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         #[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         impl Drop for FloatBits { fn drop(mut ref self) {} }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_DROP_FORBIDDEN"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_UNION_DROP_FORBIDDEN, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("FloatBits"),
+        "diagnostic should name the union, got: {}",
+        diag.message,
+    );
+    assert!(
+        diag.message.contains("`Drop`"),
+        "diagnostic should name the Drop trait, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn union_inherent_impl_unaffected_by_drop_slice() {
+    // Inherent impls on unions are not rejected by slice 3a — only
+    // `impl Drop for U` is. An inherent `impl U { fn name() }` block
+    // continues to typecheck normally.
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         impl FloatBits { fn name() -> i32 { 0 } }",
+    );
+}
+
+#[test]
+fn struct_drop_impl_unaffected_by_union_arm() {
+    // Regression: `impl Drop for S` on a regular struct must continue
+    // to typecheck — slice 3a's gate only fires when the target name
+    // is in `env.unions`.
+    typecheck_ok(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Point { x: i32, y: i32 }\n\
+         impl Drop for Point { fn drop(mut ref self) {} }",
+    );
+}

@@ -1290,6 +1290,40 @@ impl<'a> super::TypeChecker<'a> {
             .as_ref()
             .and_then(|p| p.segments.last().cloned());
 
+        // Phase-5 FFI unions slice 3a: reject `impl Drop for U` when `U`
+        // names a registered union. Per design.md § FFI Unions: every
+        // union field is `Copy` (slice 1d enforces this), so the
+        // compiler never emits a destructor for union storage; a hand-
+        // written `Drop` impl would silently never run, which is
+        // exactly the foot-gun this focused diagnostic exists to
+        // prevent. Early-return ahead of method registration so the
+        // bogus impl doesn't enter `env.impls` and produce downstream
+        // confusion (mirrors the opaque-foreign-type early-return
+        // pattern above). Non-`Drop` trait impls on unions are
+        // intentionally NOT rejected here — design.md § FFI Unions
+        // points users at hand-written `impl SomeTrait for U` inside
+        // `unsafe { }` blocks when equality / hashing / etc. is needed.
+        if let Some(trait_str) = trait_name.as_deref() {
+            if trait_str == "Drop" && self.env.unions.contains_key(&type_name) {
+                self.type_error(
+                    format!(
+                        "error[E_UNION_DROP_FORBIDDEN]: cannot implement `Drop` \
+                         for union `{type_name}` — unions overlap storage \
+                         across their fields, so the compiler cannot \
+                         determine which variant is active and never emits a \
+                         destructor; a hand-written `Drop` impl would \
+                         silently never run. Remove the impl; if a union \
+                         field holds a resource that must be released, do it \
+                         manually inside an `unsafe {{ }}` block at every \
+                         site that finishes with that variant"
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
+        }
+
         let mut methods = HashMap::new();
         for item in &imp.items {
             let method = match item {
