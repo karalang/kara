@@ -851,31 +851,28 @@ fn test_build_project_hot_swap_accepted_with_default_profile() {
         "expected success on default profile, got stderr={}",
         String::from_utf8_lossy(&out.stderr),
     );
-    // Slice 1 surface gate: the flag parses + plumbs but codegen
-    // indirection is slice 2. The notice is the contract that says so.
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("--enable-hot-swap parsed but codegen indirection not yet wired"),
-        "expected slice-1 surface notice, got stderr={stderr}",
-    );
 }
 
 #[test]
 fn test_build_bare_file_hot_swap_accepted() {
     // Bare-file build has no manifest → no profile → no gating.
-    // Flag should still parse and emit the surface notice.
+    // The flag is accepted by the parser; under cfg(feature="llvm")
+    // the build runs through codegen with indirection wired, under
+    // the no-llvm fallback `cmd_build` routes through `cmd_check`.
+    // Either way the parser should not have rejected the flag and
+    // no gating error should fire.
     let out = karac_bin()
         .args(["build", "tests/snapshots/clean.kara", "--enable-hot-swap"])
         .output()
         .unwrap();
-    // Bare-file `karac build` of a non-feature-llvm checkout exits non-
-    // zero with a no-llvm note; with the feature it succeeds. Either
-    // way the parser should not have rejected the flag, and the surface
-    // notice should fire before the codegen path forks on llvm.
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("--enable-hot-swap parsed but codegen indirection not yet wired"),
-        "expected slice-1 surface notice, got stderr={stderr}",
+        !stderr.contains("unknown flag"),
+        "expected --enable-hot-swap to parse, got stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("incompatible with"),
+        "expected no profile gating for bare-file build, got stderr={stderr}",
     );
 }
 

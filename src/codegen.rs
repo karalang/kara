@@ -95,12 +95,40 @@ pub fn compile_to_ir_with_options(
     source_filename: Option<&str>,
     source_text: Option<&str>,
 ) -> Result<String, String> {
+    compile_to_ir_with_hot_swap(
+        program,
+        ownership,
+        concurrency,
+        source_filename,
+        source_text,
+        false,
+    )
+}
+
+/// Variant of [`compile_to_ir_with_options`] that accepts the
+/// phase-7 line-5 `--enable-hot-swap` flag. When `true`, the codegen
+/// emits PLT-style indirection through `@karac_hotswap_table` for every
+/// call to a user-defined `pub fn` (extern-public module symbol);
+/// internal calls stay direct. The table + an initializer ctor are
+/// emitted at module finalize; v1 ships the table populated with
+/// direct pointers, so the perf delta is the load+indirect-call cost
+/// per call site. Provides the artifact-format reservation for the
+/// post-v1 continuous-PGO + shared-object reload story.
+pub fn compile_to_ir_with_hot_swap(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+    source_filename: Option<&str>,
+    source_text: Option<&str>,
+    enable_hot_swap: bool,
+) -> Result<String, String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
+    cg.set_hot_swap_enabled(enable_hot_swap);
     cg.compile_program(program)?;
     Ok(cg.module.print_to_string().to_string())
 }
@@ -126,12 +154,36 @@ pub fn compile_to_object_with_options(
     source_filename: Option<&str>,
     source_text: Option<&str>,
 ) -> Result<(), String> {
+    compile_to_object_with_hot_swap(
+        program,
+        output_path,
+        ownership,
+        concurrency,
+        source_filename,
+        source_text,
+        false,
+    )
+}
+
+/// Variant of [`compile_to_object_with_options`] that accepts the
+/// phase-7 line-5 `--enable-hot-swap` flag. See
+/// [`compile_to_ir_with_hot_swap`] for the codegen contract.
+pub fn compile_to_object_with_hot_swap(
+    program: &Program,
+    output_path: &str,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+    source_filename: Option<&str>,
+    source_text: Option<&str>,
+    enable_hot_swap: bool,
+) -> Result<(), String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_module");
     cg.load_rc_fallback(ownership);
     cg.load_concurrency_analysis(concurrency);
     cg.set_source_filename(source_filename);
     cg.set_source_text(source_text);
+    cg.set_hot_swap_enabled(enable_hot_swap);
     cg.compile_program(program)?;
 
     let target_machine = create_target_machine()?;
@@ -792,6 +844,25 @@ pub(super) struct Codegen<'ctx> {
     /// which we want to avoid in the (common) path where no layout
     /// intrinsic is invoked.
     pub(crate) target_data: Option<TargetData>,
+    // ── Hot-swap codegen (phase-7 line 5) ─────────────────────────
+    /// Set by `compile_to_*_with_hot_swap` from the CLI's
+    /// `--enable-hot-swap` flag. When `true`, every call to a
+    /// user-defined `pub fn` (extern-public module symbol) is emitted
+    /// as a load-from-table + indirect-call shape so post-v1 reload
+    /// can replace the table entry without recompiling callers. Off by
+    /// default; the artifact-format reservation is per `deferred.md
+    /// § Continuous PGO with Shared-Object Hot-Swap`.
+    pub(crate) hot_swap_enabled: bool,
+    /// Per-pub-fn slot index in `@karac_hotswap_table`, populated as
+    /// pub function declarations are emitted. The slot list is also
+    /// kept ordered in `hot_swap_fns` so the module-init ctor can
+    /// store function pointers in the matching order.
+    pub(crate) hot_swap_slots: HashMap<String, u32>,
+    /// Ordered list of `(slot_index, function_value)` for every
+    /// pub-fn definition that received an indirection slot. The
+    /// finalize step emits a ctor that writes each function's address
+    /// into its slot in the table.
+    pub(crate) hot_swap_fns: Vec<(u32, FunctionValue<'ctx>)>,
 }
 
 impl<'ctx> Codegen<'ctx> {
@@ -1359,6 +1430,9 @@ impl<'ctx> Codegen<'ctx> {
             karac_error_trace_push_fn,
             karac_error_trace_clear_fn,
             target_data: None,
+            hot_swap_enabled: false,
+            hot_swap_slots: HashMap::new(),
+            hot_swap_fns: Vec::new(),
         }
     }
 
@@ -1417,6 +1491,14 @@ impl<'ctx> Codegen<'ctx> {
     /// table (Debugger Contract slice 3). Mirrors `set_source_filename`.
     fn set_source_text(&mut self, text: Option<&str>) {
         self.source_text = text.map(|s| s.to_string());
+    }
+
+    /// Set the phase-7 line-5 `--enable-hot-swap` flag. When `true`,
+    /// pub-fn declarations register a slot in `@karac_hotswap_table`
+    /// during emission, and call sites to those callees are lowered as
+    /// load + indirect call. See [`compile_to_object_with_hot_swap`].
+    fn set_hot_swap_enabled(&mut self, enabled: bool) {
+        self.hot_swap_enabled = enabled;
     }
 
     /// Mint a fresh `SpawnSiteId` and record a `SpawnSiteRecord` for the
@@ -1675,6 +1757,12 @@ impl<'ctx> Codegen<'ctx> {
         // symbols which were established by `declare_function`.
         self.emit_provider_vtables(program);
 
+        // Phase-7 line 5 sub-item 1 — emit the hot-swap indirection
+        // table global so call-site lowering in the body pass can GEP
+        // into it. The populator ctor is emitted at finalize. No-op
+        // when --enable-hot-swap is off.
+        self.pre_emit_hot_swap_table();
+
         // Second pass: compile concrete functions (generic ones are compiled lazily).
         for item in &program.items {
             if let Item::Function(f) = item {
@@ -1716,10 +1804,108 @@ impl<'ctx> Codegen<'ctx> {
 
         self.emit_llvm_used();
         self.emit_spawn_sites_metadata();
+        self.finalize_hot_swap_table();
 
         self.module
             .verify()
             .map_err(|e| format!("Module verification failed: {}", e))
+    }
+
+    /// Phase-7 line 5 sub-item 1 — emit the hot-swap table global with
+    /// `zeroinitializer` so call sites lowered during function body
+    /// compilation can GEP+load it. The populator ctor is emitted
+    /// later in `finalize_hot_swap_table`, after the function bodies
+    /// have closed (so the cursor isn't yanked out from under them).
+    ///
+    /// Called between the function-declaration pass and the function-
+    /// body pass in `compile_program`. No-op when `hot_swap_enabled`
+    /// is `false` or no pub-fn declarations were registered.
+    pub(crate) fn pre_emit_hot_swap_table(&mut self) {
+        if !self.hot_swap_enabled || self.hot_swap_fns.is_empty() {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let n = self.hot_swap_fns.len() as u32;
+        let arr_ty = ptr_ty.array_type(n);
+        let table = self.module.add_global(arr_ty, None, "karac_hotswap_table");
+        table.set_initializer(&arr_ty.const_zero());
+        table.set_linkage(inkwell::module::Linkage::External);
+    }
+
+    /// Finalize phase-7 line 5 sub-item 1. Emits the populator ctor
+    /// (`@__karac_init_hot_swap_table`) and registers it in
+    /// `@llvm.global_ctors` so each slot is initialized before `main`.
+    ///
+    /// No-op when `hot_swap_enabled` is `false` or no pub-fn
+    /// declarations were registered. The v1 binary stores direct
+    /// function addresses so dispatch behavior is unchanged; the
+    /// indirection only exists to make post-v1 reload non-breaking.
+    fn finalize_hot_swap_table(&mut self) {
+        if !self.hot_swap_enabled || self.hot_swap_fns.is_empty() {
+            return;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let n = self.hot_swap_fns.len() as u32;
+        let arr_ty = ptr_ty.array_type(n);
+        let table = self
+            .module
+            .get_global("karac_hotswap_table")
+            .expect("pre_emit_hot_swap_table must run before finalize");
+
+        // Populator ctor.
+        let void_ty = self.context.void_type();
+        let ctor_ty = void_ty.fn_type(&[], false);
+        let ctor = self.module.add_function(
+            "__karac_init_hot_swap_table",
+            ctor_ty,
+            Some(inkwell::module::Linkage::Internal),
+        );
+        let entry = self.context.append_basic_block(ctor, "entry");
+        let prev = self.builder.get_insert_block();
+        self.builder.position_at_end(entry);
+        for (slot, fn_val) in self.hot_swap_fns.clone() {
+            let fn_ptr = fn_val.as_global_value().as_pointer_value();
+            let gep = unsafe {
+                self.builder.build_in_bounds_gep(
+                    arr_ty,
+                    table.as_pointer_value(),
+                    &[
+                        i64_ty.const_int(0, false),
+                        i64_ty.const_int(slot as u64, false),
+                    ],
+                    &format!("hotswap_slot_{slot}"),
+                )
+            }
+            .unwrap();
+            self.builder.build_store(gep, fn_ptr).unwrap();
+        }
+        self.builder.build_return(None).unwrap();
+        if let Some(bb) = prev {
+            self.builder.position_at_end(bb);
+        }
+
+        // Register the ctor in `@llvm.global_ctors`. Standard layout:
+        // appending-linkage `[N x { i32 priority, ptr fn, ptr data }]`.
+        // Priority 65535 is the LLVM default ("run last"); we don't need
+        // an earlier slot — the table is consulted from inside main /
+        // user code, never from another ctor.
+        let entry_ty = self
+            .context
+            .struct_type(&[i32_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let arr_one_ty = entry_ty.array_type(1);
+        let global_ctors = self
+            .module
+            .add_global(arr_one_ty, None, "llvm.global_ctors");
+        let priority = i32_ty.const_int(65535, false);
+        let ctor_ptr = ctor.as_global_value().as_pointer_value();
+        let null_data = ptr_ty.const_null();
+        let entry_val =
+            entry_ty.const_named_struct(&[priority.into(), ctor_ptr.into(), null_data.into()]);
+        let arr_val = entry_ty.const_array(&[entry_val]);
+        global_ctors.set_initializer(&arr_val);
+        global_ctors.set_linkage(inkwell::module::Linkage::Appending);
     }
 
     /// Materialize the special `@llvm.used` global from `used_symbols`.

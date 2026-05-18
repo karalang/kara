@@ -14,7 +14,7 @@
 use crate::ast::*;
 
 use inkwell::types::BasicType;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue};
 use inkwell::{AddressSpace, IntPredicate};
 
 use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call};
@@ -271,10 +271,23 @@ impl<'ctx> super::Codegen<'ctx> {
             compiled_args.push(BasicMetadataValueEnum::from(val));
         }
 
-        let call = self
-            .builder
-            .build_call(func, &compiled_args, "call")
-            .unwrap();
+        // Phase-7 line 5 sub-item 1 — hot-swap indirect dispatch.
+        // For callees registered in `hot_swap_slots`, lower the call as
+        // a load from the slot in `@karac_hotswap_table` followed by an
+        // indirect call. The table is populated at startup by the ctor
+        // emitted in `emit_hot_swap_table` so v1 binaries call the
+        // intended target on first dispatch; the indirection exists so
+        // post-v1 reload can replace the entry. Closure invocations,
+        // FFI extern decls, and intrinsic / runtime calls take the
+        // direct path below — slots are only minted for user-defined
+        // pub fn declarations.
+        let call = if let Some(slot) = self.hot_swap_slots.get(&name).copied() {
+            self.build_hot_swap_indirect_call(func, slot, &compiled_args)
+        } else {
+            self.builder
+                .build_call(func, &compiled_args, "call")
+                .unwrap()
+        };
 
         let basic_val = call.try_as_basic_value();
         if basic_val.is_instruction() {
@@ -282,6 +295,48 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(basic_val.unwrap_basic())
         }
+    }
+
+    /// Phase-7 line 5 sub-item 1 — lower a call to a hot-swap-slotted
+    /// callee as load-from-table + indirect call. `func` carries the
+    /// FunctionType the indirect call must use (signatures match the
+    /// declared symbol regardless of the indirection); `slot` indexes
+    /// into `@karac_hotswap_table` (`[N x ptr]`, populated by the
+    /// ctor emitted in `finalize_hot_swap_table`).
+    pub(super) fn build_hot_swap_indirect_call(
+        &mut self,
+        func: FunctionValue<'ctx>,
+        slot: u32,
+        args: &[BasicMetadataValueEnum<'ctx>],
+    ) -> CallSiteValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let n = self.hot_swap_fns.len() as u32;
+        let arr_ty = ptr_ty.array_type(n);
+        let table = self
+            .module
+            .get_global("karac_hotswap_table")
+            .expect("pre_emit_hot_swap_table must run before body lowering");
+        let gep = unsafe {
+            self.builder.build_in_bounds_gep(
+                arr_ty,
+                table.as_pointer_value(),
+                &[
+                    i64_ty.const_int(0, false),
+                    i64_ty.const_int(slot as u64, false),
+                ],
+                &format!("hotswap_slot_{slot}"),
+            )
+        }
+        .unwrap();
+        let loaded = self
+            .builder
+            .build_load(ptr_ty, gep, "hotswap_fnp")
+            .unwrap()
+            .into_pointer_value();
+        self.builder
+            .build_indirect_call(func.get_type(), loaded, args, "hotswap_call")
+            .unwrap()
     }
 
     /// Try to construct an enum variant value if `name` matches a known variant.

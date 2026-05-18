@@ -2425,17 +2425,6 @@ fn cmd_build(
         );
     }
     let _ = offline;
-    if enable_hot_swap {
-        // Slice 1: flag plumbs through but the codegen consumption
-        // (PLT-style indirection for extern-public symbols) lands in
-        // slice 2 of phase-7 line 5. Note the surface gap so CI scripts
-        // pinning to the flag don't think they're already producing
-        // hot-swap-capable binaries.
-        eprintln!(
-            "note: --enable-hot-swap parsed but codegen indirection not yet wired (lands in slice 2)"
-        );
-    }
-    let _ = enable_hot_swap;
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
@@ -2485,13 +2474,14 @@ fn cmd_build(
             exe_name.to_string()
         };
 
-        if let Err(e) = crate::codegen::compile_to_object_with_options(
+        if let Err(e) = crate::codegen::compile_to_object_with_hot_swap(
             &pipeline.parsed.program,
             &obj_path,
             pipeline.ownership.as_ref(),
             pipeline.concurrency.as_ref(),
             Some(filename),
             Some(&source),
+            enable_hot_swap,
         ) {
             eprintln!("error: codegen failed: {e}");
             process::exit(1);
@@ -2514,6 +2504,7 @@ fn cmd_build(
     }
     #[cfg(not(feature = "llvm"))]
     {
+        let _ = enable_hot_swap;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
         cmd_check(filename, output, None, concurrency_report, lint_overrides);
     }
@@ -2734,12 +2725,6 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool) {
         );
         process::exit(1);
     }
-    if enable_hot_swap {
-        eprintln!(
-            "note: --enable-hot-swap parsed but codegen indirection not yet wired (lands in slice 2)"
-        );
-    }
-    let _ = enable_hot_swap;
 
     let walk_opts = WalkerOpts::default();
     let walked = match walker::walk_project(&root, walk_opts) {
@@ -2806,7 +2791,7 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool) {
         && resolve_errors.is_empty()
         && type_errors.is_empty()
     {
-        codegen_status = run_multi_file_codegen(&tree, &mf, &root);
+        codegen_status = run_multi_file_codegen(&tree, &mf, &root, enable_hot_swap);
     }
 
     let failed = !parse_errors.is_empty()
@@ -3055,6 +3040,7 @@ fn run_multi_file_codegen(
     tree: &ProgramTree,
     mf: &crate::manifest::Manifest,
     project_root: &std::path::Path,
+    enable_hot_swap: bool,
 ) -> BuildCodegenStatus {
     // 1. Topological emission order — dependencies before dependents.
     let order = module::emission_order(tree);
@@ -3167,13 +3153,14 @@ fn run_multi_file_codegen(
         mf.name.replace(['/', '\\'], "_"),
     ));
 
-    if let Err(e) = crate::codegen::compile_to_object_with_options(
+    if let Err(e) = crate::codegen::compile_to_object_with_hot_swap(
         &pipeline.parsed.program,
         &obj_path.to_string_lossy(),
         pipeline.ownership.as_ref(),
         pipeline.concurrency.as_ref(),
         None,
         None,
+        enable_hot_swap,
     ) {
         let _ = std::fs::remove_file(&obj_path);
         return BuildCodegenStatus::Failed {
@@ -3202,6 +3189,7 @@ fn run_multi_file_codegen(
     _tree: &ProgramTree,
     _mf: &crate::manifest::Manifest,
     _project_root: &std::path::Path,
+    _enable_hot_swap: bool,
 ) -> BuildCodegenStatus {
     BuildCodegenStatus::NoLlvmFeature
 }

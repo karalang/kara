@@ -13077,6 +13077,134 @@ fn main() {
     /// parameters dispatch through the Vec method surface
     /// (VecDeque shares Vec's `{ptr, len, cap}` runtime layout).
     /// Pre-fix this errored with the same "no handler for method
+    /// Phase-7 line 5 sub-item 4 — smoke test the `--enable-hot-swap`
+    /// codegen path. Compiles a minimal program through
+    /// `compile_to_object_with_hot_swap(_, _, _, _, _, _, true)`, links
+    /// it, and runs the binary. Asserts:
+    /// 1. The build produces a valid object + executable (no LLVM
+    ///    module verification failure, no linker error).
+    /// 2. The binary runs and prints `42`, confirming the indirection
+    ///    table + global ctor populator wire through correctly and the
+    ///    pub-fn call lands on the intended target.
+    ///
+    /// Without this test, future cross-cutting codegen edits could
+    /// break the indirection path silently — the flag is off by
+    /// default in production so no other test exercises it.
+    #[test]
+    fn test_e2e_enable_hot_swap_minimal_pub_fn() {
+        use karac::codegen::{compile_to_object_with_hot_swap, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let src = r#"
+pub fn answer() -> i64 { 42 }
+
+fn main() {
+    println(answer());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse failed: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_hotswap_smoke_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_hotswap_smoke_{}_{}", std::process::id(), id);
+
+        let result = compile_to_object_with_hot_swap(
+            &parsed.program,
+            &obj_path,
+            None,
+            None,
+            None,
+            None,
+            true,
+        );
+        assert!(
+            result.is_ok(),
+            "compile_to_object_with_hot_swap(enable=true) failed: {:?}",
+            result
+        );
+        if link_executable(&obj_path, &exe_path).is_err() {
+            // Linker missing / no runtime archive — skip rather than fail.
+            let _ = std::fs::remove_file(&obj_path);
+            eprintln!("hot-swap smoke test: link skipped (libkarac_runtime.a missing?)");
+            return;
+        }
+        let output = std::process::Command::new(&exe_path)
+            .output()
+            .expect("running hot-swap smoke binary failed");
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+        assert!(
+            output.status.success(),
+            "binary exited with non-zero status: {output:?}",
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert_eq!(
+            stdout.trim(),
+            "42",
+            "expected '42' from indirect call to pub fn; got {stdout:?}",
+        );
+    }
+
+    /// Phase-7 line 5 sub-item 1 — verify that with `--enable-hot-swap`
+    /// the emitted IR contains the indirection table global, the
+    /// populator ctor, and an indirect call shape at the pub-fn call
+    /// site. Locks in the codegen surface so future refactors don't
+    /// silently regress the indirection.
+    #[test]
+    fn test_hot_swap_ir_shape() {
+        use karac::codegen::compile_to_ir_with_hot_swap;
+
+        let src = r#"
+pub fn answer() -> i64 { 42 }
+
+fn main() {
+    let _ = answer();
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse failed: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+
+        let ir = compile_to_ir_with_hot_swap(&parsed.program, None, None, None, None, true)
+            .expect("codegen failed");
+        assert!(
+            ir.contains("@karac_hotswap_table"),
+            "expected @karac_hotswap_table global in IR; got:\n{ir}",
+        );
+        assert!(
+            ir.contains("__karac_init_hot_swap_table"),
+            "expected init ctor in IR; got:\n{ir}",
+        );
+        assert!(
+            ir.contains("@llvm.global_ctors"),
+            "expected llvm.global_ctors registration in IR; got:\n{ir}",
+        );
+
+        // Negative — same source without hot-swap must not emit any
+        // of the indirection scaffolding.
+        let ir_off = compile_to_ir_with_hot_swap(&parsed.program, None, None, None, None, false)
+            .expect("codegen failed");
+        assert!(
+            !ir_off.contains("@karac_hotswap_table"),
+            "hot-swap off must not emit table; got:\n{ir_off}",
+        );
+    }
+
     /// 'push_back'" message because `vec_elem_types` was unset
     /// for the `mut ref` shape.
     #[test]

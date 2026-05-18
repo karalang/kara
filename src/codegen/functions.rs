@@ -139,6 +139,21 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         let fn_val = self.module.add_function(&func.name, fn_type, linkage);
         self.apply_linker_attrs(fn_val, &func.attributes);
+
+        // Phase-7 line 5 sub-item 1 — hot-swap slot registration.
+        // When `--enable-hot-swap` is active, every user-defined `pub fn`
+        // (extern-public module symbol) gets a slot in the module's
+        // indirection table; calls to it are lowered through that slot.
+        // Private / default-visibility functions stay direct. Closure
+        // bodies and synthesized clone/drop helpers do not flow through
+        // this path — they're emitted via separate `add_function` calls
+        // in `closures.rs` / `clone_drop.rs`.
+        if self.hot_swap_enabled && func.is_pub {
+            let slot = self.hot_swap_fns.len() as u32;
+            self.hot_swap_slots.insert(func.name.clone(), slot);
+            self.hot_swap_fns.push((slot, fn_val));
+        }
+
         Ok(fn_val)
     }
 
