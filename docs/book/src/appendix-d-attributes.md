@@ -243,6 +243,63 @@ Supply an in-memory provider for a test. The provider scope wraps the entire tes
 
 ---
 
+## Tool-namespaced attributes
+
+Multi-segment attribute paths of the form `#[TOOL::NAME(...)]` are reserved for external tools — formatters, linters, doc generators, IDE plugins, custom analyzers. The compiler accepts them syntactically, stores them on the AST, and otherwise ignores them; semantic interpretation is each tool's responsibility. The full design lives at *design.md § Tool-Namespaced Attributes*; this appendix entry catalogs the v1-reserved names and the read surface.
+
+```kara
+#[karafmt::skip]
+fn manually_aligned_table() { 0 }
+
+#[karalint::allow(complexity)]
+fn complicated_inner_loop(data: ref Slice[Frame]) -> Frame {
+    // ...
+}
+
+#[acmecorp_security::audit_required(level: "strict")]
+pub fn login(username: String, password: String) -> Result[Session, AuthError] { /* ... */ }
+```
+
+The discriminator is structural: a *bare-name* path (`#[derive]`, `#[no_mangle]`) must match a known compiler attribute or it is `error[E_UNKNOWN_ATTRIBUTE]`; a *multi-segment* path is either a compiler-reserved namespace (`#[diagnostic::*]` — validated per *Appendix D § Diagnostic*) or a tool namespace (silently accepted). There is no per-project tool registration at v1; the open-namespace rule applies.
+
+### v1-reserved first-party tool namespaces
+
+The Kāra organisation reserves three tool namespaces at v1 for the canonical first-party tools that will ship post-v1. User code may write attributes against them today — they parse and store like any other tool namespace — but their semantics are defined when the corresponding tool ships, and the names will not be reused by any other tool. The reservation is a name-claim, not an implementation commitment.
+
+#### `#[karafmt::*]`  *(post-v1, reserved)*
+
+The canonical formatter. Initial members:
+
+- `karafmt::skip` — on any item: suppresses formatting for that item.
+
+Until `karafmt` ships, `#[karafmt::skip]` is functionally a no-op.
+
+#### `#[karalint::*]`  *(post-v1, reserved)*
+
+The canonical lint pack ride-along — separate from the compiler-built-in lints from *Appendix D § Lint control*. Initial members:
+
+- `karalint::allow(NAME)` / `karalint::warn(NAME)` / `karalint::deny(NAME)` / `karalint::expect(NAME)` — same shape as the compiler's built-in lint attributes but scoped to lints that live in the external `karalint` package.
+
+#### `#[karadoc::*]`  *(post-v1, reserved)*
+
+The canonical doc generator. Initial members:
+
+- `karadoc::hidden` — on any item: omits the item from generated docs.
+
+### Third-party tool namespaces
+
+Any other multi-segment path is also accepted. By convention, third-party tools use a namespace matching their package or organisation name (e.g., `acmecorp_security::audit_required`, `mytool::config(level: 9)`) to avoid collision with the reserved names above. The compiler does not enforce this convention; conflict-resolution authority is social — first registered, first served, with the v1-reserved names taking absolute precedence.
+
+### Reading tool attributes from outside the compiler
+
+Tools consume tool-namespaced attributes via one of three paths:
+
+- **`karac query attributes [--tool=PREFIX]`** — emits a JSON list of every multi-segment attribute on every item, optionally filtered by first-segment prefix. `--tool=karafmt` returns every `#[karafmt::*]`. Without `--tool`, returns every multi-segment attribute (including `#[diagnostic::*]`).
+- **Language Server Protocol** (post-v1) — the IDE-facing surface exposes the same data through workspace-symbol and document-symbol responses.
+- **Direct AST access** — tools written in Kāra and using the compiler-as-library API read the same `Attribute { path, args, span }` structures the typechecker stores.
+
+---
+
 ## Post-v1 / reserved
 
 ### `#[generational_fallback]`  *(post-v1)*
