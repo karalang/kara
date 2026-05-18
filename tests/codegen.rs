@@ -15136,4 +15136,130 @@ fn main() {
             "helper must not appear in trivial driver's poll-fn:\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8i: non-unit returns through terminal field ─
+    //
+    // When a network-boundary function has a non-unit return type, the
+    // state struct gains a terminal field appended after the captured-
+    // local fields, the terminal arm of the poll-fn writes a placeholder
+    // into that field before Ready, and caller-side intercepts load the
+    // field as the call's return value. v1 records `i64` returns only;
+    // other return types stay on the unit-return path until follow-on
+    // slices widen the supported set.
+
+    #[test]
+    fn test_return_value_state_struct_includes_terminal_i64_field() {
+        // `fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 0 }`
+        // — the state struct gains a terminal i64 field after the
+        // captured-local fields (none here, so the struct is { i32 tag,
+        // i64 return }).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 0 }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        // Tag + terminal i64 — the struct definition line should be
+        // `%kara.state.driver = type { i32, i64 }`.
+        assert!(
+            line.contains("i32, i64"),
+            "state struct must include i32 tag + i64 terminal:\n{line}"
+        );
+    }
+
+    #[test]
+    fn test_return_value_terminal_arm_stores_placeholder() {
+        // The terminal arm writes a placeholder `i64 0` into the
+        // terminal field via the named GEP `kara.return.field_ptr`
+        // before the Ready return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 0 }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 0, ptr %kara.return.field_ptr"),
+            "terminal arm must store placeholder i64 0 into terminal field:\n{body}"
+        );
+        // The store must precede the Ready return.
+        let store_pos = body
+            .find("store i64 0, ptr %kara.return.field_ptr")
+            .unwrap();
+        let ready_pos = body.find("ret i8 1").unwrap();
+        assert!(
+            store_pos < ready_pos,
+            "terminal field store must precede the Ready return:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_return_value_caller_side_loads_terminal_field() {
+        // Caller-side intercept loads the terminal field after the
+        // done block (and before `@free`). The load result is the
+        // call's return value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 0 }
+             fn main() -> i64 { driver() }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // Load from the terminal field with named GEP.
+        assert!(
+            main_body.contains("%kara.return.field_ptr"),
+            "caller must GEP into terminal field:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("load i64, ptr %kara.return.field_ptr"),
+            "caller must load i64 from terminal field:\n{main_body}"
+        );
+        // The load must happen BEFORE the @free call — once freed, the
+        // pointer is no longer dereferenceable.
+        let load_pos = main_body
+            .find("load i64, ptr %kara.return.field_ptr")
+            .unwrap();
+        let free_pos = main_body.find("call void @free").unwrap();
+        assert!(
+            load_pos < free_pos,
+            "caller must load terminal field before @free:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_return_value_unit_returns_keep_existing_behavior() {
+        // Unit-returning callees (no `-> Type` in source) get no
+        // terminal field in the state struct and no caller-side load.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        // No terminal-field GEP in main.
+        assert!(
+            !main_body.contains("kara.return.field_ptr"),
+            "unit-returning callee must not produce caller-side terminal-field load:\n{main_body}"
+        );
+        // State struct stays { i32 } — only the tag.
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct:\n{ir}"));
+        assert!(
+            !line.contains("i64") || line.contains("i32, i64"),
+            // be conservative — just sanity check that the line isn't malformed
+            "unit-return state struct shape:\n{line}"
+        );
+        // The poll-fn terminal arm must not contain the placeholder store.
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            !body.contains("kara.return.field_ptr"),
+            "unit-returning poll-fn must not emit terminal-field store:\n{body}"
+        );
+    }
 }

@@ -127,6 +127,24 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 fields.push(ty);
             }
+            // Phase 6 line 26 slice 8i: append a terminal return-value
+            // field when the function's return type is non-unit. v1
+            // records `i64` returns only — other types (Vec, struct,
+            // user-named, etc.) skip the terminal field and continue
+            // to use the unit-return path. The terminal arm of the
+            // poll-fn writes a placeholder into this field before
+            // Ready; caller-side intercepts load it as the call's
+            // return value.
+            if let Some(fn_ast) = find_function_ast(program, fn_key) {
+                if let Some(ret_te) = &fn_ast.return_type {
+                    if is_i64_return_type(ret_te) {
+                        let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+                        fields.push(i64_ty);
+                        self.state_machine_return_types
+                            .insert(fn_key.clone(), i64_ty);
+                    }
+                }
+            }
             let st = self
                 .context
                 .opaque_struct_type(&format!("kara.state.{}", fn_key));
@@ -448,6 +466,36 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_return(Some(&i8_ty.const_int(0, false)))
                         .expect("return Pending from non-terminal arm");
                 } else {
+                    // Phase 6 line 26 slice 8i: when the network-
+                    // boundary function has a non-unit return type
+                    // (recorded in `state_machine_return_types`), the
+                    // state struct has a terminal field appended after
+                    // the captured-local fields. Write a placeholder
+                    // value into the terminal field before the Ready
+                    // return — body-splitting in a future slice will
+                    // replace the placeholder with the user's actual
+                    // return-expression value. The terminal field's
+                    // index in the state struct is `1 + N` where N is
+                    // the captured-local count (tag at 0, captures at
+                    // 1..=N, terminal at N+1).
+                    if self.state_machine_return_types.contains_key(fn_key) {
+                        let terminal_idx = (layout.fields.len() + 1) as u32;
+                        let terminal_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                state_struct,
+                                state_ptr,
+                                terminal_idx,
+                                "kara.return.field_ptr",
+                            )
+                            .expect("GEP terminal return-value field");
+                        // v1 places `i64` returns only — store the
+                        // placeholder zero directly as an i64 const.
+                        let placeholder = self.context.i64_type().const_int(0, false);
+                        self.builder
+                            .build_store(terminal_ptr, placeholder)
+                            .expect("store placeholder return value");
+                    }
                     self.builder
                         .build_return(Some(&i8_ty.const_int(1, false)))
                         .expect("return Ready from terminal arm");
@@ -1133,6 +1181,18 @@ impl<'ctx> super::Codegen<'ctx> {
         self.apply_linker_attrs(fn_val, block_attrs);
         self.apply_linker_attrs(fn_val, &ext.attributes);
     }
+}
+
+/// Detect whether a `TypeExpr` is the `i64` primitive — slice 8i's v1
+/// scope for non-unit returns through the state-struct terminal field.
+/// Other primitive widths (`i32`, `u64`, `bool`) and complex types
+/// (`Vec[T]`, user-named structs, etc.) are deferred to a follow-on
+/// slice that widens the supported return-type set.
+pub(super) fn is_i64_return_type(ty: &TypeExpr) -> bool {
+    matches!(
+        &ty.kind,
+        TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "i64"
+    )
 }
 
 /// Locate the user-level `Function` AST node corresponding to a state-

@@ -255,6 +255,24 @@ pub(super) struct Codegen<'ctx> {
     /// `emit_state_machine_state_constructors` after the poll-fn pass.
     /// Empty when no network-boundary functions exist.
     pub(crate) state_machine_state_constructors: HashMap<String, FunctionValue<'ctx>>,
+    /// Non-unit return-type marker for network-boundary functions
+    /// (phase 6 line 26 slice 8i). Key: same function key shape as
+    /// `state_struct_types`. Value: the LLVM type of the function's
+    /// return value (slice-8i v1 records `i64` only; unit-returning
+    /// fns have no entry; other types are deferred to a follow-on
+    /// slice and also have no entry). When an entry exists:
+    /// - The state struct (slice 5) gains a terminal field of this
+    ///   type appended after the captured-local fields;
+    /// - The poll-fn's terminal arm (slice 8b) writes a placeholder
+    ///   into the terminal field ahead of returning Ready (the
+    ///   actual user-level return-expression value lands later when
+    ///   body-splitting completes for non-trivial bodies);
+    /// - Caller-side intercepts (slices 8d / 8g) load the terminal
+    ///   field after the `kara.poll_done` block and use the loaded
+    ///   value as the call's return value, replacing the unconditional
+    ///   `i64 0` from earlier slices.
+    /// Absent entries preserve the v1 unit-return behavior.
+    pub(crate) state_machine_return_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
     /// Field type-names in declaration order (struct name → per-field
@@ -1401,6 +1419,7 @@ impl<'ctx> Codegen<'ctx> {
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),
             state_machine_state_constructors: HashMap::new(),
+            state_machine_return_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),

@@ -149,10 +149,34 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_unconditional_branch(loop_bb)
                     .expect("br back to poll loop after yield");
                 self.builder.position_at_end(done_bb);
+                // Slice 8i: load the callee's terminal return-value
+                // field before `free`. Mirrors the call_dispatch.rs
+                // intercept's load-before-free ordering — once the
+                // state struct is freed, the field is no longer
+                // dereferenceable.
+                let call_result =
+                    if let Some(ret_ty) = self.state_machine_return_types.get(key).copied() {
+                        let n_fields = state_struct.count_fields();
+                        let terminal_idx = n_fields - 1;
+                        let terminal_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                state_struct,
+                                state_ptr,
+                                terminal_idx,
+                                "kara.return.field_ptr",
+                            )
+                            .expect("GEP terminal return-value field on caller side (method call)");
+                        self.builder
+                            .build_load(ret_ty, terminal_ptr, "kara.return.value")
+                            .expect("load callee return value from terminal field (method call)")
+                    } else {
+                        self.context.i64_type().const_int(0, false).into()
+                    };
                 self.builder
                     .build_call(self.free_fn, &[state_ptr.into()], "")
                     .expect("call free on state struct");
-                return Ok(self.context.i64_type().const_int(0, false).into());
+                return Ok(call_result);
             }
         }
 
