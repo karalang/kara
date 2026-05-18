@@ -160,9 +160,9 @@ OPTIONS:
 karac query - Query compiler analysis
 
 USAGE:
-    karac query <kind> <target>
+    karac query <kind> [flags] <target>
         <target> = <file.kara>.<function>   for per-function kinds
-                 = <file.kara>              for cost-summary
+                 = <file.kara>              for cost-summary, attributes
 
 KINDS:
     effects            Inferred and declared effects
@@ -175,8 +175,16 @@ KINDS:
                        insertions. Per design.md § Compiler Query
                        API. v1 reports static counts only —
                        runtime attribution is post-v1.
+    attributes         JSON list of every multi-segment attribute
+                       (`#[diagnostic::*]`, `#[karafmt::*]`, etc.).
+                       Tool-facing read surface for the
+                       tool-namespaced-attribute work. Accepts
+                       `--tool=PREFIX` to filter by first-segment
+                       match (`--tool=karafmt` returns every
+                       `#[karafmt::*]` occurrence).
 
 OPTIONS:
+    --tool=PREFIX      attributes only: first-segment match filter
     -h, --help         Print this message"
         }
         "fmt" => {

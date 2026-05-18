@@ -229,6 +229,15 @@ pub enum QueryKind {
     /// kinds above, this one ignores the `function` slot — the static
     /// counts are reported per-function inside the JSON envelope.
     CostSummary,
+    /// Walk the program and emit one JSON record per multi-segment
+    /// attribute (`#[diagnostic::*]`, `#[karafmt::*]`, …). Tool-facing
+    /// read surface for the tool-namespaced-attribute work (v60 item
+    /// 37). Also a whole-file kind — the `function` slot is unused.
+    /// `tool_prefix` filters the output by first-segment match;
+    /// `None` emits every multi-segment attribute.
+    Attributes {
+        tool_prefix: Option<String>,
+    },
 }
 
 // ── Command Execution ───────────────────────────────────────────
@@ -4515,6 +4524,97 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.ownershipcheck();
             query_cost_summary(&pipeline);
         }
+        QueryKind::Attributes { tool_prefix } => {
+            // Pure AST walk — no further pipeline phases needed beyond
+            // the resolve already done above (which gates fatal parse /
+            // resolve errors). Tool-namespaced attributes have no
+            // semantic effect on later phases, so we can emit a usable
+            // result even when typecheck / ownership would have flagged
+            // unrelated problems.
+            query_attributes(&pipeline, tool_prefix);
+        }
+    }
+}
+
+fn query_attributes(pipeline: &Pipeline, tool_prefix: Option<String>) {
+    let filter = crate::query_attributes::AttributeQueryFilter {
+        tool_prefix: tool_prefix.clone(),
+    };
+    let records = crate::query_attributes::collect_attributes(&pipeline.parsed.program, &filter);
+    println!(
+        "{}",
+        render_attribute_query_json(&records, &pipeline.filename, tool_prefix.as_deref())
+    );
+}
+
+fn render_attribute_query_json(
+    records: &[crate::query_attributes::AttributeQueryRecord],
+    filename: &str,
+    tool_prefix: Option<&str>,
+) -> String {
+    let records_json: Vec<String> = records
+        .iter()
+        .map(|r| render_attribute_record(r, filename))
+        .collect();
+    let prefix_field = match tool_prefix {
+        Some(p) => json_string(p),
+        None => "null".to_string(),
+    };
+    format!(
+        "{{\"tool_prefix\":{},\"attributes\":[{}]}}",
+        prefix_field,
+        records_json.join(","),
+    )
+}
+
+fn render_attribute_record(
+    r: &crate::query_attributes::AttributeQueryRecord,
+    filename: &str,
+) -> String {
+    let path = json_string_list(&r.path);
+    let args: Vec<String> = r
+        .args
+        .iter()
+        .map(|a| render_attribute_arg(a, filename))
+        .collect();
+    let span = span_to_json(&r.span, filename);
+    format!(
+        "{{\"path\":{},\"args\":[{}],\"attached_to\":{},\"span\":{{{}}}}}",
+        path,
+        args.join(","),
+        json_string(&r.attached_to),
+        span,
+    )
+}
+
+fn render_attribute_arg(a: &crate::query_attributes::AttributeQueryArg, filename: &str) -> String {
+    let name = match &a.name {
+        Some(n) => json_string(n),
+        None => "null".to_string(),
+    };
+    let value = match &a.value {
+        Some(v) => render_attribute_value(v),
+        None => "null".to_string(),
+    };
+    let span = span_to_json(&a.span, filename);
+    format!(
+        "{{\"name\":{},\"value\":{},\"span\":{{{}}}}}",
+        name, value, span,
+    )
+}
+
+fn render_attribute_value(v: &crate::query_attributes::AttributeQueryValue) -> String {
+    use crate::query_attributes::AttributeQueryValue;
+    match v {
+        AttributeQueryValue::String(s) => {
+            format!("{{\"kind\":\"string\",\"value\":{}}}", json_string(s))
+        }
+        AttributeQueryValue::Int(n) => format!("{{\"kind\":\"int\",\"value\":{}}}", n),
+        AttributeQueryValue::Bool(b) => format!("{{\"kind\":\"bool\",\"value\":{}}}", b),
+        AttributeQueryValue::Path(p) => {
+            format!("{{\"kind\":\"path\",\"value\":{}}}", json_string(p))
+        }
+        AttributeQueryValue::Other => "{\"kind\":\"expr\"}".to_string(),
     }
 }
 

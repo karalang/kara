@@ -29,6 +29,7 @@ pub mod ownership;
 pub mod parser;
 pub mod prelude;
 pub mod provider_escape;
+pub mod query_attributes;
 pub mod raii_check;
 pub mod rc_predicate;
 pub mod repl;

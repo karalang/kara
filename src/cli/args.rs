@@ -647,29 +647,62 @@ fn parse_explain_command(args: &[String]) -> Command {
 
 fn parse_query_command(args: &[String]) -> Command {
     if args.len() < 4 {
-        eprintln!("Usage: karac query <effects|ownership|concurrency|cost-summary> <target>");
+        eprintln!(
+            "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes> [flags] <target>"
+        );
         eprintln!("       <target> is `<file>.<function>` for the per-function kinds,");
-        eprintln!("                or `<file>` for cost-summary.");
+        eprintln!("                or `<file>` for cost-summary and attributes.");
+        eprintln!("       attributes accepts `--tool=PREFIX` to filter by first-segment match.");
         process::exit(1);
     }
-    let kind = match args[2].as_str() {
+    // The `attributes` kind accepts an optional `--tool=PREFIX` flag
+    // before the file target — collect any flags after the kind word
+    // so the target is whatever comes next. The per-function and
+    // cost-summary kinds don't accept flags today.
+    let kind_str = args[2].as_str();
+    let mut tool_prefix: Option<String> = None;
+    let mut target_idx = 3;
+    if kind_str == "attributes" {
+        while target_idx < args.len() {
+            let a = &args[target_idx];
+            if let Some(rest) = a.strip_prefix("--tool=") {
+                tool_prefix = Some(rest.to_string());
+                target_idx += 1;
+            } else if a == "--tool" {
+                if target_idx + 1 >= args.len() {
+                    eprintln!("error: `--tool` flag requires a value");
+                    process::exit(1);
+                }
+                tool_prefix = Some(args[target_idx + 1].clone());
+                target_idx += 2;
+            } else {
+                break;
+            }
+        }
+        if target_idx >= args.len() {
+            eprintln!("error: `karac query attributes` requires a file target");
+            process::exit(1);
+        }
+    }
+    let kind = match kind_str {
         "effects" => QueryKind::Effects,
         "ownership" => QueryKind::Ownership,
         "concurrency" => QueryKind::Concurrency,
         "cost-summary" => QueryKind::CostSummary,
+        "attributes" => QueryKind::Attributes { tool_prefix },
         other => {
             eprintln!(
-                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', or 'cost-summary'."
+                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', or 'attributes'."
             );
             process::exit(1);
         }
     };
-    let target = &args[3];
-    // cost-summary takes a bare file path — there is no per-function form.
-    // The other kinds parse `file.function` via rsplit (multi-dot file paths
+    let target = &args[target_idx];
+    // cost-summary and attributes take a bare file path. The other
+    // kinds parse `file.function` via rsplit (multi-dot file paths
     // are fine since Kāra identifiers cannot contain `.`).
-    let (file, function) = match kind {
-        QueryKind::CostSummary => (target.clone(), String::new()),
+    let (file, function) = match &kind {
+        QueryKind::CostSummary | QueryKind::Attributes { .. } => (target.clone(), String::new()),
         _ => match target.rsplit_once('.') {
             Some((f, func)) => (f.to_string(), func.to_string()),
             None => {
