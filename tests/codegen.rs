@@ -14093,4 +14093,102 @@ fn main() {
             "three Pending returns (non-terminal arms) expected in 3-yield function:\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8c: state-struct constructor helper ──────
+    //
+    // For each network-boundary function, codegen emits a no-arg helper
+    // `define internal ptr @__kara_state_new_<fn_key>()` that mallocs a
+    // fresh state struct, initializes the i32 yield-point tag at field
+    // 0 to 0, and returns the heap pointer. Caller-side wiring (slice
+    // 8d+) replaces each direct call to a network-boundary fn with a
+    // constructor call + initial poll-fn invocation.
+
+    #[test]
+    fn test_state_constructor_emitted_for_network_boundary_function() {
+        // A free fn `driver` that calls a network-effect callee gets a
+        // `define internal ptr @__kara_state_new_driver()` constructor.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let define_line = ir
+            .lines()
+            .find(|l| l.contains("@__kara_state_new_driver"))
+            .unwrap_or_else(|| panic!("expected @__kara_state_new_driver in IR:\n{ir}"));
+        assert!(
+            define_line.contains("define"),
+            "constructor should be defined: {define_line}"
+        );
+        assert!(
+            define_line.contains("internal"),
+            "constructor should have internal linkage: {define_line}"
+        );
+        // No arguments, returns ptr.
+        assert!(
+            define_line.contains("ptr @__kara_state_new_driver()"),
+            "constructor signature must be `ptr @__kara_state_new_driver()`: {define_line}"
+        );
+    }
+
+    #[test]
+    fn test_state_constructor_body_calls_malloc() {
+        // Constructor body must call malloc to allocate the state
+        // struct on the heap. The exact malloc call shape includes
+        // the size operand and the result-name; pin the substring.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_new_driver");
+        assert!(
+            body.contains("call ptr @malloc"),
+            "constructor must call malloc:\n{body}"
+        );
+        // The result is bound to %state.alloc for downstream use.
+        assert!(
+            body.contains("%state.alloc"),
+            "constructor must bind malloc result to %state.alloc:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_state_constructor_initializes_tag_to_zero() {
+        // Constructor must store 0 into state struct field 0 (the
+        // i32 yield-point tag) before returning the pointer. This
+        // ensures the next poll-fn invocation routes to the entry
+        // arm `state_0` via slice 7's switch dispatch.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_new_driver");
+        assert!(
+            body.contains("store i32 0, ptr %tag_init_ptr"),
+            "constructor must initialize tag = 0:\n{body}"
+        );
+        // The GEP for the tag-init pointer references the state struct
+        // type, keeping the named type referenced from the constructor.
+        assert!(
+            body.contains("getelementptr inbounds %kara.state.driver"),
+            "constructor must GEP into the state struct's typed field 0:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_state_constructor_not_emitted_for_pure_function() {
+        // Pure functions (no network-effect calls) have no state-struct
+        // entry and therefore no constructor.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }",
+        );
+        assert!(
+            !ir.contains("@__kara_state_new_pure_helper"),
+            "pure function must not emit a state constructor:\n{ir}"
+        );
+    }
 }

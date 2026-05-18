@@ -241,6 +241,20 @@ pub(super) struct Codegen<'ctx> {
     /// `emit_state_struct_types`. Empty when no network-boundary
     /// functions exist.
     pub(crate) state_machine_poll_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// State-struct constructor helpers (phase 6 line 26 slice 8c). Key:
+    /// same function key shape as `state_struct_types`. Value:
+    /// `define internal ptr @__kara_state_new_<fn_key>()` — a no-arg
+    /// helper that `malloc`s a fresh state struct of the right size,
+    /// initializes the i32 yield-point tag (field 0) to 0 so the next
+    /// poll-fn invocation routes to the entry arm `state_0`, and
+    /// returns the heap pointer. Slice 8d's caller-side wiring replaces
+    /// each direct call to a network-boundary fn with a call to this
+    /// constructor followed by an initial poll-fn invocation; future
+    /// slices add the loop-until-Ready and the `free` of the state
+    /// struct when the caller observes Ready/Err. Populated by
+    /// `emit_state_machine_state_constructors` after the poll-fn pass.
+    /// Empty when no network-boundary functions exist.
+    pub(crate) state_machine_state_constructors: HashMap<String, FunctionValue<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
     /// Field type-names in declaration order (struct name → per-field
@@ -1362,6 +1376,7 @@ impl<'ctx> Codegen<'ctx> {
             struct_types: HashMap::new(),
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),
+            state_machine_state_constructors: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
@@ -1645,6 +1660,12 @@ impl<'ctx> Codegen<'ctx> {
         // stub at this slice; the dispatch switch + yield-arm lowering
         // land in slice 7+.
         self.emit_state_machine_poll_fns(program);
+        // Phase 6 line 26 slice 8c: emit a state-struct constructor
+        // helper per state-struct entry. Caller-side wiring in
+        // slice 8d+ replaces direct calls to network-boundary fns
+        // with a `__kara_state_new_<fn_key>` invocation + initial
+        // poll-fn invocation.
+        self.emit_state_machine_state_constructors(program);
         self.collect_soa_layouts(program);
         self.declare_extern_functions(program)?;
 

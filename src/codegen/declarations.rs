@@ -394,6 +394,88 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── State-struct constructor helper (line 26 slice 8c) ─────────────
+
+    /// Emit one constructor helper per network-boundary function:
+    /// `define internal ptr @__kara_state_new_<fn_key>()` — a no-arg
+    /// function that `malloc`s a fresh state struct of the right size,
+    /// initializes the i32 yield-point tag at field 0 to 0 (so the
+    /// next poll-fn invocation routes to the entry arm `state_0`),
+    /// and returns the heap pointer. Captured-local fields (state
+    /// struct fields 1..N) are left uninitialized — slice 8a's reload
+    /// prologue will load them, but slice 8b's terminal-vs-non-
+    /// terminal arm logic doesn't reference the loaded values, so the
+    /// loads of `poison` / `undef` from uninitialized memory are
+    /// harmless at this slice. A future slice that adds user-code
+    /// lowering between reload and tag-store (slice 8d / 8e) will need
+    /// to ensure either:
+    /// - the caller initializes the captured-local fields with the
+    ///   function's parameters before invoking the poll-fn, or
+    /// - the constructor zero-initializes the whole struct via memset.
+    ///
+    /// Must run after `emit_state_machine_poll_fns` — keeps the
+    /// emission of all state-machine helpers grouped, and matches the
+    /// alphabetical-by-purpose ordering of slice 6 then 8c.
+    pub(super) fn emit_state_machine_state_constructors(&mut self, program: &Program) {
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let ctor_fn_type = ptr_ty.fn_type(&[], false);
+        let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
+        keys.sort();
+        for fn_key in keys {
+            let state_struct = match self.state_struct_types.get(fn_key) {
+                Some(st) => *st,
+                None => continue,
+            };
+            let ctor_name = format!("__kara_state_new_{fn_key}");
+            let ctor_fn = self.module.add_function(&ctor_name, ctor_fn_type, None);
+            ctor_fn.set_linkage(Linkage::Internal);
+
+            let saved_bb = self.builder.get_insert_block();
+            let entry = self.context.append_basic_block(ctor_fn, "entry");
+            self.builder.position_at_end(entry);
+
+            // Compute the size of the state struct via inkwell's
+            // `size_of()` helper (which materializes a `ptrtoint` on
+            // a constant GEP — the standard LLVM idiom for `sizeof`).
+            let size = state_struct
+                .size_of()
+                .expect("state struct size_of always succeeds for sized types");
+
+            // Call malloc(size) — returns ptr to the fresh heap allocation.
+            let malloc_call = self
+                .builder
+                .build_call(self.malloc_fn, &[size.into()], "state.alloc")
+                .expect("call malloc for state struct");
+            let state_ptr = malloc_call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            // Initialize the tag (field 0) to 0 — entry state for the
+            // poll-fn's switch dispatch. The captured-local fields
+            // (1..N) are left uninitialized at this slice.
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(state_struct, state_ptr, 0, "tag_init_ptr")
+                .expect("GEP tag field for init");
+            self.builder
+                .build_store(tag_ptr, i32_ty.const_int(0, false))
+                .expect("store tag = 0 init");
+
+            self.builder
+                .build_return(Some(&state_ptr))
+                .expect("return state pointer from constructor");
+
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+
+            self.state_machine_state_constructors
+                .insert(fn_key.clone(), ctor_fn);
+        }
+    }
+
     pub(super) fn collect_soa_layouts(&mut self, program: &Program) {
         for item in &program.items {
             if let Item::LayoutDef(layout) = item {
