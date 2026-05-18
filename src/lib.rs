@@ -29,6 +29,7 @@ pub mod ownership;
 pub mod parser;
 pub mod prelude;
 pub mod provider_escape;
+pub mod raii_check;
 pub mod rc_predicate;
 pub mod repl;
 pub mod resolver;
@@ -266,6 +267,21 @@ pub fn provider_escape_check(
     types: Option<&TypeCheckResult>,
 ) -> Vec<provider_escape::EscapeError> {
     provider_escape::check_provider_escape(program, types)
+}
+
+/// Run the RAII-across-yield check. Implements the v1 rule from
+/// design.md § Network Event Loop and State-Machine Transform > RAII
+/// Across Yield Points: a network-boundary function cannot hold a
+/// non-cancel-safe binding live across any yield point. Slice 1 detects
+/// the unambiguous shared-struct / shared-enum case via the
+/// typechecker's `is_shared` flag — see `src/raii_check.rs` for scope
+/// and the (intentionally not-yet-shipped) marker-trait extensibility.
+/// Returns an empty list when `types` is `None`.
+pub fn raii_across_yield_check(
+    program: &Program,
+    types: Option<&TypeCheckResult>,
+) -> Vec<raii_check::RaiiAcrossYieldError> {
+    raii_check::check_raii_across_yield(program, types)
 }
 
 /// Run a closure on a freshly spawned thread with a 16 MB stack and

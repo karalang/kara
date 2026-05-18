@@ -323,6 +323,15 @@ struct Pipeline {
     ownership: Option<OwnershipCheckResult>,
     concurrency: Option<ConcurrencyAnalysis>,
     provider_escape: Option<Vec<crate::provider_escape::EscapeError>>,
+    /// Phase 6 line 31 slice 1: RAII-across-yield rejections for the
+    /// network-event-loop state-machine transform. One error per
+    /// (binding × function) pair where a non-cancel-safe binding lives
+    /// across at least one yield point in a network-boundary function's
+    /// body. Populated by [`Pipeline::raii_check`] after `effectcheck`
+    /// (depends on `state_struct_layouts` + `yield_points`); merged into
+    /// the final error count + diagnostic output alongside the other
+    /// post-typecheck checkers.
+    raii_errors: Option<Vec<crate::raii_check::RaiiAcrossYieldError>>,
     profile: crate::manifest::CompileProfile,
     /// Build-wide lint level overrides from CLI flags
     /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`).
@@ -346,6 +355,7 @@ impl Pipeline {
             ownership: None,
             concurrency: None,
             provider_escape: None,
+            raii_errors: None,
             profile: crate::manifest::CompileProfile::Default,
             lint_overrides: crate::lints::CliLintOverrides::default(),
         }
@@ -501,6 +511,24 @@ impl Pipeline {
         ));
     }
 
+    /// Phase 6 line 31 slice 1: run the RAII-across-yield check. Depends
+    /// on `effectcheck` having populated `Program.state_struct_layouts` +
+    /// `Program.yield_points` (slices 4 + 2 under line 26) and on
+    /// `typecheck` having populated `struct_info` / `enum_info` for
+    /// classifying surface type names as shared. With parse errors the
+    /// check is a no-op (the layouts are empty and the typecheck index
+    /// is missing); with typecheck errors but no parse errors, the
+    /// check still runs against whatever made it into the layouts.
+    fn raii_check(&mut self) {
+        if self.has_parse_errors() {
+            return;
+        }
+        self.raii_errors = Some(crate::raii_across_yield_check(
+            &self.parsed.program,
+            self.typed.as_ref(),
+        ));
+    }
+
     /// Run all analysis phases (no execution).
     fn run_all_checks(&mut self) {
         self.resolve();
@@ -510,6 +538,7 @@ impl Pipeline {
         self.ownershipcheck();
         self.concurrencycheck();
         self.provider_escape_check();
+        self.raii_check();
     }
 
     /// Collect all errors across phases.
@@ -537,6 +566,9 @@ impl Pipeline {
         }
         if let Some(ref esc) = self.provider_escape {
             n += esc.len();
+        }
+        if let Some(ref r) = self.raii_errors {
+            n += r.len();
         }
         n
     }
@@ -600,6 +632,18 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
                 err.closure_span.column,
                 err.message()
             );
+        }
+    }
+    if let Some(ref raii) = pipeline.raii_errors {
+        for err in raii {
+            eprintln!(
+                "error[E_RAII_ACROSS_YIELD]: {}:{}:{}: {}",
+                filename,
+                err.yield_span.line,
+                err.yield_span.column,
+                err.message(),
+            );
+            eprintln!("  help: {}", err.help());
         }
     }
 }
@@ -2095,6 +2139,27 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         }
     }
 
+    if let Some(ref raii) = pipeline.raii_errors {
+        for err in raii {
+            id_counter += 1;
+            let message = err.message();
+            diags.add(DiagEntry {
+                id: &format!("d{id_counter}"),
+                severity: "error",
+                phase: "raii_check",
+                code: "E_RAII_ACROSS_YIELD",
+                category: "raii_across_yield",
+                message: &message,
+                filename,
+                span: &err.yield_span,
+                suggestion: None,
+                extra_json: None,
+                lint_name: None,
+                fix_it: None,
+            });
+        }
+    }
+
     diags
 }
 
@@ -2468,12 +2533,25 @@ fn run_pipeline_jsonl(pipeline: &mut Pipeline) {
         ),
     );
 
+    // RAII-across-yield phase (phase 6 line 31 slice 1)
+    emit_jsonl_event("phase_start", "\"phase\":\"raii_check\"");
+    pipeline.raii_check();
+    let raii_errors = pipeline.raii_errors.as_ref().map_or(0, |r| r.len());
+    emit_jsonl_event(
+        "phase_complete",
+        &format!(
+            "\"phase\":\"raii_check\",\"errors\":{},\"warnings\":0,\"notes\":0",
+            raii_errors
+        ),
+    );
+
     let total = parse_errors
         + resolve_errors
         + type_errors
         + effect_errors
         + ownership_errors
-        + escape_errors;
+        + escape_errors
+        + raii_errors;
     let effects = program_effects_json(pipeline);
     emit_jsonl_event(
         "build_complete",
@@ -2707,6 +2785,45 @@ fn cmd_run(
                             &format!(
                                 "\"severity\":\"error\",\"phase\":\"provider_escape\",\"code\":\"E0600\",{},\"message\":{}",
                                 span_to_json(&err.closure_span, filename),
+                                json_string(&err.message()),
+                            ),
+                        );
+                    }
+                }
+            }
+            process::exit(1);
+        }
+    }
+
+    // RAII-across-yield — phase 6 line 31 slice 1. Same hard-error
+    // contract as provider_escape: the network-event-loop state-machine
+    // transform can't soundly lower a function that would leak resources
+    // under cooperative cancellation, so the run path aborts rather
+    // than proceeds to the interpreter.
+    pipeline.raii_check();
+    if let Some(ref raii) = pipeline.raii_errors {
+        if !raii.is_empty() {
+            match output {
+                OutputMode::Text => {
+                    for err in raii {
+                        eprintln!(
+                            "error[E_RAII_ACROSS_YIELD]: {}:{}:{}: {}",
+                            filename,
+                            err.yield_span.line,
+                            err.yield_span.column,
+                            err.message(),
+                        );
+                        eprintln!("  help: {}", err.help());
+                    }
+                }
+                OutputMode::Json => emit_json_output(&pipeline),
+                OutputMode::Jsonl => {
+                    for err in raii {
+                        emit_jsonl_event(
+                            "diagnostic",
+                            &format!(
+                                "\"severity\":\"error\",\"phase\":\"raii_check\",\"code\":\"E_RAII_ACROSS_YIELD\",{},\"message\":{}",
+                                span_to_json(&err.yield_span, filename),
                                 json_string(&err.message()),
                             ),
                         );
@@ -3615,6 +3732,7 @@ fn run_multi_file_codegen(
         ownership: None,
         concurrency: None,
         provider_escape: None,
+        raii_errors: None,
         profile: crate::manifest::CompileProfile::Default,
         lint_overrides: crate::lints::CliLintOverrides::default(),
     };
