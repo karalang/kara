@@ -249,6 +249,41 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value();
+            // Slice 8f: thread call args into the state struct's
+            // captured-local slots. Per slice 4's layout ordering,
+            // parameters occupy the first K fields of the layout (1..=K
+            // in the state struct after skipping the i32 tag at field
+            // 0); let-bindings introduced inside the body occupy fields
+            // K+1..=N and stay uninitialized at construction time —
+            // they're populated by the state-machine transform itself
+            // when execution reaches the let-site. For each call arg
+            // at position i, compile the arg expression, GEP into
+            // state struct field `i+1`, and store the value. Method
+            // calls and ref-flagged args fall outside the v1 scope of
+            // this slice (free-function calls only, owned-arg
+            // semantics); ref-passing through the state struct lands
+            // alongside the method-call intercept.
+            let state_struct = self
+                .state_struct_types
+                .get(&name)
+                .copied()
+                .expect("state struct type co-emitted with constructor");
+            for (i, arg) in args.iter().enumerate() {
+                let arg_val = self.compile_expr(&arg.value)?;
+                let field_idx = (i + 1) as u32;
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        state_struct,
+                        state_ptr,
+                        field_idx,
+                        &format!("kara.arg{i}.field_ptr"),
+                    )
+                    .expect("GEP state struct field for arg");
+                self.builder
+                    .build_store(field_ptr, arg_val)
+                    .expect("store arg into state struct field");
+            }
             // Branch into the poll loop. Slice 8e routes the Pending
             // path through a `kara.poll_yield` block that calls
             // `sched_yield` before looping back to `kara.poll_loop`,

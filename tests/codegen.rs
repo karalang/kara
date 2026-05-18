@@ -14573,4 +14573,145 @@ fn main() {
             "expected at least two `kara.poll_loop` occurrences (one per call site):\n{main_body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8f: caller-side arg-storing ─────────────
+    //
+    // After the state-struct constructor call but before the poll loop,
+    // the intercept threads each call arg into the corresponding state
+    // struct captured-local field via `getelementptr inbounds + store`.
+    // Args[i] lands in state struct field i+1 (skipping the i32 tag at
+    // field 0); slice 4's layout puts parameters first in the field
+    // order so the index mapping is direct.
+
+    #[test]
+    fn test_caller_arg_storing_single_primitive_arg() {
+        // `fn driver(n: i64)` → state struct = { i32 tag, i64 n }.
+        // Caller's `driver(42)` must emit:
+        //   %kara.state = call ptr @__kara_state_new_driver()
+        //   %kara.arg0.field_ptr = getelementptr ... i32 0, i32 1
+        //   store i64 42, ptr %kara.arg0.field_ptr
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }
+             fn main() { driver(42); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.driver, ptr %kara.state, i32 0, i32 1"
+            ),
+            "intercept must GEP into state struct field 1 for arg 0:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "intercept must store i64 42 (the literal arg) into field 1:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_arg_storing_multi_arg_function() {
+        // Two params → two arg-stores into fields 1 and 2.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: i64, b: i64) { fetch(); }
+             fn main() { driver(1, 2); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.driver, ptr %kara.state, i32 0, i32 1"
+            ),
+            "first arg must GEP into field 1:\n{main_body}"
+        );
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.driver, ptr %kara.state, i32 0, i32 2"
+            ),
+            "second arg must GEP into field 2:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("store i64 1, ptr %kara.arg0.field_ptr"),
+            "first arg literal 1 must be stored into field 1:\n{main_body}"
+        );
+        assert!(
+            main_body.contains("store i64 2, ptr %kara.arg1.field_ptr"),
+            "second arg literal 2 must be stored into field 2:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_arg_storing_no_args_no_field_writes() {
+        // A no-arg function has no arg-store sites — main's body must
+        // not contain any kara.argN.field_ptr GEPs.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }
+             fn main() { driver(); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            !main_body.contains("kara.arg0.field_ptr"),
+            "no-arg call must not emit arg-store sites:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_arg_storing_identifier_arg_stores_loaded_value() {
+        // An identifier-arg (`driver(n)` where `n` is a let-bound local)
+        // compiles to a load of the let-binding's alloca followed by a
+        // store of the loaded value into the state struct field. Pins
+        // that non-literal args route through the existing compile_expr
+        // path correctly.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }
+             fn main() {
+                 let x: i64 = 7;
+                 driver(x);
+             }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        assert!(
+            main_body.contains(
+                "getelementptr inbounds %kara.state.driver, ptr %kara.state, i32 0, i32 1"
+            ),
+            "identifier arg must GEP into field 1:\n{main_body}"
+        );
+        // The store transports the loaded i64 SSA value (not a literal)
+        // into the field — LLVM names this `%x` / `%x1` / similar
+        // depending on inkwell renaming, so we just check `store i64 %`.
+        assert!(
+            main_body.contains("store i64 %") && main_body.contains(", ptr %kara.arg0.field_ptr"),
+            "store must carry an SSA-named loaded value into field 1:\n{main_body}"
+        );
+    }
+
+    #[test]
+    fn test_caller_arg_storing_appears_before_poll_loop_branch() {
+        // The arg-store sites must appear textually before the
+        // `br label %kara.poll_loop` that enters the loop — args have
+        // to be in the state struct by the time the first poll-fn
+        // invocation runs.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }
+             fn main() { driver(7); }",
+        );
+        let main_body = extract_fn_ir(&ir, "main");
+        let store_pos = main_body
+            .find("store i64 7, ptr %kara.arg0.field_ptr")
+            .expect("arg store must exist");
+        let br_pos = main_body
+            .find("br label %kara.poll_loop")
+            .expect("poll-loop entry branch must exist");
+        assert!(
+            store_pos < br_pos,
+            "arg-store must precede `br label %kara.poll_loop`:\n{main_body}"
+        );
+    }
 }
