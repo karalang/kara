@@ -263,6 +263,28 @@ pub struct TypeError {
     /// group, and route by lint name. Slice 7 of the lint-level
     /// entry — see `phase-5-diagnostics.md` § "Lint level attributes".
     pub lint_name: Option<String>,
+    /// Machine-applicable fix-it edit when one is known. `None` when
+    /// the diagnostic carries only a textual hint or none at all.
+    /// Surfaced into the structured JSON diagnostic so
+    /// `karac --output=json` consumers (IDEs, formatters) can apply
+    /// the edit directly. `#[non_exhaustive]` slice 7 (the pattern
+    /// and match variants of the cross-package family) is the first
+    /// producer; the surface is intentionally minimal (one span +
+    /// replacement) and grows when richer multi-edit fix-its land.
+    /// See `phase-5-diagnostics.md` § `#[non_exhaustive]`.
+    pub fix_it: Option<FixIt>,
+}
+
+/// One machine-applicable fix-it edit attached to a `TypeError`.
+/// Replacing the text covered by `span` with `replacement` produces a
+/// program in which the diagnostic the fix-it accompanies is no
+/// longer triggered. A zero-`length` span represents an insertion at
+/// the byte offset (no original text is removed). Atomic — apply as
+/// a single edit. `#[non_exhaustive]` slice 7 introduces the type.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FixIt {
+    pub span: Span,
+    pub replacement: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1040,6 +1062,30 @@ impl<'a> TypeChecker<'a> {
             span,
             kind,
             lint_name: None,
+            fix_it: None,
+        });
+    }
+
+    /// `type_error` with an attached machine-applicable [`FixIt`].
+    /// `#[non_exhaustive]` slice 7 introduces this helper for the
+    /// cross-package pattern and match diagnostics, which can derive
+    /// a precise insertion edit from the offending pattern/match
+    /// span. The fix-it is structurally captured on the `TypeError`
+    /// and surfaced into JSON output via `src/cli.rs` so
+    /// IDE / formatter consumers can apply it directly.
+    pub(super) fn type_error_with_fix_it(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        fix_it: FixIt,
+    ) {
+        self.errors.push(TypeError {
+            message,
+            span,
+            kind,
+            lint_name: None,
+            fix_it: Some(fix_it),
         });
     }
 
@@ -1175,6 +1221,7 @@ impl<'a> TypeChecker<'a> {
             span,
             kind,
             lint_name: Some(lint_name.to_string()),
+            fix_it: None,
         };
         match level {
             LintLevel::Allow => {

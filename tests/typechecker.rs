@@ -14561,10 +14561,13 @@ fn non_exhaustive_slice5_cross_package_match_without_wildcard_rejected() {
     assert!(
         errs.iter().any(|e| {
             matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageMatch)
-                && e.message.contains("todo!(")
+                && e.message.contains("panic(\"handle new variant\")")
         }),
-        "diagnostic should include the `todo!(...)` placeholder in the \
-         fix-it as the spec mandates; got: {:?}",
+        "diagnostic should include the `panic(\"handle new variant\")` \
+         placeholder in the fix-it text (slice 7 updated from the spec's \
+         original `todo!(...)` rendering — `todo!()` is not a Kāra \
+         construct; the design.md sentence is honoured by the structural \
+         insertion); got: {:?}",
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
@@ -14943,6 +14946,228 @@ fn non_exhaustive_slice6_lint_is_registered() {
     // without wiring the check, or vice versa, breaks this loudly.
     let info = karac::lints::lint_by_name("missing_non_exhaustive").expect("lint registered");
     assert!(matches!(info.default_level, karac::lints::LintLevel::Deny));
+}
+
+// ── `#[non_exhaustive]` slice 7: machine-applicable fix-its ────
+//
+// The cross-package pattern and match diagnostics gain a structured
+// `fix_it: Option<FixIt>` whose span is an insertion point and whose
+// `replacement` is the text to insert. The literal fix-it is
+// deferred — the AST doesn't carry per-brace spans, and constructor
+// rewriting requires either source-text access or a multi-edit
+// shape neither of which the slice-7 surface introduces. See
+// `phase-5-diagnostics.md` slice 7 entry.
+
+#[test]
+fn non_exhaustive_slice7_pattern_fix_it_present_with_fields() {
+    // Headline pin — a cross-package non-exhaustive struct pattern
+    // with fields produces a `FixIt` with replacement `, ..` and an
+    // insertion-only (zero-length) span.
+    use karac::ast::Item;
+    let mut parsed = parse(
+        "pub struct Config { x: i64, y: i64 }\n\
+         fn use_it(c: Config) -> i64 { let Config { x, y } = c; x + y }",
+    );
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        if let Item::StructDef(s) = item {
+            s.stdlib_origin = true;
+            s.is_non_exhaustive = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern))
+        .expect("expected pattern diagnostic");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("pattern diagnostic must carry a fix_it (slice 7)");
+    assert_eq!(fix.replacement, ", ..");
+    assert_eq!(fix.span.length, 0, "fix-it is an insertion (zero-length)");
+}
+
+#[test]
+fn non_exhaustive_slice7_pattern_fix_it_empty_field_list_emits_dot_dot() {
+    // Empty `Foo { }` — replacement is `..` (no leading comma) and
+    // insertion anchors at the position of `}` (one byte before the
+    // pattern's end).
+    use karac::ast::Item;
+    let mut parsed = parse(
+        "pub struct Empty { x: i64 }\n\
+         fn use_it(e: Empty) -> i64 { let Empty {} = e; 0 }",
+    );
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        if let Item::StructDef(s) = item {
+            s.stdlib_origin = true;
+            s.is_non_exhaustive = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern))
+        .expect("expected pattern diagnostic");
+    let fix = err.fix_it.as_ref().expect("fix_it present");
+    assert_eq!(fix.replacement, "..");
+    assert_eq!(fix.span.length, 0);
+}
+
+#[test]
+fn non_exhaustive_slice7_pattern_fix_it_anchors_after_last_field() {
+    // Insertion offset must point at `last_field.span.offset +
+    // last_field.span.length` — splicing the fix-it must yield a
+    // parser-valid pattern.
+    use karac::ast::Item;
+    let source =
+        "pub struct Cfg { x: i64, y: i64 }\nfn u(c: Cfg) -> i64 { let Cfg { x, y } = c; x }";
+    let mut parsed = parse(source);
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        if let Item::StructDef(s) = item {
+            s.stdlib_origin = true;
+            s.is_non_exhaustive = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackagePattern))
+        .expect("expected pattern diagnostic");
+    let fix = err.fix_it.as_ref().expect("fix_it present");
+
+    // Splice the fix-it in by hand and re-parse — the result must
+    // be a clean parse (the slice-7 fix-it is machine-applicable).
+    let mut spliced = String::with_capacity(source.len() + fix.replacement.len());
+    spliced.push_str(&source[..fix.span.offset]);
+    spliced.push_str(&fix.replacement);
+    spliced.push_str(&source[fix.span.offset..]);
+    let reparsed = parse(&spliced);
+    assert!(
+        reparsed.errors.is_empty(),
+        "fix-it must produce a parser-valid program; got: {:?} for spliced source: {}",
+        reparsed.errors,
+        spliced
+    );
+    assert!(
+        spliced.contains(", .."),
+        "spliced text must contain `, ..`; got: {}",
+        spliced
+    );
+}
+
+#[test]
+fn non_exhaustive_slice7_match_fix_it_inserts_wildcard_arm() {
+    // Match diagnostic carries a fix-it whose replacement contains
+    // `_ => todo!("handle new variant"),` and whose span is a
+    // zero-width insertion just before the closing `}` of the match.
+    let errs = typecheck_with_stdlib_origin_on_enums(
+        "#[non_exhaustive]\npub enum Op { Read, Write }\n\
+         fn classify(o: Op) -> i64 { match o { Read => 1, Write => 2 } }",
+    );
+    let err = errs
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageMatch))
+        .expect("expected match diagnostic");
+    let fix = err
+        .fix_it
+        .as_ref()
+        .expect("match diagnostic must carry a fix_it (slice 7)");
+    assert!(
+        fix.replacement
+            .contains("_ => panic(\"handle new variant\")"),
+        "replacement should be the wildcard arm; got: {:?}",
+        fix.replacement
+    );
+    assert_eq!(fix.span.length, 0, "fix-it is an insertion (zero-length)");
+}
+
+#[test]
+fn non_exhaustive_slice7_match_fix_it_anchors_after_last_arm() {
+    // Splicing the fix-it in must yield a parser-valid program —
+    // the insertion anchors just before the match's closing `}`,
+    // so the inserted text becomes a new trailing arm.
+    let source = "#[non_exhaustive]\npub enum Op { Read, Write }\n\
+                  fn classify(o: Op) -> i64 { match o { Read => 1, Write => 2 } }";
+    use karac::ast::Item;
+    let mut parsed = parse(source);
+    assert!(parsed.errors.is_empty());
+    for item in &mut parsed.program.items {
+        if let Item::EnumDef(e) = item {
+            e.stdlib_origin = true;
+        }
+    }
+    let resolved = resolve(&parsed.program);
+    assert!(resolved.errors.is_empty());
+    let result = typecheck(&parsed.program, &resolved);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(e.kind, TypeErrorKind::NonExhaustiveCrossPackageMatch))
+        .expect("expected match diagnostic");
+    let fix = err.fix_it.as_ref().expect("fix_it present");
+
+    let mut spliced = String::with_capacity(source.len() + fix.replacement.len());
+    spliced.push_str(&source[..fix.span.offset]);
+    spliced.push_str(&fix.replacement);
+    spliced.push_str(&source[fix.span.offset..]);
+    let reparsed = parse(&spliced);
+    assert!(
+        reparsed.errors.is_empty(),
+        "spliced match must parse cleanly; got: {:?} for source: {}",
+        reparsed.errors,
+        spliced
+    );
+}
+
+#[test]
+fn non_exhaustive_slice7_unrelated_diagnostics_carry_no_fix_it() {
+    // Pin that the `fix_it` channel doesn't leak — typechecking a
+    // program with unrelated errors must produce diagnostics whose
+    // `fix_it` is `None`.
+    let parsed = parse("fn f() -> i64 { let x: bool = 1; x }");
+    assert!(parsed.errors.is_empty());
+    let resolved = resolve(&parsed.program);
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result.errors.is_empty(),
+        "expected at least one type error for shape sanity"
+    );
+    for err in &result.errors {
+        assert!(
+            err.fix_it.is_none(),
+            "unrelated diagnostic surfaced a fix_it: {:?}",
+            err.message
+        );
+    }
+}
+
+#[test]
+fn non_exhaustive_slice7_fix_it_type_is_public() {
+    // `FixIt` is the public API for consumers (IDE / formatter).
+    // Compile-time pin that the type stays accessible from the
+    // crate root so a `pub use` regression surfaces here rather
+    // than as silent JSON-shape drift.
+    let _fix: karac::typechecker::FixIt = karac::typechecker::FixIt {
+        span: karac::token::Span {
+            line: 1,
+            column: 1,
+            offset: 0,
+            length: 0,
+        },
+        replacement: String::new(),
+    };
 }
 
 // ── `impl Trait` slice 5: RPITIT blocks `dyn Trait` ─────────────

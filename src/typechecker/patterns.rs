@@ -457,7 +457,8 @@ impl<'a> super::TypeChecker<'a> {
                         && !self.current_fn_stdlib_origin
                         && !*has_rest
                     {
-                        self.type_error(
+                        let fix_it = non_exhaustive_pattern_fix_it(&pattern.span, fields);
+                        self.type_error_with_fix_it(
                             format!(
                                 "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN]: \
                                  cannot exhaustively destructure `{name}` — \
@@ -472,6 +473,7 @@ impl<'a> super::TypeChecker<'a> {
                             ),
                             pattern.span.clone(),
                             TypeErrorKind::NonExhaustiveCrossPackagePattern,
+                            fix_it,
                         );
                     }
                 }
@@ -627,20 +629,22 @@ impl<'a> super::TypeChecker<'a> {
                     && !self.current_fn_stdlib_origin
                     && !arms_contain_catchall(arms, &variant_names)
                 {
-                    self.type_error(
+                    let fix_it = non_exhaustive_match_fix_it(&span, arms);
+                    self.type_error_with_fix_it(
                         format!(
                             "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_MATCH]: \
                              match on `{name}` must include a wildcard arm \
                              (`_ => ...`) — `{name}` is `#[non_exhaustive]` \
                              and defined in another package, so new variants \
                              may land without breaking source compatibility. \
-                             Add `_ => todo!(\"handle new variant\")` (or a \
+                             Add `_ => panic(\"handle new variant\")` (or a \
                              real handler) before the closing brace. \
                              See design.md § `#[non_exhaustive]` for \
                              Evolvable Public Types."
                         ),
                         span.clone(),
                         TypeErrorKind::NonExhaustiveCrossPackageMatch,
+                        fix_it,
                     );
                     return;
                 }
@@ -992,7 +996,8 @@ impl<'a> super::TypeChecker<'a> {
                         && !self.current_fn_stdlib_origin
                         && !*has_rest
                     {
-                        self.type_error(
+                        let fix_it = non_exhaustive_pattern_fix_it(&pattern.span, fields);
+                        self.type_error_with_fix_it(
                             format!(
                                 "error[E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN]: \
                                  cannot exhaustively destructure `{name}` — \
@@ -1006,6 +1011,7 @@ impl<'a> super::TypeChecker<'a> {
                             ),
                             pattern.span.clone(),
                             TypeErrorKind::NonExhaustiveCrossPackagePattern,
+                            fix_it,
                         );
                     }
                 }
@@ -1217,5 +1223,83 @@ fn pattern_is_catchall(p: &Pattern, variant_names: &std::collections::HashSet<&s
         PatternKind::AtBinding { pattern, .. } => pattern_is_catchall(pattern, variant_names),
         PatternKind::Or(alts) => alts.iter().any(|p| pattern_is_catchall(p, variant_names)),
         _ => false,
+    }
+}
+
+/// `#[non_exhaustive]` slice 7 — build the machine-applicable fix-it
+/// that inserts the rest-pattern (`..`) into a cross-package
+/// struct pattern. With existing fields, the insertion is anchored
+/// just after the last field (so the result reads `Foo { a, b, .. }`
+/// even when the pattern has trailing whitespace before the `}`).
+/// With no fields, the insertion lands just before the closing `}`
+/// of the pattern. The `pattern_span` is the whole struct-pattern
+/// span ending at `}`; field spans cover the field name and any
+/// nested sub-pattern. Insertion-only — never replaces existing
+/// source text.
+fn non_exhaustive_pattern_fix_it(
+    pattern_span: &Span,
+    fields: &[crate::ast::FieldPattern],
+) -> crate::typechecker::FixIt {
+    let (offset, line, column, replacement) = if let Some(last) = fields.last() {
+        // Insert `, ..` right after the last field's span. Works
+        // cleanly whether the source has `Foo { a, b }`,
+        // `Foo { a, b, }`, or `Foo {a,b}` — the comma we emit
+        // chains onto the existing last-field token unambiguously.
+        let after_last = last.span.offset + last.span.length;
+        (after_last, last.span.line, last.span.column, ", ..")
+    } else {
+        // Empty field list — `Foo { }`. Insert `..` just before
+        // `}`. `pattern_span.length` is always >= 1 because the
+        // pattern source ends with `}`, so `length - 1` is a
+        // valid byte offset pointing at `}`.
+        let brace = pattern_span.offset + pattern_span.length.saturating_sub(1);
+        (brace, pattern_span.line, pattern_span.column, "..")
+    };
+    crate::typechecker::FixIt {
+        span: Span {
+            line,
+            column,
+            offset,
+            length: 0,
+        },
+        replacement: replacement.to_string(),
+    }
+}
+
+/// `#[non_exhaustive]` slice 7 — build the machine-applicable fix-it
+/// that appends a wildcard arm to a cross-package non-exhaustive
+/// match. With existing arms, the insertion anchors right after the
+/// last arm (using its own span, before any trailing comma) and the
+/// replacement starts with `, ` so it chains cleanly regardless of
+/// whether the source already carried a trailing comma. With no
+/// arms, the insertion anchors just before the closing `}` of the
+/// match block and emits the bare arm with no leading comma.
+/// Insertion-only — never replaces existing source text.
+fn non_exhaustive_match_fix_it(match_span: &Span, arms: &[MatchArm]) -> crate::typechecker::FixIt {
+    let (offset, line, column, replacement) = if let Some(last) = arms.last() {
+        let after_last = last.span.offset + last.span.length;
+        (
+            after_last,
+            last.span.line,
+            last.span.column,
+            ", _ => panic(\"handle new variant\")",
+        )
+    } else {
+        let brace = match_span.offset + match_span.length.saturating_sub(1);
+        (
+            brace,
+            match_span.line,
+            match_span.column,
+            "_ => panic(\"handle new variant\")",
+        )
+    };
+    crate::typechecker::FixIt {
+        span: Span {
+            line,
+            column,
+            offset,
+            length: 0,
+        },
+        replacement: replacement.to_string(),
     }
 }

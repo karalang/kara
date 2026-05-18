@@ -627,6 +627,14 @@ struct DiagEntry<'a> {
     /// and filter by lint. `None` on hard errors and on warnings that
     /// haven't migrated to a registered lint yet.
     lint_name: Option<&'a str>,
+    /// Machine-applicable fix-it edit when the diagnostic supplies one
+    /// (`#[non_exhaustive]` slice 7 introduces the producers for the
+    /// cross-package pattern and match diagnostics). Surfaced as a
+    /// nested `"fix_it":{"span":{...},"replacement":"..."}` object so
+    /// IDE / formatter consumers can apply it without re-parsing the
+    /// message text. `None` for every other diagnostic; widens as
+    /// more producers land.
+    fix_it: Option<&'a crate::typechecker::FixIt>,
 }
 
 struct DiagnosticJson {
@@ -656,6 +664,22 @@ impl DiagnosticJson {
         }
         if let Some(name) = d.lint_name {
             write!(entry, ",\"lint_name\":{}", json_string(name)).unwrap();
+        }
+        if let Some(fix) = d.fix_it {
+            // `#[non_exhaustive]` slice 7 — surface the
+            // machine-applicable edit as a nested object. `length` is
+            // included so consumers can distinguish insertion
+            // (length=0) from replacement without re-deriving from
+            // start/end markers.
+            write!(
+                entry,
+                ",\"fix_it\":{{\"span\":{{{},\"offset\":{},\"length\":{}}},\"replacement\":{}}}",
+                span_to_json(&fix.span, d.filename),
+                fix.span.offset,
+                fix.span.length,
+                json_string(&fix.replacement),
+            )
+            .unwrap();
         }
         if let Some(ref extra) = d.extra_json {
             write!(entry, ",{}", extra).unwrap();
@@ -691,6 +715,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             suggestion: None,
             extra_json: None,
             lint_name: None,
+            fix_it: None,
         });
     }
 
@@ -744,6 +769,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: err.suggestion.as_deref(),
                 extra_json: replacement_json,
                 lint_name: None,
+                fix_it: None,
             });
         }
     }
@@ -810,6 +836,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: None,
                 extra_json: None,
                 lint_name: err.lint_name.as_deref(),
+                fix_it: err.fix_it.as_ref(),
             });
         }
         for warn in &t.warnings {
@@ -834,6 +861,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: None,
                 extra_json: None,
                 lint_name: warn.lint_name.as_deref(),
+                fix_it: warn.fix_it.as_ref(),
             });
         }
     }
@@ -883,6 +911,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: None,
                 extra_json,
                 lint_name: None,
+                fix_it: None,
             });
         }
     }
@@ -933,6 +962,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: err.suggestion.as_deref(),
                 extra_json: replacement_json,
                 lint_name: None,
+                fix_it: None,
             });
         }
         for note in &o.notes {
@@ -961,6 +991,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: note.suggestion.as_deref(),
                 extra_json: replacement_json,
                 lint_name: None,
+                fix_it: None,
             });
         }
     }
@@ -981,6 +1012,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 suggestion: None,
                 extra_json: None,
                 lint_name: None,
+                fix_it: None,
             });
         }
     }
