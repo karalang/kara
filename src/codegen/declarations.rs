@@ -316,6 +316,15 @@ impl<'ctx> super::Codegen<'ctx> {
             let mut current_names = layout_names.clone();
             let mut per_arm_stmts: Vec<Vec<BodySplitStmt>> =
                 (0..yield_points.len() + 1).map(|_| Vec::new()).collect();
+            // Slice 8o: capture the user's final-expression value when
+            // it's a recognised `BodyArg` shape. The terminal-arm
+            // emission consults this instead of slice 8i's `i64 0`
+            // placeholder, threading the user's actual return value
+            // through the state-struct terminal field. Walker fills
+            // this AFTER the per-statement loop so the recognition
+            // uses the terminal arm's `current_names` (including any
+            // arm-local lets introduced in the terminal arm body).
+            let mut terminal_return: Option<BodyArg> = None;
             if let Some(fn_ast) = find_function_ast(program, fn_key) {
                 let mut cur_arm = 0usize;
                 for stmt in &fn_ast.body.stmts {
@@ -422,6 +431,21 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                         _ => {}
                     }
+                }
+                // Slice 8o: capture the block's trailing expression (if
+                // any) as the terminal-arm return value, provided it
+                // matches the `BodyArg` recognised set. The walker
+                // reaches here after processing all `stmts`, with
+                // `current_names` reflecting the terminal arm's scope
+                // (layout-captured locals + any terminal-arm let
+                // bindings). Non-i64-returning functions still record
+                // the value here, but the terminal-arm emission only
+                // consults `terminal_return` when
+                // `state_machine_return_types` has an entry — so non-
+                // i64 returns stay on the unit path until follow-on
+                // slices widen the supported set.
+                if let Some(final_expr) = fn_ast.body.final_expr.as_deref() {
+                    terminal_return = recognize_body_arg(final_expr, &current_names);
                 }
             }
             let poll_name = format!("__kara_poll_{fn_key}");
@@ -848,12 +872,39 @@ impl<'ctx> super::Codegen<'ctx> {
                                 "kara.return.field_ptr",
                             )
                             .expect("GEP terminal return-value field");
-                        // v1 places `i64` returns only — store the
-                        // placeholder zero directly as an i64 const.
-                        let placeholder = self.context.i64_type().const_int(0, false);
+                        // Slice 8o: when the walker captured the user's
+                        // final-expression value via `terminal_return`,
+                        // use that instead of slice 8i's `i64 0`
+                        // placeholder. `IntLit(v)` lowers to an i64
+                        // const; `Slot(name)` loads from the per-arm
+                        // slot map (populated by slice 8a reload +
+                        // slice 8m let emissions). If `terminal_return`
+                        // is `None` (final expr not recognised, or no
+                        // trailing expr), fall back to the slice-8i
+                        // placeholder.
+                        let return_val: inkwell::values::BasicValueEnum<'ctx> =
+                            match &terminal_return {
+                                Some(BodyArg::IntLit(v)) => {
+                                    self.context.i64_type().const_int(*v as u64, true).into()
+                                }
+                                Some(BodyArg::Slot(name)) => {
+                                    if let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() {
+                                        self.builder
+                                            .build_load(
+                                                slot_ty,
+                                                slot_ptr,
+                                                &format!("{name}.return"),
+                                            )
+                                            .expect("load slot for terminal return")
+                                    } else {
+                                        self.context.i64_type().const_int(0, false).into()
+                                    }
+                                }
+                                None => self.context.i64_type().const_int(0, false).into(),
+                            };
                         self.builder
-                            .build_store(terminal_ptr, placeholder)
-                            .expect("store placeholder return value");
+                            .build_store(terminal_ptr, return_val)
+                            .expect("store terminal return value");
                     }
                     self.builder
                         .build_return(Some(&i8_ty.const_int(1, false)))

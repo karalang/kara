@@ -15613,6 +15613,97 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
+    //
+    // The terminal-arm store into the state-struct terminal field now
+    // uses the user's `body.final_expr` value when it's a recognised
+    // `BodyArg` shape (slice-8k discipline: integer literal or in-scope
+    // identifier). Slice 8i's placeholder `i64 0` survives only as a
+    // fallback for unrecognised final-exprs or absent final-exprs.
+
+    #[test]
+    fn test_terminal_return_8o_uses_int_literal_final_expr() {
+        // `fn driver() -> i64 ... { fetch(); 42 }` — the user's
+        // trailing `42` becomes the stored terminal value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> i64 with sends(Network) receives(Network) { fetch(); 42 }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 42, ptr %kara.return.field_ptr"),
+            "terminal arm must store user's literal 42 into terminal field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_terminal_return_8o_uses_captured_local_final_expr() {
+        // `fn driver(n: i64) -> i64 ... { fetch(); n }` — `n` is a
+        // captured local; the terminal arm loads it from the slot and
+        // stores into the terminal field.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) { fetch(); n }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%n.return = load i64, ptr %n.slot"),
+            "terminal arm must load captured local n via .return:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %n.return, ptr %kara.return.field_ptr"),
+            "terminal arm must store slot-loaded n into terminal field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_terminal_return_8o_uses_arm_local_let_final_expr() {
+        // `fn driver() -> i64 ... { fetch(); let r = 99; r }` — slice
+        // 8m emits the let into the terminal arm's slot_map; slice 8o
+        // loads from that slot for the final-expression return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> i64 with sends(Network) receives(Network) {
+                 fetch();
+                 let r = 99;
+                 r
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 99, ptr %r.slot"),
+            "let r = 99 must store into r.slot in terminal arm:\n{body}"
+        );
+        assert!(
+            body.contains("%r.return = load i64, ptr %r.slot"),
+            "terminal arm must load r.slot via .return:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %r.return, ptr %kara.return.field_ptr"),
+            "terminal arm must store r's loaded value into terminal field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_terminal_return_8o_unrecognised_final_expr_keeps_zero_fallback() {
+        // `fn driver(n: i64) -> i64 ... { fetch(); n + 1 }` — binary-op
+        // final expr is outside the recognised `BodyArg` set, so slice
+        // 8o falls back to slice-8i's placeholder `i64 0`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) -> i64 with sends(Network) receives(Network) { fetch(); n + 1 }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 0, ptr %kara.return.field_ptr"),
+            "unrecognised final expr must fall back to i64 0 placeholder:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8n: cross-yield captured-local writeback ────
     //
     // Before each non-terminal arm's tag-store + Pending return, the
