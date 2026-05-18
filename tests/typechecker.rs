@@ -2921,6 +2921,66 @@ fn test_trait_impl_on_opaque_type_rejected() {
     );
 }
 
+// ── Method-call rejection on opaque foreign types ──────────────
+//
+// Impl blocks on opaque foreign types are rejected at
+// E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS, so no method can ever
+// resolve through the type. The receiver dispatch in
+// `infer_method_call` intercepts a `Type::Named { name }` receiver
+// whose name is in `env.opaque_foreign_types` and emits the focused
+// E_OPAQUE_TYPE_NO_METHODS instead of the generic "method not found"
+// fall-through, steering the programmer toward the wrapper-type
+// pattern.
+
+#[test]
+fn test_opaque_type_method_call_through_ref_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn caller(r: ref Foo) {\n\
+             r.do_something();\n\
+         }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_NO_METHODS");
+}
+
+#[test]
+fn test_opaque_type_method_call_through_mut_ref_rejected() {
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn caller(r: mut ref Foo) {\n\
+             r.mutate();\n\
+         }",
+    );
+    assert_error_code_present(&errors, "E_OPAQUE_TYPE_NO_METHODS");
+}
+
+#[test]
+fn test_opaque_type_method_call_diagnostic_names_wrapper_pattern() {
+    // The diagnostic body steers the user toward the recommended
+    // `distinct type Wrapper = *mut Foo` pattern so they don't have
+    // to read the spec to find the fix.
+    let errors = typecheck_errors(
+        "unsafe extern \"C\" {\n\
+             type Foo;\n\
+         }\n\
+         fn caller(r: ref Foo) {\n\
+             r.greet();\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| e.message.contains("distinct type")),
+        "expected diagnostic to suggest the wrapper-type pattern, got: {:?}",
+        errors
+            .iter()
+            .map(|e| e.message.as_str())
+            .collect::<Vec<_>>()
+    );
+}
+
 // ── Layout introspection intrinsics: size_of[T]() / align_of[T]() ─
 //
 // Slice 1b NO_KNOWN_SIZE pull. The intrinsics live in

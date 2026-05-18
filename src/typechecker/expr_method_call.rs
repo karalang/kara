@@ -1434,6 +1434,34 @@ impl<'a> super::TypeChecker<'a> {
         // type's methods. Refinement-base candidate (1C) remains
         // deferred on `Type::Refinement` from phase-9.
         let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
+        // Opaque foreign types have no methods by definition — impl blocks
+        // on them are rejected at `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`,
+        // so the generic "method not found" diagnostic that would otherwise
+        // fire from the fallthrough at the bottom of this function is
+        // technically true but misleading. Emit the focused
+        // `E_OPAQUE_TYPE_NO_METHODS` instead so the programmer is steered
+        // toward the wrapper-type / free-function pattern.
+        if let Type::Named { name, .. } = &receiver_for_lookup {
+            if self.env.opaque_foreign_types.contains(name) {
+                self.type_error(
+                    format!(
+                        "error[E_OPAQUE_TYPE_NO_METHODS]: opaque foreign type \
+                         '{name}' has no methods — impl blocks on opaque types \
+                         are rejected, so no '.{method}(…)' or any other method \
+                         call resolves through '{name}'. Use the wrapper-type \
+                         pattern (`distinct type Wrapper = *mut {name}; impl Wrapper {{ … }}`) \
+                         or call a free function from the `unsafe extern \"C\" {{ … }}` \
+                         block that takes `ref {name}` / `mut ref {name}`."
+                    ),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+                for arg in args {
+                    self.infer_expr(&arg.value);
+                }
+                return Type::Error;
+            }
+        }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
             Type::TypeParam(name) if name == "Self" => {
