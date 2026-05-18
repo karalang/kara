@@ -335,6 +335,130 @@ fn main() {
         );
     }
 
+    // ── extend_from_slice + from_slice: RC-bearing element types ─
+    // The bit-copy code path bit-copies String / Vec / shared-T
+    // aggregates between source and dest. Both observers then alias
+    // the same inner heap pointers, so the first scope-exit free
+    // wins and the second hits double-free / UAF. Fix routes through
+    // per-element synth_clone for non-trivially-copyable elements.
+    // These tests verify the fix; they fail under the bit-copy v1
+    // implementation.
+
+    #[test]
+    fn asan_vec_extend_from_slice_string_smallest_repro_with_cap() {
+        // Smallest repro for debugging: 2 heap strings, no grow on
+        // src (uses with_capacity(4)), no grow on dst (uses
+        // with_capacity(4)). If this passes, the bug is in the
+        // grow-path interaction. If it fails, the bug is in the
+        // per-element String clone path itself.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("hi");
+    let mut b: String = String.new();
+    b.push_str("ho");
+    let mut src: Vec[String] = Vec.with_capacity(4);
+    src.push(a);
+    src.push(b);
+    let mut dst: Vec[String] = Vec.with_capacity(4);
+    dst.extend_from_slice(src);
+    println(dst[0]);
+}
+"#,
+            &["hi"],
+            "vec_extend_from_slice_string_smallest_repro_with_cap",
+        );
+    }
+
+    #[test]
+    fn asan_vec_extend_from_slice_string_elements_independent() {
+        // Vec[String] source — each String must be deep-cloned into
+        // dest, not bit-copied. Strings here are heap-allocated (via
+        // push_str on a fresh String) so cap > 0 and the scope-exit
+        // free does fire. Without the fix, dst[0]'s String
+        // {ptr, len, cap} aliases src[0]'s; scope-exit frees both,
+        // ASAN reports double-free of the char buffer.
+        //
+        // The string-literal version of this test (push("hello"))
+        // doesn't catch the bug because literals are rodata-backed
+        // with cap=0 and the free path skips them — that's the same
+        // shape that hid the bug pre-fix.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("hello");
+    let mut b: String = String.new();
+    b.push_str("world");
+    let mut src: Vec[String] = Vec.new();
+    src.push(a);
+    src.push(b);
+    let mut dst: Vec[String] = Vec.new();
+    dst.extend_from_slice(src);
+    println(dst[0]);
+    println(dst[1]);
+}
+"#,
+            &["hello", "world"],
+            "vec_extend_from_slice_string_elements_independent",
+        );
+    }
+
+    #[test]
+    fn asan_vec_extend_from_slice_nested_vec_elements_independent() {
+        // Vec[Vec[i64]] source — the inner Vec storage must be
+        // deep-cloned into dest. Without the fix, dst[0]'s inner Vec
+        // aliases src[0]'s buffer; both scope-exit frees the same
+        // pointer.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut src: Vec[Vec[i64]] = Vec.new();
+    let mut a: Vec[i64] = Vec.new();
+    a.push(1);
+    a.push(2);
+    src.push(a);
+    let mut b: Vec[i64] = Vec.new();
+    b.push(3);
+    src.push(b);
+    let mut dst: Vec[Vec[i64]] = Vec.new();
+    dst.extend_from_slice(src);
+    println(dst[0].len());
+    println(dst[1].len());
+}
+"#,
+            &["2", "1"],
+            "vec_extend_from_slice_nested_vec_elements_independent",
+        );
+    }
+
+    #[test]
+    fn asan_vec_from_slice_string_elements_independent() {
+        // Same hazard for `Vec.from_slice` — pre-dates
+        // `extend_from_slice` but inherits the same v1 limitation.
+        // Heap-allocated Strings to ensure cap > 0 and the
+        // scope-exit free actually fires.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let mut a: String = String.new();
+    a.push_str("alpha");
+    let mut b: String = String.new();
+    b.push_str("beta");
+    let mut src: Vec[String] = Vec.new();
+    src.push(a);
+    src.push(b);
+    let dst: Vec[String] = Vec.from_slice(src);
+    println(dst[0]);
+    println(dst[1]);
+}
+"#,
+            &["alpha", "beta"],
+            "vec_from_slice_string_elements_independent",
+        );
+    }
+
     #[test]
     fn asan_vec_extend_from_slice_nested_index_source_clean() {
         // Source is `rows[r]` on Vec[Vec[T]] — the kata-6 case.

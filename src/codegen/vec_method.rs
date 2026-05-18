@@ -778,7 +778,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.build_unconditional_branch(copy_bb).unwrap();
 
                 // Copy src elements to data + len * elem_size (i.e., GEP
-                // by len in elem_ty stride).
+                // by len in elem_ty stride). Two paths: memcpy fast path
+                // for trivially-copyable elements (primitives), or
+                // per-element synth_clone for anything that carries a
+                // heap pointer (String, Vec, Map, Set, shared T, tuples
+                // / structs that recursively contain any of those).
+                //
+                // Without the clone path, `Vec[String].extend_from_slice`
+                // and `Vec[Vec[T]].extend_from_slice` bit-copy aggregate
+                // values whose inner `{ptr, len, cap}` triples then
+                // alias the source's heap buffers in dest. Both scope-
+                // exit frees fire on the same pointers → double-free /
+                // UAF (ASAN-flagged in `tests/memory_sanitizer.rs ::
+                // asan_vec_extend_from_slice_nested_vec_elements_independent`).
                 self.builder.position_at_end(copy_bb);
                 let cur_data = self
                     .builder
@@ -790,14 +802,86 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_load(i64_t, len_ptr, "efs.cur_len")
                     .unwrap()
                     .into_int_value();
-                let dest = unsafe {
+                let elem_te = self.var_elem_type_exprs.get(var_name).cloned();
+                let trivial = elem_te
+                    .as_ref()
+                    .map(is_trivially_copyable_te)
+                    .unwrap_or(true);
+                if trivial {
+                    let dest = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, cur_data, &[cur_len], "efs.dest")
+                            .unwrap()
+                    };
                     self.builder
-                        .build_gep(elem_ty, cur_data, &[cur_len], "efs.dest")
+                        .build_memcpy(dest, 8, src_data, 8, src_bytes)
+                        .unwrap();
+                } else {
+                    let elem_te = elem_te.unwrap();
+                    let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+                    // Per-element clone loop:
+                    //   for i in 0..src_len:
+                    //     src_ep = src_data + i * elem_size
+                    //     dst_ep = cur_data + (cur_len + i) * elem_size
+                    //     karac_clone_<T>(src_ep, dst_ep)
+                    let loop_cond_bb =
+                        self.context.append_basic_block(fn_val, "efs.clone.cond");
+                    let loop_body_bb =
+                        self.context.append_basic_block(fn_val, "efs.clone.body");
+                    let loop_exit_bb =
+                        self.context.append_basic_block(fn_val, "efs.clone.exit");
+                    let i_alloca =
+                        self.create_entry_alloca(fn_val, "efs.clone.i", i64_t.into());
+                    self.builder.build_store(i_alloca, i64_t.const_zero()).unwrap();
+                    self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+
+                    self.builder.position_at_end(loop_cond_bb);
+                    let i_cur = self
+                        .builder
+                        .build_load(i64_t, i_alloca, "efs.clone.i.cur")
                         .unwrap()
-                };
-                self.builder
-                    .build_memcpy(dest, 8, src_data, 8, src_bytes)
-                    .unwrap();
+                        .into_int_value();
+                    let cond = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::ULT,
+                            i_cur,
+                            src_len,
+                            "efs.clone.lt",
+                        )
+                        .unwrap();
+                    self.builder
+                        .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
+                        .unwrap();
+
+                    self.builder.position_at_end(loop_body_bb);
+                    let src_ep = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, src_data, &[i_cur], "efs.clone.src.ep")
+                            .unwrap()
+                    };
+                    let dst_idx = self
+                        .builder
+                        .build_int_add(cur_len, i_cur, "efs.clone.dst.idx")
+                        .unwrap();
+                    let dst_ep = unsafe {
+                        self.builder
+                            .build_gep(elem_ty, cur_data, &[dst_idx], "efs.clone.dst.ep")
+                            .unwrap()
+                    };
+                    self.builder
+                        .build_call(clone_fn, &[src_ep.into(), dst_ep.into()], "")
+                        .unwrap();
+                    let one = i64_t.const_int(1, false);
+                    let i_next = self
+                        .builder
+                        .build_int_add(i_cur, one, "efs.clone.i.next")
+                        .unwrap();
+                    self.builder.build_store(i_alloca, i_next).unwrap();
+                    self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+
+                    self.builder.position_at_end(loop_exit_bb);
+                }
                 let updated_len = self
                     .builder
                     .build_int_add(cur_len, src_len, "efs.updated_len")
@@ -1349,4 +1433,37 @@ impl<'ctx> super::Codegen<'ctx> {
 
         thunk_fn
     }
+}
+
+/// True if `te` is a bit-copyable primitive (i*, u*, f*, bool, char).
+/// Conservative: anything else — String, Vec[T], Map, Set, shared T,
+/// tuples, structs, enums — needs per-element synth_clone for correct
+/// ownership transfer in `Vec.extend_from_slice` / `Vec.from_slice`.
+/// Same conservative shape as `ownership::is_copy_type_basic`, but
+/// works on the AST `TypeExpr` rather than the resolved `Type`.
+pub(super) fn is_trivially_copyable_te(te: &TypeExpr) -> bool {
+    let TypeKind::Path(p) = &te.kind else {
+        return false;
+    };
+    if p.segments.len() != 1 {
+        return false;
+    }
+    if p.generic_args.is_some() {
+        return false;
+    }
+    matches!(
+        p.segments[0].as_str(),
+        "i8" | "i16"
+            | "i32"
+            | "i64"
+            | "u8"
+            | "u16"
+            | "u32"
+            | "u64"
+            | "usize"
+            | "f32"
+            | "f64"
+            | "bool"
+            | "char"
+    )
 }

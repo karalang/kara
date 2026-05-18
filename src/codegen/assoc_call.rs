@@ -969,9 +969,85 @@ impl<'ctx> super::Codegen<'ctx> {
                 .try_as_basic_value()
                 .unwrap_basic()
                 .into_pointer_value();
-            self.builder
-                .build_memcpy(new_buf, 8, src_data, 8, alloc_bytes)
-                .unwrap();
+
+            // Branch on element triviality: memcpy for primitives,
+            // per-element synth_clone for anything carrying a heap
+            // pointer (String, Vec, Map, Set, shared T, tuples /
+            // structs that recursively contain those). Without the
+            // clone path, `Vec.from_slice` on a `Vec[String]` /
+            // `Vec[Vec[T]]` source bit-copies the aggregate values
+            // and both src and dst alias the same inner heap
+            // pointers — first scope-exit free wins, second
+            // double-frees (ASAN-flagged in `tests/memory_sanitizer
+            // .rs :: asan_vec_from_slice_string_elements_independent`).
+            let elem_te = self.var_elem_type_exprs.get(src_name).cloned();
+            let trivial = elem_te
+                .as_ref()
+                .map(super::vec_method::is_trivially_copyable_te)
+                .unwrap_or(true);
+            if trivial {
+                self.builder
+                    .build_memcpy(new_buf, 8, src_data, 8, alloc_bytes)
+                    .unwrap();
+            } else {
+                let elem_te = elem_te.unwrap();
+                let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
+                let i64_t = self.context.i64_type();
+                let fn_val = self.current_fn.unwrap();
+                let loop_cond_bb =
+                    self.context.append_basic_block(fn_val, "from_slice.clone.cond");
+                let loop_body_bb =
+                    self.context.append_basic_block(fn_val, "from_slice.clone.body");
+                let loop_exit_bb =
+                    self.context.append_basic_block(fn_val, "from_slice.clone.exit");
+                let i_alloca =
+                    self.create_entry_alloca(fn_val, "from_slice.clone.i", i64_t.into());
+                self.builder.build_store(i_alloca, i64_t.const_zero()).unwrap();
+                self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+
+                self.builder.position_at_end(loop_cond_bb);
+                let i_cur = self
+                    .builder
+                    .build_load(i64_t, i_alloca, "from_slice.clone.i.cur")
+                    .unwrap()
+                    .into_int_value();
+                let cond = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::ULT,
+                        i_cur,
+                        src_len,
+                        "from_slice.clone.lt",
+                    )
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(cond, loop_body_bb, loop_exit_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(loop_body_bb);
+                let src_ep = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, src_data, &[i_cur], "from_slice.clone.src.ep")
+                        .unwrap()
+                };
+                let dst_ep = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, new_buf, &[i_cur], "from_slice.clone.dst.ep")
+                        .unwrap()
+                };
+                self.builder
+                    .build_call(clone_fn, &[src_ep.into(), dst_ep.into()], "")
+                    .unwrap();
+                let one = i64_t.const_int(1, false);
+                let i_next = self
+                    .builder
+                    .build_int_add(i_cur, one, "from_slice.clone.i.next")
+                    .unwrap();
+                self.builder.build_store(i_alloca, i_next).unwrap();
+                self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+
+                self.builder.position_at_end(loop_exit_bb);
+            }
 
             let vec_ty = self.vec_struct_type();
             let mut agg = vec_ty.get_undef();

@@ -63,10 +63,22 @@ pub unsafe extern "C" fn karac_string_clone(src: *const c_void, dst: *mut c_void
         return;
     }
 
-    let new_cap = src.len.max(1) as usize;
-    let layout = Layout::array::<u8>(new_cap).unwrap();
+    // Allocate `len + 1` bytes and write a NUL at position `len` so the
+    // cloned String stays printf-compatible. `Vec.push_str` codegen at
+    // `src/codegen/assoc_call.rs:476` maintains the same invariant
+    // (alloc len+1, copy len, set [len]=0); String-creating paths in
+    // karac are expected to keep this contract because `println(str)` /
+    // `printf("%s", data)` reads until NUL. Pre-fix the clone allocated
+    // exactly `len` bytes, so a printf on the cloned String read one
+    // byte past the allocation (ASAN heap-buffer-overflow, surfaced by
+    // tests/memory_sanitizer.rs::asan_vec_extend_from_slice_string_*).
+    // The `cap` field still mirrors `len` (no headroom) — only the
+    // backing buffer is one byte larger.
+    let alloc_bytes = (src.len as usize) + 1;
+    let layout = Layout::array::<u8>(alloc_bytes).unwrap();
     let new_data = alloc(layout);
     ptr::copy_nonoverlapping(src.data, new_data, src.len as usize);
+    *new_data.add(src.len as usize) = 0;
 
     dst.data = new_data;
     dst.len = src.len;
