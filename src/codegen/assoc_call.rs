@@ -994,16 +994,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 let clone_fn = self.emit_clone_fn_for_type_expr(&elem_te);
                 let i64_t = self.context.i64_type();
                 let fn_val = self.current_fn.unwrap();
-                let loop_cond_bb =
-                    self.context.append_basic_block(fn_val, "from_slice.clone.cond");
-                let loop_body_bb =
-                    self.context.append_basic_block(fn_val, "from_slice.clone.body");
-                let loop_exit_bb =
-                    self.context.append_basic_block(fn_val, "from_slice.clone.exit");
-                let i_alloca =
-                    self.create_entry_alloca(fn_val, "from_slice.clone.i", i64_t.into());
-                self.builder.build_store(i_alloca, i64_t.const_zero()).unwrap();
-                self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+                let loop_cond_bb = self
+                    .context
+                    .append_basic_block(fn_val, "from_slice.clone.cond");
+                let loop_body_bb = self
+                    .context
+                    .append_basic_block(fn_val, "from_slice.clone.body");
+                let loop_exit_bb = self
+                    .context
+                    .append_basic_block(fn_val, "from_slice.clone.exit");
+                let i_alloca = self.create_entry_alloca(fn_val, "from_slice.clone.i", i64_t.into());
+                self.builder
+                    .build_store(i_alloca, i64_t.const_zero())
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(loop_cond_bb)
+                    .unwrap();
 
                 self.builder.position_at_end(loop_cond_bb);
                 let i_cur = self
@@ -1044,7 +1050,9 @@ impl<'ctx> super::Codegen<'ctx> {
                     .build_int_add(i_cur, one, "from_slice.clone.i.next")
                     .unwrap();
                 self.builder.build_store(i_alloca, i_next).unwrap();
-                self.builder.build_unconditional_branch(loop_cond_bb).unwrap();
+                self.builder
+                    .build_unconditional_branch(loop_cond_bb)
+                    .unwrap();
 
                 self.builder.position_at_end(loop_exit_bb);
             }
