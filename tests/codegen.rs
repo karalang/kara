@@ -13973,4 +13973,124 @@ fn main() {
             "poll-fn with 3 yields must NOT have `state_4:` arm:\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8b: state-transition skeleton ────────────
+    //
+    // Non-terminal arms (state_i for i < N) write the next tag value
+    // i+1 into state struct field 0 ahead of returning Pending, so the
+    // next poll-fn invocation routes to state_{i+1}. The terminal arm
+    // (state_N) returns Ready (i8 1) — the function has completed and
+    // the caller can observe the result. Slice 8c+ adds the user-code
+    // lowering between the reload prologue and the tag-store / Ready
+    // return.
+
+    #[test]
+    fn test_poll_fn_non_terminal_arm_stores_next_tag() {
+        // For a function with one yield point, state_0 is the only
+        // non-terminal arm — it stores `i32 1` into state struct field 0
+        // before returning Pending. The store value matches the
+        // arm-index + 1 (the tag of the next state to dispatch to).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // `store i32 1` to the state struct's tag field. The exact
+        // instruction shape: `store i32 1, ptr %state_0.next_tag_ptr`
+        // (the GEP target carries the slice-8b naming).
+        assert!(
+            body.contains("store i32 1, ptr %state_0.next_tag_ptr"),
+            "state_0 must store i32 1 (next tag) into state struct tag field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_terminal_arm_returns_ready() {
+        // The terminal arm (state_N) returns `ret i8 1` (Ready discrim)
+        // rather than Pending — the function has completed and the
+        // caller observes the result. For a 1-yield function, state_1
+        // is the terminal arm.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Find the state_1 block and check it ends in `ret i8 1`.
+        // The state_1 label starts the terminal arm; the next instr
+        // after the reload prologue should be `ret i8 1`.
+        assert!(
+            body.contains("ret i8 1"),
+            "terminal arm must return Ready (i8 1):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_multi_yield_stores_each_tag_transition() {
+        // A 2-yield function has 3 arms: state_0 (entry, stores 1),
+        // state_1 (post-yield-1, stores 2), state_2 (terminal, returns
+        // Ready). Pins that the tag-transition value increments with
+        // the arm index.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             pub fn upload() with sends(Network) {}
+             fn driver() {
+                 fetch();
+                 upload();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i32 1, ptr %state_0.next_tag_ptr"),
+            "state_0 must store next tag = 1:\n{body}"
+        );
+        assert!(
+            body.contains("store i32 2, ptr %state_1.next_tag_ptr"),
+            "state_1 must store next tag = 2:\n{body}"
+        );
+        // Terminal arm state_2 must have NO tag-store (only a Ready
+        // return). Pin this by checking that `next_tag_ptr` doesn't
+        // appear with a state_2 prefix.
+        assert!(
+            !body.contains("%state_2.next_tag_ptr"),
+            "terminal arm state_2 must not emit a tag-store:\n{body}"
+        );
+        // And the Ready return must be present.
+        assert!(
+            body.contains("ret i8 1"),
+            "terminal arm state_2 must return Ready (i8 1):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_poll_fn_terminal_arm_only_arm_with_ready_return() {
+        // The Ready return only appears in the terminal arm — every
+        // non-terminal arm ends in `ret i8 0` (Pending). For a 3-yield
+        // function (4 arms), exactly one `ret i8 1` should appear
+        // (terminal state_3) while three `ret i8 0` appear
+        // (state_0..state_2 non-terminal).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             pub fn upload() with sends(Network) {}
+             fn driver() {
+                 fetch();
+                 upload();
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let ready_count = body.matches("ret i8 1").count();
+        let pending_count = body.matches("ret i8 0").count();
+        assert_eq!(
+            ready_count, 1,
+            "exactly one Ready return (terminal arm) expected in 3-yield function:\n{body}"
+        );
+        assert_eq!(
+            pending_count, 3,
+            "three Pending returns (non-terminal arms) expected in 3-yield function:\n{body}"
+        );
+    }
 }

@@ -307,7 +307,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // actual per-arm logic (run user code until next yield,
             // store captured locals back, return Pending; or at the
             // terminal arm return Ready with the result).
-            for arm_bb in &arm_blocks {
+            for (arm_idx, arm_bb) in arm_blocks.iter().enumerate() {
                 self.builder.position_at_end(*arm_bb);
                 for (field_idx, field) in layout.fields.iter().enumerate() {
                     let struct_field_idx = (field_idx + 1) as u32;
@@ -338,9 +338,43 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_store(slot, loaded)
                         .expect("store reloaded captured-local into slot");
                 }
-                self.builder
-                    .build_return(Some(&i8_ty.const_int(0, false)))
-                    .expect("return Pending from state-machine arm");
+                // Slice-8b state transition: non-terminal arms (the
+                // first `yield_count` arms — state_0..state_<N-1>) write
+                // the next tag value `arm_idx + 1` into the state
+                // struct's field 0 ahead of returning Pending, so the
+                // next poll-fn invocation dispatches to the correct
+                // resume arm. The terminal arm (state_<N>) returns Ready
+                // (`i8 1`) — the function has completed and the caller
+                // can observe the result. Slice 8c+ replaces the bare
+                // tag-store + Pending sequence with the full yield-site
+                // mechanic (suspend the parent task via the scheduler,
+                // store back any not-yet-saved captured locals); slice
+                // 8d+ replaces the bare Ready return with the actual
+                // function-return-value plumbing through the state
+                // struct (final field carries the result; caller reads
+                // it after observing Ready).
+                if arm_idx < yield_count {
+                    let next_tag_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            0,
+                            &format!("state_{arm_idx}.next_tag_ptr"),
+                        )
+                        .expect("GEP tag field for state transition");
+                    let next_tag = i32_ty.const_int((arm_idx + 1) as u64, false);
+                    self.builder
+                        .build_store(next_tag_ptr, next_tag)
+                        .expect("store next tag for state transition");
+                    self.builder
+                        .build_return(Some(&i8_ty.const_int(0, false)))
+                        .expect("return Pending from non-terminal arm");
+                } else {
+                    self.builder
+                        .build_return(Some(&i8_ty.const_int(1, false)))
+                        .expect("return Ready from terminal arm");
+                }
             }
             // Default block — unreachable, since the runtime never
             // produces out-of-range tags. The `unreachable` instruction
