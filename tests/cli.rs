@@ -79,6 +79,8 @@ fn test_subcommand_help_build() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(stdout.contains("karac build"));
     assert!(stdout.contains("kara.toml"));
+    // Phase-7 line 5 sub-item 1 — flag is listed in build's help.
+    assert!(stdout.contains("--enable-hot-swap"));
 }
 
 #[test]
@@ -779,6 +781,101 @@ fn test_build_project_emits_built_line_or_no_llvm_note() {
     assert!(
         built,
         "expected `Built: ...` (llvm path) or no-llvm fallback note; stdout={stdout} stderr={stderr}",
+    );
+}
+
+// ── Phase-7 line 5 slice 1: --enable-hot-swap plumbing + gating ─
+
+#[test]
+fn test_build_project_hot_swap_rejected_with_embedded_profile() {
+    let tmp = scratch_project("hotswap-embedded");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\nprofile = \"embedded\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "--enable-hot-swap"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--enable-hot-swap is incompatible with"),
+        "expected gating diagnostic, got stderr={stderr}",
+    );
+    assert!(stderr.contains("embedded"));
+}
+
+#[test]
+fn test_build_project_hot_swap_rejected_with_kernel_profile() {
+    let tmp = scratch_project("hotswap-kernel");
+    write(
+        &tmp.join("kara.toml"),
+        "[package]\nname = \"demo\"\nprofile = \"kernel\"\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "--enable-hot-swap"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--enable-hot-swap is incompatible with"),
+        "expected gating diagnostic, got stderr={stderr}",
+    );
+    assert!(stderr.contains("kernel"));
+}
+
+#[test]
+fn test_build_project_hot_swap_accepted_with_default_profile() {
+    let tmp = scratch_project("hotswap-default");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["build", "--enable-hot-swap"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "expected success on default profile, got stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    // Slice 1 surface gate: the flag parses + plumbs but codegen
+    // indirection is slice 2. The notice is the contract that says so.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--enable-hot-swap parsed but codegen indirection not yet wired"),
+        "expected slice-1 surface notice, got stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_build_bare_file_hot_swap_accepted() {
+    // Bare-file build has no manifest → no profile → no gating.
+    // Flag should still parse and emit the surface notice.
+    let out = karac_bin()
+        .args(["build", "tests/snapshots/clean.kara", "--enable-hot-swap"])
+        .output()
+        .unwrap();
+    // Bare-file `karac build` of a non-feature-llvm checkout exits non-
+    // zero with a no-llvm note; with the feature it succeeds. Either
+    // way the parser should not have rejected the flag, and the surface
+    // notice should fire before the codegen path forks on llvm.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--enable-hot-swap parsed but codegen indirection not yet wired"),
+        "expected slice-1 surface notice, got stderr={stderr}",
     );
 }
 

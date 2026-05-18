@@ -148,6 +148,11 @@ OPTIONS:
                             calls in source order, their reads/writes effects,
                             and the analyzer's reason for parallelizing) to
                             stdout alongside the binary build.
+    --enable-hot-swap       Emit PLT-style indirection for extern-public
+                            module symbols so the AOT artifact format stays
+                            forward-compatible with the post-v1 continuous-
+                            PGO + shared-object reload story. Off by default.
+                            Incompatible with embedded / kernel profiles.
     -h, --help              Print this message"
         }
         "query" => {

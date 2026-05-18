@@ -215,6 +215,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut output = OutputMode::Text;
     let mut concurrency_report = false;
     let mut offline = false;
+    let mut enable_hot_swap = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -227,6 +228,8 @@ fn parse_build_command(args: &[String]) -> Command {
             concurrency_report = true;
         } else if arg == "--offline" {
             offline = true;
+        } else if arg == "--enable-hot-swap" {
+            enable_hot_swap = true;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -252,9 +255,14 @@ fn parse_build_command(args: &[String]) -> Command {
             output,
             concurrency_report,
             offline,
+            enable_hot_swap,
             lint_overrides,
         },
-        None => Command::BuildProject { output, offline },
+        None => Command::BuildProject {
+            output,
+            offline,
+            enable_hot_swap,
+        },
     }
 }
 

@@ -100,6 +100,14 @@ pub enum Command {
         /// the build command body so callers can scaffold their CI
         /// config against the canonical flag name today.
         offline: bool,
+        /// `--enable-hot-swap`: emit PLT-style indirection for
+        /// `extern`-public module symbols so the AOT artifact format
+        /// is forward-compatible with the post-v1 continuous-PGO +
+        /// shared-object reload story (`deferred.md § Continuous PGO
+        /// with Shared-Object Hot-Swap`). Off by default in v1. The
+        /// codegen consumption lands in slice 2 of phase-7 line 5;
+        /// slice 1 plumbs the flag and gates incompatible profiles.
+        enable_hot_swap: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -111,6 +119,12 @@ pub enum Command {
         output: OutputMode,
         /// `--offline` — see `Build.offline` above. Same v1 contract.
         offline: bool,
+        /// `--enable-hot-swap` — see `Build.enable_hot_swap` above.
+        /// In project mode this also gates against the manifest's
+        /// `[package].profile`: `embedded` and `kernel` lack the
+        /// dynamic-symbol-resolution machinery hot-swap requires, so
+        /// the combination hard-errors before codegen.
+        enable_hot_swap: bool,
     },
     Query {
         kind: QueryKind,
@@ -247,9 +261,21 @@ pub fn execute(cmd: Command) {
             output,
             concurrency_report,
             offline,
+            enable_hot_swap,
             lint_overrides,
-        } => cmd_build(&file, output, concurrency_report, offline, lint_overrides),
-        Command::BuildProject { output, offline } => cmd_build_project(output, offline),
+        } => cmd_build(
+            &file,
+            output,
+            concurrency_report,
+            offline,
+            enable_hot_swap,
+            lint_overrides,
+        ),
+        Command::BuildProject {
+            output,
+            offline,
+            enable_hot_swap,
+        } => cmd_build_project(output, offline, enable_hot_swap),
         Command::Query {
             kind,
             file,
@@ -2385,6 +2411,7 @@ fn cmd_build(
     output: OutputMode,
     concurrency_report: bool,
     offline: bool,
+    enable_hot_swap: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     if offline {
@@ -2398,6 +2425,17 @@ fn cmd_build(
         );
     }
     let _ = offline;
+    if enable_hot_swap {
+        // Slice 1: flag plumbs through but the codegen consumption
+        // (PLT-style indirection for extern-public symbols) lands in
+        // slice 2 of phase-7 line 5. Note the surface gap so CI scripts
+        // pinning to the flag don't think they're already producing
+        // hot-swap-capable binaries.
+        eprintln!(
+            "note: --enable-hot-swap parsed but codegen indirection not yet wired (lands in slice 2)"
+        );
+    }
+    let _ = enable_hot_swap;
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
@@ -2655,7 +2693,7 @@ fn effect_set_to_display(
 /// (`E0223`), and runs cross-module name resolution per module
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
-fn cmd_build_project(output: OutputMode, offline: bool) {
+fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool) {
     if offline {
         eprintln!(
             "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
@@ -2677,6 +2715,31 @@ fn cmd_build_project(output: OutputMode, offline: bool) {
             process::exit(1);
         }
     };
+
+    // Phase-7 line 5 sub-item 3 — target gating. Hot-swap requires dynamic
+    // symbol resolution at runtime, which embedded and kernel profiles
+    // do not provide. Reject the combination before any work.
+    // The wasm-target half of the entry's gating defers until a wasm
+    // CompileProfile (or `--target=`) lands; no enum variant to gate
+    // against yet.
+    if enable_hot_swap
+        && matches!(
+            mf.profile,
+            crate::manifest::CompileProfile::Embedded | crate::manifest::CompileProfile::Kernel
+        )
+    {
+        eprintln!(
+            "error: --enable-hot-swap is incompatible with [package].profile = \"{}\" (no dynamic-symbol-resolution machinery on this profile)",
+            mf.profile.as_str()
+        );
+        process::exit(1);
+    }
+    if enable_hot_swap {
+        eprintln!(
+            "note: --enable-hot-swap parsed but codegen indirection not yet wired (lands in slice 2)"
+        );
+    }
+    let _ = enable_hot_swap;
 
     let walk_opts = WalkerOpts::default();
     let walked = match walker::walk_project(&root, walk_opts) {
