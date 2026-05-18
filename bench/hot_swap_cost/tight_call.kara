@@ -1,0 +1,27 @@
+// Phase-7 line 5 sub-item 2 — worst-case microbench for the
+// `--enable-hot-swap` flag.
+//
+// `step` is a `pub fn` doing minimal work (~3 ops). In the baseline
+// build the compiler inlines it, collapsing the body into the loop
+// and letting LLVM apply LICM / vectorization / closed-form rewrites.
+// With `--enable-hot-swap` the call site lowers as a load from
+// `@karac_hotswap_table` + indirect call, which LLVM cannot inline
+// across. The delta between the two binaries is therefore an
+// *upper bound* on the indirection cost — real workloads with more
+// work per call amortize the indirect-call overhead.
+
+pub fn step(acc: i64, x: i64) -> i64 {
+    let h: i64 = acc ^ x;
+    h * 31 + 7
+}
+
+fn main() {
+    let n: i64 = 500000000;
+    let mut acc: i64 = 1;
+    let mut i: i64 = 0;
+    while i < n {
+        acc = step(acc, i);
+        i = i + 1;
+    }
+    println(acc);
+}

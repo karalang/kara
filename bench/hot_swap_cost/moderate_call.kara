@@ -1,0 +1,37 @@
+// Phase-7 line 5 sub-item 2 — realistic-case microbench for the
+// `--enable-hot-swap` flag.
+//
+// `mix` is a `pub fn` doing enough work (~30 arithmetic ops) that the
+// per-call call/return overhead is amortized rather than dominant.
+// The baseline build still inlines `mix`, so vectorization can apply;
+// the hot-swap build cannot inline the call but can still vectorize
+// inside the body. The delta measured here is the realistic-case
+// indirection overhead — closer to what real Kāra programs would see
+// at hot-inner-loop pub-fn call sites.
+
+pub fn mix(seed: i64, x: i64) -> i64 {
+    let a: i64 = seed ^ x;
+    let b: i64 = a * 31 + 7;
+    let c: i64 = b ^ (b + 1);
+    let d: i64 = c * 17 + 13;
+    let e: i64 = d ^ (d + a);
+    let f: i64 = e * 23 + 41;
+    let g: i64 = f ^ (f + b);
+    let h: i64 = g * 13 + 29;
+    let i_: i64 = h ^ (h + c);
+    let j: i64 = i_ * 19 + 53;
+    let k: i64 = j ^ (j + d);
+    let l: i64 = k * 11 + 37;
+    l ^ (l + e)
+}
+
+fn main() {
+    let n: i64 = 50000000;
+    let mut acc: i64 = 1;
+    let mut i: i64 = 0;
+    while i < n {
+        acc = mix(acc, i);
+        i = i + 1;
+    }
+    println(acc);
+}

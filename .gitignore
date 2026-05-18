@@ -10,3 +10,12 @@ a.out
 # WIP scratch files and bug log (uncommitted)
 wip-*.md
 bugs.md
+
+# Built bench binaries (reproduce via the bench dir's README; see
+# bench/hot_swap_cost/README.md for the hot-swap pair).
+bench/hot_swap_cost/tight_call
+bench/hot_swap_cost/tight_call_baseline
+bench/hot_swap_cost/tight_call_hotswap
+bench/hot_swap_cost/moderate_call
+bench/hot_swap_cost/moderate_call_baseline
+bench/hot_swap_cost/moderate_call_hotswap
