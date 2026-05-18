@@ -1428,6 +1428,332 @@ fn lint_attrs_slice4b_multiple_lints_in_one_attribute() {
     );
 }
 
+// ── Slice 4b polish — CLI flags (-A/-W/-D/-F + -D warnings) ─────
+
+fn typecheck_with_cli(
+    source: &str,
+    overrides: karac::lints::CliLintOverrides,
+) -> karac::typechecker::TypeCheckResult {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "parse errors: {:?}",
+        parsed.errors
+    );
+    let resolved = resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "resolve errors: {:?}",
+        resolved.errors,
+    );
+    karac::typecheck_with_lint_overrides(&parsed.program, &resolved, overrides)
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_cli_deny_promotes_default_warn_to_error() {
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        karac::lints::CliLintOverrides::with_level(
+            "unreachable_arm",
+            karac::lints::LintLevel::Deny,
+        ),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::UnreachableArm),
+        "CLI `-D unreachable_arm` should promote to error; got errors: {:?}, warnings: {:?}",
+        result.errors,
+        result.warnings,
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "CLI Deny should NOT also leave the entry in warnings; got: {:?}",
+        result.warnings,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_cli_allow_suppresses_default_warn() {
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        karac::lints::CliLintOverrides::with_level(
+            "unreachable_arm",
+            karac::lints::LintLevel::Allow,
+        ),
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "CLI `-A unreachable_arm` should suppress the warning; got: {:?}",
+        result.warnings,
+    );
+    assert!(
+        result.errors.is_empty(),
+        "suppression should not produce errors; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_cli_deny_warnings_promotes_all_warn_to_error() {
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        karac::lints::CliLintOverrides::with_deny_warnings(),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::UnreachableArm),
+        "`-D warnings` should promote default-Warn `unreachable_arm` to error; \
+         got errors: {:?}, warnings: {:?}",
+        result.errors,
+        result.warnings,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_source_allow_beats_cli_deny() {
+    // Cascade rule: per-item `lint_overrides` are consulted first.
+    // A source `#[allow(NAME)]` always wins over CLI `-D NAME` —
+    // the inner scope is the most specific authority.
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         #[allow(unreachable_arm)]\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        karac::lints::CliLintOverrides::with_level(
+            "unreachable_arm",
+            karac::lints::LintLevel::Deny,
+        ),
+    );
+    assert!(
+        result.errors.is_empty(),
+        "source #[allow] should beat CLI `-D`; got errors: {:?}",
+        result.errors,
+    );
+    assert!(
+        result
+            .warnings
+            .iter()
+            .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "source #[allow] should suppress entirely; got: {:?}",
+        result.warnings,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_per_name_cli_beats_deny_warnings() {
+    // Pins the resolution order inside `CliLintOverrides::level_for`:
+    // per-name `levels` lookup wins before `deny_warnings` is
+    // consulted. So `-A unreachable_arm` + `-D warnings` keeps the
+    // lint at Allow.
+    let o = karac::lints::CliLintOverrides {
+        deny_warnings: true,
+        ..karac::lints::CliLintOverrides::with_level(
+            "unreachable_arm",
+            karac::lints::LintLevel::Allow,
+        )
+    };
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        o,
+    );
+    assert!(
+        result.errors.is_empty()
+            && result
+                .warnings
+                .iter()
+                .all(|w| w.kind != TypeErrorKind::UnreachableArm),
+        "per-name `-A` should beat the `-D warnings` catch-all; \
+         got errors: {:?}, warnings: {:?}",
+        result.errors,
+        result.warnings,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_deny_warnings_does_not_affect_default_deny() {
+    // `-D warnings` is scoped to default-Warn lints. Default-Deny
+    // lints (like `missing_non_exhaustive`) are unaffected — the
+    // catch-all does not over-promote nor over-suppress them.
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn f() -> i64 { 0 }",
+        karac::lints::CliLintOverrides::with_deny_warnings(),
+    );
+    // Just a sanity check that an unrelated program type-checks
+    // without spurious errors from `-D warnings`.
+    assert!(
+        result.errors.is_empty(),
+        "`-D warnings` should not over-fire on clean code; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_forbid_rejects_inner_allow() {
+    let result = typecheck_with_cli(
+        "#[allow(unreachable_arm)]\n\
+         fn f() -> i64 { 0 }",
+        karac::lints::CliLintOverrides::with_forbid("unreachable_arm"),
+    );
+    let forbidden = result
+        .errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::ForbiddenLintAllow)
+        .expect("expected ForbiddenLintAllow error for #[allow(unreachable_arm)] under -F");
+    assert!(
+        forbidden.message.contains("unreachable_arm"),
+        "diagnostic should name the forbidden lint; got: {}",
+        forbidden.message,
+    );
+    assert!(
+        forbidden.message.contains("E_FORBIDDEN_LINT_ALLOW"),
+        "diagnostic should carry the symbolic error code; got: {}",
+        forbidden.message,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_forbid_accepts_inner_warn_deny_expect() {
+    // Forbid mode rejects only inner `#[allow]` — `#[warn]`,
+    // `#[deny]`, and `#[expect]` are all valid inner overrides
+    // (they don't silence the lint; expect silences but is the
+    // user's explicit acknowledgment that the lint fires, not a
+    // suppression). Pins that the rejection is narrowly scoped.
+    let result = typecheck_with_cli(
+        "#[warn(unreachable_arm)]\n\
+         fn a() -> i64 { 0 }\n\
+         #[deny(unreachable_arm)]\n\
+         fn b() -> i64 { 0 }\n\
+         #[expect(unreachable_arm)]\n\
+         fn c() -> i64 { 0 }",
+        karac::lints::CliLintOverrides::with_forbid("unreachable_arm"),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.kind != TypeErrorKind::ForbiddenLintAllow),
+        "forbid mode should NOT reject inner #[warn]/#[deny]/#[expect]; \
+         got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_forbid_on_impl_method_inner_allow_rejected() {
+    // The forbid pre-pass walks impl-block methods (their
+    // `lint_overrides` live one level inside the impl). Pins that
+    // an inner `#[allow]` on a method body is caught.
+    let result = typecheck_with_cli(
+        "pub struct S { x: i64 }\n\
+         impl S {\n\
+             #[allow(unreachable_arm)]\n\
+             fn f(ref self) -> i64 { self.x }\n\
+         }",
+        karac::lints::CliLintOverrides::with_forbid("unreachable_arm"),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::ForbiddenLintAllow),
+        "impl-method #[allow(forbidden_lint)] should be rejected; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_forbid_no_inner_allow_no_error() {
+    // Pins that forbid mode produces no error when no inner
+    // `#[allow(NAME)]` exists — it's not a positive duty to declare
+    // a lint, just a prohibition on silencing it.
+    let result = typecheck_with_cli(
+        "fn f() -> i64 { 0 }",
+        karac::lints::CliLintOverrides::with_forbid("unreachable_arm"),
+    );
+    assert!(
+        result
+            .errors
+            .iter()
+            .all(|e| e.kind != TypeErrorKind::ForbiddenLintAllow),
+        "no inner #[allow] should produce no forbid error; got: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn lint_attrs_slice4b_polish_empty_overrides_keeps_default_cascade() {
+    // Regression — passing a default CliLintOverrides through the
+    // typecheck builder produces identical behavior to the
+    // no-overrides path.
+    let result = typecheck_with_cli(
+        "enum Color { Red, Green, Blue }\n\
+         fn name(c: Color) -> i64 {\n\
+             match c {\n\
+                 Red   => 1,\n\
+                 Red   => 2,\n\
+                 Green => 3,\n\
+                 Blue  => 4,\n\
+             }\n\
+         }",
+        karac::lints::CliLintOverrides::default(),
+    );
+    let unreachable = result
+        .warnings
+        .iter()
+        .find(|w| w.kind == TypeErrorKind::UnreachableArm)
+        .expect("default overrides should preserve baseline cascade — Warn fires");
+    assert_eq!(unreachable.lint_name.as_deref(), Some("unreachable_arm"));
+}
+
 // ── Maranget witness construction (exhaustiveness slice 4) ──────
 
 #[test]

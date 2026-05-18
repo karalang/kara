@@ -118,6 +118,22 @@ pub fn typecheck(program: &Program, resolve_result: &ResolveResult) -> TypeCheck
     checker.check()
 }
 
+/// Type-check with CLI-driven build-wide lint level overrides
+/// (slice 4b polish — `-A NAME` / `-W NAME` / `-D NAME` / `-F NAME`
+/// / `-D warnings`). The CLI dispatch in `src/cli.rs` calls this
+/// when any of the flags is set; in-process callers that don't need
+/// CLI overrides keep using [`typecheck`]. The overrides feed into
+/// the cascade fall-through via
+/// [`crate::typechecker::TypeChecker::effective_lint_level`].
+pub fn typecheck_with_lint_overrides(
+    program: &Program,
+    resolve_result: &ResolveResult,
+    overrides: crate::lints::CliLintOverrides,
+) -> TypeCheckResult {
+    let checker = TypeChecker::new(program, resolve_result).with_cli_lint_overrides(overrides);
+    checker.check()
+}
+
 /// Rewrite operator expressions into trait-method calls in place.
 /// Runs after typecheck (uses inferred operand types) and before
 /// effectcheck / ownership / interpret / codegen.

@@ -43,6 +43,7 @@ pub fn parse_args(args: &[String]) -> Command {
                     file: p.file,
                     output: p.output,
                     sequential: p.sequential,
+                    lint_overrides: p.lint_overrides,
                 }
             }
         }
@@ -74,6 +75,7 @@ pub fn parse_args(args: &[String]) -> Command {
                 file: p.file,
                 output: p.output,
                 sequential: p.sequential,
+                lint_overrides: p.lint_overrides,
             }
         }
         other => {
@@ -88,18 +90,21 @@ struct ParsedFileArgs {
     file: String,
     output: OutputMode,
     sequential: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
 }
 
 struct ParsedOptionalFileArgs {
     file: Option<String>,
     output: OutputMode,
     sequential: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
 }
 
 fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalFileArgs {
     let mut file = None;
     let mut output = OutputMode::Text;
     let mut sequential = false;
+    let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = file_idx;
     while i < args.len() {
         let arg = &args[i];
@@ -115,6 +120,8 @@ fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalF
                 arg.strip_prefix("--output=").unwrap_or(arg)
             );
             process::exit(1);
+        } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
+            // consumed; i already points at the last consumed arg
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
@@ -130,6 +137,7 @@ fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalF
         file,
         output,
         sequential,
+        lint_overrides,
     }
 }
 
@@ -140,6 +148,7 @@ fn parse_file_args(args: &[String], file_idx: usize) -> ParsedFileArgs {
             file: f,
             output: p.output,
             sequential: p.sequential,
+            lint_overrides: p.lint_overrides,
         },
         None => {
             eprintln!("error: missing file argument");
@@ -153,6 +162,7 @@ fn parse_check_command(args: &[String]) -> Command {
     let mut output = OutputMode::Text;
     let mut profiles: Option<Vec<crate::manifest::CompileProfile>> = None;
     let mut concurrency_report = false;
+    let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -170,6 +180,8 @@ fn parse_check_command(args: &[String]) -> Command {
                 arg.strip_prefix("--output=").unwrap_or(arg)
             );
             process::exit(1);
+        } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
+            // consumed
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
@@ -190,6 +202,7 @@ fn parse_check_command(args: &[String]) -> Command {
         output,
         profiles,
         concurrency_report,
+        lint_overrides,
     }
 }
 
@@ -202,6 +215,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut output = OutputMode::Text;
     let mut concurrency_report = false;
     let mut offline = false;
+    let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
         let arg = &args[i];
@@ -219,6 +233,8 @@ fn parse_build_command(args: &[String]) -> Command {
                 arg.strip_prefix("--output=").unwrap_or(arg)
             );
             process::exit(1);
+        } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
+            // consumed
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
@@ -236,6 +252,7 @@ fn parse_build_command(args: &[String]) -> Command {
             output,
             concurrency_report,
             offline,
+            lint_overrides,
         },
         None => Command::BuildProject { output, offline },
     }
@@ -296,6 +313,106 @@ fn parse_vendor_command(args: &[String]) -> Command {
     Command::Vendor
 }
 
+/// Try to consume a lint-level CLI flag at `args[*i]`. Returns
+/// `true` (and advances `*i` past any next-arg the flag pulled in)
+/// when the arg was a lint flag; `false` otherwise so the caller's
+/// loop can try other arms.
+///
+/// Slice 4b polish — recognised forms (per
+/// `design.md § Lint Level Attributes`):
+///
+/// - `-A NAME` / `-A=NAME` → record `NAME → Allow`
+/// - `-W NAME` / `-W=NAME` → record `NAME → Warn`
+/// - `-D NAME` / `-D=NAME` → record `NAME → Deny`
+/// - `-F NAME` / `-F=NAME` → record `NAME → Deny` *and* mark
+///   `NAME` forbidden (rejects inner `#[allow(NAME)]`)
+/// - `-D warnings` / `-D=warnings` → set `deny_warnings` catch-all
+///   (every default-`Warn` lint promotes to `Deny`); no per-name
+///   entry is recorded so later `-A NAME` flags can re-suppress
+///
+/// Repeated flags for the same name are last-write-wins (matches
+/// Rust's behavior). Unknown lint names are accepted silently —
+/// the catch is at the source side (the `unknown_lint` lint fires
+/// at `#[allow(NAME)]` for an unknown `NAME`); a CLI flag naming
+/// an unknown lint is inert (no emission site queries the name).
+/// `-F` for an unknown name is still load-bearing because inner
+/// `#[allow(NAME)]` rejection is name-based, not registry-gated.
+pub(super) fn try_consume_lint_flag(
+    args: &[String],
+    i: &mut usize,
+    overrides: &mut crate::lints::CliLintOverrides,
+) -> bool {
+    let arg = args[*i].clone();
+
+    // Pattern 1: bare flag with value as next arg ("-A name").
+    let bare = match arg.as_str() {
+        "-A" => Some((crate::lints::LintLevel::Allow, false)),
+        "-W" => Some((crate::lints::LintLevel::Warn, false)),
+        "-D" => Some((crate::lints::LintLevel::Deny, false)),
+        "-F" => Some((crate::lints::LintLevel::Deny, true)),
+        _ => None,
+    };
+    if let Some((level, is_forbid)) = bare {
+        *i += 1;
+        let Some(name) = args.get(*i) else {
+            eprintln!(
+                "error: `{arg}` requires a lint name (e.g. `{arg} deprecated`{})",
+                if arg == "-D" { " or `-D warnings`" } else { "" },
+            );
+            process::exit(1);
+        };
+        apply_lint_flag(overrides, level, is_forbid, name);
+        return true;
+    }
+
+    // Pattern 2: joined flag ("-A=name").
+    for (prefix, level, is_forbid) in [
+        ("-A=", crate::lints::LintLevel::Allow, false),
+        ("-W=", crate::lints::LintLevel::Warn, false),
+        ("-D=", crate::lints::LintLevel::Deny, false),
+        ("-F=", crate::lints::LintLevel::Deny, true),
+    ] {
+        if let Some(name) = arg.strip_prefix(prefix) {
+            if name.is_empty() {
+                eprintln!(
+                    "error: `{prefix}` requires a lint name (e.g. `{prefix}deprecated`{})",
+                    if prefix == "-D=" {
+                        " or `-D=warnings`"
+                    } else {
+                        ""
+                    },
+                );
+                process::exit(1);
+            }
+            apply_lint_flag(overrides, level, is_forbid, name);
+            return true;
+        }
+    }
+    false
+}
+
+fn apply_lint_flag(
+    overrides: &mut crate::lints::CliLintOverrides,
+    level: crate::lints::LintLevel,
+    is_forbid: bool,
+    name: &str,
+) {
+    // `-D warnings` is the catch-all: promote every default-Warn
+    // lint to Deny. Stored as a separate flag so a later `-A NAME`
+    // can re-suppress an explicitly allowed lint (per-name beats
+    // catch-all). No per-name entry under `"warnings"` because the
+    // name isn't a real lint and would otherwise live inertly in
+    // the levels map.
+    if name == "warnings" && level == crate::lints::LintLevel::Deny && !is_forbid {
+        overrides.deny_warnings = true;
+        return;
+    }
+    overrides.levels.insert(name.to_string(), level);
+    if is_forbid {
+        overrides.forbidden.insert(name.to_string());
+    }
+}
+
 /// Parse the comma-separated profile list passed to `--profiles=...`.
 /// `all` expands to every known profile in canonical order. Empty entries
 /// (e.g. trailing comma) are rejected. Unknown profile names abort with a
@@ -340,34 +457,33 @@ fn parse_run_example_command(args: &[String]) -> Command {
     let mut name: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut sequential = false;
+    let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
-        match args[i].as_str() {
-            "--example" => {
-                i += 1;
-                name = Some(args.get(i).cloned().unwrap_or_else(|| {
-                    eprintln!("error: --example requires a name argument");
-                    process::exit(1);
-                }));
-            }
-            "--output=json" => output = OutputMode::Json,
-            "--output=jsonl" => output = OutputMode::Jsonl,
-            "--sequential" => sequential = true,
-            flag if flag.starts_with("--output=") => {
-                eprintln!(
-                    "error: unknown output mode '{}'. Use json or jsonl.",
-                    flag.strip_prefix("--output=").unwrap_or(flag)
-                );
+        let arg = &args[i];
+        if arg == "--example" {
+            i += 1;
+            name = Some(args.get(i).cloned().unwrap_or_else(|| {
+                eprintln!("error: --example requires a name argument");
                 process::exit(1);
-            }
-            flag if flag.starts_with('-') => {
-                eprintln!("error: unknown flag '{flag}' for `karac run --example`");
-                process::exit(1);
-            }
-            other => {
-                eprintln!("error: unexpected argument '{other}' (use --example NAME to specify which example to run)");
-                process::exit(1);
-            }
+            }));
+        } else if arg == "--output=json" {
+            output = OutputMode::Json;
+        } else if arg == "--output=jsonl" {
+            output = OutputMode::Jsonl;
+        } else if arg == "--sequential" {
+            sequential = true;
+        } else if let Some(rest) = arg.strip_prefix("--output=") {
+            eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
+            process::exit(1);
+        } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
+            // consumed
+        } else if arg.starts_with('-') {
+            eprintln!("error: unknown flag '{arg}' for `karac run --example`");
+            process::exit(1);
+        } else {
+            eprintln!("error: unexpected argument '{arg}' (use --example NAME to specify which example to run)");
+            process::exit(1);
         }
         i += 1;
     }
@@ -379,6 +495,7 @@ fn parse_run_example_command(args: &[String]) -> Command {
         name,
         output,
         sequential,
+        lint_overrides,
     }
 }
 

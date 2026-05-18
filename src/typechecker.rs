@@ -447,6 +447,15 @@ pub enum TypeErrorKind {
     /// `stdlib_origin`). See design.md § `#[non_exhaustive]` for
     /// Evolvable Public Types > "stdlib hygiene lint".
     MissingNonExhaustive,
+    /// Lint-level slice 4b polish — the CLI was invoked with `-F NAME`
+    /// (forbid mode for `NAME`) and the source carries an inner
+    /// `#[allow(NAME)]`. Unlike the four lint-level attributes, this
+    /// is a hard error: forbid mode is the CLI author's load-bearing
+    /// guarantee that the lint cannot be silenced anywhere in the
+    /// build. Emitted via `type_error` (not the cascade) so it cannot
+    /// itself be suppressed. See design.md § Lint Level Attributes
+    /// for the `-F` semantics; `E_FORBIDDEN_LINT_ALLOW`.
+    ForbiddenLintAllow,
 }
 
 impl std::fmt::Display for TypeError {
@@ -813,6 +822,19 @@ pub struct TypeChecker<'a> {
     /// `Deny` → push to `errors`, `Expect` → push to `warnings`
     /// (fulfilment tracking lands in slice 5).
     pub(super) lint_override_stack: Vec<Vec<crate::lints::LintLevelOverride>>,
+    /// Build-wide lint level overrides set via CLI flags
+    /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`).
+    /// Slice 4b polish. Consulted by
+    /// [`Self::effective_lint_level`] on cascade fall-through (after
+    /// the `lint_override_stack` misses, before the registry
+    /// default). Defaults empty for the in-process API path
+    /// (`crate::typecheck`); the CLI entry point
+    /// (`crate::typecheck_with_lint_overrides`) populates from the
+    /// parsed flags. The `forbidden` set drives
+    /// [`Self::emit_forbidden_lint_allow_errors`] — a pre-pass that
+    /// emits a hard error at every inner `#[allow(NAME)]` whose name
+    /// the CLI marked `-F`.
+    pub(super) cli_lint_overrides: crate::lints::CliLintOverrides,
 }
 
 /// Why a closure is `OnceFunction`-typed: which captured outer binding the
@@ -865,7 +887,18 @@ impl<'a> TypeChecker<'a> {
             closure_once_reasons: HashMap::new(),
             current_fn_stdlib_origin: false,
             lint_override_stack: Vec::new(),
+            cli_lint_overrides: crate::lints::CliLintOverrides::default(),
         }
+    }
+
+    /// Attach CLI-driven build-wide lint level overrides (slice 4b
+    /// polish — `-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` /
+    /// `-D warnings`). Builder method, defaulted empty in
+    /// [`Self::new`]. See [`crate::lints::CliLintOverrides`] for the
+    /// resolution rule.
+    pub fn with_cli_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
+        self.cli_lint_overrides = overrides;
+        self
     }
 
     /// Attach a project-wide `ProgramTree` so cross-module visibility checks
@@ -895,6 +928,13 @@ impl<'a> TypeChecker<'a> {
         // cascade-aware emission path is already wired (see
         // `emit_unknown_lint_warnings`).
         self.emit_unknown_lint_warnings();
+        // Lint-level slice 4b polish — CLI `-F NAME` (forbid mode)
+        // rejects inner `#[allow(NAME)]` with a hard error. Pre-pass
+        // runs before per-item checks so a downstream emission site
+        // that the forbidden `#[allow]` *would* have suppressed
+        // still surfaces (the inner attribute is invalid; the lint
+        // should fire). See `emit_forbidden_lint_allow_errors`.
+        self.emit_forbidden_lint_allow_errors();
         // `#[non_exhaustive]` slice 6 — stdlib hygiene lint. Runs as a
         // pre-pass for the same reason: cascade-aware emission needs
         // each enum's own `lint_overrides` pushed as the innermost
@@ -1005,6 +1045,61 @@ impl<'a> TypeChecker<'a> {
             if pushed_outer {
                 self.lint_override_stack.pop();
             }
+        }
+    }
+
+    /// Lint-level slice 4b polish — emit
+    /// `error[E_FORBIDDEN_LINT_ALLOW]` at every inner
+    /// `#[allow(NAME)]` whose `NAME` was set forbidden by a CLI
+    /// `-F NAME` flag. Walks the same item-level lint-override
+    /// surface as `emit_unknown_lint_warnings`: top-level items via
+    /// `item_own_lint_overrides`, plus impl-block methods explicitly
+    /// (their `lint_overrides` live one level inside the impl).
+    ///
+    /// The diagnostic is a hard `type_error` (not routed through
+    /// the lint cascade), because forbid mode is the CLI author's
+    /// load-bearing guarantee: a forbidden lint cannot be silenced
+    /// anywhere in the build. Routing it through the cascade would
+    /// let `#[allow(forbidden_lint_allow)]` defeat its own purpose
+    /// — there is no such lint, and adding one would be a footgun.
+    ///
+    /// **What this pre-pass does *not* do.** Statement / expression
+    /// block / module-level overrides are not walked because those
+    /// AST nodes don't carry `lint_overrides` today (the spec's
+    /// inner-scope cascade is item-level only at v1). When that
+    /// surface grows, this walker grows with it — same shape, more
+    /// nodes.
+    fn emit_forbidden_lint_allow_errors(&mut self) {
+        if self.cli_lint_overrides.forbidden.is_empty() {
+            return; // no -F flag set; fast-path skip.
+        }
+        // Collect (span, lint_name) emissions first, then drain;
+        // `type_error` borrows `&mut self` so we can't hold a
+        // borrow of `self.program.items` across the call.
+        let mut emissions: Vec<(Span, String)> = Vec::new();
+        for item in &self.program.items {
+            if let Some(overs) = item_own_lint_overrides(item) {
+                collect_forbidden_allows(overs, &self.cli_lint_overrides, &mut emissions);
+            }
+            if let Item::ImplBlock(imp) = item {
+                for impl_item in &imp.items {
+                    if let ImplItem::Method(f) = impl_item {
+                        collect_forbidden_allows(
+                            &f.lint_overrides,
+                            &self.cli_lint_overrides,
+                            &mut emissions,
+                        );
+                    }
+                }
+            }
+        }
+        for (span, lint_name) in emissions {
+            let message = format!(
+                "error[E_FORBIDDEN_LINT_ALLOW]: lint `{lint_name}` was set to `forbid` \
+                 on the command line (`-F {lint_name}`); inner `#[allow({lint_name})]` is \
+                 rejected — forbid mode disallows any source-level suppression of the lint",
+            );
+            self.type_error(message, span, TypeErrorKind::ForbiddenLintAllow);
         }
     }
 
@@ -1248,11 +1343,13 @@ impl<'a> TypeChecker<'a> {
 
     /// Walk the `lint_override_stack` innermost-first looking for a
     /// matching override on `lint_name`. Returns the override's level
-    /// when found, falling through to the lint's registered default
-    /// (`Warn` when the name is unknown to the registry — matching the
-    /// design.md "Naming" rule of "unknown lint names continue to
-    /// compile"). Slice 4b cascade reader. CLI build-wide defaults
-    /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME`) are a follow-up.
+    /// when found, falling through to CLI build-wide defaults
+    /// ([`Self::cli_lint_overrides`] — `-A NAME` / `-W NAME` /
+    /// `-D NAME` / `-F NAME` / `-D warnings`), then to the lint's
+    /// registered default (`Warn` when the name is unknown to the
+    /// registry — matching the design.md "Naming" rule of
+    /// "unknown lint names continue to compile"). Slice 4b cascade
+    /// reader; slice 4b polish wired the CLI fall-through.
     pub(super) fn effective_lint_level(&self, lint_name: &str) -> crate::lints::LintLevel {
         for frame in self.lint_override_stack.iter().rev() {
             for ov in frame.iter().rev() {
@@ -1261,9 +1358,12 @@ impl<'a> TypeChecker<'a> {
                 }
             }
         }
-        crate::lints::lint_by_name(lint_name)
+        let registry_default = crate::lints::lint_by_name(lint_name)
             .map(|info| info.default_level)
-            .unwrap_or(crate::lints::LintLevel::Warn)
+            .unwrap_or(crate::lints::LintLevel::Warn);
+        self.cli_lint_overrides
+            .level_for(lint_name, registry_default)
+            .unwrap_or(registry_default)
     }
 
     /// `#[deprecated]` slice 4 — at a reference site, check whether
@@ -1772,6 +1872,23 @@ fn has_unknown_lint(overrides: &[crate::lints::LintLevelOverride]) -> bool {
     overrides
         .iter()
         .any(|ov| crate::lints::lint_by_name(&ov.lint).is_none())
+}
+
+/// Extract `(span, lint_name)` for every `#[allow(NAME)]` whose
+/// `NAME` appears in `cli.forbidden`. Helper for
+/// `emit_forbidden_lint_allow_errors` (slice 4b polish). Captures
+/// by value so the caller can drain into `type_error` without
+/// holding a borrow of the program AST.
+fn collect_forbidden_allows(
+    overrides: &[crate::lints::LintLevelOverride],
+    cli: &crate::lints::CliLintOverrides,
+    out: &mut Vec<(Span, String)>,
+) {
+    for ov in overrides {
+        if ov.level == crate::lints::LintLevel::Allow && cli.is_forbidden(&ov.lint) {
+            out.push((ov.span.clone(), ov.lint.clone()));
+        }
+    }
 }
 
 /// The item's own lint overrides (the attached `#[allow]` / `#[warn]`

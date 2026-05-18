@@ -197,6 +197,108 @@ pub fn lint_by_name(name: &str) -> Option<&'static LintInfo> {
     STARTER_LINTS.iter().find(|info| info.name == name)
 }
 
+/// CLI build-wide lint level overrides — set via `-A NAME` /
+/// `-W NAME` / `-D NAME` / `-F NAME` flags (slice 4b polish).
+///
+/// **Resolution order.** The cascade reader
+/// [`crate::typechecker::TypeChecker::effective_lint_level`] walks
+/// the per-item `lint_override_stack` innermost-first; on a miss it
+/// consults `level_for(lint, registry_default)` here. So a source
+/// `#[allow(NAME)]` always wins over a CLI `-D NAME` — the spec's
+/// intent is that the inner scope is the most specific authority.
+///
+/// **`-D warnings` catch-all.** Stored as a separate boolean rather
+/// than expanding into per-lint overrides at parse time so its
+/// scope (every registry-default-`Warn` lint) can be computed
+/// lazily and so a later per-name `-A NAME` flag interacts cleanly
+/// (per-name beats catch-all when both name the same lint).
+///
+/// **`-F NAME` (forbid).** Acts as `-D NAME` *and* additionally
+/// rejects any inner `#[allow(NAME)]` with
+/// `error[E_FORBIDDEN_LINT_ALLOW]`. Forbidden names land in both
+/// `levels` (mapped to `Deny`) and `forbidden`; the typechecker's
+/// pre-pass consults `forbidden` to emit the rejection.
+#[derive(Debug, Default, Clone)]
+pub struct CliLintOverrides {
+    /// Per-lint-name level set by `-A NAME` / `-W NAME` /
+    /// `-D NAME` / `-F NAME`. Repeated flags for the same name
+    /// last-write-wins. `-F NAME` writes `Deny` here and also
+    /// records the name in `forbidden`.
+    pub levels: std::collections::HashMap<String, LintLevel>,
+    /// Names mentioned by `-F NAME` (forbid). The typechecker's
+    /// `emit_forbidden_lint_allow_errors` pre-pass emits a hard
+    /// error at any source-level `#[allow(NAME)]` whose target name
+    /// is in this set. Membership is independent of `levels` — the
+    /// `Deny` mapping there drives the cascade severity; this set
+    /// drives the inner-`#[allow]` rejection.
+    pub forbidden: std::collections::HashSet<String>,
+    /// `-D warnings` was set on the command line — every
+    /// registry-default-`Warn` lint is promoted to `Deny` on
+    /// cascade fall-through. Subordinate to per-name CLI flags and
+    /// to source-level `#[allow]` (both win over this).
+    pub deny_warnings: bool,
+}
+
+impl CliLintOverrides {
+    /// Resolve the build-wide level for a lint after the per-item
+    /// cascade missed. Returns `None` when no CLI flag mentions the
+    /// lint and `-D warnings` does not apply — caller falls through
+    /// to `registry_default`.
+    pub fn level_for(&self, lint_name: &str, registry_default: LintLevel) -> Option<LintLevel> {
+        if let Some(&lvl) = self.levels.get(lint_name) {
+            return Some(lvl);
+        }
+        if self.deny_warnings && registry_default == LintLevel::Warn {
+            return Some(LintLevel::Deny);
+        }
+        None
+    }
+
+    /// True when `-F NAME` named this lint — the typechecker
+    /// pre-pass emits `E_FORBIDDEN_LINT_ALLOW` at any inner
+    /// `#[allow(NAME)]`.
+    pub fn is_forbidden(&self, lint_name: &str) -> bool {
+        self.forbidden.contains(lint_name)
+    }
+
+    /// Convenience constructor — a single per-name override, no
+    /// forbid, no catch-all. Lets tests express the common case
+    /// without the `let mut o = Default::default(); o.levels.insert(...)`
+    /// pattern that clippy's `field_reassign_with_default` flags.
+    pub fn with_level(name: &str, level: LintLevel) -> Self {
+        let mut levels = std::collections::HashMap::new();
+        levels.insert(name.to_string(), level);
+        Self {
+            levels,
+            ..Self::default()
+        }
+    }
+
+    /// Convenience constructor — `-F NAME` shape: per-name `Deny`
+    /// plus name in the `forbidden` set so inner `#[allow(NAME)]`
+    /// is rejected.
+    pub fn with_forbid(name: &str) -> Self {
+        let mut levels = std::collections::HashMap::new();
+        levels.insert(name.to_string(), LintLevel::Deny);
+        let mut forbidden = std::collections::HashSet::new();
+        forbidden.insert(name.to_string());
+        Self {
+            levels,
+            forbidden,
+            ..Self::default()
+        }
+    }
+
+    /// Convenience constructor — `-D warnings` shape: catch-all
+    /// flag only, no per-name overrides.
+    pub fn with_deny_warnings() -> Self {
+        Self {
+            deny_warnings: true,
+            ..Self::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -242,6 +344,61 @@ mod tests {
                 "spec-listed lint missing from registry: {name}",
             );
         }
+    }
+
+    #[test]
+    fn cli_overrides_per_name_wins_over_registry_default() {
+        let o = CliLintOverrides::with_level("unreachable_arm", LintLevel::Deny);
+        assert_eq!(
+            o.level_for("unreachable_arm", LintLevel::Warn),
+            Some(LintLevel::Deny),
+        );
+    }
+
+    #[test]
+    fn cli_overrides_deny_warnings_promotes_default_warn() {
+        let o = CliLintOverrides::with_deny_warnings();
+        // A default-Warn lint promotes to Deny via the catch-all.
+        assert_eq!(
+            o.level_for("unreachable_arm", LintLevel::Warn),
+            Some(LintLevel::Deny),
+        );
+        // A default-Deny lint (e.g. missing_non_exhaustive) is unaffected.
+        assert_eq!(o.level_for("missing_non_exhaustive", LintLevel::Deny), None);
+    }
+
+    #[test]
+    fn cli_overrides_per_name_wins_over_deny_warnings() {
+        // `-A unreachable_arm` plus `-D warnings`: the per-name flag
+        // wins (last-named-wins-by-specificity). Pins the precedence.
+        let o = CliLintOverrides {
+            deny_warnings: true,
+            ..CliLintOverrides::with_level("unreachable_arm", LintLevel::Allow)
+        };
+        assert_eq!(
+            o.level_for("unreachable_arm", LintLevel::Warn),
+            Some(LintLevel::Allow),
+        );
+    }
+
+    #[test]
+    fn cli_overrides_empty_falls_through() {
+        let o = CliLintOverrides::default();
+        assert_eq!(o.level_for("anything", LintLevel::Warn), None);
+        assert!(!o.is_forbidden("anything"));
+    }
+
+    #[test]
+    fn cli_overrides_forbidden_flag_is_separate_from_levels() {
+        let o = CliLintOverrides::with_forbid("deprecated");
+        assert!(o.is_forbidden("deprecated"));
+        assert!(!o.is_forbidden("unreachable_arm"));
+        // Forbid also writes Deny into `levels` so the cascade
+        // fall-through promotes the lint.
+        assert_eq!(
+            o.level_for("deprecated", LintLevel::Warn),
+            Some(LintLevel::Deny),
+        );
     }
 
     #[test]

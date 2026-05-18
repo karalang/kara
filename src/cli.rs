@@ -50,11 +50,18 @@ pub enum Command {
         file: String,
         output: OutputMode,
         sequential: bool,
+        /// Build-wide lint level overrides set via `-A NAME` /
+        /// `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`. Slice
+        /// 4b polish. Threaded into [`Pipeline`] via
+        /// [`Pipeline::with_lint_overrides`].
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     RunExample {
         name: String,
         output: OutputMode,
         sequential: bool,
+        /// See [`Command::Run::lint_overrides`].
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     Check {
         file: String,
@@ -70,6 +77,8 @@ pub enum Command {
         /// complete. Already runs `concurrencycheck()` via
         /// `Pipeline::run_all_checks`, so wiring is purely render-side.
         concurrency_report: bool,
+        /// See [`Command::Run::lint_overrides`].
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     Build {
         file: String,
@@ -91,6 +100,8 @@ pub enum Command {
         /// the build command body so callers can scaffold their CI
         /// config against the canonical flag name today.
         offline: bool,
+        /// See [`Command::Run::lint_overrides`].
+        lint_overrides: crate::lints::CliLintOverrides,
     },
     /// Project-mode build: no file argument. Walks up from CWD to find
     /// `kara.toml`, loads the manifest, and (once CR-24 slices 3+ land) runs
@@ -216,24 +227,28 @@ pub fn execute(cmd: Command) {
             file,
             output,
             sequential,
-        } => cmd_run(&file, output, sequential),
+            lint_overrides,
+        } => cmd_run(&file, output, sequential, lint_overrides),
         Command::RunExample {
             name,
             output,
             sequential,
-        } => cmd_run_example(&name, output, sequential),
+            lint_overrides,
+        } => cmd_run_example(&name, output, sequential, lint_overrides),
         Command::Check {
             file,
             output,
             profiles,
             concurrency_report,
-        } => cmd_check(&file, output, profiles, concurrency_report),
+            lint_overrides,
+        } => cmd_check(&file, output, profiles, concurrency_report, lint_overrides),
         Command::Build {
             file,
             output,
             concurrency_report,
             offline,
-        } => cmd_build(&file, output, concurrency_report, offline),
+            lint_overrides,
+        } => cmd_build(&file, output, concurrency_report, offline, lint_overrides),
         Command::BuildProject { output, offline } => cmd_build_project(output, offline),
         Command::Query {
             kind,
@@ -283,6 +298,14 @@ struct Pipeline {
     concurrency: Option<ConcurrencyAnalysis>,
     provider_escape: Option<Vec<crate::provider_escape::EscapeError>>,
     profile: crate::manifest::CompileProfile,
+    /// Build-wide lint level overrides from CLI flags
+    /// (`-A NAME` / `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`).
+    /// Slice 4b polish. Defaulted empty in [`Pipeline::new`]; the
+    /// per-subcommand entry points set this via
+    /// [`Pipeline::with_lint_overrides`] from the parsed
+    /// [`crate::cli::args`] flags. Threaded into [`Pipeline::typecheck`]
+    /// via [`crate::typecheck_with_lint_overrides`].
+    lint_overrides: crate::lints::CliLintOverrides,
 }
 
 impl Pipeline {
@@ -298,7 +321,13 @@ impl Pipeline {
             concurrency: None,
             provider_escape: None,
             profile: crate::manifest::CompileProfile::Default,
+            lint_overrides: crate::lints::CliLintOverrides::default(),
         }
+    }
+
+    fn with_lint_overrides(mut self, overrides: crate::lints::CliLintOverrides) -> Self {
+        self.lint_overrides = overrides;
+        self
     }
 
     fn has_parse_errors(&self) -> bool {
@@ -321,9 +350,10 @@ impl Pipeline {
         if self.resolved.is_none() || self.has_resolve_errors() {
             return;
         }
-        self.typed = Some(crate::typecheck(
+        self.typed = Some(crate::typecheck_with_lint_overrides(
             &self.parsed.program,
             self.resolved.as_ref().unwrap(),
+            self.lint_overrides.clone(),
         ));
     }
 
@@ -823,6 +853,11 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // `STARTER_LINTS`, so it normally surfaces as an error
                 // (W-prefixed because the underlying carrier is a lint).
                 crate::typechecker::TypeErrorKind::MissingNonExhaustive => "W0246",
+                // Lint-level slice 4b polish — emitted only when the
+                // CLI sets `-F NAME` and an inner `#[allow(NAME)]`
+                // is rejected; never appears as a warning (the
+                // diagnostic is a hard error by construction).
+                crate::typechecker::TypeErrorKind::ForbiddenLintAllow => "E0247",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
@@ -1429,7 +1464,12 @@ fn format_error_trace_json(frames: &[ErrorTraceFrame], truncated: bool) -> Strin
     }
 }
 
-fn cmd_run_example(name: &str, output: OutputMode, sequential: bool) {
+fn cmd_run_example(
+    name: &str,
+    output: OutputMode,
+    sequential: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
+) {
     // Try single-file form first, then project-style directory form.
     let single_file = format!("examples/{name}.kara");
     let dir_entry = format!("examples/{name}/src/main.kara");
@@ -1444,7 +1484,7 @@ fn cmd_run_example(name: &str, output: OutputMode, sequential: bool) {
         list_available_examples();
         process::exit(1);
     };
-    cmd_run(&path, output, sequential);
+    cmd_run(&path, output, sequential, lint_overrides);
 }
 
 fn list_available_examples() {
@@ -1458,9 +1498,14 @@ fn list_available_examples() {
     }
 }
 
-fn cmd_run(filename: &str, output: OutputMode, sequential: bool) {
+fn cmd_run(
+    filename: &str,
+    output: OutputMode,
+    sequential: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
+) {
     let source = read_source(filename);
-    let mut pipeline = Pipeline::new(filename, &source);
+    let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
     pipeline.resolve();
 
     if pipeline.has_fatal_errors() {
@@ -1647,24 +1692,25 @@ fn cmd_check(
     output: OutputMode,
     profiles: Option<Vec<crate::manifest::CompileProfile>>,
     concurrency_report: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
 ) {
     let source = read_source(filename);
 
     if let Some(list) = profiles {
-        cmd_check_profiles(filename, &source, output, &list);
+        cmd_check_profiles(filename, &source, output, &list, lint_overrides);
         return;
     }
 
     match output {
         OutputMode::Jsonl => {
-            let mut pipeline = Pipeline::new(filename, &source);
+            let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
             run_pipeline_jsonl(&mut pipeline);
             if pipeline.total_errors() > 0 {
                 process::exit(1);
             }
         }
         _ => {
-            let mut pipeline = Pipeline::new(filename, &source);
+            let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
             pipeline.run_all_checks();
 
             // Slice D: concurrency report fires after `run_all_checks` (which
@@ -1728,11 +1774,13 @@ fn cmd_check_profiles(
     source: &str,
     output: OutputMode,
     profiles: &[crate::manifest::CompileProfile],
+    lint_overrides: crate::lints::CliLintOverrides,
 ) {
     let mut any_failed = false;
     let mut blocks: Vec<String> = Vec::new();
     for (idx, profile) in profiles.iter().enumerate() {
-        let mut pipeline = Pipeline::new(filename, source);
+        let mut pipeline =
+            Pipeline::new(filename, source).with_lint_overrides(lint_overrides.clone());
         pipeline.profile = *profile;
 
         match output {
@@ -1805,7 +1853,13 @@ fn cmd_check_profiles(
     }
 }
 
-fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool, offline: bool) {
+fn cmd_build(
+    filename: &str,
+    output: OutputMode,
+    concurrency_report: bool,
+    offline: bool,
+    lint_overrides: crate::lints::CliLintOverrides,
+) {
     if offline {
         // v1 surface gate: the `--offline` flag parses and routes, but
         // the resolver wiring that would consult `vendor/` and refuse
@@ -1820,7 +1874,7 @@ fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool, offli
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
-        let mut pipeline = Pipeline::new(filename, &source);
+        let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
         pipeline.resolve();
         pipeline.typecheck();
         pipeline.lower();
@@ -1896,7 +1950,7 @@ fn cmd_build(filename: &str, output: OutputMode, concurrency_report: bool, offli
     #[cfg(not(feature = "llvm"))]
     {
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
-        cmd_check(filename, output, None, concurrency_report);
+        cmd_check(filename, output, None, concurrency_report, lint_overrides);
     }
 }
 
@@ -2463,6 +2517,7 @@ fn run_multi_file_codegen(
         concurrency: None,
         provider_escape: None,
         profile: crate::manifest::CompileProfile::Default,
+        lint_overrides: crate::lints::CliLintOverrides::default(),
     };
     pipeline.resolve();
     if pipeline.has_resolve_errors() {

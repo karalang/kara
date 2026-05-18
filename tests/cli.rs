@@ -3182,3 +3182,176 @@ fn test_explain_rejects_unknown_flag() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("unknown flag '--banana'"));
 }
+
+// ── Lint level CLI flags (-A/-W/-D/-F + -D warnings, slice 4b polish) ──
+
+/// Build a temp `.kara` file with a function whose `match` body has
+/// duplicate arms (fires `unreachable_arm`, default-`Warn`). The
+/// `-A`/`-W`/`-D`/`-F` flag tests use this fixture so they exercise
+/// the end-to-end CLI → typecheck path against a real diagnostic.
+fn write_unreachable_arm_fixture(suffix: &str) -> std::path::PathBuf {
+    let src = "enum Color { Red, Green, Blue }\n\
+               fn name(c: Color) -> i64 {\n\
+                   match c {\n\
+                       Red   => 1,\n\
+                       Red   => 2,\n\
+                       Green => 3,\n\
+                       Blue  => 4,\n\
+                   }\n\
+               }\n\
+               fn main() {}\n";
+    let path = std::env::temp_dir().join(format!(
+        "karac-lintcli-{suffix}-{}-{}.kara",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::write(&path, src).unwrap();
+    path
+}
+
+#[test]
+fn test_lint_cli_deny_promotes_unreachable_arm_to_error() {
+    let path = write_unreachable_arm_fixture("deny-unreachable");
+    let out = karac_bin()
+        .args(["check", "-D", "unreachable_arm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !out.status.success(),
+        "`-D unreachable_arm` should promote the warning to an error and exit non-zero",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error") && stderr.contains("unreachable"),
+        "expected an unreachable_arm error in stderr; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_lint_cli_allow_suppresses_unreachable_arm() {
+    let path = write_unreachable_arm_fixture("allow-unreachable");
+    let out = karac_bin()
+        .args(["check", "-A", "unreachable_arm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        out.status.success(),
+        "`-A unreachable_arm` should suppress the warning and the check should pass",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.to_lowercase().contains("unreachable"),
+        "suppressed lint must not surface in stderr; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_lint_cli_deny_warnings_catch_all_promotes_unreachable() {
+    let path = write_unreachable_arm_fixture("deny-warnings");
+    let out = karac_bin()
+        .args(["check", "-D", "warnings", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !out.status.success(),
+        "`-D warnings` should promote every default-Warn lint and exit non-zero",
+    );
+}
+
+#[test]
+fn test_lint_cli_joined_form_deny_equals_name() {
+    // `-D=NAME` joined form parses identically to `-D NAME`.
+    let path = write_unreachable_arm_fixture("deny-joined");
+    let out = karac_bin()
+        .args(["check", "-D=unreachable_arm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !out.status.success(),
+        "`-D=unreachable_arm` (joined form) should promote to error",
+    );
+}
+
+#[test]
+fn test_lint_cli_forbid_rejects_inner_allow() {
+    let src = "#[allow(unreachable_arm)]\nfn f() -> i64 { 0 }\nfn main() {}\n";
+    let path = std::env::temp_dir().join(format!(
+        "karac-lintcli-forbid-{}-{}.kara",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["check", "-F", "unreachable_arm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        !out.status.success(),
+        "`-F unreachable_arm` + inner #[allow(unreachable_arm)] should error",
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("E_FORBIDDEN_LINT_ALLOW"),
+        "expected E_FORBIDDEN_LINT_ALLOW in stderr; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_lint_cli_missing_arg_fails() {
+    // Bare `-D` with no following arg should error and exit non-zero.
+    let path = write_unreachable_arm_fixture("missing-arg");
+    let out = karac_bin().args(["check", "-D"]).output().unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(!out.status.success(), "bare `-D` with no NAME should error",);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("requires a lint name"),
+        "expected explanatory error; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_lint_cli_allow_via_build_subcommand() {
+    // The flag plumbing covers `build` too — exercise the path even
+    // without --features llvm by relying on `cargo test`'s build of
+    // the binary (which is built once per cargo invocation). On no-llvm
+    // builds, `cmd_build` falls through to `cmd_check`, which still
+    // consults the lint overrides — so the assertion is the same.
+    let path = write_unreachable_arm_fixture("build-allow");
+    // `karac build` derives the output executable name from the
+    // source file_stem and writes to CWD on the llvm-feature path.
+    // Capture the would-be name so we can clean it up after the
+    // test even if the assertion fires first.
+    let exe_stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+    let exe_in_cwd = std::path::PathBuf::from(if cfg!(windows) {
+        format!("{exe_stem}.exe")
+    } else {
+        exe_stem.to_string()
+    });
+    let out = karac_bin()
+        .args(["build", "-A", "unreachable_arm", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    let _ = std::fs::remove_file(&exe_in_cwd);
+    // Either the build succeeds (llvm feature, link works) or the
+    // typecheck pass succeeds and link fails downstream. Either way
+    // stderr must not surface the suppressed unreachable_arm
+    // warning.
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.to_lowercase().contains("unreachable"),
+        "suppressed lint must not surface under `karac build -A`; got: {stderr}",
+    );
+}
