@@ -16377,6 +16377,160 @@ fn on_unimpl_slice6_do_not_recommend_does_not_block_impl() {
     );
 }
 
+// ── Slice 6 follow-up: "trait X is implemented by …" candidate note ──
+
+#[test]
+fn impl_candidates_note_single_impl_listed() {
+    let errors = typecheck_errors(
+        "struct Yes { x: i64 }\n\
+         struct No { x: i64 }\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         impl Custom for Yes { fn m(self) -> i64 { 0 } }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         fn use_it() -> i64 { needs(No { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected an unsatisfied-bound diagnostic");
+    assert!(
+        msg.contains("trait `Custom` is implemented by: Yes"),
+        "expected impl-candidates note; got: {msg}",
+    );
+}
+
+#[test]
+fn impl_candidates_note_multiple_alphabetical() {
+    let errors = typecheck_errors(
+        "struct Apple { x: i64 }\n\
+         struct Banana { x: i64 }\n\
+         struct Cherry { x: i64 }\n\
+         struct NotImpl { x: i64 }\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         impl Custom for Cherry { fn m(self) -> i64 { 0 } }\n\
+         impl Custom for Apple { fn m(self) -> i64 { 1 } }\n\
+         impl Custom for Banana { fn m(self) -> i64 { 2 } }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    // Order is alphabetical regardless of declaration order.
+    assert!(
+        msg.contains("implemented by: Apple, Banana, Cherry"),
+        "expected alphabetical order; got: {msg}",
+    );
+}
+
+#[test]
+fn impl_candidates_note_skips_do_not_recommend_impls() {
+    let errors = typecheck_errors(
+        "struct Public { x: i64 }\n\
+         struct LegacyShim { x: i64 }\n\
+         struct NotImpl { x: i64 }\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         impl Custom for Public { fn m(self) -> i64 { 0 } }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl Custom for LegacyShim { fn m(self) -> i64 { 1 } }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(msg.contains("implemented by: Public"));
+    assert!(
+        !msg.contains("LegacyShim"),
+        "expected do_not_recommend impl to be filtered out; got: {msg}",
+    );
+}
+
+#[test]
+fn impl_candidates_note_absent_when_no_impls() {
+    // A user trait with zero registered impls — the note suppresses
+    // (would otherwise render "implemented by: " with nothing).
+    let errors = typecheck_errors(
+        "trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(
+        !msg.contains("implemented by"),
+        "expected note to be absent when no impls exist; got: {msg}",
+    );
+}
+
+#[test]
+fn impl_candidates_note_absent_when_all_impls_do_not_recommend() {
+    // Every registered impl is `do_not_recommend` — the candidate
+    // list is empty after filtering and the note suppresses entirely.
+    let errors = typecheck_errors(
+        "struct LegacyA { x: i64 }\n\
+         struct LegacyB { x: i64 }\n\
+         struct NotImpl { x: i64 }\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl Custom for LegacyA { fn m(self) -> i64 { 0 } }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl Custom for LegacyB { fn m(self) -> i64 { 1 } }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(
+        !msg.contains("implemented by"),
+        "expected note to suppress; got: {msg}",
+    );
+}
+
+#[test]
+fn impl_candidates_note_appended_after_on_unimplemented_payload() {
+    // The candidate-note is complementary to `on_unimplemented`, not
+    // alternative — it appears after the author's message / label /
+    // note clauses.
+    let errors = typecheck_errors(
+        "struct Yes { x: i64 }\n\
+         struct NotImpl { x: i64 }\n\
+         #[diagnostic::on_unimplemented(\
+             message: \"custom headline\", \
+             note: \"author hint\"\
+         )]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         impl Custom for Yes { fn m(self) -> i64 { 0 } }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("custom headline"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(msg.starts_with("custom headline"));
+    assert!(msg.contains("; note: author hint"));
+    let note_pos = msg.find("; note: author hint").unwrap();
+    let impl_pos = msg.find("implemented by").unwrap();
+    assert!(
+        impl_pos > note_pos,
+        "expected impl-candidates note after author note; got: {msg}",
+    );
+}
+
 #[test]
 fn on_unimpl_slice6_self_placeholder_substitutes_in_label_and_note() {
     let errors = typecheck_errors(

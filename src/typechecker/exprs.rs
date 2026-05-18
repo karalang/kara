@@ -950,14 +950,6 @@ impl<'a> super::TypeChecker<'a> {
             type_display(concrete_ty),
             trait_name
         );
-        let Some(payload) = self
-            .env
-            .traits
-            .get(trait_name)
-            .and_then(|t| t.on_unimplemented.as_ref())
-        else {
-            return default;
-        };
         let self_render = type_display(concrete_ty);
         let generic_arg_renders: Vec<Option<String>> = bound
             .generic_args
@@ -983,9 +975,13 @@ impl<'a> super::TypeChecker<'a> {
                     .collect()
             })
             .unwrap_or_default();
+        let payload = self
+            .env
+            .traits
+            .get(trait_name)
+            .and_then(|t| t.on_unimplemented.as_ref());
         let headline = payload
-            .message
-            .as_ref()
+            .and_then(|p| p.message.as_ref())
             .map(|m| {
                 crate::diagnostic_attrs_lint::substitute_placeholders(
                     m,
@@ -995,23 +991,73 @@ impl<'a> super::TypeChecker<'a> {
             })
             .unwrap_or(default);
         let mut out = headline;
-        if let Some(label) = &payload.label {
-            out.push_str("; label: ");
-            out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
-                label,
-                &self_render,
-                &generic_arg_renders,
-            ));
+        if let Some(p) = payload {
+            if let Some(label) = &p.label {
+                out.push_str("; label: ");
+                out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
+                    label,
+                    &self_render,
+                    &generic_arg_renders,
+                ));
+            }
+            if let Some(note) = &p.note {
+                out.push_str("; note: ");
+                out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
+                    note,
+                    &self_render,
+                    &generic_arg_renders,
+                ));
+            }
         }
-        if let Some(note) = &payload.note {
-            out.push_str("; note: ");
-            out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
-                note,
-                &self_render,
-                &generic_arg_renders,
-            ));
+        let candidates = self.impl_candidates_for_trait(trait_name);
+        if !candidates.is_empty() {
+            out.push_str("; trait `");
+            out.push_str(trait_name);
+            out.push_str("` is implemented by: ");
+            out.push_str(&candidates.join(", "));
         }
         out
+    }
+
+    /// Slice 6 follow-up — produce a stable, deterministic list of
+    /// impl-target renderings for the failed trait at a bound-not-
+    /// satisfied site. Skips impls flagged `#[diagnostic::do_not_recommend]`
+    /// (the spec's headline use case for the flag), dedupes by rendered
+    /// string (a specialized impl + a generic-on-name impl on the same
+    /// target collapse into one entry), and sorts alphabetically so the
+    /// note's order does not leak registration order into user-visible
+    /// diagnostics (and so snapshot tests stay stable across compiler
+    /// changes that reorder env construction). Empty when the trait
+    /// has no env entries (built-in traits like `Eq` / `Ord` / `Hash`
+    /// where the impls are implicit rather than materialised in
+    /// `env.impls`) — the caller suppresses the note in that case.
+    fn impl_candidates_for_trait(&self, trait_name: &str) -> Vec<String> {
+        let Some(indices) = self.env.impls_by_trait.get(trait_name) else {
+            return Vec::new();
+        };
+        let mut renders: Vec<String> = indices
+            .iter()
+            .filter_map(|idx| {
+                let imp = &self.env.impls[*idx];
+                if imp.do_not_recommend {
+                    return None;
+                }
+                Some(if imp.target_args.is_empty() {
+                    imp.target_type.clone()
+                } else {
+                    let args = imp
+                        .target_args
+                        .iter()
+                        .map(type_display)
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}[{}]", imp.target_type, args)
+                })
+            })
+            .collect();
+        renders.sort();
+        renders.dedup();
+        renders
     }
 
     /// GAT slice 8a — discharge `WhereConstraint::ProjectionBound`
