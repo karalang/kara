@@ -210,6 +210,20 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) snprintf_fn: FunctionValue<'ctx>,
     /// LLVM struct types for Kāra structs (struct name → LLVM type).
     pub(crate) struct_types: HashMap<String, StructType<'ctx>>,
+    /// State-struct LLVM types for the network-event-loop state-machine
+    /// transform (phase 6 line 26). Key: network-boundary function key
+    /// (`name` for free fns, `Type.method` for impl methods — same shape
+    /// as `Program.state_struct_layouts`). Value: `%kara.state.<fn_key>`
+    /// LLVM struct type with field 0 = `i32` yield-point tag, fields 1..n
+    /// = one slot per captured local from the function's `StateStructLayout`
+    /// (sized via the typechecker-recorded `type_name` through the
+    /// existing `llvm_type_for_name` API; `None` type names fall back to
+    /// `i64`). Populated by `emit_state_struct_types` immediately after
+    /// `declare_enums`, before any function-body lowering — so the
+    /// slice-6+ state-machine transform passes can look up the struct
+    /// type at body-rewrite time. Empty when no network-boundary
+    /// functions exist (the common case for non-network programs).
+    pub(crate) state_struct_types: HashMap<String, StructType<'ctx>>,
     /// Field names in declaration order (struct name → field names).
     pub(crate) struct_field_names: HashMap<String, Vec<String>>,
     /// Field type-names in declaration order (struct name → per-field
@@ -1323,6 +1337,7 @@ impl<'ctx> Codegen<'ctx> {
             printf_fn,
             snprintf_fn,
             struct_types: HashMap::new(),
+            state_struct_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
             struct_field_type_exprs: HashMap::new(),
@@ -1591,6 +1606,13 @@ impl<'ctx> Codegen<'ctx> {
         self.seed_builtin_enum_layouts();
         self.declare_structs(program);
         self.declare_enums(program);
+        // Phase 6 line 26 slice 5: emit one `%kara.state.<fn_key>` LLVM
+        // struct per entry in `program.state_struct_layouts` (populated
+        // by the cli pipeline from slice 4). Must precede function-body
+        // lowering so the slice-6+ state-machine transform pass can look
+        // up the struct type at body-rewrite time. Empty when no
+        // network-boundary functions exist (the common case).
+        self.emit_state_struct_types(program);
         self.collect_soa_layouts(program);
         self.declare_extern_functions(program)?;
 

@@ -13229,4 +13229,206 @@ fn main() {
             );
         }
     }
+
+    // ── Phase 6 line 26 slice 5: state-struct LLVM type emission ───────
+    //
+    // For each entry in `Program.state_struct_layouts` (built by slice 4
+    // in `Pipeline::effectcheck`), codegen emits a named LLVM struct
+    // `%kara.state.<fn_key>` carrying field 0 = i32 yield-point tag and
+    // fields 1..n = one slot per captured local sized via the
+    // typechecker-recorded `type_name`. This slice only emits the types;
+    // function-body lowering against them lands in slice 6.
+
+    /// Drive parse → resolve → typecheck → lower → effectcheck → build
+    /// network-yield / yield-points / state-struct-layouts side-tables
+    /// on the program, then compile to LLVM IR. Mirrors
+    /// `Pipeline::effectcheck`'s wiring exactly so codegen sees the same
+    /// program state it would in the cli path.
+    fn ir_for_with_state_struct_layouts(src: &str) -> String {
+        use karac::cli::{
+            build_callee_network_yield_effect_table, build_state_struct_layouts,
+            build_yield_points_table,
+        };
+        use karac::codegen::compile_to_ir;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type errors: {:?}", typed.errors);
+        let method_types = typed.method_callee_types.clone();
+        let call_type_subs = typed.call_type_subs.clone();
+        let pattern_binding_types = typed.pattern_binding_types.clone();
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            method_types.clone(),
+            call_type_subs,
+        );
+        parsed.program.callee_network_yield_effect =
+            build_callee_network_yield_effect_table(&effects);
+        let yield_points = build_yield_points_table(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+        );
+        parsed.program.yield_points = yield_points;
+        parsed.program.state_struct_layouts = build_state_struct_layouts(
+            &parsed.program,
+            &parsed.program.callee_network_yield_effect,
+            &method_types,
+            &pattern_binding_types,
+        );
+        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+    }
+
+    #[test]
+    fn test_state_struct_type_emitted_for_network_boundary_function() {
+        // A function that calls into a `sends(Network)` callee gets a
+        // `%kara.state.driver` LLVM struct type emitted at module setup.
+        // First field is the i32 yield-point tag.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() { fetch(); }",
+        );
+        assert!(
+            ir.contains("%kara.state.driver"),
+            "expected state struct type %kara.state.driver to appear in IR:\n{ir}"
+        );
+        // The emitted struct definition line carries the tag + fields list.
+        // Match `%kara.state.driver = type { i32` to pin the tag at field 0.
+        assert!(
+            ir.contains("%kara.state.driver = type { i32"),
+            "state struct's first field must be i32 yield-point tag:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_struct_type_expands_vec_param_to_three_word_layout() {
+        // A `Vec[i64]` parameter expands to the codegen's existing 3-word
+        // Vec struct layout (`{ ptr, i64, i64 }`). With the tag field
+        // prepended, the state struct = `{ i32, { ptr, i64, i64 } }`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        // Find the state-struct type definition line.
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct type def in IR:\n{ir}"));
+        assert!(
+            line.contains("i32"),
+            "tag field missing in state struct line: {line}"
+        );
+        // Vec is the codegen's 3-word inline struct — search for the
+        // `{ ptr, i64, i64 }` shape (or its anonymous-struct equivalent).
+        // LLVM emits the inline struct as `{ ptr, i64, i64 }` on the type
+        // definition line for the Vec field.
+        assert!(
+            line.contains("{ ptr, i64, i64 }") || line.contains("{ptr, i64, i64}"),
+            "expected inline Vec layout in state struct: {line}"
+        );
+    }
+
+    #[test]
+    fn test_state_struct_type_emitted_for_method_with_self() {
+        // A method whose body calls a network-effect callee gets a
+        // `%kara.state.Hub.run` LLVM struct type. `self` carries the
+        // impl block's target type — for a `shared struct Hub`, that's
+        // a pointer-sized handle, so the state struct = `{ i32, ptr }`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             shared struct Hub { count: i64 }
+             impl Hub {
+                 fn run(self) { fetch(); }
+             }",
+        );
+        assert!(
+            ir.contains("%kara.state.Hub.run"),
+            "expected state struct %kara.state.Hub.run for impl method:\n{ir}"
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.Hub.run = type {"))
+            .unwrap_or_else(|| panic!("no Hub.run state struct type def:\n{ir}"));
+        // Shared struct handles are pointers.
+        assert!(
+            line.contains("ptr"),
+            "expected self to lower to a pointer-sized handle for shared struct: {line}"
+        );
+    }
+
+    #[test]
+    fn test_state_struct_type_primitive_typed_param_uses_i64_fallback() {
+        // A primitive-typed param (`i64`) has no recorded `type_name` in
+        // `pattern_binding_types`, so the layout's `type_name` is `None`
+        // and codegen falls back to `i64`. State struct = `{ i32, i64 }`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct type def:\n{ir}"));
+        assert!(
+            line.contains("i32, i64"),
+            "expected tag + i64 fallback for primitive param: {line}"
+        );
+    }
+
+    #[test]
+    fn test_state_struct_type_not_emitted_for_pure_function() {
+        // A pure function that calls no network-effect callee gets no
+        // entry in `state_struct_layouts` (slice-4 presence rule) and
+        // therefore no `%kara.state.*` type in the IR.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }",
+        );
+        assert!(
+            !ir.contains("%kara.state.pure_helper"),
+            "pure function must not emit a state struct type:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_struct_type_unions_multi_yield_captures() {
+        // Two sequential yields, second one sees a binding introduced
+        // after the first. The layout = source-order union `[a, b]`,
+        // both `Vec[i64]` — state struct = `{ i32, {ptr,i64,i64},
+        // {ptr,i64,i64} }`. Pins that the union shape lowers correctly,
+        // not just single-yield single-field cases.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(a: Vec[i64]) {
+                 fetch();
+                 let b: Vec[i64] = a;
+                 fetch();
+             }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct type def:\n{ir}"));
+        // Two Vec-shaped fields in the type definition line.
+        let vec_shape_count =
+            line.matches("{ ptr, i64, i64 }").count() + line.matches("{ptr, i64, i64}").count();
+        assert_eq!(
+            vec_shape_count, 2,
+            "expected two inline Vec layouts in unioned state struct: {line}"
+        );
+    }
 }

@@ -84,6 +84,69 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── State-struct type emission (phase 6 line 26 slice 5) ──────────
+
+    /// Emit one `%kara.state.<fn_key>` LLVM struct type per entry in
+    /// `program.state_struct_layouts` (populated by `Pipeline::effectcheck`
+    /// from slice 4's `build_state_struct_layouts`). The struct shape is:
+    ///
+    /// ```text
+    /// %kara.state.<fn_key> = type { i32, <field 0 LLVM type>, <field 1 LLVM type>, ... }
+    ///                                ^^^                       ^^^
+    ///                                tag = yield-point index   captured local
+    /// ```
+    ///
+    /// Field 0 is always an `i32` tag carrying the yield-point index the
+    /// state machine resumes against. Fields 1..=N correspond 1:1 to the
+    /// `StateStructLayout.fields` in source-introduction order; each is
+    /// sized via `llvm_type_for_name(type_name)` when the typechecker
+    /// recorded a surface type name for the binding's pattern span, and
+    /// falls back to `i64` for primitive / unrecorded bindings (the same
+    /// over-approximation `llvm_type_for_name`'s default arm uses for
+    /// unknown type names). Vec / String surface names expand to the
+    /// existing `{ptr, i64, i64}` 3-word struct; user-named `shared
+    /// struct`s collapse to a pointer-sized handle.
+    ///
+    /// Must run after `declare_structs` (so user-named struct types are
+    /// resolvable through `struct_types`) and after `declare_enums` (for
+    /// future entries that may resolve to enum-typed slots). Must run
+    /// before any function-body lowering so the slice-6+ state-machine
+    /// transform passes can look up the struct type at body-rewrite time.
+    pub(super) fn emit_state_struct_types(&mut self, program: &Program) {
+        for (fn_key, layout) in &program.state_struct_layouts {
+            let mut fields: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(1 + layout.fields.len());
+            // Tag is i32 — yield-point indices for v1 fit comfortably in
+            // 31 bits (designers expect single-digit yields per
+            // network-boundary function; the headroom matches the
+            // `karac explain` predictability claim from the design spec).
+            fields.push(self.context.i32_type().into());
+            for field in &layout.fields {
+                let ty: BasicTypeEnum<'ctx> = match &field.type_name {
+                    Some(name) => self.llvm_type_for_name(name),
+                    None => self.context.i64_type().into(),
+                };
+                fields.push(ty);
+            }
+            let st = self
+                .context
+                .opaque_struct_type(&format!("kara.state.{}", fn_key));
+            st.set_body(&fields, false);
+            // LLVM `print_to_string` elides named types that no module
+            // entity references; without an anchor, the slice-5 type
+            // would exist in the context but not appear in the IR
+            // dump that codegen tests grep against. Emit a private
+            // zero-initialized global per state struct to keep the
+            // type referenced. Slice 6 (the poll-function body rewrite)
+            // will reference the same type from function signatures
+            // directly, at which point this anchor can be removed.
+            let anchor_name = format!("__kara_state_type_anchor_{}", fn_key);
+            let anchor = self.module.add_global(st, None, &anchor_name);
+            anchor.set_linkage(Linkage::Private);
+            anchor.set_initializer(&st.const_zero());
+            self.state_struct_types.insert(fn_key.clone(), st);
+        }
+    }
+
     pub(super) fn collect_soa_layouts(&mut self, program: &Program) {
         for item in &program.items {
             if let Item::LayoutDef(layout) = item {
