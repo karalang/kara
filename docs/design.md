@@ -9221,6 +9221,48 @@ The diagnostic surfaces both the FFI-call site and the intervening yield-point s
 
 **Layer classification.** The rule "network-boundary function cannot make an FFI call across a yield point" is *Guaranteed semantics* — a conforming compiler must enforce it. The diagnostic wording is *Reported behavior* per the general carve-out. The `unsafe`-block escape hatch is *Guaranteed* (the rule's exception is part of the spec), but the `// Safety:` comment the author writes to justify use of the hatch is content the compiler does not interpret — auditing belongs to the author per the existing [`unsafe_op_in_unsafe_fn` rule](#unsafe_op_in_unsafe_fn-rule).
 
+#### RC-Drop Ordering Across Yield Points
+
+When a task yields and is later cancelled (or panics) at any yield point in a network-boundary function, the resources captured in the state struct are dropped in **reverse construction order** — same rule as scope-exit drop ordering applied to the state-struct fields. This subsection makes the rule explicit so user code can rely on it for resource-ordering guarantees.
+
+**The rule.** For a network-boundary function `f` parked at yield point `Y`, let `L = [l_1, l_2, ..., l_n]` be the bindings live at `Y` in the order they were constructed in `f`'s body. When the task is cancelled (or panics during unwind, per [Panic During Suspend](#panic-during-suspend)), the state-struct destructor drops the bindings as `drop(l_n), drop(l_{n-1}), ..., drop(l_1)` — the reverse of construction order. This is identical to the rule for non-yielding scope exit (per [Drop ordering within a branch](#drop-ordering-within-a-branch)); the state-struct destructor is the unwind vehicle, not a new ordering policy.
+
+**Why explicit specification.** Without this commitment, code that yields cannot rely on resource-ordering during cancellation cleanup. A function that constructs a `TcpConnection` (closing it releases an fd and notifies the peer) before a `MetricsCounter` (decrementing it updates a shared atomic) might rely on the counter being decremented *first* — so the peer-notification path observes the metric state without the connection's just-closed event having raced. Reverse-construction-order guarantees the counter drops first (since it was constructed second), then the connection. The rule is the same the language already guarantees for non-yielding scope exit; the explicit spec confirms that yielding does not change it.
+
+```kara
+fn handle(req: Request) -> Result[(), AppError]
+    with sends(Network) receives(Network)
+{
+    let conn = TcpConnection.connect(req.target)?;     // constructed first
+    let counter = MetricsCounter.acquire("requests");  // constructed second
+
+    let response = conn.fetch(req.body)?;              // yield point — sends(Network)
+    counter.record_success();
+    Ok(())
+}
+```
+
+If the task is cancelled while parked at the `fetch(...)` yield point:
+
+- `counter` is dropped first (constructed second — reverse order) → metric decremented; the cancellation-recording side effect runs.
+- `conn` is dropped second (constructed first) → the connection's `Drop` impl closes the fd and notifies the peer.
+
+User code can rely on this order: the counter side-effect is visible to any observer of the metric system before the peer notification fires. Swapping the construction order in source code swaps the drop order in the cancellation path, predictably.
+
+**State-struct field layout does not affect drop order.** The state-machine transform is free to pack the captured-locals union with overlapping storage (per [State-Machine Transform — Network-Boundary Functions](#state-machine-transform--network-boundary-functions)), reorder fields for cache locality, or split a single binding across multiple state struct fields when the live range is non-contiguous. **None of these implementation-freedom choices affect drop order** — the destructor invokes drops in the source-level reverse construction order regardless of physical field layout. The transform records construction-order metadata as part of the state struct's per-state map and the destructor consults it; field layout is irrelevant to the ordering decision.
+
+**`defer` and `errdefer` blocks.** `defer` and `errdefer` blocks declared inside a network-boundary function follow the existing rule from [Error Handling](#error-handling) (the LIFO scope-exit cleanup contract for `defer` / `errdefer`) — they fire at scope exit in reverse declaration order, interleaved with RC drops per the source-level live-range pass. Yielding does not change the interleave: the state-struct destructor invokes defer / errdefer blocks at the right scope-exit points exactly as the non-yielding path would, with RC drops appearing in source-level reverse construction order alongside them.
+
+**Per-yield drop set.** The drops invoked on cancellation are the ones whose source live range includes the active yield point. A binding constructed *after* yield point `Y` is not in `Y`'s drop set (since it cannot have been constructed yet when the task parked at `Y`); a binding constructed *before* `Y` and then moved out before reaching `Y` is also not in the drop set (since it is no longer live). The transform's per-yield-point live-set construction is the same machinery the [RAII Across Yield Points](#raii-across-yield-points) check runs against; the drop set at a yield point is the same set the `CancelSafe`-bound check reads.
+
+**Partial-drop guarantee.** If a destructor itself panics during the unwind (the "drop-during-drop" case), the rule per [Catching Panics](#catching-panics-catch_panict) fires: the process aborts. **No drops after the panicking destructor run** — this is the standard double-panic prohibition, and it matches the non-yielding scope-exit case. Programs that need destructor-panic recovery must structure their drops to be infallible (the standard advice).
+
+**RC vs. owned drops.** The rule applies uniformly to owned types and RC-counted types — both have destructors invoked by the state-struct unwind, and both follow source-level reverse construction order. The "RC" in this subsection's title is a nod to the spec-audit text ("RC-counted resources captured in the state struct"); the rule itself does not distinguish — owned values, `Rc[T]`, `Arc[T]`, `shared struct` values, `par struct` values all drop in source-level reverse construction order during the state-struct unwind.
+
+**Cross-package observability.** The drop order is part of the language-level contract — a library author who exports a `pub struct` with a side-effecting `Drop` impl can rely on user code observing the documented order. Stdlib types document their `Drop` side effects (e.g., `Mutex[T].Guard.Drop` releases the lock; `TcpConnection.Drop` closes the fd and sends a TCP FIN); the rule applies across package boundaries identically.
+
+**Layer classification.** The rule "drops at a yield-point cancellation fire in source-level reverse construction order" is *Guaranteed semantics* — a conforming compiler+runtime must invoke drops in this order. The state-struct's per-state construction-order metadata representation is *Implementation freedom*. The diagnostic surface that surfaces drop order through `karac explain` (a per-yield-point drop list, when requested) is *Reported behavior* and may evolve with the usual `karac explain` discipline.
+
 ### Explicit Concurrency: `par {}` and `spawn()`
 
 Auto-concurrency handles the common case — the compiler finds independent operations and parallelizes them. Two explicit constructs complement it for cases the compiler cannot handle alone:
