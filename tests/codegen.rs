@@ -15322,4 +15322,156 @@ fn main() {
             "unit-returning poll-fn must not emit terminal-field store:\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8j: method-call body-splitting ──────────────
+    //
+    // Mirrors slice 8h's free-function body-splitting for `<recv>.method()`
+    // shapes where the receiver is a captured layout-field identifier,
+    // args are empty, and the resolved `Type.method` LLVM function
+    // returns void. The reloaded receiver slot from slice 8a feeds the
+    // method's first param — by-value for owned self, by-pointer for
+    // `ref self` / `mut ref self`. Tests use a free-fn `driver` body
+    // with `let h = ...; h.method(); fetch();` shape rather than an
+    // impl-method body with `self.method()`, because the codegen's
+    // user-side `compile_method_call` doesn't yet resolve `SelfValue`
+    // receivers (an orthogonal limitation that doesn't affect the
+    // body-splitting walker itself).
+
+    #[test]
+    fn test_body_splitting_8j_emits_method_call_on_local_in_state_0() {
+        // `fn driver() { let h = Hub { count: 0 }; h.helper(); fetch(); }`
+        // — `h.helper()` runs in state_0 before the tag-store that
+        // transitions to state_1. `ref self` so the method takes a
+        // pointer (slice 8j passes the slot pointer directly).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn helper(ref self) {} }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.helper();
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let helper_pos = body
+            .find("call void @Hub.helper(")
+            .expect("Hub.helper void-call must appear in poll-fn body");
+        let tag_store_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 must store next tag = 1");
+        assert!(
+            helper_pos < tag_store_pos,
+            "h.helper() call must precede the tag-store in state_0:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8j_emits_method_call_in_terminal_arm() {
+        // `fn driver() { let h = Hub { count: 0 }; fetch(); h.helper(); }`
+        // — `h.helper()` runs in the terminal arm before the Ready return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn helper(ref self) {} }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 fetch();
+                 h.helper();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let helper_pos = body
+            .find("call void @Hub.helper(")
+            .expect("Hub.helper void-call must appear in poll-fn body");
+        let ready_pos = body
+            .find("ret i8 1")
+            .expect("terminal arm must return Ready");
+        assert!(
+            helper_pos < ready_pos,
+            "h.helper() call must precede the Ready return in terminal arm:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8j_multi_yield_method_segments_per_arm() {
+        // Three method calls between two yields land in three distinct
+        // state arms in source order — `h.a()` in state_0, `h.b()` in
+        // state_1, `h.c()` in terminal state_2.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub {
+                 fn a(ref self) {}
+                 fn b(ref self) {}
+                 fn c(ref self) {}
+             }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.a();
+                 fetch();
+                 h.b();
+                 fetch();
+                 h.c();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert_eq!(
+            body.matches("call void @Hub.a(").count(),
+            1,
+            "Hub.a should appear once in state_0:\n{body}"
+        );
+        assert_eq!(
+            body.matches("call void @Hub.b(").count(),
+            1,
+            "Hub.b should appear once in state_1:\n{body}"
+        );
+        assert_eq!(
+            body.matches("call void @Hub.c(").count(),
+            1,
+            "Hub.c should appear once in terminal state_2:\n{body}"
+        );
+        let pos_a = body.find("call void @Hub.a(").unwrap();
+        let pos_state_0_store = body.find("store i32 1, ptr %state_0.next_tag_ptr").unwrap();
+        let pos_b = body.find("call void @Hub.b(").unwrap();
+        let pos_state_1_store = body.find("store i32 2, ptr %state_1.next_tag_ptr").unwrap();
+        let pos_c = body.find("call void @Hub.c(").unwrap();
+        let pos_ready = body.rfind("ret i8 1").unwrap();
+        assert!(pos_a < pos_state_0_store, "a() before state_0 tag-store");
+        assert!(
+            pos_b > pos_state_0_store && pos_b < pos_state_1_store,
+            "b() between state_0 and state_1 tag-stores"
+        );
+        assert!(
+            pos_c > pos_state_1_store && pos_c < pos_ready,
+            "c() between state_1 tag-store and Ready"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8j_method_call_passes_reloaded_slot_pointer() {
+        // Pins that the receiver argument routes through the slice-8a
+        // `%h.slot` alloca — slot pointer passed directly to `ref self`.
+        // The regression pin: receiver mechanic actually wires through
+        // to the method call, not just emits a call with garbage.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn helper(ref self) {} }
+             fn driver() with sends(Network) receives(Network) {
+                 let h = Hub { count: 0 };
+                 h.helper();
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("call void @Hub.helper(ptr %h.slot)"),
+            "h.helper(ref self) must receive the slice-8a h.slot pointer:\n{body}"
+        );
+    }
 }

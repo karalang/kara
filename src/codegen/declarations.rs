@@ -16,10 +16,30 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
-use inkwell::values::FunctionValue;
+use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
+
+/// Body-splitting statement classification used by `emit_state_machine_poll_fns`.
+///
+/// Slice 8h queued only arg-less void free-fn names per arm; slice 8j
+/// generalises to also cover self-and-identifier-receiver method calls
+/// against `Type.method` LLVM symbols. Each variant carries the minimal
+/// data needed to re-emit the call inside the per-arm body.
+enum BodySplitStmt {
+    /// Slice 8h: `name()` with no args, callee declared as void.
+    FreeFnCall(String),
+    /// Slice 8j: `<receiver>.<method>()` with no args, callee declared
+    /// as void. `receiver_field` is the state-struct layout field name
+    /// to load (`"self"` for impl methods invoked on self, otherwise
+    /// the source binding name). `callee_key` is the `Type.method`
+    /// symbol name as emitted by the impl-block declaration pass.
+    MethodCall {
+        receiver_field: String,
+        callee_key: String,
+    },
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Struct declaration pass ───────────────────────────────────
@@ -226,25 +246,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(fn_key)
                 .expect("layout exists for sorted key");
 
-            // Slice 8h: build per-arm segments of user-code statements
+            // Slice 8h/8j: build per-arm segments of user-code statements
             // between yield-point spans. For each statement in the user
             // function's body, classify it as either:
             // - a yield-point Call/MethodCall (advances the current
             //   segment index, statement itself isn't emitted — the
             //   state-transition lowering handles it via tag-store +
             //   Pending return),
-            // - an emittable void-call statement (free-function call
-            //   with no args, callee declared in the module, callee
-            //   returns void) → queued into the current arm's segment,
+            // - an emittable void-call statement: slice 8h covers
+            //   `name()` (free-fn, no args, void return); slice 8j adds
+            //   `<self|name>.method()` (impl method, no args, void
+            //   return) where the receiver is `self` or a captured
+            //   layout field already reloaded into a slot by slice 8a,
             // - any other shape (let bindings, control flow, non-void
-            //   calls, args-bearing calls, method calls) → ignored at
-            //   v1; future slices extend the supported statement set.
+            //   calls, args-bearing calls, non-captured receivers) →
+            //   ignored at v1; future slices extend the supported set.
             let yield_points = program
                 .yield_points
                 .get(fn_key)
                 .cloned()
                 .unwrap_or_default();
-            let mut per_arm_calls: Vec<Vec<String>> = vec![Vec::new(); yield_points.len() + 1];
+            let layout_field_names: std::collections::HashSet<&str> =
+                layout.fields.iter().map(|f| f.name.as_str()).collect();
+            let mut per_arm_stmts: Vec<Vec<BodySplitStmt>> =
+                (0..yield_points.len() + 1).map(|_| Vec::new()).collect();
             if let Some(fn_ast) = find_function_ast(program, fn_key) {
                 let mut cur_arm = 0usize;
                 for stmt in &fn_ast.body.stmts {
@@ -262,16 +287,45 @@ impl<'ctx> super::Codegen<'ctx> {
                             continue;
                         }
                     }
-                    // Emit-eligible shape: bare-identifier free-fn
-                    // call with no args. Method calls and arg-bearing
-                    // calls are deferred to follow-on slices that
-                    // thread receivers + args through the state struct.
-                    if let ExprKind::Call { callee, args } = &expr.kind {
-                        if args.is_empty() {
+                    match &expr.kind {
+                        // Slice 8h shape: bare-identifier free-fn call
+                        // with no args.
+                        ExprKind::Call { callee, args } if args.is_empty() => {
                             if let ExprKind::Identifier(name) = &callee.kind {
-                                per_arm_calls[cur_arm].push(name.clone());
+                                per_arm_stmts[cur_arm]
+                                    .push(BodySplitStmt::FreeFnCall(name.clone()));
                             }
                         }
+                        // Slice 8j shape: `<recv>.method()` with no
+                        // args. Receiver must resolve to a layout field
+                        // (so slice 8a's reload prologue has already
+                        // alloca'd a slot for it); callee must resolve
+                        // through `method_callee_types` to a stable
+                        // `Type.method` symbol.
+                        ExprKind::MethodCall { object, args, .. } if args.is_empty() => {
+                            let receiver_field = match &object.kind {
+                                ExprKind::SelfValue => Some("self".to_string()),
+                                ExprKind::Identifier(name)
+                                    if layout_field_names.contains(name.as_str()) =>
+                                {
+                                    Some(name.clone())
+                                }
+                                _ => None,
+                            };
+                            let callee_key = program
+                                .method_callee_types
+                                .get(&(expr.span.offset, expr.span.length))
+                                .cloned();
+                            if let (Some(receiver_field), Some(callee_key)) =
+                                (receiver_field, callee_key)
+                            {
+                                per_arm_stmts[cur_arm].push(BodySplitStmt::MethodCall {
+                                    receiver_field,
+                                    callee_key,
+                                });
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -377,6 +431,14 @@ impl<'ctx> super::Codegen<'ctx> {
             // terminal arm return Ready with the result).
             for (arm_idx, arm_bb) in arm_blocks.iter().enumerate() {
                 self.builder.position_at_end(*arm_bb);
+                // Slice-8a reload prologue + 8j slot map: walk every
+                // captured local and GEP/load/alloca/store it into a
+                // local slot. Stash each slot's pointer + element type
+                // by field name so slice-8j method-call emission below
+                // can re-load the receiver value (or pass the slot
+                // pointer directly for ref-self methods).
+                let mut slot_map: HashMap<String, (BasicTypeEnum<'ctx>, PointerValue<'ctx>)> =
+                    HashMap::new();
                 for (field_idx, field) in layout.fields.iter().enumerate() {
                     let struct_field_idx = (field_idx + 1) as u32;
                     let field_ty = state_struct
@@ -405,32 +467,79 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.builder
                         .build_store(slot, loaded)
                         .expect("store reloaded captured-local into slot");
+                    slot_map.insert(field.name.clone(), (field_ty, slot));
                 }
-                // Slice 8h body-splitting: emit each user-code void
-                // call queued for this arm. Only callees that are
-                // already declared in the module with a void return
-                // type emit — non-void returns would produce malformed
-                // LLVM IR (a SSA value with no name binding), and
-                // not-yet-declared callees indicate compilation order
-                // issues that should surface in a regression test
-                // rather than silently emit a dangling call. Lookup
-                // uses `module.get_function` against the LLVM symbol
-                // name (matching the user-level `@<name>` shape).
-                if let Some(arm_calls) = per_arm_calls.get(arm_idx) {
-                    for callee_name in arm_calls {
-                        let Some(callee_fn) = self.module.get_function(callee_name) else {
-                            continue;
-                        };
-                        if callee_fn.get_type().get_return_type().is_some() {
-                            // Non-void return — skip at v1 (the call
-                            // would need a name binding which adds
-                            // complexity we'll thread through a later
-                            // slice).
-                            continue;
+                // Slice 8h/8j body-splitting: emit each user-code
+                // statement queued for this arm. Slice 8h handles
+                // `name()` (free-fn, no args, void return); slice 8j
+                // handles `<recv>.method()` (self or captured-receiver,
+                // no args, void return) — looks up the Type.method
+                // symbol declared by the impl-block pass and threads
+                // the reloaded receiver through. Lookups use
+                // `module.get_function` against the user-level `@<sym>`
+                // shape. Non-void returns are skipped at v1 (the call
+                // would need a name binding which adds complexity we'll
+                // thread through a later slice).
+                if let Some(arm_stmts) = per_arm_stmts.get(arm_idx) {
+                    for stmt in arm_stmts {
+                        match stmt {
+                            BodySplitStmt::FreeFnCall(callee_name) => {
+                                let Some(callee_fn) = self.module.get_function(callee_name) else {
+                                    continue;
+                                };
+                                if callee_fn.get_type().get_return_type().is_some() {
+                                    continue;
+                                }
+                                self.builder
+                                    .build_call(callee_fn, &[], "")
+                                    .expect("emit slice-8h void user call");
+                            }
+                            BodySplitStmt::MethodCall {
+                                receiver_field,
+                                callee_key,
+                            } => {
+                                let Some(callee_fn) = self.module.get_function(callee_key) else {
+                                    continue;
+                                };
+                                if callee_fn.get_type().get_return_type().is_some() {
+                                    continue;
+                                }
+                                let Some((slot_ty, slot_ptr)) =
+                                    slot_map.get(receiver_field).copied()
+                                else {
+                                    continue;
+                                };
+                                // Receiver ABI: mirror compile_method_call's
+                                // discipline. If the first param of the
+                                // resolved method is pointer-typed, the
+                                // method takes `ref self` / `mut ref self` —
+                                // pass the slot pointer directly. Otherwise
+                                // the method takes owned self — load the
+                                // slot's stored value and pass by value.
+                                let first_param_is_ptr = callee_fn
+                                    .get_type()
+                                    .get_param_types()
+                                    .first()
+                                    .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
+                                    .unwrap_or(false);
+                                let recv_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr {
+                                    slot_ptr.into()
+                                } else {
+                                    let loaded = self
+                                        .builder
+                                        .build_load(
+                                            slot_ty,
+                                            slot_ptr,
+                                            &format!("{receiver_field}.recv"),
+                                        )
+                                        .expect("load receiver from reloaded slot");
+                                    loaded.into()
+                                };
+                                self.builder
+                                    .build_call(callee_fn, &[recv_arg], "")
+                                    .expect("emit slice-8j void method call");
+                            }
                         }
-                        self.builder
-                            .build_call(callee_fn, &[], "")
-                            .expect("emit slice-8h void user call");
                     }
                 }
                 // Slice-8b state transition: non-terminal arms (the
