@@ -15458,6 +15458,158 @@ fn main() {
     // local identifier reference). The per-arm slot map from slice 8j
     // provides the variable backing store for identifier args.
 
+    // ── Phase 6 line 26 slice 8m: arm-local let-bindings ─────────────────
+    //
+    // Lets introduced inside an arm body (between yields) get an arm-local
+    // alloca slot, with the binding name registered into the per-arm slot
+    // map so subsequent calls in the same arm can reference it. v1 lowers
+    // every slot as `i64` (state-struct primitive fallback); let-bindings
+    // don't survive across yields without state-struct write-back (a
+    // follow-on slice). RHS shapes follow the slice-8k `BodyArg`
+    // discipline (integer literal or in-scope identifier).
+
+    #[test]
+    fn test_body_splitting_8m_let_int_lit_then_call_uses_slot() {
+        // `fn driver() with sends(Network) { fetch(); let x = 42; take(x); }`
+        // — terminal arm allocates `%x.slot`, stores 42, then `take(x)`
+        // loads the slot and passes it as the call arg.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver() with sends(Network) receives(Network) {
+                 fetch();
+                 let x = 42;
+                 take(x);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Alloca + store + load + call shape.
+        assert!(
+            body.contains("%x.slot = alloca i64"),
+            "let x must alloca an i64 slot:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 42, ptr %x.slot"),
+            "let x = 42 must store literal into slot:\n{body}"
+        );
+        assert!(
+            body.contains("call void @take(i64 %x.arg)"),
+            "take(x) must pass the loaded slot value:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8m_let_identifier_rhs_loads_source_slot() {
+        // `fn driver(n: i64) with sends(Network) { let y = n; fetch(); }`
+        // — `let y = n` loads `n` from its captured-local slot and
+        // stores it into the new `%y.slot`. Because `y` survives across
+        // the fetch yield (referenced after — actually here `y` is
+        // unused post-yield so it's NOT in layout, BUT slice 8m still
+        // emits the let in state_0 because the walker queues it ahead
+        // of the yield-point span match).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(n: i64) with sends(Network) receives(Network) {
+                 let y = n;
+                 take(y);
+                 fetch();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // `let y = n` loads n then stores into y's slot.
+        assert!(
+            body.contains("%y.slot = alloca i64"),
+            "let y must alloca an i64 slot:\n{body}"
+        );
+        assert!(
+            body.contains("%n.let_rhs = load i64, ptr %n.slot"),
+            "let y = n must load n via .let_rhs:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %n.let_rhs, ptr %y.slot"),
+            "let RHS load must store into y.slot:\n{body}"
+        );
+        // Subsequent `take(y)` uses the new slot.
+        assert!(
+            body.contains("call void @take(i64 %y.arg)"),
+            "take(y) must use the slot-loaded y value:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8m_let_then_method_call_on_local() {
+        // The arm-local let-binding can serve as a method-call receiver
+        // via the slice-8j receiver-from-slot mechanic. Here `let h = ...`
+        // — wait, struct literal RHS isn't in BodyArg recognised set, so
+        // this test actually pins that the let is silently DROPPED for
+        // non-recognised RHS, and the subsequent `h.helper()` falls
+        // through (h is not in the slot map, so receiver_field=None).
+        // This is the v1 conservative behaviour — non-IntLit/non-slot
+        // RHS shapes drop the let, downstream receiver becomes invalid.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             impl Hub { fn helper(ref self) {} }
+             fn driver() with sends(Network) receives(Network) {
+                 fetch();
+                 let h = Hub { count: 0 };
+                 h.helper();
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Struct-literal RHS isn't recognised — the let is dropped, so
+        // no `%h.slot` alloca appears in the poll-fn body. Receiver
+        // therefore can't resolve; `h.helper()` also doesn't emit.
+        assert!(
+            !body.contains("%h.slot = alloca"),
+            "unrecognised let RHS must skip the binding emission:\n{body}"
+        );
+        assert!(
+            !body.contains("call void @Hub.helper"),
+            "h.helper() must skip when receiver isn't in slot map:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8m_let_chained_consumers() {
+        // `let a = 7; let b = a; take(b);` in the terminal arm — let-
+        // chains work because each let registers into slot_map, making
+        // its binding name available to later lets and calls in the
+        // same arm.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver() with sends(Network) receives(Network) {
+                 fetch();
+                 let a = 7;
+                 let b = a;
+                 take(b);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i64 7, ptr %a.slot"),
+            "let a = 7 must store literal into a.slot:\n{body}"
+        );
+        assert!(
+            body.contains("%a.let_rhs = load i64, ptr %a.slot"),
+            "let b = a must load a.slot:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %a.let_rhs, ptr %b.slot"),
+            "let b = a must store loaded value into b.slot:\n{body}"
+        );
+        assert!(
+            body.contains("call void @take(i64 %b.arg)"),
+            "take(b) must pass b's slot-loaded value:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8l: args-bearing method-call body-splitting ─
     //
     // Mirrors slice 8k's free-fn arg compilation for `MethodCall` shapes:

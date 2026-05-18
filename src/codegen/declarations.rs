@@ -46,6 +46,16 @@ enum BodySplitStmt {
         callee_key: String,
         args: Vec<BodyArg>,
     },
+    /// Slice 8m: `let name = <recognised-rhs>` introduced inside an arm
+    /// body. The walker accepts simple `PatternKind::Binding(name)`
+    /// lets whose RHS is in the `BodyArg` recognised set; emission
+    /// allocas a local slot, computes the RHS, stores it, and registers
+    /// the binding into the per-arm slot map so subsequent calls in
+    /// the same arm can reference it. v1 lowers the slot as `i64` (the
+    /// state-struct primitive fallback) — wider / pointer / aggregate
+    /// types stay deferred until typed-aware lowering threads
+    /// param/let-type information into the walker.
+    Let { name: String, rhs: BodyArg },
 }
 
 /// Slice 8k: per-arg shape recognised by the body-splitting walker.
@@ -294,13 +304,42 @@ impl<'ctx> super::Codegen<'ctx> {
                 .get(fn_key)
                 .cloned()
                 .unwrap_or_default();
-            let layout_field_names: std::collections::HashSet<&str> =
-                layout.fields.iter().map(|f| f.name.as_str()).collect();
+            let layout_names: std::collections::HashSet<String> =
+                layout.fields.iter().map(|f| f.name.clone()).collect();
+            // Slice 8m: `current_names` extends `layout_names` with
+            // arm-local let-introduced bindings as the walker
+            // encounters them. Resets to `layout_names` at every yield
+            // (each new arm starts with only the slice-8a reload
+            // prologue contents visible — arm-local lets from prior
+            // arms aren't carried forward without state-struct write-
+            // back, which is a follow-on slice).
+            let mut current_names = layout_names.clone();
             let mut per_arm_stmts: Vec<Vec<BodySplitStmt>> =
                 (0..yield_points.len() + 1).map(|_| Vec::new()).collect();
             if let Some(fn_ast) = find_function_ast(program, fn_key) {
                 let mut cur_arm = 0usize;
                 for stmt in &fn_ast.body.stmts {
+                    // Slice 8m: handle simple `let name = <recognised>`
+                    // statements between yields. The let is queued for
+                    // emission (alloca + RHS compute + store) and the
+                    // binding name is added to `current_names` so
+                    // subsequent calls in the same arm can reference
+                    // it. Non-binding-pattern shapes (destructuring,
+                    // struct patterns, etc.) and unrecognised RHS
+                    // shapes are silently skipped — same conservative
+                    // rule as the call-classification arms.
+                    if let StmtKind::Let { value, pattern, .. } = &stmt.kind {
+                        if let PatternKind::Binding(name) = &pattern.kind {
+                            if let Some(rhs) = recognize_body_arg(value, &current_names) {
+                                per_arm_stmts[cur_arm].push(BodySplitStmt::Let {
+                                    name: name.clone(),
+                                    rhs,
+                                });
+                                current_names.insert(name.clone());
+                            }
+                        }
+                        continue;
+                    }
                     let StmtKind::Expr(expr) = &stmt.kind else {
                         continue;
                     };
@@ -312,6 +351,12 @@ impl<'ctx> super::Codegen<'ctx> {
                         if expr.span.offset == yp_span.offset && expr.span.length == yp_span.length
                         {
                             cur_arm += 1;
+                            // Slice 8m: reset arm-local lets at yield
+                            // boundary. layout-captured bindings stay
+                            // available via slice-8a's reload prologue;
+                            // arm-local lets from the prior arm don't
+                            // survive without state-struct write-back.
+                            current_names = layout_names.clone();
                             continue;
                         }
                     }
@@ -328,7 +373,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             if let ExprKind::Identifier(name) = &callee.kind {
                                 let body_args: Option<Vec<BodyArg>> = args
                                     .iter()
-                                    .map(|a| recognize_body_arg(&a.value, &layout_field_names))
+                                    .map(|a| recognize_body_arg(&a.value, &current_names))
                                     .collect();
                                 if let Some(body_args) = body_args {
                                     per_arm_stmts[cur_arm].push(BodySplitStmt::FreeFnCall {
@@ -351,7 +396,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let receiver_field = match &object.kind {
                                 ExprKind::SelfValue => Some("self".to_string()),
                                 ExprKind::Identifier(name)
-                                    if layout_field_names.contains(name.as_str()) =>
+                                    if current_names.contains(name.as_str()) =>
                                 {
                                     Some(name.clone())
                                 }
@@ -363,7 +408,7 @@ impl<'ctx> super::Codegen<'ctx> {
                                 .cloned();
                             let body_args: Option<Vec<BodyArg>> = args
                                 .iter()
-                                .map(|a| recognize_body_arg(&a.value, &layout_field_names))
+                                .map(|a| recognize_body_arg(&a.value, &current_names))
                                 .collect();
                             if let (Some(receiver_field), Some(callee_key), Some(body_args)) =
                                 (receiver_field, callee_key, body_args)
@@ -665,6 +710,47 @@ impl<'ctx> super::Codegen<'ctx> {
                                 self.builder
                                     .build_call(callee_fn, &compiled, "")
                                     .expect("emit slice-8j/8l void method call");
+                            }
+                            BodySplitStmt::Let { name, rhs } => {
+                                // Slice 8m: arm-local let binding —
+                                // alloca an i64 slot (v1 conservative
+                                // typing), compute the RHS via the same
+                                // `BodyArg` discipline as call args,
+                                // store, and register the binding into
+                                // slot_map so subsequent statements in
+                                // the SAME arm can reference it as a
+                                // captured-local-equivalent receiver or
+                                // arg. Across yields the binding is not
+                                // preserved without state-struct write-
+                                // back — a follow-on slice for the
+                                // capture-then-yield case.
+                                let i64_ty = self.context.i64_type();
+                                let slot_name = format!("{name}.slot");
+                                let slot = self
+                                    .builder
+                                    .build_alloca(i64_ty, &slot_name)
+                                    .expect("alloca for arm-local let slot");
+                                let value = match rhs {
+                                    BodyArg::IntLit(v) => i64_ty.const_int(*v as u64, true).into(),
+                                    BodyArg::Slot(src_field) => {
+                                        let Some((src_ty, src_ptr)) =
+                                            slot_map.get(src_field).copied()
+                                        else {
+                                            continue;
+                                        };
+                                        self.builder
+                                            .build_load(
+                                                src_ty,
+                                                src_ptr,
+                                                &format!("{src_field}.let_rhs"),
+                                            )
+                                            .expect("load let RHS from slot")
+                                    }
+                                };
+                                self.builder
+                                    .build_store(slot, value)
+                                    .expect("store let RHS into slot");
+                                slot_map.insert(name.clone(), (i64_ty.into(), slot));
                             }
                         }
                     }
@@ -1478,10 +1564,10 @@ pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Optio
 /// the body-splitting walker treats the whole call as ineligible when any
 /// arg returns `None`, mirroring the conservative skip behaviour of slice
 /// 8h's "non-emittable-shape silently dropped" rule.
-fn recognize_body_arg(expr: &Expr, layout_field_names: &HashSet<&str>) -> Option<BodyArg> {
+fn recognize_body_arg(expr: &Expr, in_scope_names: &HashSet<String>) -> Option<BodyArg> {
     match &expr.kind {
         ExprKind::Integer(n, _) => Some(BodyArg::IntLit(*n)),
-        ExprKind::Identifier(name) if layout_field_names.contains(name.as_str()) => {
+        ExprKind::Identifier(name) if in_scope_names.contains(name) => {
             Some(BodyArg::Slot(name.clone()))
         }
         _ => None,
