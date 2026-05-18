@@ -54,6 +54,16 @@ jobs:
       - name: Clippy
         run: cargo clippy --all -- -D warnings
 
+      - name: Codegen containment guard
+        run: |
+          violations=$(grep -rlE '^\s*use\s+inkwell|\b(LLVMValue|LLVMType|BasicValueEnum|BasicTypeEnum)\b' src/ | grep -vE '^src/codegen(\.rs$|/)' || true)
+          if [ -n "$violations" ]; then
+            echo "::error::Codegen containment violation — LLVM/inkwell references outside src/codegen.{rs,/}:"
+            echo "$violations"
+            echo "See docs/design.md § Codegen architecture and CLAUDE.md § Architecture > Codegen containment."
+            exit 1
+          fi
+
   cross:
     name: Cross-compile (${{ matrix.target }})
     runs-on: ubuntu-latest
