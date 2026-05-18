@@ -271,6 +271,7 @@ pub(super) struct Codegen<'ctx> {
     ///   field after the `kara.poll_done` block and use the loaded
     ///   value as the call's return value, replacing the unconditional
     ///   `i64 0` from earlier slices.
+    ///
     /// Absent entries preserve the v1 unit-return behavior.
     pub(crate) state_machine_return_types: HashMap<String, BasicTypeEnum<'ctx>>,
     /// Field names in declaration order (struct name → field names).
