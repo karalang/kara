@@ -102,24 +102,53 @@ impl<'a> super::TypeChecker<'a> {
         // is unconditionally safe per design.md § FFI Unions). Capture
         // `is_lhs` at entry and reset it for nested reads — `a.b.c = x`
         // where `a.b` reads union `a`'s field `b` must still fire.
+        //
+        // Slice 2b layers borrow-context routing on top of 2a: when the
+        // typechecker entered the field access through a call-arg
+        // position whose parameter is `ref T` / `mut ref T`,
+        // `borrow_context` is `Some(_)` and the borrow-flavored
+        // `E_UNION_BORROW_REQUIRES_UNSAFE` fires instead of the
+        // read-flavored 2a code. The context is taken (cleared) on the
+        // outermost union access so nested non-borrow union reads
+        // inside the same arg expression still route through 2a.
         let is_lhs = self.assigning_lhs;
         self.assigning_lhs = false;
+        let borrow_kind = self.borrow_context.take();
         let union_fields = self.env.unions.get(&type_name).map(|u| u.fields.clone());
         if let Some(fields) = union_fields {
             if !is_lhs && self.unsafe_depth == 0 {
-                self.type_error(
-                    format!(
-                        "error[E_UNION_READ_REQUIRES_UNSAFE]: reading field \
-                         '{field}' of union '{type_name}' must be wrapped in an \
-                         `unsafe {{ ... }}` block — the active variant of a \
-                         union is not tracked by the type system, so the reader \
-                         is asserting they know which interpretation of the \
-                         bytes is valid. Field *assignment* (`u.{field} = ...`) \
-                         is unconditionally safe and does not require unsafe."
-                    ),
-                    span.clone(),
-                    TypeErrorKind::TypeMismatch,
-                );
+                if let Some(kind) = borrow_kind {
+                    self.type_error(
+                        format!(
+                            "error[E_UNION_BORROW_REQUIRES_UNSAFE]: borrowing \
+                             field '{field}' of union '{type_name}' as \
+                             `{kind} T` must be wrapped in an `unsafe \
+                             {{ ... }}` block — the active variant of a \
+                             union is not tracked by the type system, so the \
+                             borrower is asserting they know which \
+                             interpretation of the bytes is valid. Field \
+                             *assignment* (`u.{field} = ...`) is \
+                             unconditionally safe and does not require \
+                             unsafe."
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                } else {
+                    self.type_error(
+                        format!(
+                            "error[E_UNION_READ_REQUIRES_UNSAFE]: reading field \
+                             '{field}' of union '{type_name}' must be wrapped in an \
+                             `unsafe {{ ... }}` block — the active variant of a \
+                             union is not tracked by the type system, so the reader \
+                             is asserting they know which interpretation of the \
+                             bytes is valid. Field *assignment* (`u.{field} = ...`) \
+                             is unconditionally safe and does not require unsafe."
+                        ),
+                        span.clone(),
+                        TypeErrorKind::TypeMismatch,
+                    );
+                }
             }
             for (fname, ftype, is_pub) in &fields {
                 if fname == field {

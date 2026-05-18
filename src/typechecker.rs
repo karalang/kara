@@ -773,6 +773,18 @@ pub struct TypeChecker<'a> {
     /// fire there. Line 549 slice 2a — "field assignment is
     /// unconditionally safe" per design.md § FFI Unions.
     pub(super) assigning_lhs: bool,
+    /// `Some("ref")` / `Some("mut ref")` while typechecking a call
+    /// argument whose callee parameter type is `Type::Ref(_)` /
+    /// `Type::MutRef(_)`. Consumed by `infer_field_access`'s union arm
+    /// (line 549 slice 2b — `E_UNION_BORROW_REQUIRES_UNSAFE`): when a
+    /// union field access lands inside a borrow context outside an
+    /// `unsafe { ... }` block, the borrow-flavored diagnostic fires
+    /// instead of the slice 2a read-flavored one. The field is taken
+    /// (cleared) on the first union access inside the arg so nested
+    /// non-borrow union reads still route through slice 2a, and is
+    /// saved/restored around each `check_expr` arg call so outer
+    /// contexts don't leak across siblings.
+    pub(super) borrow_context: Option<&'static str>,
     pub(super) current_return_type: Option<Type>,
     /// LB3 — per-label collector stack for labeled-block break-with-value
     /// LUB inference. Pushed at labeled-block entry; each `Break { label:
@@ -951,6 +963,7 @@ impl<'a> TypeChecker<'a> {
             expr_types: HashMap::new(),
             unsafe_depth: 0,
             assigning_lhs: false,
+            borrow_context: None,
             current_return_type: None,
             break_value_types: Vec::new(),
             current_self_type: None,

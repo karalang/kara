@@ -581,7 +581,17 @@ impl<'a> super::TypeChecker<'a> {
             || has_where_const_predicate;
         if !has_generic {
             for (arg, param_ty) in args.iter().zip(params.iter()) {
+                // Line 549 slice 2b — set the union-borrow context for
+                // the duration of this arg's check_expr so a top-level
+                // `u.field` access lands in `infer_field_access` with
+                // the borrow-flavored diagnostic active. Saved/restored
+                // around the arg so sibling args don't inherit, and
+                // `infer_field_access` takes() on the first union access
+                // so nested non-borrow reads still fire slice 2a.
+                let saved_borrow_ctx = self.borrow_context;
+                self.borrow_context = borrow_context_for_param(param_ty);
                 let arg_ty = self.check_expr(&arg.value, param_ty);
+                self.borrow_context = saved_borrow_ctx;
                 if apply_call_site_marker {
                     self.check_call_site_marker(arg, param_ty, &arg_ty);
                 }
@@ -642,11 +652,21 @@ impl<'a> super::TypeChecker<'a> {
         }
 
         let mut arg_tys: Vec<Option<Type>> = Vec::with_capacity(args.len());
-        for arg in args {
+        for (arg, formal_param_ty) in args.iter().zip(params.iter()) {
             if matches!(arg.value.kind, ExprKind::Closure { .. }) {
                 arg_tys.push(None);
             } else {
-                arg_tys.push(Some(self.infer_expr(&arg.value)));
+                // Line 549 slice 2b — the `Type::Ref(_)` / `Type::MutRef(_)`
+                // wrapper is visible on the *formal* param type before
+                // metavar instantiation, so the borrow context can be
+                // decided here without waiting for the pass-2 resolution.
+                // This is what makes a generic `fn foo[T](x: ref T)`
+                // called with a union-field arg fire slice 2b in pass 1.
+                let saved_borrow_ctx = self.borrow_context;
+                self.borrow_context = borrow_context_for_param(formal_param_ty);
+                let inferred = self.infer_expr(&arg.value);
+                self.borrow_context = saved_borrow_ctx;
+                arg_tys.push(Some(inferred));
             }
         }
         // Pass 1: unify non-closure arg types into the instantiated
@@ -687,7 +707,18 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
                 None => {
+                    // Line 549 slice 2b — see the non-generic arm above
+                    // for the contract. Closure args (the only branch
+                    // that reaches this re-check, since pass 1 inferred
+                    // non-closure args already) won't trip a union
+                    // field read at their top level, but the context is
+                    // set defensively so any synthesised cell-rewrap
+                    // path that lowers into a non-closure here still
+                    // routes through slice 2b correctly.
+                    let saved_borrow_ctx = self.borrow_context;
+                    self.borrow_context = borrow_context_for_param(&resolved);
                     let arg_ty = self.check_expr(&arg.value, &resolved);
+                    self.borrow_context = saved_borrow_ctx;
                     if apply_call_site_marker {
                         self.check_call_site_marker(arg, &resolved, &arg_ty);
                     }
@@ -2382,5 +2413,20 @@ impl<'a> super::TypeChecker<'a> {
 
             ExprKind::Error => Type::Error,
         }
+    }
+}
+
+/// Line 549 slice 2b — translate a callee's formal parameter type into
+/// the `borrow_context` string consumed by `infer_field_access`. Only
+/// the immediate `Type::Ref(_)` / `Type::MutRef(_)` wrappers count;
+/// owned / `Slice[T]` / `mut Slice[T]` / value-typed parameters are
+/// not borrow positions for union-field-access purposes. The mut-slice
+/// case is handled by the slice-assignment write-only contract (no
+/// read of the union storage), so it intentionally does not gate.
+pub(super) fn borrow_context_for_param(param_ty: &Type) -> Option<&'static str> {
+    match param_ty {
+        Type::Ref(_) => Some("ref"),
+        Type::MutRef(_) => Some("mut ref"),
+        _ => None,
     }
 }

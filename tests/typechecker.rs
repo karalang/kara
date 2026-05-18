@@ -17089,3 +17089,128 @@ fn union_undefined_field_diagnostic_names_union() {
         diag.message,
     );
 }
+
+// ── FFI unions slice 2b — E_UNION_BORROW_REQUIRES_UNSAFE ────────
+//
+// Passing `u.field` to a callee whose parameter is `ref T` /
+// `mut ref T` is the Kāra surface for "borrow a union field"
+// (design.md § "No implicit coercions" — there is no `&u.field`
+// expression). Outside an `unsafe { ... }` block the call fires the
+// borrow-flavored diagnostic instead of the slice 2a read-flavored
+// one — same hard requirement (wrap in `unsafe { }`), better wording.
+
+#[test]
+fn union_field_borrow_to_ref_param_outside_unsafe_rejected() {
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn take_ref(x: ref u32) {}\n\
+         fn caller(u: FloatBits) { take_ref(u.bits); }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_BORROW_REQUIRES_UNSAFE"))
+        .expect("expected E_UNION_BORROW_REQUIRES_UNSAFE");
+    assert!(
+        diag.message.contains("FloatBits")
+            && diag.message.contains("bits")
+            && diag.message.contains("`ref T`"),
+        "diagnostic should name union, field, and borrow form, got: {}",
+        diag.message,
+    );
+    // The borrow diagnostic supersedes the read diagnostic on this
+    // exact site — slice 2a must NOT fire alongside slice 2b.
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_READ_REQUIRES_UNSAFE")),
+        "slice 2a should be suppressed when 2b fires, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_field_borrow_to_ref_param_inside_unsafe_accepted() {
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn take_ref(x: ref u32) {}\n\
+         fn caller(u: FloatBits) { unsafe { take_ref(u.bits); } }",
+    );
+}
+
+// Note: a `mut ref T` parameter case has no reachable Kāra surface
+// today — design.md § "No implicit coercions" coerces only owned
+// `T` → `ref T` (shared) at call sites; an owned `T` is *not*
+// accepted as `mut ref T`, and there is no expression that produces
+// a `mut ref T` from a place. The borrow-context helper still
+// returns `Some("mut ref")` for `Type::MutRef(_)` so the diagnostic
+// wording is symmetric and forward-compatible should a place-to-
+// mut-ref form ever land, but no test asserts on the mut-ref path
+// because every reachable call still fires a structural type
+// mismatch (`expected mut ref u32, found u32`) downstream.
+
+#[test]
+fn union_field_passed_by_value_outside_unsafe_fires_read_not_borrow() {
+    // Owned parameter — `take_value(u.bits)` is a read, not a borrow.
+    // Slice 2a fires; slice 2b's borrow_context stays None so the
+    // diagnostic uses the read-flavored code.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn take_value(x: u32) {}\n\
+         fn caller(u: FloatBits) { take_value(u.bits); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_READ_REQUIRES_UNSAFE")),
+        "owned param should still fire the read gate, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_BORROW_REQUIRES_UNSAFE")),
+        "owned param must NOT fire the borrow gate, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn nested_union_read_inside_borrow_arg_routes_to_read_diag() {
+    // The outer arg is a value-producing expression
+    // `(unsafe { u.bits })`. The `u.bits` access happens inside
+    // `unsafe`, so neither gate fires on it. The arg's resulting
+    // u32 is then passed by value (after the unsafe block) — no
+    // borrow context applies to the inner read. This pins the
+    // contract that slice 2b's context affects only the
+    // top-level call-arg field access, not borrowing computed
+    // temporaries through the same call.
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn take_value(x: u32) {}\n\
+         fn caller(u: FloatBits) { take_value(unsafe { u.bits }); }",
+    );
+}
+
+#[test]
+fn union_field_borrow_to_generic_ref_param_outside_unsafe_rejected() {
+    // Generic call path — `fn take[T](x: ref T)` — exercises the
+    // pass-1 borrow_context wiring (formal param shape visible
+    // before metavar resolution).
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn take[T](x: ref T) {}\n\
+         fn caller(u: FloatBits) { take(u.bits); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_BORROW_REQUIRES_UNSAFE")),
+        "generic ref param should fire the borrow gate, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
