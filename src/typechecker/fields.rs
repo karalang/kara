@@ -307,6 +307,118 @@ impl<'a> super::TypeChecker<'a> {
         self.lower_type_expr(&field_def.ty, &[])
     }
 
+    // ── FFI Union Literals (line 549 slice 2c) ──────────────────
+
+    /// Construct a value of an FFI union type via the
+    /// `Name { field: value }` literal shape. The exactly-one-field
+    /// rule is what makes union construction *safe* (design.md §
+    /// FFI Unions): the bytes are written with a single named
+    /// interpretation, so no reinterpretation is happening at the
+    /// construction site, so no `unsafe { ... }` block is required.
+    ///
+    /// Diagnostic-shape contract:
+    /// - Zero fields (`Foo {}`) and multi-field (`Foo { a: x, b: y }`)
+    ///   both fire `E_UNION_LITERAL_REQUIRES_ONE_FIELD` at the literal
+    ///   span; the message lists the available field names so the
+    ///   recovery shape is obvious.
+    /// - A spread base (`Foo { ..base }`) is rejected with the same
+    ///   code — "copy remaining fields from base" is meaningless when
+    ///   only one field is active at a time. The spread expression is
+    ///   still inferred so its own diagnostics surface.
+    /// - An unknown field name fires the standard undefined-field
+    ///   diagnostic (mirroring slice 2a's union-field-access path)
+    ///   naming the union and the available fields.
+    /// - In every error case the field values are still typechecked
+    ///   against the declared field type when known, falling back to
+    ///   synth otherwise, so cascading diagnostics don't fire.
+    pub(super) fn infer_union_literal(
+        &mut self,
+        union_name: &str,
+        fields: &[FieldInit],
+        spread: Option<&Expr>,
+        span: &Span,
+    ) -> Type {
+        let union_fields = self
+            .env
+            .unions
+            .get(union_name)
+            .expect("caller verified union_name is in env.unions")
+            .fields
+            .clone();
+
+        self.check_deprecated_use_at(span, union_name);
+
+        if let Some(spread_expr) = spread {
+            self.infer_expr(spread_expr);
+            self.type_error(
+                format!(
+                    "error[E_UNION_LITERAL_REQUIRES_ONE_FIELD]: union '{union_name}' \
+                     literal does not support spread base (`..base`) — a union's \
+                     storage is shared by every field, so 'copy the remaining \
+                     fields from base' is meaningless. Write `{union_name} \
+                     {{ <field>: <expr> }}` with exactly one field instead."
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+
+        if fields.len() != 1 {
+            let avail: Vec<String> = union_fields
+                .iter()
+                .map(|(n, _, _)| format!("'{n}'"))
+                .collect();
+            self.type_error(
+                format!(
+                    "error[E_UNION_LITERAL_REQUIRES_ONE_FIELD]: union \
+                     '{union_name}' literal must name exactly one field — \
+                     got {n}. A union's storage is shared by every field, so \
+                     construction commits to one named interpretation. Write \
+                     `{union_name} {{ <field>: <expr> }}` with one of: {avail}.",
+                    n = fields.len(),
+                    avail = avail.join(", "),
+                ),
+                span.clone(),
+                TypeErrorKind::TypeMismatch,
+            );
+        }
+
+        for f in fields {
+            let matched = union_fields
+                .iter()
+                .find(|(n, _, _)| n == &f.name)
+                .map(|(_, ty, is_pub)| (ty.clone(), *is_pub));
+            match matched {
+                Some((expected_ty, is_pub)) => {
+                    if !is_pub {
+                        self.check_cross_module_field_access(union_name, &f.name, &f.span);
+                    }
+                    self.check_expr(&f.value, &expected_ty);
+                }
+                None => {
+                    let avail: Vec<&str> =
+                        union_fields.iter().map(|(n, _, _)| n.as_str()).collect();
+                    self.type_error(
+                        format!(
+                            "no field '{}' on union '{}', available fields: {}",
+                            f.name,
+                            union_name,
+                            avail.join(", ")
+                        ),
+                        f.span.clone(),
+                        TypeErrorKind::UndefinedField,
+                    );
+                    self.infer_expr(&f.value);
+                }
+            }
+        }
+
+        Type::Named {
+            name: union_name.to_string(),
+            args: Vec::new(),
+        }
+    }
+
     // ── Struct Literals ─────────────────────────────────────────
 
     pub(super) fn infer_struct_literal(

@@ -17214,3 +17214,142 @@ fn union_field_borrow_to_generic_ref_param_outside_unsafe_rejected() {
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
+
+// ── FFI unions slice 2c — E_UNION_LITERAL_REQUIRES_ONE_FIELD ────
+//
+// Construction `Foo { field: value }` is the *safe* form because
+// the bytes are written with a single named interpretation. The
+// rule: exactly one field per literal. Empty (`Foo {}`),
+// multi-field (`Foo { a: x, b: y }`), and spread (`Foo { ..base }`)
+// all reject; single-field is the only valid shape.
+
+#[test]
+fn union_literal_single_field_accepts_without_unsafe() {
+    // Per design.md § FFI Unions: "construction is safe — exactly
+    // one field is named". No `unsafe { ... }` required.
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits { f: 3.14f32 } }",
+    );
+}
+
+#[test]
+fn union_literal_alternate_single_field_accepts() {
+    typecheck_ok(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits { bits: 1077936029u32 } }",
+    );
+}
+
+#[test]
+fn union_literal_empty_rejected() {
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits {} }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_LITERAL_REQUIRES_ONE_FIELD"))
+        .expect("expected E_UNION_LITERAL_REQUIRES_ONE_FIELD");
+    assert!(
+        diag.message.contains("FloatBits") && diag.message.contains("got 0"),
+        "diagnostic should name the union and the count, got: {}",
+        diag.message,
+    );
+    assert!(
+        diag.message.contains("'f'") && diag.message.contains("'bits'"),
+        "diagnostic should list available field names, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn union_literal_multi_field_rejected() {
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits { f: 1.0f32, bits: 1u32 } }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_UNION_LITERAL_REQUIRES_ONE_FIELD"))
+        .expect("expected E_UNION_LITERAL_REQUIRES_ONE_FIELD");
+    assert!(
+        diag.message.contains("got 2"),
+        "diagnostic should report the field count, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn union_literal_unknown_field_rejected() {
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits { typo: 1u32 } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("no field 'typo' on union 'FloatBits'")),
+        "expected undefined-union-field diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_literal_field_value_type_checked() {
+    // The value is typechecked against the declared field type;
+    // a mismatch surfaces the standard type-error diagnostic.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller() -> FloatBits { FloatBits { bits: \"hello\" } }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type-mismatch diagnostic for string value to u32 field",
+    );
+    // The exactly-one-field rule should still accept the literal shape;
+    // the rejection is on the value type, not the literal structure.
+    assert!(
+        !errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_LITERAL_REQUIRES_ONE_FIELD")),
+        "single-field literal should NOT fire the count rule, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn union_literal_spread_rejected() {
+    // `..base` over a union literal is meaningless because only one
+    // field is active; the spread variant of E_UNION_LITERAL_REQUIRES_ONE_FIELD
+    // fires alongside (or instead of) the count rule.
+    let errors = typecheck_errors(
+        "#[repr(C)]\n\
+         union FloatBits { f: f32, bits: u32 }\n\
+         fn caller(base: FloatBits) -> FloatBits { FloatBits { f: 1.0f32, ..base } }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_UNION_LITERAL_REQUIRES_ONE_FIELD")
+                && e.message.contains("spread")),
+        "expected spread-rejection diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn struct_literal_unchanged_by_union_arm() {
+    // Regression: a normal struct literal still typechecks as before;
+    // the union arm only branches for `env.unions` targets.
+    typecheck_ok(
+        "struct Point { x: i32, y: i32 }\n\
+         fn caller() -> Point { Point { x: 1, y: 2 } }",
+    );
+}

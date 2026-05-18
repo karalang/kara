@@ -2106,6 +2106,21 @@ impl<'a> super::TypeChecker<'a> {
                 fields,
                 spread,
             } => {
+                // Slice 2c — FFI union literal arm. Unions share the
+                // `Name { field: value, ... }` shape with struct
+                // literals but have distinct construction rules
+                // (exactly one field, no spread, no missing-field
+                // recovery), so they branch off before
+                // `infer_struct_literal` runs.
+                let target_name = path.last().cloned().unwrap_or_default();
+                if self.env.unions.contains_key(&target_name) {
+                    return self.infer_union_literal(
+                        &target_name,
+                        fields,
+                        spread.as_deref(),
+                        &expr.span,
+                    );
+                }
                 if let Some(ref spread_expr) = spread {
                     self.infer_expr(spread_expr);
                 }
