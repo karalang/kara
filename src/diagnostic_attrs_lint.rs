@@ -471,3 +471,113 @@ fn is_known_placeholder(name: &str, arity: usize) -> bool {
     }
     false
 }
+
+/// Substitute the slice-6 placeholders `{Self}` / `{T0}` / `{T1}` / ...
+/// in `template` against the call-site's resolved metavariables.
+///
+/// - `self_render` replaces every `{Self}`.
+/// - `generic_arg_renders[i]` replaces every `{T<i>}` when the slot is
+///   present; missing or `None` slots leave the placeholder literal.
+/// - Unknown placeholder names (and unbalanced braces) render literally
+///   — the slice-3 lint already warned at the trait declaration site so
+///   the author saw the diagnostic once at definition; literal-render at
+///   the use site is the documented fallback.
+///
+/// Shared placeholder grammar with [`validate_placeholders`]: the lint
+/// pass and the substituter must recognise the same names, otherwise an
+/// author could write a placeholder the validator accepts but the
+/// substituter ignores (or vice-versa). Keeping both helpers in this
+/// module enforces the grammar in one place.
+pub fn substitute_placeholders(
+    template: &str,
+    self_render: &str,
+    generic_arg_renders: &[Option<String>],
+) -> String {
+    let mut out = String::with_capacity(template.len());
+    let bytes = template.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] != b'{' {
+            out.push(bytes[i] as char);
+            i += 1;
+            continue;
+        }
+        let start = i + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b'}' {
+            end += 1;
+        }
+        if end >= bytes.len() {
+            // No closing brace — emit the rest literally.
+            out.push_str(&template[i..]);
+            break;
+        }
+        let name = &template[start..end];
+        if name == "Self" {
+            out.push_str(self_render);
+        } else if let Some(idx) = name.strip_prefix('T').and_then(|r| r.parse::<usize>().ok()) {
+            match generic_arg_renders.get(idx).and_then(|x| x.as_ref()) {
+                Some(rendered) => out.push_str(rendered),
+                // Unknown / unsolved slot — render literally so the
+                // author can see which placeholder didn't substitute.
+                None => out.push_str(&template[i..=end]),
+            }
+        } else {
+            // Unknown placeholder name — render literally.
+            out.push_str(&template[i..=end]);
+        }
+        i = end + 1;
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn substitute_self_only() {
+        let s = substitute_placeholders("{Self} is not Foo", "i64", &[]);
+        assert_eq!(s, "i64 is not Foo");
+    }
+
+    #[test]
+    fn substitute_with_generics() {
+        let s = substitute_placeholders(
+            "{Self} cannot map ({T0}, {T1})",
+            "MyType",
+            &[Some("K".into()), Some("V".into())],
+        );
+        assert_eq!(s, "MyType cannot map (K, V)");
+    }
+
+    #[test]
+    fn substitute_missing_slot_renders_literal() {
+        let s = substitute_placeholders("{T0} and {T1}", "X", &[Some("A".into()), None]);
+        assert_eq!(s, "A and {T1}");
+    }
+
+    #[test]
+    fn substitute_unknown_name_renders_literal() {
+        let s = substitute_placeholders("hello {NotAParam}", "X", &[]);
+        assert_eq!(s, "hello {NotAParam}");
+    }
+
+    #[test]
+    fn substitute_unbalanced_brace_renders_literal() {
+        let s = substitute_placeholders("oops {Self {", "X", &[]);
+        assert_eq!(s, "oops {Self {");
+    }
+
+    #[test]
+    fn substitute_multiple_self() {
+        let s = substitute_placeholders("{Self} or {Self}", "i64", &[]);
+        assert_eq!(s, "i64 or i64");
+    }
+
+    #[test]
+    fn substitute_empty_template() {
+        let s = substitute_placeholders("", "X", &[]);
+        assert_eq!(s, "");
+    }
+}

@@ -93,6 +93,12 @@ pub struct FunctionSig {
 #[derive(Debug, Clone)]
 pub struct ImplInfo {
     pub target_type: String,
+    /// `#[diagnostic::do_not_recommend]` flag — slice 6 of item 36.
+    /// Captured here so the failed-bound diagnostic builder can skip
+    /// flagged impls when listing candidates. Default `false`; pure
+    /// diagnostic-only effect (does not influence coherence, lookup,
+    /// or trait resolution).
+    pub do_not_recommend: bool,
     /// Type arguments of the impl target (`impl Foo for Option[Ordering]`
     /// → `[Type::Named { name: "Ordering", args: [] }]`). Empty means the
     /// impl is generic-on-name — it applies to every instantiation of
@@ -127,6 +133,17 @@ pub struct TraitInfo {
     pub assoc_types: Vec<String>,
     /// Names of supertraits declared in `trait Foo: Bar + Baz`.
     pub supertraits: Vec<String>,
+    /// Trait-level generic param names in declaration order
+    /// (`trait Foo[A, B]` → `["A", "B"]`). Slice 6 of item 36 reads
+    /// these to render `{T0}` / `{T1}` placeholder substitutions
+    /// against the bound's resolved args — index N picks the N-th
+    /// generic arg of the failing trait reference.
+    pub generic_param_names: Vec<String>,
+    /// `#[diagnostic::on_unimplemented(...)]` payload — slice 6 of
+    /// item 36. `None` when the trait carries no such attribute; in
+    /// that case failed-bound diagnostics fall back to the default
+    /// phrasing.
+    pub on_unimplemented: Option<crate::ast::OnUnimplemented>,
 }
 
 /// Storage entry for an impl block's associated-type binding.

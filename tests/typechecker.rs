@@ -16233,3 +16233,168 @@ fn deprecated_slice4_self_referential_use_inside_deprecated_fn_emits() {
         w.lint_name.as_deref() == Some("deprecated") && w.message.contains("old_helper")
     }));
 }
+
+// ── Slice 6 of item 36: #[diagnostic::on_unimplemented] substitution ──
+
+#[test]
+fn on_unimpl_slice6_default_phrasing_fallback_when_no_payload() {
+    // No on_unimplemented → message is the pre-slice-6 default
+    // ("trait bound `T: Trait` is not satisfied; `X` does not implement
+    // `Trait`"). Regression pin so a future tweak doesn't silently
+    // change the fallback shape.
+    let errors = typecheck_errors(
+        "trait Plain { fn m(self) -> i64; }\n\
+         fn needs[T: Plain](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("`Plain`"))
+        .map(|e| e.message.clone())
+        .expect("expected an unsatisfied-bound diagnostic for Plain");
+    assert!(
+        msg.contains("trait bound `T: Plain` is not satisfied"),
+        "default phrasing should fire when no on_unimplemented is set; got: {msg}",
+    );
+    assert!(msg.contains("does not implement `Plain`"));
+}
+
+#[test]
+fn on_unimpl_slice6_custom_message_replaces_default() {
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(message: \"custom headline for missing impl\")]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("custom headline"))
+        .map(|e| e.message.clone())
+        .expect("expected custom-message diagnostic");
+    assert!(msg.starts_with("custom headline for missing impl"));
+    // The default phrasing is fully replaced by the custom message.
+    assert!(!msg.contains("trait bound `T: Custom` is not satisfied"));
+}
+
+#[test]
+fn on_unimpl_slice6_self_placeholder_substitutes() {
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(message: \"{Self} is not Custom\")]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("NotImpl is not Custom")),
+        "expected `{{Self}}` to substitute to `NotImpl`; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn on_unimpl_slice6_t0_placeholder_substitutes_from_bound_args() {
+    // `Custom[Self, A]` at the bound site: `{T0}` → `Self` arg here
+    // (rendered from the AST form), `{T1}` → `A`.
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(message: \"need {Self} : Custom[{T0}, {T1}]\")]\n\
+         trait Custom[A, B] { fn m(self) -> i64; }\n\
+         fn needs[T: Custom[i64, bool]](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("need NotImpl : Custom[i64, bool]")),
+        "expected `{{T0}}`/`{{T1}}` to substitute; got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn on_unimpl_slice6_label_and_note_appended() {
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(\
+            message: \"missing Custom for {Self}\", \
+            label: \"this is the spot\", \
+            note: \"hint about how to fix\"\
+         )]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("missing Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected custom-payload diagnostic");
+    assert!(msg.contains("missing Custom for NotImpl"));
+    assert!(msg.contains("; label: this is the spot"));
+    assert!(msg.contains("; note: hint about how to fix"));
+}
+
+#[test]
+fn on_unimpl_slice6_partial_payload_only_label_appends_to_default() {
+    // No `message` field → the default phrasing remains the headline;
+    // the present `label` still appends.
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(label: \"label only\")]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("Custom"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(msg.contains("trait bound `T: Custom` is not satisfied"));
+    assert!(msg.contains("; label: label only"));
+}
+
+#[test]
+fn on_unimpl_slice6_do_not_recommend_does_not_block_impl() {
+    // Slice 4's AST flag flows into `ImplInfo.do_not_recommend` (the
+    // env-side plumbing for the slice 6 follow-up "implemented by …"
+    // note). The spec is explicit that the flag is purely diagnostic
+    // — it must NOT influence trait resolution. Pin that: a call site
+    // that depends on a `do_not_recommend` impl still typechecks.
+    typecheck_ok(
+        "struct S { x: i64 }\n\
+         trait T { fn m(self) -> i64; }\n\
+         #[diagnostic::do_not_recommend]\n\
+         impl T for S { fn m(self) -> i64 { 0 } }\n\
+         fn needs[U: T](x: U) -> i64 { x.m() }\n\
+         fn use_it(s: S) -> i64 { needs(s) }",
+    );
+}
+
+#[test]
+fn on_unimpl_slice6_self_placeholder_substitutes_in_label_and_note() {
+    let errors = typecheck_errors(
+        "#[diagnostic::on_unimplemented(\
+            message: \"hi\", \
+            label: \"label for {Self}\", \
+            note: \"note for {Self}\"\
+         )]\n\
+         trait Custom { fn m(self) -> i64; }\n\
+         fn needs[T: Custom](x: T) -> i64 { 0 }\n\
+         struct NotImpl { x: i64 }\n\
+         fn use_it() -> i64 { needs(NotImpl { x: 0 }) }",
+    );
+    let msg = errors
+        .iter()
+        .find(|e| e.message.contains("hi"))
+        .map(|e| e.message.clone())
+        .expect("expected diagnostic");
+    assert!(msg.contains("label for NotImpl"));
+    assert!(msg.contains("note for NotImpl"));
+}

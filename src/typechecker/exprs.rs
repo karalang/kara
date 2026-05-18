@@ -914,20 +914,104 @@ impl<'a> super::TypeChecker<'a> {
                 if self.type_satisfies_bound(concrete_ty, trait_name) {
                     continue;
                 }
-                self.type_error(
-                    format!(
-                        "trait bound `{}: {}` is not satisfied; `{}` does not implement `{}`",
-                        type_name,
-                        trait_name,
-                        type_display(concrete_ty),
-                        trait_name
-                    ),
-                    discharge_span.clone(),
-                    TypeErrorKind::TypeMismatch,
+                let message = self.render_unsatisfied_bound_message(
+                    type_name,
+                    trait_name,
+                    concrete_ty,
+                    bound,
                 );
+                self.type_error(message, discharge_span.clone(), TypeErrorKind::TypeMismatch);
             }
         }
         self.discharge_projection_bounds(where_clause, solutions, discharge_span);
+    }
+
+    /// Render the message for an unsatisfied `type_name: trait_name`
+    /// bound. Slice 6 of item 36 — consults the failing trait's
+    /// `#[diagnostic::on_unimplemented(...)]` payload (if any) and
+    /// substitutes `{Self}` against the concrete failing type plus
+    /// `{T0}` / `{T1}` / ... against the bound's generic args; the
+    /// result replaces the default phrasing entirely when `message` is
+    /// present, with `label` and `note` appended as ` ; label: ...` /
+    /// ` ; note: ...` clauses. Absent fields fall back to the default
+    /// phrasing for that clause; an entirely absent payload reproduces
+    /// the pre-slice-6 message verbatim.
+    fn render_unsatisfied_bound_message(
+        &self,
+        type_name: &str,
+        trait_name: &str,
+        concrete_ty: &Type,
+        bound: &crate::ast::TraitBound,
+    ) -> String {
+        let default = format!(
+            "trait bound `{}: {}` is not satisfied; `{}` does not implement `{}`",
+            type_name,
+            trait_name,
+            type_display(concrete_ty),
+            trait_name
+        );
+        let Some(payload) = self
+            .env
+            .traits
+            .get(trait_name)
+            .and_then(|t| t.on_unimplemented.as_ref())
+        else {
+            return default;
+        };
+        let self_render = type_display(concrete_ty);
+        let generic_arg_renders: Vec<Option<String>> = bound
+            .generic_args
+            .as_ref()
+            .map(|args| {
+                args.iter()
+                    .map(|a| match a {
+                        // Render the AST form rather than lowering +
+                        // re-substituting — for simple traits like
+                        // `T: Into[String]` this faithfully shows the
+                        // user what `{T0}` resolves to; for traits
+                        // whose generic args are themselves unsolved
+                        // type-params, the source form (e.g. `U`)
+                        // remains a useful readable token.
+                        crate::ast::GenericArg::Type(ty) => {
+                            Some(crate::parser::render_type_for_diagnostic(ty))
+                        }
+                        // Const args have no concise rendering and
+                        // aren't part of the documented placeholder
+                        // surface — leave the slot unsubstituted.
+                        crate::ast::GenericArg::Const(_) => None,
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let headline = payload
+            .message
+            .as_ref()
+            .map(|m| {
+                crate::diagnostic_attrs_lint::substitute_placeholders(
+                    m,
+                    &self_render,
+                    &generic_arg_renders,
+                )
+            })
+            .unwrap_or(default);
+        let mut out = headline;
+        if let Some(label) = &payload.label {
+            out.push_str("; label: ");
+            out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
+                label,
+                &self_render,
+                &generic_arg_renders,
+            ));
+        }
+        if let Some(note) = &payload.note {
+            out.push_str("; note: ");
+            out.push_str(&crate::diagnostic_attrs_lint::substitute_placeholders(
+                note,
+                &self_render,
+                &generic_arg_renders,
+            ));
+        }
+        out
     }
 
     /// GAT slice 8a — discharge `WhereConstraint::ProjectionBound`

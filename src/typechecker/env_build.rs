@@ -1135,6 +1135,7 @@ impl<'a> super::TypeChecker<'a> {
 
         self.env.add_impl(ImplInfo {
             target_type: type_name,
+            do_not_recommend: imp.do_not_recommend,
             target_args,
             trait_name,
             methods,
@@ -1192,6 +1193,7 @@ impl<'a> super::TypeChecker<'a> {
             .collect();
         self.env.add_impl(ImplInfo {
             target_type: target_type.to_string(),
+            do_not_recommend: false,
             target_args: Vec::new(),
             trait_name: Some(trait_name.to_string()),
             methods,
@@ -1221,11 +1223,18 @@ impl<'a> super::TypeChecker<'a> {
             .iter()
             .map(|b| b.path.last().cloned().unwrap_or_default())
             .collect();
+        let generic_param_names: Vec<String> = t
+            .generic_params
+            .as_ref()
+            .map(|gp| gp.params.iter().map(|p| p.name.clone()).collect())
+            .unwrap_or_default();
         self.env.traits.insert(
             t.name.clone(),
             TraitInfo {
                 assoc_types,
                 supertraits,
+                generic_param_names,
+                on_unimplemented: t.on_unimplemented.clone(),
             },
         );
     }
@@ -1251,6 +1260,8 @@ impl<'a> super::TypeChecker<'a> {
             TraitInfo {
                 assoc_types: Vec::new(),
                 supertraits,
+                generic_param_names: Vec::new(),
+                on_unimplemented: None,
             },
         );
         self.env.marker_traits.insert(t.name.clone());
