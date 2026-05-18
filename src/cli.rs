@@ -722,13 +722,7 @@ pub fn build_yield_points_table(
             Item::Function(func) => {
                 let key = func.name.clone();
                 if network_yield.get(&key).copied().unwrap_or(false) {
-                    let mut yps = Vec::new();
-                    collect_yield_points_in_block(
-                        &func.body,
-                        network_yield,
-                        method_callee_types,
-                        &mut yps,
-                    );
+                    let yps = walk_fn_for_yield_points(func, network_yield, method_callee_types);
                     if !yps.is_empty() {
                         table.insert(key, yps);
                     }
@@ -746,13 +740,8 @@ pub fn build_yield_points_table(
                     };
                     let key = format!("{}.{}", type_name, method.name);
                     if network_yield.get(&key).copied().unwrap_or(false) {
-                        let mut yps = Vec::new();
-                        collect_yield_points_in_block(
-                            &method.body,
-                            network_yield,
-                            method_callee_types,
-                            &mut yps,
-                        );
+                        let yps =
+                            walk_fn_for_yield_points(method, network_yield, method_callee_types);
                         if !yps.is_empty() {
                             table.insert(key, yps);
                         }
@@ -765,49 +754,51 @@ pub fn build_yield_points_table(
     table
 }
 
-fn collect_yield_points_in_block(
-    block: &crate::ast::Block,
-    network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
-    out: &mut Vec<crate::ast::YieldPoint>,
-) {
-    for stmt in &block.stmts {
-        collect_yield_points_in_stmt(stmt, network_yield, method_callee_types, out);
-    }
-    if let Some(ref expr) = block.final_expr {
-        collect_yield_points_in_expr(expr, network_yield, method_callee_types, out);
-    }
+/// Walker state for one function body. Threads the network-boundary
+/// classification + method-callee resolution maps (read-only), tracks a
+/// running scope stack of in-scope binding names (push on let / pattern
+/// binding, pop on block exit), and accumulates yield-point records.
+/// Centralizes the recursive-walk state cleaner than threading every
+/// argument through each helper.
+struct YieldPointWalker<'a> {
+    network_yield: &'a std::collections::HashMap<String, bool>,
+    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    /// Flat stack of in-scope local-binding names in source-introduction
+    /// order. Function parameters occupy the bottom of the stack; later
+    /// pushes come from `let` / `let-else` / `if let` / `while let` /
+    /// `for` / match-arm pattern bindings as the walker crosses them.
+    /// On every block exit, the walker truncates back to a recorded
+    /// length (lexical scope discipline).
+    scope: Vec<String>,
+    out: Vec<crate::ast::YieldPoint>,
 }
 
-fn collect_yield_points_in_stmt(
-    stmt: &crate::ast::Stmt,
+fn walk_fn_for_yield_points(
+    func: &crate::ast::Function,
     network_yield: &std::collections::HashMap<String, bool>,
     method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
-    out: &mut Vec<crate::ast::YieldPoint>,
-) {
-    use crate::ast::StmtKind;
-    match &stmt.kind {
-        StmtKind::Let { value, .. } => {
-            collect_yield_points_in_expr(value, network_yield, method_callee_types, out)
-        }
-        StmtKind::LetUninit { .. } => {}
-        StmtKind::LetElse {
-            value, else_block, ..
-        } => {
-            collect_yield_points_in_expr(value, network_yield, method_callee_types, out);
-            collect_yield_points_in_block(else_block, network_yield, method_callee_types, out);
-        }
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            collect_yield_points_in_block(body, network_yield, method_callee_types, out);
-        }
-        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-            collect_yield_points_in_expr(target, network_yield, method_callee_types, out);
-            collect_yield_points_in_expr(value, network_yield, method_callee_types, out);
-        }
-        StmtKind::Expr(expr) => {
-            collect_yield_points_in_expr(expr, network_yield, method_callee_types, out)
+) -> Vec<crate::ast::YieldPoint> {
+    let mut walker = YieldPointWalker {
+        network_yield,
+        method_callee_types,
+        scope: Vec::new(),
+        out: Vec::new(),
+    };
+    // Function parameters are in scope throughout the body. `self` is
+    // bound automatically when `self_param` is present (method bodies).
+    // Each non-self param has a `Pattern` that may bind one (simple
+    // `name: T`) or multiple (destructuring `let (a, b): (i64, i64)`)
+    // names; collect them all.
+    if func.self_param.is_some() {
+        walker.scope.push("self".to_string());
+    }
+    for p in &func.params {
+        for name in p.pattern.binding_names() {
+            walker.scope.push(name);
         }
     }
+    walker.walk_block(&func.body);
+    walker.out
 }
 
 fn callee_key_from_call(callee: &crate::ast::Expr) -> Option<String> {
@@ -819,207 +810,308 @@ fn callee_key_from_call(callee: &crate::ast::Expr) -> Option<String> {
     }
 }
 
-fn collect_yield_points_in_expr(
-    expr: &crate::ast::Expr,
-    network_yield: &std::collections::HashMap<String, bool>,
-    method_callee_types: &std::collections::HashMap<crate::resolver::SpanKey, String>,
-    out: &mut Vec<crate::ast::YieldPoint>,
-) {
-    use crate::ast::ExprKind;
-    let recurse = |e: &crate::ast::Expr, out: &mut Vec<crate::ast::YieldPoint>| {
-        collect_yield_points_in_expr(e, network_yield, method_callee_types, out)
-    };
-    let recurse_block = |b: &crate::ast::Block, out: &mut Vec<crate::ast::YieldPoint>| {
-        collect_yield_points_in_block(b, network_yield, method_callee_types, out)
-    };
-    match &expr.kind {
-        ExprKind::Call { callee, args } => {
-            if let Some(key) = callee_key_from_call(callee) {
-                if network_yield.get(&key).copied().unwrap_or(false) {
-                    out.push(crate::ast::YieldPoint {
-                        callee: key,
-                        span: expr.span.clone(),
-                    });
+impl YieldPointWalker<'_> {
+    fn snapshot_scope(&self) -> Vec<String> {
+        self.scope.clone()
+    }
+
+    fn walk_block(&mut self, block: &crate::ast::Block) {
+        let scope_mark = self.scope.len();
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    /// Walk a block where the pattern's bindings are pre-pushed onto the
+    /// scope (used for `if let` / `while let` / `for` bodies and the
+    /// match-arm `Block` form). Pattern bindings live through the entire
+    /// block and pop when it exits.
+    fn walk_block_with_pattern(&mut self, pat: &crate::ast::Pattern, block: &crate::ast::Block) {
+        let scope_mark = self.scope.len();
+        for name in pat.binding_names() {
+            self.scope.push(name);
+        }
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    /// Same idea for a match-arm body expression (which may be a Block
+    /// or any other Expr — non-block arms still need pattern scope).
+    fn walk_expr_with_pattern(&mut self, pat: &crate::ast::Pattern, expr: &crate::ast::Expr) {
+        let scope_mark = self.scope.len();
+        for name in pat.binding_names() {
+            self.scope.push(name);
+        }
+        self.walk_expr(expr);
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_stmt(&mut self, stmt: &crate::ast::Stmt) {
+        use crate::ast::StmtKind;
+        match &stmt.kind {
+            StmtKind::Let { value, pattern, .. } => {
+                // Walk the value FIRST — yield points in the RHS see the
+                // pre-binding scope. Then introduce the pattern's bindings
+                // into the parent scope.
+                self.walk_expr(value);
+                for name in pattern.binding_names() {
+                    self.scope.push(name);
                 }
             }
-            recurse(callee, out);
-            for arg in args {
-                recurse(&arg.value, out);
+            StmtKind::LetUninit { name, .. } => {
+                self.scope.push(name.clone());
             }
-        }
-        ExprKind::MethodCall { object, args, .. } => {
-            if let Some(key) = method_callee_types
-                .get(&crate::resolver::SpanKey::from_span(&expr.span))
-                .cloned()
-            {
-                if network_yield.get(&key).copied().unwrap_or(false) {
-                    out.push(crate::ast::YieldPoint {
-                        callee: key,
-                        span: expr.span.clone(),
-                    });
+            StmtKind::LetElse {
+                value,
+                pattern,
+                else_block,
+                ..
+            } => {
+                // Value walks against the pre-binding scope.
+                self.walk_expr(value);
+                // Else block walks in its own nested scope — it must
+                // diverge, so its bindings never propagate to the parent.
+                self.walk_block(else_block);
+                // Success-branch pattern bindings flow into the parent
+                // scope after the let-else statement.
+                for name in pattern.binding_names() {
+                    self.scope.push(name);
                 }
             }
-            recurse(object, out);
-            for arg in args {
-                recurse(&arg.value, out);
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.walk_block(body);
             }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.walk_expr(target);
+                self.walk_expr(value);
+            }
+            StmtKind::Expr(expr) => self.walk_expr(expr),
         }
-        ExprKind::Binary { left, right, .. } => {
-            recurse(left, out);
-            recurse(right, out);
-        }
-        ExprKind::Unary { operand, .. } => recurse(operand, out),
-        ExprKind::Question(inner) => recurse(inner, out),
-        ExprKind::OptionalChain { object, args, .. } => {
-            recurse(object, out);
-            if let Some(arglist) = args {
-                for arg in arglist {
-                    recurse(&arg.value, out);
+    }
+
+    fn walk_expr(&mut self, expr: &crate::ast::Expr) {
+        use crate::ast::ExprKind;
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                if let Some(key) = callee_key_from_call(callee) {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        let captured = self.snapshot_scope();
+                        self.out.push(crate::ast::YieldPoint {
+                            callee: key,
+                            span: expr.span.clone(),
+                            captured_locals: captured,
+                        });
+                    }
+                }
+                self.walk_expr(callee);
+                for arg in args {
+                    self.walk_expr(&arg.value);
                 }
             }
-        }
-        ExprKind::NilCoalesce { left, right } => {
-            recurse(left, out);
-            recurse(right, out);
-        }
-        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            recurse(object, out)
-        }
-        ExprKind::Index { object, index } => {
-            recurse(object, out);
-            recurse(index, out);
-        }
-        ExprKind::Block(b)
-        | ExprKind::Unsafe(b)
-        | ExprKind::Try(b)
-        | ExprKind::Seq(b)
-        | ExprKind::Par(b) => recurse_block(b, out),
-        ExprKind::If {
-            condition,
-            then_block,
-            else_branch,
-        } => {
-            recurse(condition, out);
-            recurse_block(then_block, out);
-            if let Some(eb) = else_branch {
-                recurse(eb, out);
-            }
-        }
-        ExprKind::IfLet {
-            value,
-            then_block,
-            else_branch,
-            ..
-        } => {
-            recurse(value, out);
-            recurse_block(then_block, out);
-            if let Some(eb) = else_branch {
-                recurse(eb, out);
-            }
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            recurse(scrutinee, out);
-            for arm in arms {
-                if let Some(ref g) = arm.guard {
-                    recurse(g, out);
+            ExprKind::MethodCall { object, args, .. } => {
+                if let Some(key) = self
+                    .method_callee_types
+                    .get(&crate::resolver::SpanKey::from_span(&expr.span))
+                    .cloned()
+                {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        let captured = self.snapshot_scope();
+                        self.out.push(crate::ast::YieldPoint {
+                            callee: key,
+                            span: expr.span.clone(),
+                            captured_locals: captured,
+                        });
+                    }
                 }
-                recurse(&arm.body, out);
+                self.walk_expr(object);
+                for arg in args {
+                    self.walk_expr(&arg.value);
+                }
             }
-        }
-        ExprKind::While {
-            condition, body, ..
-        } => {
-            recurse(condition, out);
-            recurse_block(body, out);
-        }
-        ExprKind::WhileLet { value, body, .. } => {
-            recurse(value, out);
-            recurse_block(body, out);
-        }
-        ExprKind::For { iterable, body, .. } => {
-            recurse(iterable, out);
-            recurse_block(body, out);
-        }
-        ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
-            recurse_block(body, out)
-        }
-        ExprKind::Closure { body, .. } => recurse(body, out),
-        ExprKind::Return(Some(e)) => recurse(e, out),
-        ExprKind::Return(None) => {}
-        ExprKind::Break { value, .. } => {
-            if let Some(v) = value {
-                recurse(v, out);
+            ExprKind::Binary { left, right, .. } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
             }
-        }
-        ExprKind::Continue { .. } => {}
-        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
-            for e in items {
-                recurse(e, out);
+            ExprKind::Unary { operand, .. } => self.walk_expr(operand),
+            ExprKind::Question(inner) => self.walk_expr(inner),
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.walk_expr(object);
+                if let Some(arglist) = args {
+                    for arg in arglist {
+                        self.walk_expr(&arg.value);
+                    }
+                }
             }
-        }
-        ExprKind::PrefixCollectionLiteral { items, .. } => {
-            for e in items {
-                recurse(e, out);
+            ExprKind::NilCoalesce { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
             }
-        }
-        ExprKind::RepeatLiteral { value, count, .. } => {
-            recurse(value, out);
-            recurse(count, out);
-        }
-        ExprKind::MapLiteral(pairs) => {
-            for (k, v) in pairs {
-                recurse(k, out);
-                recurse(v, out);
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.walk_expr(object)
             }
-        }
-        ExprKind::StructLiteral { fields, spread, .. } => {
-            for f in fields {
-                recurse(&f.value, out);
+            ExprKind::Index { object, index } => {
+                self.walk_expr(object);
+                self.walk_expr(index);
             }
-            if let Some(s) = spread {
-                recurse(s, out);
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
             }
-        }
-        ExprKind::Pipe { left, right } => {
-            recurse(left, out);
-            recurse(right, out);
-        }
-        ExprKind::Cast { expr, .. } => recurse(expr, out),
-        ExprKind::Range { start, end, .. } => {
-            if let Some(s) = start {
-                recurse(s, out);
+            ExprKind::IfLet {
+                value,
+                pattern,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
             }
-            if let Some(e) = end {
-                recurse(e, out);
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee);
+                for arm in arms {
+                    if let Some(ref g) = arm.guard {
+                        // Guards execute under the arm's pattern bindings.
+                        let scope_mark = self.scope.len();
+                        for name in arm.pattern.binding_names() {
+                            self.scope.push(name);
+                        }
+                        self.walk_expr(g);
+                        self.scope.truncate(scope_mark);
+                    }
+                    self.walk_expr_with_pattern(&arm.pattern, &arm.body);
+                }
             }
-        }
-        ExprKind::Lock { body, .. } => recurse_block(body, out),
-        ExprKind::Providers { bindings, body } => {
-            for b in bindings {
-                recurse(&b.value, out);
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(body);
             }
-            recurse_block(body, out);
-        }
-        // Leaves / no-call shapes.
-        ExprKind::Integer(_, _)
-        | ExprKind::Float(_, _)
-        | ExprKind::CharLit(_)
-        | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
-        | ExprKind::Bool(_)
-        | ExprKind::Identifier(_)
-        | ExprKind::Path { .. }
-        | ExprKind::SelfValue
-        | ExprKind::SelfType
-        | ExprKind::PipePlaceholder
-        | ExprKind::OffsetOf { .. }
-        | ExprKind::Error => {}
-        ExprKind::InterpolatedStringLit(parts) => {
-            // Each `ParsedInterpolationPart::Expr(e)` contributes an
-            // embedded expression to walk.
-            for part in parts {
-                if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
-                    recurse(e, out);
+            ExprKind::WhileLet {
+                value,
+                pattern,
+                body,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.walk_expr(iterable);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                self.walk_block(body)
+            }
+            // Closures form their own state machine — a yield point inside
+            // a closure body is the closure's yield, not the enclosing
+            // function's. Do NOT walk into the closure body for the outer
+            // function's yield-point enumeration.
+            ExprKind::Closure { .. } => {}
+            ExprKind::Return(Some(e)) => self.walk_expr(e),
+            ExprKind::Return(None) => {}
+            ExprKind::Break { value, .. } => {
+                if let Some(v) = value {
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::Continue { .. } => {}
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.walk_expr(value);
+                self.walk_expr(count);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.walk_expr(k);
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.walk_expr(&f.value);
+                }
+                if let Some(s) = spread {
+                    self.walk_expr(s);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Cast { expr, .. } => self.walk_expr(expr),
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.walk_expr(s);
+                }
+                if let Some(e) = end {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::Lock { body, .. } => self.walk_block(body),
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.walk_expr(&b.value);
+                }
+                self.walk_block(body);
+            }
+            // Leaves / no-call shapes.
+            ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => {}
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                        self.walk_expr(e);
+                    }
                 }
             }
         }

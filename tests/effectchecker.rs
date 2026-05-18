@@ -5180,3 +5180,161 @@ fn yield_points_empty_for_program_without_network_effects() {
         program.yield_points.keys().collect::<Vec<_>>()
     );
 }
+
+// ── captured-locals at yield points (phase 6 line 26 slice 3) ──────────
+//
+// Each `YieldPoint` carries `captured_locals: Vec<String>` — the names of
+// every binding lexically in scope at the yield site (function params +
+// every let / pattern binding introduced earlier in source order that
+// hasn't gone out of scope). These are the locals the state-machine
+// transform codegen must preserve across the suspension (v1 conservative
+// over-approximation; future passes can refine with real live-range
+// analysis).
+
+#[test]
+fn captured_locals_includes_params() {
+    // Function params are in scope throughout the body and must appear in
+    // every yield point's captured set.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch(url: i64) with sends(Network) receives(Network) {}
+         fn driver(url: i64, retries: i64) { fetch(url); }",
+    );
+    let yps = program
+        .yield_points
+        .get("driver")
+        .expect("driver should have yield points");
+    assert_eq!(yps.len(), 1);
+    assert_eq!(yps[0].captured_locals, vec!["url", "retries"]);
+}
+
+#[test]
+fn captured_locals_includes_lets_introduced_before_yield() {
+    // Local bindings introduced before the yield point are in scope at it.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() {
+             let a: i64 = 1;
+             let b: i64 = 2;
+             fetch();
+         }",
+    );
+    let yps = program.yield_points.get("driver").expect("yield points");
+    assert_eq!(yps[0].captured_locals, vec!["a", "b"]);
+}
+
+#[test]
+fn captured_locals_grows_across_sequential_yields() {
+    // The first yield sees `a`; the second yield sees `a` + `b` introduced
+    // between the two calls.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() {
+             let a: i64 = 1;
+             fetch();
+             let b: i64 = 2;
+             fetch();
+         }",
+    );
+    let yps = program.yield_points.get("driver").expect("yield points");
+    assert_eq!(yps.len(), 2);
+    assert_eq!(yps[0].captured_locals, vec!["a"]);
+    assert_eq!(yps[1].captured_locals, vec!["a", "b"]);
+}
+
+#[test]
+fn captured_locals_excludes_binding_introduced_by_the_let_containing_the_yield() {
+    // A yield point in the RHS of `let x = ...` runs BEFORE `x` is bound;
+    // `x` is not yet in scope at the yield. (`fetch_ret` doesn't return a
+    // useful type here but the parser doesn't need that.)
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() {
+             let a: i64 = 1;
+             let _x: i64 = { fetch(); 0 };
+         }",
+    );
+    let yps = program.yield_points.get("driver").expect("yield points");
+    assert_eq!(yps[0].captured_locals, vec!["a"]);
+}
+
+#[test]
+fn captured_locals_pops_after_inner_block_exit() {
+    // A binding inside an inner block is captured at a yield inside that
+    // block but NOT at a yield outside it (it's already gone out of
+    // scope).
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver() {
+             let outer: i64 = 1;
+             {
+                 let inner: i64 = 2;
+                 fetch();
+             }
+             fetch();
+         }",
+    );
+    let yps = program.yield_points.get("driver").expect("yield points");
+    assert_eq!(yps.len(), 2);
+    assert_eq!(yps[0].captured_locals, vec!["outer", "inner"]);
+    assert_eq!(yps[1].captured_locals, vec!["outer"]);
+}
+
+#[test]
+fn captured_locals_records_for_loop_pattern_binding() {
+    // A `for x in iter { ... }` body has `x` bound; yield inside captures
+    // it. The iter expression itself runs in the parent scope, before
+    // `x` is bound.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(items: Vec[i64]) {
+             for x in items.iter() { fetch(); }
+         }",
+    );
+    let yps = program.yield_points.get("driver").expect("yield points");
+    assert_eq!(yps[0].captured_locals, vec!["items", "x"]);
+}
+
+#[test]
+fn captured_locals_self_in_methods() {
+    // For methods with a `self` parameter, `self` is in scope and appears
+    // in every yield point's captured set.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    let yps = program
+        .yield_points
+        .get("Hub.run")
+        .expect("Hub.run should be in yield_points");
+    assert_eq!(yps[0].captured_locals, vec!["self"]);
+}
+
+#[test]
+fn captured_locals_does_not_descend_into_closures() {
+    // Closures form their own state machine. A network-effect call inside
+    // a closure body is NOT a yield point of the enclosing function.
+    let program = pipeline_with_yield_points(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(items: Vec[i64]) {
+             let _c = |x: i64| { fetch(); };
+         }",
+    );
+    // driver doesn't itself call any network-boundary fn; the closure
+    // body's call doesn't count. So driver has no entry in yield_points.
+    assert!(
+        !program.yield_points.contains_key("driver"),
+        "closure-body yield should NOT count for the outer function: {:?}",
+        program.yield_points.get("driver")
+    );
+}

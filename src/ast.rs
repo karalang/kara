@@ -103,6 +103,21 @@ pub struct YieldPoint {
     /// the source-level yield site, identical to a thread-blocking
     /// syscall's stack frame.
     pub span: Span,
+    /// V1 conservative over-approximation of the locals that the
+    /// state-machine transform must preserve across this suspension —
+    /// every binding lexically in scope at the yield site (function
+    /// parameters + every `let` / `let-else` / `for`-loop / pattern
+    /// binding introduced earlier in source order that hasn't gone out
+    /// of scope). Names are listed in introduction order — params first
+    /// (left-to-right), then per-block let-binding sequence. The
+    /// captures-union packed-across-non-overlapping-live-ranges
+    /// optimization (per design.md § State-Machine Transform) is a later
+    /// refinement; v1 codegen packs every entry unconditionally.
+    /// Closures are NOT descended into during the walk — a yield point
+    /// inside a closure body is the closure's own state machine, not
+    /// the enclosing function's. Empty when slice 3 hasn't run (e.g.
+    /// before phase 6 line 26 slice 3's pipeline pass).
+    pub captured_locals: Vec<String>,
 }
 
 /// Side-table populated by the cli pipeline after `EffectCheckResult` and
