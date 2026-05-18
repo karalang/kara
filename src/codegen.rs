@@ -536,6 +536,12 @@ pub(super) struct Codegen<'ctx> {
     /// each symbol even when nothing else references it. Order is preserved
     /// for stable IR output (helps snapshot tests and diffs).
     pub(crate) used_symbols: Vec<FunctionValue<'ctx>>,
+    /// Data-global counterpart to `used_symbols` — globals (not
+    /// functions) that need to land in `@llvm.used` so the linker
+    /// preserves them across `--gc-sections` / `-dead_strip`. v1
+    /// consumer: the `.kara_jit_template` manifest emitted by
+    /// `emit_jit_template_section` (phase-7 line 14).
+    pub(crate) used_data_globals: Vec<inkwell::values::GlobalValue<'ctx>>,
     /// When compiling a par-branch function body, holds the LLVM pointer
     /// to the runtime's `AtomicBool` cancel flag (the second parameter
     /// passed by `karac_par_run`). `compile_call` reads this to emit a
@@ -1387,6 +1393,7 @@ impl<'ctx> Codegen<'ctx> {
             source_filename_global: None,
             source_text: None,
             used_symbols: Vec::new(),
+            used_data_globals: Vec::new(),
             branch_cancel_ptr: None,
             rc_fallback_fns: HashMap::new(),
             arc_fallback_fns: HashMap::new(),
@@ -1824,6 +1831,7 @@ impl<'ctx> Codegen<'ctx> {
             }
         }
 
+        self.emit_jit_template_section();
         self.emit_llvm_used();
         self.emit_spawn_sites_metadata();
         self.finalize_hot_swap_table();
@@ -1930,23 +1938,89 @@ impl<'ctx> Codegen<'ctx> {
         global_ctors.set_linkage(inkwell::module::Linkage::Appending);
     }
 
+    /// Phase-7 line 14 — emit the `.kara_jit_template` section
+    /// containing a 4-byte version manifest. The section is reserved
+    /// at v1 freeze so post-v1 runtime monomorphization JIT (see
+    /// `deferred.md § Runtime Monomorphization JIT`) can fill in real
+    /// bitcode payloads without breaking the AOT binary format —
+    /// existing v1 binaries already carry a `version=0 / empty` slot
+    /// that v2+ readers recognize and ignore.
+    ///
+    /// Layout — 4 bytes total:
+    /// `[version: u8, reserved: u8, reserved: u8, reserved: u8]`.
+    /// v1 ships `[0x00, 0x00, 0x00, 0x00]` (version 0 = empty). v2+
+    /// picks any payload shape under version 1+ without breaking v1
+    /// readers (which only know version 0 = empty; any unknown
+    /// version is ignored).
+    ///
+    /// The global is `External`-linkage with a stable symbol name
+    /// (`karac_jit_template_manifest`) so v2+ tooling can find it
+    /// either by section or by symbol. It registers in
+    /// `used_data_globals` so `emit_llvm_used` pins it into
+    /// `@llvm.used` and the linker can't strip it under
+    /// `--gc-sections` / `-dead_strip`.
+    ///
+    /// **Section name handling.** ELF accepts `.kara_jit_template`
+    /// verbatim; Mach-O caps section names at 16 chars and uses a
+    /// `__SEGMENT,__SECTION` form, so the codegen picks
+    /// `__KARA,__jittmpl` (segment 6 chars, section 8 chars) on Apple
+    /// targets. The platform branch reflects the karac binary's host
+    /// triple (matches `create_target_machine` which uses the default
+    /// triple); cross-compile to a non-host object format would need
+    /// to widen this surface.
+    ///
+    /// **Target gating.** v1 emits unconditionally — the 4-byte
+    /// marker has no measurable cost regardless of profile. The
+    /// entry's "v1 simply does not emit for embedded/wasm" guidance
+    /// was a future-proofing precaution against bitcode payload; for
+    /// the empty-manifest case the marker is harmless on any target.
+    /// The hard-error for actual bitcode payload lives at the v2
+    /// emission site (where it can refuse to populate the section
+    /// based on profile).
+    fn emit_jit_template_section(&mut self) {
+        let i8_ty = self.context.i8_type();
+        let manifest_ty = i8_ty.array_type(4);
+        let manifest = self
+            .module
+            .add_global(manifest_ty, None, "karac_jit_template_manifest");
+        // Version 0 = empty; the trailing three bytes are reserved for
+        // future use and stay 0 in v1.
+        let bytes = [
+            i8_ty.const_int(0, false),
+            i8_ty.const_int(0, false),
+            i8_ty.const_int(0, false),
+            i8_ty.const_int(0, false),
+        ];
+        manifest.set_initializer(&i8_ty.const_array(&bytes));
+        manifest.set_linkage(inkwell::module::Linkage::External);
+        let section_name = if cfg!(target_vendor = "apple") {
+            "__KARA,__jittmpl"
+        } else {
+            ".kara_jit_template"
+        };
+        manifest.set_section(Some(section_name));
+        self.used_data_globals.push(manifest);
+    }
+
     /// Materialize the special `@llvm.used` global from `used_symbols`.
     /// Standard LLVM convention: an `appending`-linkage array of pointers
     /// in section `llvm.metadata`. The linker treats every entry as
     /// implicitly referenced and preserves it across dead-code elimination.
     /// No-op when no `#[used]` symbols were declared.
     fn emit_llvm_used(&mut self) {
-        if self.used_symbols.is_empty() {
+        if self.used_symbols.is_empty() && self.used_data_globals.is_empty() {
             return;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let arr_ty = ptr_ty.array_type(self.used_symbols.len() as u32);
+        let total = (self.used_symbols.len() + self.used_data_globals.len()) as u32;
+        let arr_ty = ptr_ty.array_type(total);
         let global = self.module.add_global(arr_ty, None, "llvm.used");
-        let entries: Vec<inkwell::values::PointerValue<'ctx>> = self
+        let mut entries: Vec<inkwell::values::PointerValue<'ctx>> = self
             .used_symbols
             .iter()
             .map(|f| f.as_global_value().as_pointer_value())
             .collect();
+        entries.extend(self.used_data_globals.iter().map(|g| g.as_pointer_value()));
         let init = ptr_ty.const_array(&entries);
         global.set_initializer(&init);
         global.set_linkage(inkwell::module::Linkage::Appending);

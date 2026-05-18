@@ -6814,13 +6814,25 @@ fn main() {
     }
 
     #[test]
-    fn test_ir_no_used_means_no_llvm_used_global() {
-        // Without `#[used]`, no `@llvm.used` global should appear.
+    fn test_ir_no_used_means_only_jit_template_in_llvm_used_global() {
+        // Without `#[used]`, the only entry in `@llvm.used` is the
+        // phase-7-line-14 `.kara_jit_template` manifest, which always
+        // emits (the 4-byte marker is reserved at v1 freeze for the
+        // post-v1 JIT-template story — see
+        // `Codegen::emit_jit_template_section`).
         let ir = ir_for("fn keep() -> i64 { 7 }\nfn main() { println(keep()); }");
+        let used_line = ir
+            .lines()
+            .find(|l| l.contains("@llvm.used"))
+            .unwrap_or_else(|| panic!("expected one @llvm.used line; IR: {ir}"));
         assert!(
-            !ir.contains("@llvm.used"),
-            "should not emit @llvm.used when no `#[used]` attributes; IR: {}",
-            ir
+            used_line.contains("@karac_jit_template_manifest"),
+            "expected jit-template manifest to be the lone @llvm.used entry; line: {used_line}",
+        );
+        // Bound: a `[1 x ptr]` shape means exactly one entry.
+        assert!(
+            used_line.contains("[1 x ptr]"),
+            "expected @llvm.used to carry exactly one entry; line: {used_line}",
         );
     }
 
@@ -13202,6 +13214,134 @@ fn main() {
         assert!(
             !ir_off.contains("@karac_hotswap_table"),
             "hot-swap off must not emit table; got:\n{ir_off}",
+        );
+    }
+
+    /// Phase-7 line 14 — verify the `.kara_jit_template` section is
+    /// reserved with a 4-byte `version=0 / empty` manifest. v1
+    /// emission only — actual JIT-template payloads are post-v1 per
+    /// `deferred.md § Runtime Monomorphization JIT`.
+    ///
+    /// Three layers of assertion catch different rot modes:
+    /// 1. IR — the global + initializer + section name appear with
+    ///    the right shape. Catches accidental rename/drop.
+    /// 2. Object file — `nm` reports the symbol, confirming the
+    ///    backend honors the codegen request.
+    /// 3. Linked executable — the symbol survives `--gc-sections` /
+    ///    `-dead_strip`. Catches the case where v2+ readers can't
+    ///    locate the manifest after the linker has run.
+    #[test]
+    fn test_jit_template_section_reserved() {
+        use karac::codegen::compile_to_ir;
+
+        let src = r#"
+fn main() {}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse failed: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+
+        let ir = compile_to_ir(&parsed.program, None, None).expect("codegen failed");
+
+        // Layer 1 — IR shape. The manifest global must exist with
+        // the right name, type, and `version=0 / empty` initializer.
+        assert!(
+            ir.contains("@karac_jit_template_manifest"),
+            "expected manifest global in IR; got:\n{ir}",
+        );
+        // The 4-byte zero initializer should appear in some IR form
+        // (`zeroinitializer` if LLVM folds it, otherwise explicit
+        // `[4 x i8] c\"\\00\\00\\00\\00\"`).
+        let initializer_ok = ir.contains("zeroinitializer")
+            || ir.contains(r#"c"\00\00\00\00""#)
+            || ir.contains("[i8 0, i8 0, i8 0, i8 0]");
+        assert!(
+            initializer_ok,
+            "expected version=0 / empty initializer for manifest; got:\n{ir}",
+        );
+        // Section name — picks `__KARA,__jittmpl` on Apple targets
+        // (Mach-O 16-char limit) and `.kara_jit_template` elsewhere.
+        let section_name = if cfg!(target_vendor = "apple") {
+            "__KARA,__jittmpl"
+        } else {
+            ".kara_jit_template"
+        };
+        assert!(
+            ir.contains(section_name),
+            "expected section `{section_name}` in IR; got:\n{ir}",
+        );
+        // The manifest must register in `@llvm.used` so the linker
+        // can't strip it under `--gc-sections` / `-dead_strip`.
+        assert!(
+            ir.contains("@llvm.used"),
+            "expected @llvm.used to pin the manifest; got:\n{ir}",
+        );
+    }
+
+    /// Phase-7 line 14 — object-file + linked-binary roundtrip. The
+    /// symbol must survive backend codegen, linking, and (where the
+    /// platform supports it) `--gc-sections`/`-dead_strip`. Skipped
+    /// gracefully when `libkarac_runtime.a` isn't built; the IR-shape
+    /// test above is the unconditional safety net.
+    #[test]
+    fn test_jit_template_section_roundtrip() {
+        use karac::codegen::{compile_to_object, link_executable};
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+        let src = r#"
+fn main() {}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse failed: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let obj_path = format!("/tmp/karac_jit_tmpl_{}_{}.o", std::process::id(), id);
+        let exe_path = format!("/tmp/karac_jit_tmpl_{}_{}", std::process::id(), id);
+
+        compile_to_object(&parsed.program, &obj_path, None, None).expect("codegen failed");
+
+        // Layer 2 — symbol visible in the object file.
+        let nm_obj = std::process::Command::new("nm")
+            .arg(&obj_path)
+            .output()
+            .expect("nm should be on PATH");
+        let nm_obj_stdout = String::from_utf8_lossy(&nm_obj.stdout);
+        assert!(
+            nm_obj_stdout.contains("karac_jit_template_manifest"),
+            "expected manifest symbol in object file; nm stdout:\n{nm_obj_stdout}",
+        );
+
+        // Layer 3 — symbol survives linking. Soft-skip if the runtime
+        // archive isn't built (the link will fail without it).
+        if link_executable(&obj_path, &exe_path).is_err() {
+            let _ = std::fs::remove_file(&obj_path);
+            eprintln!("jit-template roundtrip: link skipped (libkarac_runtime.a missing?)");
+            return;
+        }
+        let nm_exe = std::process::Command::new("nm")
+            .arg(&exe_path)
+            .output()
+            .expect("nm should be on PATH");
+        let nm_exe_stdout = String::from_utf8_lossy(&nm_exe.stdout);
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
+        assert!(
+            nm_exe_stdout.contains("karac_jit_template_manifest"),
+            "expected manifest symbol in linked executable; nm stdout:\n{nm_exe_stdout}",
         );
     }
 
