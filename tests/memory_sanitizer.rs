@@ -930,6 +930,73 @@ fn main() {
         );
     }
 
+    // Regression for the kata 133 (`clone_graph` BFS) perf cliff
+    // introduced by commit 2bd2dba ("per-iteration cleanup + null-
+    // guarded RcDec for body-local lets", 2026-05-17). The per-iter
+    // cleanup fires `rc_dec` on every body-local shared-struct let on
+    // every loop iteration. `let n = visited.get(k).unwrap()` binds
+    // an aliasing handle to the Map's stored ref because the runtime
+    // `karac_map_get` byte-copies the bucket's value pointer without
+    // touching its refcount, and the let-site's `rhs_yields_fresh_ref`
+    // path treats MethodCall RHS as "fresh +1 ref" so it skips the
+    // receive-side rc_inc. Pre-fix, the per-iter dec on `n` drove the
+    // bucket's ref to zero, freeing the Node while the Map still held
+    // a dangling pointer. Subsequent allocations reused the freed
+    // chunk and every subsequent get-then-bind returned a node
+    // aliasing the latest reuse — observable here as `visited.get(0).val`
+    // reading the wrong value, and in kata 133 as a ~100× malloc-
+    // freelist thrash on the next clone_graph call. The fix
+    // (`compile_map_method` "get" arm) emits an rc_inc on the loaded
+    // pointer when V is a shared struct, aligning Map.get with the
+    // calling convention that shared-returning callees hand the
+    // caller a fresh +1 ref. The Vec[Node] field in the Node type is
+    // load-bearing for the repro — it bumps the heap allocation to
+    // 40 bytes, putting it in a freelist bucket the next alloc reuses
+    // deterministically; with no Vec field the 16-byte Node lands in
+    // a sparser bucket and the corruption pattern doesn't surface.
+    #[test]
+    fn asan_map_get_shared_value_in_loop_no_alias_collapse() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn main() {
+    let mut visited: Map[i64, Node] = Map.new();
+    let k: i64 = 5;
+    for i in 0..k {
+        let fresh = Node { val: i, neighbors: Vec.new() };
+        let _ = visited.insert(i, fresh);
+    }
+    // The push-into-Vec[Node] step is what triggers the per-iter
+    // cleanup of `a` and `b` to free the Map's only ref; without
+    // this second loop the bug doesn't surface because the inserts'
+    // per-iter cleanup is already balanced by the existing
+    // `suppress_source_vec_cleanup_for_arg` rc_inc.
+    for i in 0..k {
+        let a = visited.get(i).unwrap();
+        let b = visited.get((i + 1) % k).unwrap();
+        a.neighbors.push(b);
+    }
+    // Read with let-bindings (not inline chains). Inline
+    // `Map.get(k).unwrap().val` chains hit a pre-existing bug-#8-
+    // adjacent dec-during-temp-discard path that flips the loaded
+    // val to zero — orthogonal to the regression under test here.
+    let n0 = visited.get(0_i64).unwrap();
+    let n1 = visited.get(1_i64).unwrap();
+    let n4 = visited.get(4_i64).unwrap();
+    println(n0.val);
+    println(n1.val);
+    println(n4.val);
+}
+"#,
+            &["0", "1", "4"],
+            "map_get_shared_value_in_loop_no_alias_collapse",
+        );
+    }
+
     #[test]
     fn asan_set_clone_independent_handle() {
         // Set[i64] clone — both sets free independent bucket arrays.

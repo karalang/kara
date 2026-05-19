@@ -894,6 +894,42 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_load(val_ty, val_slot, "map.get.val")
                     .unwrap();
+                // Shared-struct V: the runtime `karac_map_get` /
+                // mono `karac_map_*_get` byte-copies the bucket's
+                // stored pointer into `val_slot` without touching its
+                // refcount. The caller's let-site treats Call/MethodCall
+                // RHS as "fresh +1 ref" (`rhs_yields_fresh_ref` →
+                // skip receive-side rc_inc) under the assumption every
+                // shared-returning callee hands the caller a freshly-
+                // owned ref. Map.get violates that assumption: the
+                // returned ptr is an alias to the bucket's stored ref.
+                // Pre-2bd2dba, the let-binding's queued scope-exit
+                // dec only fired at function tail (function-scope
+                // frame), so the alias-then-discard pattern didn't
+                // expose the missing inc. Post-2bd2dba, the per-iter
+                // cleanup of body-local lets fires on every loop
+                // iteration; without the inc here, the per-iter dec
+                // brings the bucket's ref to zero, freeing the Node
+                // while the Map still holds a dangling pointer.
+                // Subsequent allocations reuse the freed chunk and
+                // every bucket whose value was the freed chunk now
+                // aliases the new occupant — observed in kata 133
+                // (clone_graph BFS over 2000-node ring graph) as a
+                // ~100× per-clone slowdown from malloc-freelist
+                // thrashing. Emit the inc here so Map.get matches the
+                // calling convention; the caller's per-iter dec
+                // brings the count back to the construction-time
+                // value, leaving the Map's bucket reference intact.
+                if let Some(te) = self.var_elem_type_exprs.get(var_name).cloned() {
+                    if let TypeKind::Path(p) = &te.kind {
+                        if let Some(seg) = p.segments.last() {
+                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                                let ptr = elem_val.into_pointer_value();
+                                self.emit_refcount_inc("map.get", info.heap_type, ptr);
+                            }
+                        }
+                    }
+                }
                 // Multi-word payload via `coerce_to_payload_words` — see
                 // `Vec.first`/`Vec.last` arm for the rationale.
                 let some_payload_words = self.coerce_to_payload_words(elem_val, 3)?;
