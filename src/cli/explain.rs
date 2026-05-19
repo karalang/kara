@@ -52,6 +52,40 @@ pub fn render(target: &ExplainTarget, format: ExplainFormat) {
     }
 }
 
+/// Like [`render`] but returns the rendered text (or a structured
+/// error string) instead of printing + `process::exit`-ing. Used by
+/// non-CLI consumers — currently `Session::dispatch_magic` so the
+/// Jupyter `%explain` magic surface can route the lookup result into
+/// the kernel's `display_data` channel without going through stdout.
+pub fn render_to_string(target: &ExplainTarget, format: ExplainFormat) -> Result<String, String> {
+    match target {
+        ExplainTarget::Concept(name) => {
+            let Some(concept) = ExplainConcept::parse(name) else {
+                return Err(format!(
+                    "unknown concept '{name}'. Supported: {}.",
+                    concept_list(),
+                ));
+            };
+            Ok(match format {
+                ExplainFormat::Text => concept.page().to_string(),
+                ExplainFormat::Json => render_concept_json(concept),
+            })
+        }
+        ExplainTarget::Class(name) => {
+            let Some(class) = parse_class_name(name) else {
+                return Err(format!(
+                    "unknown diagnostic class '{name}'. Supported: {}.",
+                    class_list(),
+                ));
+            };
+            Ok(match format {
+                ExplainFormat::Text => render_class_text(class),
+                ExplainFormat::Json => render_class_json(class),
+            })
+        }
+    }
+}
+
 fn render_concept(name: &str, format: ExplainFormat) {
     let Some(concept) = ExplainConcept::parse(name) else {
         eprintln!(

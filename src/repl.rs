@@ -147,6 +147,39 @@ pub fn run_with_options(opts: ReplOptions) {
     }
 }
 
+/// Result of `Session::dispatch_magic` — the rendered display text
+/// plus a flag indicating whether the kernel should treat this as an
+/// error reply. The Jupyter kernel (tracker line 687, still `[ ]`)
+/// will route `ok` true results into `display_data` / `execute_result`
+/// and `ok` false results into `error` replies with the carried text
+/// as the traceback body. The text is line-oriented and pre-trimmed
+/// so a kernel can splice it into its output channel without
+/// re-formatting.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MagicOutput {
+    pub text: String,
+    pub ok: bool,
+}
+
+impl MagicOutput {
+    /// Construct a successful magic reply.
+    pub fn ok(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ok: true,
+        }
+    }
+
+    /// Construct an error magic reply. The kernel maps the text into
+    /// the `error` channel's traceback body.
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            text: text.into(),
+            ok: false,
+        }
+    }
+}
+
 /// Result of `Session::evaluate_cell_captured` — captured stdout plus any
 /// parse / resolve / type errors. Used by integration tests; the
 /// production `evaluate_cell` writes directly to the process's stdout/
@@ -161,6 +194,16 @@ pub struct EvaluatedCell {
     /// requires the channel be visible — never silent). Production
     /// `evaluate_cell` mirrors each entry to stderr so users see them.
     pub notes: Vec<String>,
+    /// Per-cell effect set rendered as the `writes(A, B) reads(C)` text
+    /// the Jupyter kernel uses to display a cell's effect footer
+    /// automatically after every execution. Empty for cells whose
+    /// inferred effects on `main` (or accumulated items) are empty —
+    /// the kernel suppresses the footer in that case so pure cells
+    /// stay visually quiet. Computed by `compute_cell_effect_footer`
+    /// after the cell's interpreter run succeeds; the same
+    /// `render_effect_decls` helper that drives `:save`'s declared-
+    /// effects rendering keeps the format stable.
+    pub effect_footer: String,
 }
 
 /// Internal result type for `run_with_wrapper_inner` — bundles captured
@@ -292,6 +335,258 @@ impl Session {
     /// only run once across cells.
     pub fn let_snapshots(&self) -> &HashMap<String, Value> {
         &self.let_snapshots
+    }
+
+    /// Dispatch a Jupyter-style `%magic` line. The kernel binary
+    /// (line 687 of the tracker, still `[ ]`) routes every cell whose
+    /// first token starts with `%` through this entry point; the
+    /// returned `MagicOutput` carries the rendered text, the channel
+    /// the kernel should display on (`stdout` vs `display_data` for
+    /// rich shapes), and an `ok` flag the kernel maps to its protocol
+    /// error semantics. The same dispatcher is exercised by the test
+    /// suite so the surface is observable without a kernel binary.
+    ///
+    /// Supported magics (line 689 spec):
+    ///
+    /// - `%effects`               — session-wide effect set on items_source
+    /// - `%ownership`             — current binding table with mode / RC status
+    /// - `%explain <name>`        — wrap `karac explain` (concept or class)
+    /// - `%set auto-clone on|off` — toggle the opt-in ownership mode
+    /// - `%provide R = expr`      — open a cross-cell `with_provider` scope
+    /// - `%end-provide R`         — close the matching provider scope
+    ///
+    /// The `%provide` / `%end-provide` forms parse cleanly but return a
+    /// structured `not yet wired` error today — they share their
+    /// compilation path with the `:provide` / `:end-provide` REPL
+    /// meta-commands tracked at line 681 of the tracker, which has not
+    /// shipped. Once line 681 lands, the wiring here forwards to the
+    /// same handler the meta-command uses; the magic-side parser stays
+    /// in place. `%rc` is deferred to post-MVP per the spec (RC
+    /// fallback's introspection surface still settling).
+    pub fn dispatch_magic(&mut self, line: &str) -> MagicOutput {
+        let trimmed = line.trim();
+        let body = trimmed.strip_prefix('%').unwrap_or(trimmed).trim();
+        let (cmd, rest) = match body.split_once(char::is_whitespace) {
+            Some((c, r)) => (c.trim(), r.trim()),
+            None => (body, ""),
+        };
+        match cmd {
+            "effects" => self.magic_effects(),
+            "ownership" => self.magic_ownership(),
+            "explain" => self.magic_explain(rest),
+            "set" => self.magic_set(rest),
+            "provide" => MagicOutput::error(
+                "magic `%provide` not yet wired — cross-cell provider scoping (`:provide` / `%provide`) lands once tracker line 681 ships; tracked at the `Cross-cell providers` entry in `docs/implementation_checklist/phase-5-diagnostics.md`",
+            ),
+            "end-provide" => MagicOutput::error(
+                "magic `%end-provide` not yet wired — see `%provide` above; tracker line 681",
+            ),
+            "rc" => MagicOutput::error(
+                "magic `%rc` is deferred to post-MVP per the line 689 spec — RC fallback's introspection surface is still settling",
+            ),
+            "" => MagicOutput::error(
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %provide R = expr, %end-provide R",
+            ),
+            other => MagicOutput::error(format!(
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %provide R = expr, %end-provide R"
+            )),
+        }
+    }
+
+    fn magic_effects(&self) -> MagicOutput {
+        // Reuse `show_effects`'s logic but accumulate into a string
+        // instead of printing. The kernel will route this through
+        // `display_data` so a long list lands cleanly in the cell
+        // output area.
+        if self.items_source.trim().is_empty() {
+            return MagicOutput::ok("(no items defined yet)");
+        }
+        let parsed = crate::parse(&self.items_source);
+        if !parsed.errors.is_empty() {
+            return MagicOutput::error("(items_source has parse errors — fix them first)");
+        }
+        let effects = crate::effectcheck(&parsed.program);
+        let mut entries: Vec<(&String, &crate::effectchecker::EffectSet)> =
+            effects.inferred_effects.iter().collect();
+        entries.sort_by(|a, b| a.0.cmp(b.0));
+        let mut out = String::new();
+        let mut printed = 0usize;
+        for (name, eff) in entries {
+            if eff.effects.is_empty() {
+                continue;
+            }
+            let rendered = render_effect_decls(eff);
+            if rendered.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("{name}: {rendered}\n"));
+            printed += 1;
+        }
+        if printed == 0 {
+            out.push_str("(no effects inferred so far)\n");
+        }
+        MagicOutput::ok(out.trim_end())
+    }
+
+    fn magic_ownership(&self) -> MagicOutput {
+        // Compute the ownership surface for the current session view:
+        // items_source wrapped in a synthetic `fn main()` so the
+        // ownership pass classifies any binding the user has
+        // accumulated. The pass's `representations` map records
+        // parameters and RC-promoted bindings; owned-stack locals
+        // (the most common case in a `let x = 5;` REPL session) do
+        // not appear there, so we layer a baseline walk over the
+        // session's `persistent_lets` to keep the table populated
+        // for plain `let` bindings. Each row is `<binding>: <mode>`
+        // sorted lexicographically; RC promotions from the
+        // ownership pass win over the baseline owned-stack label.
+        let mut synth = String::new();
+        if !self.items_source.trim().is_empty() {
+            synth.push_str(&strip_main(&self.items_source));
+            if !synth.is_empty() && !synth.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str("}\n");
+        let parsed = crate::parse(&synth);
+        if !parsed.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has parse errors — fix them before inspecting ownership)",
+            );
+        }
+        let resolved = crate::resolve(&parsed.program);
+        if !resolved.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has resolve errors — fix them before inspecting ownership)",
+            );
+        }
+        let typed = crate::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has type errors — fix them before inspecting ownership)",
+            );
+        }
+        let owned = crate::ownershipcheck(&parsed.program, &typed);
+
+        // Baseline: every persistent-let binding is owned-stack until
+        // the ownership pass overrides it (e.g. with an RC promotion).
+        let mut rows: BTreeMap<String, String> = BTreeMap::new();
+        for prior_let in &self.persistent_lets {
+            for name in parse_let_binding_names(prior_let) {
+                rows.insert(name, "owned (stack)".to_string());
+            }
+        }
+        for (key, mode) in &owned.representations {
+            if let Some(stripped) = key.strip_prefix("main.") {
+                rows.insert(stripped.to_string(), mode.clone());
+            }
+        }
+        if rows.is_empty() {
+            return MagicOutput::ok("(no bindings to inspect)");
+        }
+        let mut out = String::new();
+        for (binding, mode) in rows {
+            out.push_str(&format!("{binding}: {mode}\n"));
+        }
+        MagicOutput::ok(out.trim_end())
+    }
+
+    fn magic_explain(&self, rest: &str) -> MagicOutput {
+        if rest.is_empty() {
+            return MagicOutput::error("usage: %explain <concept-or-class-name>");
+        }
+        // Try concept lookup first, then class. Matches the CLI
+        // surface's lookup order (concept names + class wire forms
+        // share the same identifier namespace today). The CLI flag
+        // `--format=json` is not exposed via the magic surface; the
+        // kernel renders the text form into the cell output.
+        let concept_target = crate::cli::ExplainTarget::Concept(rest.to_string());
+        if let Ok(rendered) =
+            crate::cli::explain::render_to_string(&concept_target, crate::cli::ExplainFormat::Text)
+        {
+            return MagicOutput::ok(rendered.trim_end());
+        }
+        let class_target = crate::cli::ExplainTarget::Class(rest.to_string());
+        match crate::cli::explain::render_to_string(&class_target, crate::cli::ExplainFormat::Text)
+        {
+            Ok(rendered) => MagicOutput::ok(rendered.trim_end()),
+            Err(msg) => MagicOutput::error(msg),
+        }
+    }
+
+    fn magic_set(&mut self, rest: &str) -> MagicOutput {
+        // Spec form: `%set auto-clone on|off`. The flag is the only
+        // setting in the v1 surface; future settings extend the same
+        // `<key> <value>` shape.
+        let (key, value) = match rest.split_once(char::is_whitespace) {
+            Some((k, v)) => (k.trim(), v.trim()),
+            None => (rest.trim(), ""),
+        };
+        match key {
+            "auto-clone" => match value {
+                "on" | "true" | "1" => {
+                    self.auto_clone = true;
+                    MagicOutput::ok("auto-clone: on")
+                }
+                "off" | "false" | "0" => {
+                    self.auto_clone = false;
+                    MagicOutput::ok("auto-clone: off")
+                }
+                "" => MagicOutput::error("usage: %set auto-clone on|off"),
+                other => MagicOutput::error(format!(
+                    "unknown value `{other}` for auto-clone. Use `on` or `off`."
+                )),
+            },
+            "" => MagicOutput::error("usage: %set <key> <value>"),
+            other => {
+                MagicOutput::error(format!("unknown setting `{other}`. Supported: auto-clone."))
+            }
+        }
+    }
+
+    /// Compute the per-cell effect footer for a statement-style cell.
+    /// Runs effect inference on the synthetic source (items + replayed
+    /// lets + the just-evaluated cell body) and renders `main`'s
+    /// effect set via the same `render_effect_decls` helper that
+    /// drives `:save`'s declared-effects. Returns `""` for pure cells
+    /// so the kernel can suppress the footer line entirely instead of
+    /// rendering an empty annotation. Defensive on parse failure
+    /// (returns `""` so footer rendering never surfaces a fresh
+    /// parser error after a cell that already evaluated cleanly).
+    fn compute_cell_effect_footer(&self, cell_src: &str) -> String {
+        let mut synth = String::new();
+        synth.push_str(&strip_main(&self.items_source));
+        if !synth.is_empty() && !synth.ends_with('\n') {
+            synth.push('\n');
+        }
+        synth.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str(cell_src);
+        if !cell_src.ends_with('\n') {
+            synth.push('\n');
+        }
+        synth.push_str("}\n");
+        let parsed = crate::parse(&synth);
+        if !parsed.errors.is_empty() {
+            return String::new();
+        }
+        let effects = crate::effectcheck(&parsed.program);
+        let Some(set) = effects.inferred_effects.get("main") else {
+            return String::new();
+        };
+        render_effect_decls(set)
     }
 
     /// Construct a session pre-configured from caller-supplied
@@ -968,6 +1263,7 @@ impl Session {
                 stdout: String::new(),
                 errors: errs,
                 notes: Vec::new(),
+                effect_footer: String::new(),
             };
         }
 
@@ -975,10 +1271,12 @@ impl Session {
         match self.run_with_wrapper_inner(trimmed, /* capture */ true) {
             Ok(out) => {
                 self.capture_new_lets(trimmed);
+                let effect_footer = self.compute_cell_effect_footer(trimmed);
                 EvaluatedCell {
                     stdout: out.stdout.join(""),
                     errors: Vec::new(),
                     notes: out.notes,
+                    effect_footer,
                 }
             }
             Err(out) => {
@@ -988,6 +1286,7 @@ impl Session {
                     stdout: String::new(),
                     errors: out.errors,
                     notes: out.notes,
+                    effect_footer: String::new(),
                 }
             }
         }

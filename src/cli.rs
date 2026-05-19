@@ -27,7 +27,7 @@ use std::path::PathBuf;
 use std::process;
 
 mod args;
-mod explain;
+pub mod explain;
 mod help;
 
 pub use args::parse_args;

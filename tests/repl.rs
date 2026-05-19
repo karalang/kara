@@ -5,7 +5,7 @@
 //! `println` output into an in-memory buffer so we can assert against it
 //! without touching the process's real stdout fd.
 
-use karac::repl::{ReplOptions, Session};
+use karac::repl::{MagicOutput, ReplOptions, Session};
 
 // ── Item accumulation ──────────────────────────────────────────────────────
 
@@ -1146,4 +1146,282 @@ fn let_value_snapshot_unused_binding_still_visible() {
     // wires the binding through without re-running the literal.
     let r = s.evaluate_cell_captured("println(unused);");
     assert_eq!(r.stdout.trim(), "123");
+}
+
+// ── Jupyter %magic surface ────────────────────────────────────────────────
+
+#[test]
+fn magic_unknown_returns_structured_error() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%not-a-real-magic");
+    assert!(!out.ok, "unknown magic must surface as an error reply");
+    assert!(
+        out.text.contains("unknown magic") && out.text.contains("not-a-real-magic"),
+        "expected the error text to name the bad magic; got: {}",
+        out.text,
+    );
+    // Listing of supported magics is part of the error UX.
+    assert!(
+        out.text.contains("%effects")
+            && out.text.contains("%ownership")
+            && out.text.contains("%explain")
+            && out.text.contains("%set"),
+        "expected the error text to list supported magics; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_effects_renders_inferred_effect_set() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn touch_env() writes(Env) { env.set(\"X\", \"1\"); }");
+    let out = s.dispatch_magic("%effects");
+    assert!(out.ok, "expected %effects to succeed; got: {}", out.text);
+    assert!(
+        out.text.contains("touch_env") && out.text.contains("writes(Env)"),
+        "expected %effects output to surface the inferred effect set; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_effects_empty_when_session_pure() {
+    // No items_source yet — the magic explains the state instead of
+    // emitting a blank cell.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%effects");
+    assert!(out.ok);
+    assert!(
+        out.text.contains("no items defined yet"),
+        "expected the empty-session hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_ownership_lists_binding_modes() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("let n = 7;");
+    let out = s.dispatch_magic("%ownership");
+    assert!(out.ok, "expected %ownership to succeed; got: {}", out.text);
+    // The ownership pass classifies a bare `let n = 7;` as an owned
+    // stack binding; the exact representation string matches what
+    // `OwnershipCheckResult.representations` records.
+    assert!(
+        out.text.contains("n:"),
+        "expected `n:` row in the %ownership table; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_ownership_empty_when_no_bindings() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn foo() {}");
+    let out = s.dispatch_magic("%ownership");
+    assert!(out.ok);
+    assert!(
+        out.text.contains("no bindings"),
+        "expected an empty-bindings hint when no lets exist; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_explain_concept_lookup() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%explain closures");
+    assert!(
+        out.ok,
+        "expected %explain closures to succeed; got: {}",
+        out.text
+    );
+    assert!(
+        out.text.to_lowercase().contains("closure"),
+        "expected the closures concept body; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_explain_class_lookup() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%explain TYPE_MISMATCH");
+    assert!(
+        out.ok,
+        "expected %explain class lookup to succeed; got: {}",
+        out.text
+    );
+    assert!(
+        out.text.contains("TYPE_MISMATCH"),
+        "expected the class name in the output; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_explain_unknown_target() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%explain not-a-real-thing");
+    assert!(!out.ok, "unknown explain target must surface as error");
+    // The lookup tries concept then class; the final error should
+    // name the class-list since that's the last failure.
+    assert!(
+        out.text.contains("unknown") && out.text.contains("not-a-real-thing"),
+        "expected error text naming the bad lookup; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_explain_no_argument() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%explain");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("usage:"),
+        "expected usage text on empty %explain; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_set_auto_clone_toggles_flag() {
+    let mut s = Session::new();
+    assert!(!s.auto_clone(), "default off");
+
+    let on = s.dispatch_magic("%set auto-clone on");
+    assert!(on.ok, "expected `on` toggle to succeed; got: {}", on.text);
+    assert!(s.auto_clone(), "flag should be on after toggle");
+    assert!(on.text.contains("auto-clone: on"));
+
+    let off = s.dispatch_magic("%set auto-clone off");
+    assert!(off.ok);
+    assert!(!s.auto_clone(), "flag should be off after toggle");
+    assert!(off.text.contains("auto-clone: off"));
+}
+
+#[test]
+fn magic_set_auto_clone_rejects_bad_value() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%set auto-clone maybe");
+    assert!(!out.ok, "bad value must surface as error");
+    assert!(
+        out.text.contains("maybe") && out.text.contains("on") && out.text.contains("off"),
+        "expected the error to name the bad value + accepted options; got: {}",
+        out.text,
+    );
+    assert!(!s.auto_clone(), "flag must NOT change on rejected value");
+}
+
+#[test]
+fn magic_set_unknown_setting() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%set frobnicate true");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("frobnicate") && out.text.contains("auto-clone"),
+        "expected the error to name the bad setting + the supported set; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_provide_returns_deferred_error() {
+    // %provide / %end-provide share their compilation path with the
+    // :provide / :end-provide REPL meta-commands tracked at line 681.
+    // Line 681 has not shipped, so the magic dispatcher surfaces a
+    // structured deferral pointer rather than a "no such magic"
+    // error — the kernel can render this in the cell output without
+    // hiding the spec'd surface.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%provide MyResource = SomeProvider {}");
+    assert!(!out.ok, "deferred magic must surface as error");
+    assert!(
+        out.text.contains("not yet wired") && out.text.contains("line 681"),
+        "expected the error to mention the tracker pointer; got: {}",
+        out.text,
+    );
+
+    let out = s.dispatch_magic("%end-provide MyResource");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("not yet wired"),
+        "%end-provide must also surface as deferred; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_rc_is_post_mvp() {
+    // Spec explicitly defers %rc to post-MVP. Surfaces as error with
+    // the deferral reason so the kernel reply can carry the
+    // explanation.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%rc");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("post-MVP") || out.text.contains("RC fallback"),
+        "expected %rc to surface a deferral reason; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_output_construction_helpers() {
+    // Sanity for the consumer-facing MagicOutput shape — the kernel
+    // will rely on these for adapting cell outputs.
+    let ok_msg = MagicOutput::ok("hello");
+    assert!(ok_msg.ok);
+    assert_eq!(ok_msg.text, "hello");
+
+    let err = MagicOutput::error("bad");
+    assert!(!err.ok);
+    assert_eq!(err.text, "bad");
+}
+
+// ── Per-cell effect footer ────────────────────────────────────────────────
+
+#[test]
+fn cell_effect_footer_populates_after_run() {
+    // A cell that triggers a tracked effect (env.set carries
+    // `writes(Env)`) must surface the footer string the kernel will
+    // render below the cell's stdout.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("env.set(\"X\", \"y\");");
+    assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
+    assert!(
+        r.effect_footer.contains("writes(Env)"),
+        "expected `writes(Env)` in the footer; got: {:?}",
+        r.effect_footer,
+    );
+}
+
+#[test]
+fn cell_effect_footer_empty_for_pure_cell() {
+    // Pure cells (no tracked effect calls) emit an empty footer so
+    // the kernel can suppress the annotation.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("let _x = 1 + 2;");
+    assert!(r.errors.is_empty());
+    assert!(
+        r.effect_footer.is_empty(),
+        "pure cells must emit an empty footer; got: {:?}",
+        r.effect_footer,
+    );
+}
+
+#[test]
+fn cell_effect_footer_empty_for_pure_items_cell() {
+    // Item-only cells use the early-return path of evaluate_cell_captured
+    // (no synthetic main is built). The footer field is empty since
+    // there's no statement-side run to summarize.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("fn one() -> i64 { 1 }");
+    assert!(r.errors.is_empty());
+    assert!(
+        r.effect_footer.is_empty(),
+        "pure items cell must emit an empty footer; got: {:?}",
+        r.effect_footer,
+    );
 }
