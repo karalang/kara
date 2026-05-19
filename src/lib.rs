@@ -11,6 +11,7 @@ pub mod cost_summary;
 pub mod def_path;
 pub mod desugar;
 pub mod diagnostic_attrs_lint;
+pub mod diagnostic_class;
 pub mod doc;
 pub mod dominator;
 pub mod edit_distance;
