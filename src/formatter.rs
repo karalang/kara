@@ -20,6 +20,64 @@ pub fn format_program(program: &Program) -> String {
     f.output
 }
 
+/// Render a single [`TypeExpr`] to its canonical surface form — the same
+/// shape the formatter prints inside a larger item. Useful to outside
+/// modules (e.g. `karac catalog`) that need to emit a type's display
+/// string without round-tripping through a full item.
+pub fn render_type_expr(ty: &TypeExpr) -> String {
+    let mut f = Formatter::new();
+    f.format_type_expr(ty);
+    f.output
+}
+
+/// Render an [`EffectList`] to its surface form without the leading
+/// ` with ` keyword — the caller decides whether to wrap. Mirrors
+/// [`render_type_expr`].
+pub fn render_effect_list(effects: &EffectList) -> String {
+    let mut f = Formatter::new();
+    let mut first = true;
+    for item in &effects.items {
+        if !first {
+            f.write_str(" ");
+        }
+        first = false;
+        match item {
+            EffectItem::Verb(v) => {
+                f.write_str(&format_effect_verb_kind(&v.kind));
+                f.write_str("(");
+                for (j, r) in v.resources.iter().enumerate() {
+                    if j > 0 {
+                        f.write_str(", ");
+                    }
+                    f.write_path(&r.path);
+                }
+                f.write_str(")");
+            }
+            EffectItem::Group(g) => f.write_ident(g),
+            EffectItem::Polymorphic => f.write_str("_"),
+            EffectItem::Variable(v) => f.write_ident(v),
+        }
+    }
+    f.output
+}
+
+/// Render a single [`Expr`] to its canonical surface form — for catalog
+/// emitters that surface refinement predicates (`requires` / `ensures`)
+/// as source strings.
+pub fn render_expr(expr: &Expr) -> String {
+    let mut f = Formatter::new();
+    f.format_expr(expr);
+    f.output
+}
+
+/// Render a single [`TraitBound`] (`Trait[Args]`) to its surface form.
+pub fn render_trait_bound(bound: &TraitBound) -> String {
+    let mut f = Formatter::new();
+    f.write_path(&bound.path);
+    f.format_generic_args_opt(&bound.generic_args);
+    f.output
+}
+
 pub(super) struct Formatter {
     pub(super) output: String,
     pub(super) indent: usize,

@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod attribute_validator;
+pub mod catalog;
 pub mod cfg;
 pub mod cli;
 #[cfg(feature = "llvm")]

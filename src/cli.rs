@@ -208,6 +208,19 @@ pub enum Command {
     /// wiring lands in a follow-up; this arm currently emits a
     /// "not yet wired" diagnostic.
     Vendor,
+    /// Emit the project's public API surface as JSONL on stdout. One record
+    /// per exported item (`fn`, `struct`, `enum`, `trait`, `const`,
+    /// `type_alias`, `distinct_type`, `effect_resource`, `extern_fn`,
+    /// plus `impl_method` rows for `pub` methods inside `impl` blocks).
+    /// Each record carries the item's signature shape (generics with
+    /// bounds, parameters with modes and types, return type, declared
+    /// effect row, refinement constraints) and source span. Public-only
+    /// — inferred reported-tier effect rows of non-`pub` items are not
+    /// stable enough to index. See `docs/deferred.md § Signature
+    /// Catalog (karac catalog)` and `phase-5-diagnostics.md` line 643.
+    Catalog {
+        file: String,
+    },
     /// Concept-level explainer surface. `karac explain --concept=closures`
     /// renders a per-concept page covering the relevant analysis rules,
     /// diagnostic shapes, and inspection commands. The concept name is
@@ -356,6 +369,28 @@ pub fn execute(cmd: Command) {
         Command::Install { spec } => cmd_install(&spec),
         Command::Vendor => cmd_vendor(),
         Command::Explain { target, format } => explain::render(&target, format),
+        Command::Catalog { file } => cmd_catalog(&file),
+    }
+}
+
+fn cmd_catalog(filename: &str) {
+    let source = read_source(filename);
+    let pipeline = Pipeline::new(filename, &source);
+    // Catalog is a pure AST walk over signatures — name resolution
+    // failures (unknown types in a half-written file, undeclared
+    // effect resources, etc.) don't affect the per-item shape we
+    // surface. Gate on parse only so external tooling can index a
+    // file even when resolve / typecheck would later flag unrelated
+    // issues. Parse failures still hard-fail because a half-parsed
+    // item has no faithful signature to emit.
+    if pipeline.has_parse_errors() {
+        print_text_diagnostics(&pipeline);
+        process::exit(1);
+    }
+    let out = crate::catalog::render(&pipeline.parsed.program, filename);
+    if !out.is_empty() {
+        // `render` already terminates the last record with `\n`; print as-is.
+        print!("{out}");
     }
 }
 

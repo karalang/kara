@@ -44,6 +44,10 @@ COMMANDS:
                                            Arc-provider wraps, borrow flags)
                         monomorphization - per-generic instantiation counts
                                            + per-instance type tuples
+    catalog <file>    Emit the file's public API surface as JSONL on stdout
+                      (one record per exported item with signature shape,
+                      generics, parameters with modes, return type,
+                      declared effects, refinement constraints, and span).
     explain --concept=NAME
                       Print a concept-level explainer page. Available
                       concepts:
@@ -389,6 +393,29 @@ SEE ALSO:
                        Per-function JSON of inferred parameter modes
                        and per-closure capture modes against a real
                        source file."
+        }
+        "catalog" => {
+            "\
+karac catalog - Emit the file's public API surface as JSONL
+
+USAGE:
+    karac catalog <file.kara>
+
+Walks the parsed program and prints one JSON record per exported item on
+its own line (`fn`, `struct`, `enum`, `trait`, `const`, `type_alias`,
+`distinct_type`, `effect_resource`, `extern_fn`, plus `impl_method` rows
+for `pub` methods inside `impl` blocks). Each record carries the item's
+signature shape: generics with bounds, parameters with modes and types,
+return type, declared effect row, refinement constraints, and source
+span. Public-surface only — non-`pub` items are skipped because their
+inferred reported-tier effect rows are not stable enough to index.
+
+DOWNSTREAM CONSUMERS:
+    LLM agents, IDE plugins, doc generators that need a machine-readable
+    view of the project's exported API surface.
+
+OPTIONS:
+    -h, --help         Print this message"
         }
         "vendor" => {
             "\

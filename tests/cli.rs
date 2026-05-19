@@ -3964,3 +3964,168 @@ fn test_lint_cli_allow_via_build_subcommand() {
         "suppressed lint must not surface under `karac build -A`; got: {stderr}",
     );
 }
+
+// ── karac catalog ───────────────────────────────────────────────
+
+fn catalog_tmp_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "karac-cli-catalog-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
+}
+
+#[test]
+fn test_subcommand_help_catalog() {
+    let out = karac_bin().args(["catalog", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("karac catalog"));
+    assert!(stdout.contains("public API surface"));
+    assert!(stdout.contains("JSONL"));
+}
+
+#[test]
+fn test_main_help_lists_catalog_command() {
+    let out = karac_bin().arg("help").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("catalog <file>"),
+        "top-level help should advertise the catalog subcommand; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_catalog_emits_one_record_per_public_item() {
+    let path = catalog_tmp_path("multi");
+    let src = r#"pub fn add(x: i64, y: i64) -> i64 { x + y }
+pub struct Point { pub x: f64, pub y: f64 }
+pub enum Color { Red, Green, Blue }
+pub const TAU: f64 = 6.2831853;
+fn internal() -> i64 { 0 }
+"#;
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["catalog", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        out.status.success(),
+        "karac catalog should exit 0 on a clean file; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(lines.len(), 4, "expected 4 records, got: {stdout}");
+    assert!(lines[0].contains("\"kind\":\"fn\""), "got: {}", lines[0]);
+    assert!(lines[0].contains("\"name\":\"add\""), "got: {}", lines[0]);
+    assert!(
+        lines[1].contains("\"kind\":\"struct\""),
+        "got: {}",
+        lines[1]
+    );
+    assert!(lines[2].contains("\"kind\":\"enum\""), "got: {}", lines[2]);
+    assert!(lines[3].contains("\"kind\":\"const\""), "got: {}", lines[3]);
+    // Private item omitted.
+    assert!(
+        !stdout.contains("\"name\":\"internal\""),
+        "non-pub item must not appear in catalog; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_catalog_each_line_is_valid_json_envelope() {
+    let path = catalog_tmp_path("jsonl");
+    let src = r#"pub fn f(x: ref Vec[i64]) -> i64 with reads(Time) { 0 }
+"#;
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["catalog", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    // Structural shape — opens with `{`, closes with `}`, has the
+    // anchor fields and ends in a newline.
+    assert!(stdout.ends_with('\n'), "JSONL stream must end with \\n");
+    assert!(line.starts_with('{') && line.ends_with('}'), "got: {line}");
+    assert!(line.contains("\"mode\":\"ref\""), "got: {line}");
+    assert!(line.contains("\"ty\":\"Vec[i64]\""), "got: {line}");
+    assert!(
+        line.contains("\"verb\":\"reads\",\"resources\":[\"Time\"]"),
+        "got: {line}",
+    );
+}
+
+#[test]
+fn test_catalog_qualifies_impl_methods_with_target_type() {
+    let path = catalog_tmp_path("impl");
+    let src = r#"pub struct Point { pub x: f64, pub y: f64 }
+impl Point {
+    pub fn origin() -> Point { Point { x: 0.0, y: 0.0 } }
+    fn private_helper() -> i64 { 0 }
+}
+"#;
+    std::fs::write(&path, src).unwrap();
+    let out = karac_bin()
+        .args(["catalog", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("\"kind\":\"impl_method\""), "got: {stdout}",);
+    assert!(
+        stdout.contains("\"name\":\"Point.origin\""),
+        "got: {stdout}",
+    );
+    assert!(
+        !stdout.contains("\"name\":\"Point.private_helper\""),
+        "private impl method must be omitted; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_catalog_empty_file_emits_no_output() {
+    let path = catalog_tmp_path("empty");
+    std::fs::write(&path, "").unwrap();
+    let out = karac_bin()
+        .args(["catalog", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.is_empty(),
+        "empty source must produce zero records; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_catalog_unknown_flag_rejected() {
+    let path = catalog_tmp_path("flag");
+    std::fs::write(&path, "pub fn f() {}\n").unwrap();
+    let out = karac_bin()
+        .args(["catalog", "--bogus", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown flag"), "got: {stderr}");
+}
+
+#[test]
+fn test_catalog_missing_file_arg_rejected() {
+    let out = karac_bin().args(["catalog"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("missing file argument"), "got: {stderr}");
+}

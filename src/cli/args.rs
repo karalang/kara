@@ -68,6 +68,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "install" => parse_install_command(args),
         "vendor" => parse_vendor_command(args),
         "explain" => parse_explain_command(args),
+        "catalog" => parse_catalog_command(args),
         // Bare file path: treat as `karac run <file>`
         other if other.ends_with(".kara") => {
             let p = parse_file_args(args, 1);
@@ -608,6 +609,29 @@ fn parse_fix_command(args: &[String]) -> Command {
         process::exit(1);
     };
     Command::Fix { file, dry_run }
+}
+
+/// Parser for `karac catalog <file.kara>`. Takes a single positional file
+/// argument and rejects any flags — JSONL output is the only mode (no
+/// `--output=text` form), so there is nothing to switch.
+fn parse_catalog_command(args: &[String]) -> Command {
+    let mut file: Option<String> = None;
+    for arg in args.iter().skip(2) {
+        if arg.starts_with('-') {
+            eprintln!("error: unknown flag '{arg}' for `karac catalog`");
+            process::exit(1);
+        }
+        if file.is_some() {
+            eprintln!("error: `karac catalog` takes a single file argument");
+            process::exit(1);
+        }
+        file = Some(arg.clone());
+    }
+    let Some(file) = file else {
+        eprintln!("error: missing file argument for `karac catalog`");
+        process::exit(1);
+    };
+    Command::Catalog { file }
 }
 
 /// Parser for `karac explain --concept=NAME [--format=FMT]` and
