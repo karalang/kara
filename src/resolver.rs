@@ -1031,8 +1031,52 @@ impl<'a> Resolver<'a> {
 /// Best-effort local inference of a call-argument's type for the
 /// signature-from-call-site stub diagnostic. Returns `None` (rendered as
 /// `_`) when the expression's type depends on type-checker state the
-/// resolver cannot consult. Slice 1 always returns `None` — the
-/// scaffolding lands; slice 2 fills in literal-derived inference.
-fn infer_stub_arg_type(_expr: &Expr) -> Option<String> {
-    None
+/// resolver cannot consult. Slice 2 covers the literal cases that are
+/// fully determinable at parse time:
+///
+/// - Integer literal with a suffix → the suffix's wire form (`i32`,
+///   `u64`, `i128`, …). Unsuffixed integers fall back to `i64`, the
+///   language's default integer type (see
+///   `typechecker::const_eval::infer_operand_target_ty` for the canonical
+///   reference).
+/// - Float literal with a suffix → `f32` / `f64`. Unsuffixed floats
+///   default to `f64`.
+/// - Boolean literal → `bool`. Char literal → `char`.
+/// - Plain / multi-line string literal → `String` (matches
+///   `type_display(Type::Str)`).
+/// - C-string literal → `ref CStr` (matches the
+///   `infer_expr` arm shipped with line 587).
+///
+/// Identifier arguments, complex expressions, struct literals, and
+/// collection literals fall back to `None`. The post-typecheck-refinement
+/// layer (deferred — see the design.md inference-scope table) is where
+/// those gain types; the resolver only sees what's local to the call.
+fn infer_stub_arg_type(expr: &Expr) -> Option<String> {
+    use crate::token::{FloatSuffix, IntSuffix};
+    let ty = match &expr.kind {
+        ExprKind::Integer(_, suffix) => match suffix {
+            Some(IntSuffix::I8) => "i8",
+            Some(IntSuffix::I16) => "i16",
+            Some(IntSuffix::I32) => "i32",
+            Some(IntSuffix::I64) => "i64",
+            Some(IntSuffix::I128) => "i128",
+            Some(IntSuffix::U8) => "u8",
+            Some(IntSuffix::U16) => "u16",
+            Some(IntSuffix::U32) => "u32",
+            Some(IntSuffix::U64) => "u64",
+            Some(IntSuffix::U128) => "u128",
+            None => "i64",
+        },
+        ExprKind::Float(_, suffix) => match suffix {
+            Some(FloatSuffix::F32) => "f32",
+            Some(FloatSuffix::F64) => "f64",
+            None => "f64",
+        },
+        ExprKind::Bool(_) => "bool",
+        ExprKind::CharLit(_) => "char",
+        ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => "String",
+        ExprKind::CStringLit { .. } => "ref CStr",
+        _ => return None,
+    };
+    Some(ty.to_string())
 }

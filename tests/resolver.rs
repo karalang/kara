@@ -4046,8 +4046,10 @@ fn main() {
 fn unresolved_call_in_test_file_carries_stub_hint() {
     // Test-file (`is_test_file=true`) unresolved-call sites enrich the
     // `UndefinedName` diagnostic with a `StubHint` carrying one entry
-    // per argument. Slice 1: every inferred_type is `None` (rendered as
-    // `_`); slice 2 fills literal-derived types.
+    // per argument. Slice 2: unsuffixed integer literals infer to `i64`
+    // (Kāra's default integer type), so `add(2, 3)` produces two i64
+    // arguments. Return type stays `None` — resolver-time inference
+    // does not yet read enclosing comparison context.
     let result = resolve_as_test_file(
         r#"
 fn test_add_two_and_three() {
@@ -4066,10 +4068,8 @@ fn test_add_two_and_three() {
         .expect("test-file unresolved call must carry stub_hint");
     assert_eq!(stub.callee_name, "add");
     assert_eq!(stub.args.len(), 2);
-    assert!(
-        stub.args.iter().all(|a| a.inferred_type.is_none()),
-        "slice 1: all inferred_type fields should be None"
-    );
+    assert_eq!(stub.args[0].inferred_type.as_deref(), Some("i64"));
+    assert_eq!(stub.args[1].inferred_type.as_deref(), Some("i64"));
     assert!(stub.return_type.is_none());
 }
 
@@ -4106,6 +4106,104 @@ fn stub_hint_render_source_zero_args() {
         return_type: None,
     };
     assert_eq!(hint.render_source(), "fn init() -> _ {\n    todo()\n}\n");
+}
+
+#[test]
+fn stub_hint_infers_suffixed_int_literals() {
+    // Suffixed integer literals carry their type verbatim — i8, u32,
+    // u128 round-trip through the suffix name into the stub signature.
+    let result = resolve_as_test_file(
+        r#"
+fn test_with_suffixed_ints() {
+    let _ = stash(1i8, 200u32, 999u128);
+}
+"#,
+    );
+    let stub = result
+        .errors
+        .iter()
+        .find_map(|e| e.stub_hint.as_ref())
+        .expect("expected stub_hint");
+    assert_eq!(
+        stub.args
+            .iter()
+            .map(|a| a.inferred_type.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("i8"), Some("u32"), Some("u128")],
+    );
+}
+
+#[test]
+fn stub_hint_infers_bool_char_string_float_literals() {
+    // Bool / char / string / float literals each route to their
+    // canonical wire-form type. Unsuffixed float defaults to f64
+    // (mirrors `infer_operand_target_ty` / type_display).
+    let result = resolve_as_test_file(
+        r#"
+fn test_mixed_literals() {
+    let _ = grab(true, 'x', "hello", 3.14);
+}
+"#,
+    );
+    let stub = result
+        .errors
+        .iter()
+        .find_map(|e| e.stub_hint.as_ref())
+        .expect("expected stub_hint");
+    assert_eq!(
+        stub.args
+            .iter()
+            .map(|a| a.inferred_type.as_deref())
+            .collect::<Vec<_>>(),
+        vec![Some("bool"), Some("char"), Some("String"), Some("f64")],
+    );
+}
+
+#[test]
+fn stub_hint_non_literal_args_fall_back_to_placeholder() {
+    // Identifier arguments depend on type-checker state; the resolver
+    // leaves their stub-slot as `_`. Pins the slice-2 fallback path
+    // against accidentally over-inferring.
+    let result = resolve_as_test_file(
+        r#"
+fn test_with_identifier_arg() {
+    let x = 5;
+    let _ = consume(x);
+}
+"#,
+    );
+    let stub = result
+        .errors
+        .iter()
+        .find_map(|e| e.stub_hint.as_ref())
+        .expect("expected stub_hint");
+    assert_eq!(stub.args.len(), 1);
+    assert!(stub.args[0].inferred_type.is_none());
+}
+
+#[test]
+fn stub_hint_render_source_with_typed_args() {
+    // Slice 2 inference flows through to the rendered stub — concrete
+    // types appear in the parameter list where inferred, `_` elsewhere.
+    let hint = StubHint {
+        callee_name: "mix".to_string(),
+        args: vec![
+            StubArg {
+                inferred_type: Some("i64".to_string()),
+            },
+            StubArg {
+                inferred_type: None,
+            },
+            StubArg {
+                inferred_type: Some("bool".to_string()),
+            },
+        ],
+        return_type: None,
+    };
+    assert_eq!(
+        hint.render_source(),
+        "fn mix(arg0: i64, arg1: _, arg2: bool) -> _ {\n    todo()\n}\n"
+    );
 }
 
 #[test]
