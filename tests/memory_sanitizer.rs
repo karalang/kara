@@ -980,10 +980,10 @@ fn main() {
         let b = visited.get((i + 1) % k).unwrap();
         a.neighbors.push(b);
     }
-    // Read with let-bindings (not inline chains). Inline
-    // `Map.get(k).unwrap().val` chains hit a pre-existing bug-#8-
-    // adjacent dec-during-temp-discard path that flips the loaded
-    // val to zero — orthogonal to the regression under test here.
+    // Read with let-bindings (not inline chains). The inline
+    // `Map.get(k).unwrap().val` shape is covered separately in
+    // `asan_map_get_unwrap_field_inline_chain` — together the
+    // two tests pin both common reader shapes.
     let n0 = visited.get(0_i64).unwrap();
     let n1 = visited.get(1_i64).unwrap();
     let n4 = visited.get(4_i64).unwrap();
@@ -994,6 +994,43 @@ fn main() {
 "#,
             &["0", "1", "4"],
             "map_get_shared_value_in_loop_no_alias_collapse",
+        );
+    }
+
+    // Regression for the inline `m.get(k).unwrap().val` chain
+    // returning literal zero instead of the heap struct's val
+    // field. Pre-fix, `shared_type_for_call_like` only handled
+    // Identifier-receiver MethodCalls; a MethodCall whose object
+    // is itself a MethodCall (the unwrap-on-Map.get chain) fell
+    // through to the generic non-shared FieldAccess path, which
+    // compiled `.val` as i64 zero. The fix recognises
+    // `unwrap`/`expect` as a special case and recovers the inner
+    // T from `method_unwrap_inner_types[span]`; the bug-#8
+    // GEP+load+dec path then fires and the field is actually
+    // read.
+    //
+    // Together with `asan_map_get_shared_value_in_loop_no_alias_collapse`
+    // (which uses let-bindings) this covers both common reader
+    // shapes for `Map[K, Shared]` values.
+    #[test]
+    fn asan_map_get_unwrap_field_inline_chain() {
+        assert_clean_asan_run(
+            r#"
+shared struct Node {
+    val: i64,
+    mut neighbors: Vec[Node],
+}
+
+fn main() {
+    let mut visited: Map[i64, Node] = Map.new();
+    let _ = visited.insert(0_i64, Node { val: 100, neighbors: Vec.new() });
+    let _ = visited.insert(1_i64, Node { val: 200, neighbors: Vec.new() });
+    println(visited.get(0_i64).unwrap().val);
+    println(visited.get(1_i64).unwrap().val);
+}
+"#,
+            &["100", "200"],
+            "map_get_unwrap_field_inline_chain",
         );
     }
 

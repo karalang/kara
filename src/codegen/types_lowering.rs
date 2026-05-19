@@ -832,6 +832,42 @@ impl<'ctx> super::Codegen<'ctx> {
         &self,
         expr: &Expr,
     ) -> Option<(String, SharedTypeInfo<'ctx>)> {
+        // Fast path for the `m.get(k).unwrap()` / `.expect()` chain
+        // shape: the outer call is `unwrap` / `expect` on an
+        // `Option`/`Result` whose receiver is itself a MethodCall
+        // (Map.get, Vec.first, VecDeque.pop_front, etc.). The
+        // standard `Type.method` → `fn_return_type_names` lookup
+        // doesn't apply because the inner call's return type
+        // depends on the receiver's V parameter, not on a fixed
+        // function name. But the typechecker already recorded the
+        // resolved inner T in `method_unwrap_inner_types[span]` —
+        // use that to recover the shared struct info when T is
+        // shared.
+        //
+        // Without this path, FieldAccess like `m.get(k).unwrap().val`
+        // falls through to the generic non-shared field access,
+        // which compiles `.val` as a literal i64 zero instead of
+        // GEPing the val field on the heap struct. Surfaced while
+        // writing the kata 133 regression test
+        // (`asan_map_get_shared_value_in_loop_no_alias_collapse`):
+        // the let-binding form `let n = m.get(k).unwrap();
+        // println(n.val)` worked because `n` is an Identifier and
+        // hits `shared_type_for_expr`'s arm, but the inline chain
+        // `println(m.get(k).unwrap().val)` produced zeros.
+        if let ExprKind::MethodCall { method, .. } = &expr.kind {
+            if method == "unwrap" || method == "expect" {
+                let key = (expr.span.offset, expr.span.length);
+                if let Some(te) = self.method_unwrap_inner_types.get(&key) {
+                    if let TypeKind::Path(p) = &te.kind {
+                        if let Some(seg) = p.segments.last() {
+                            if let Some(info) = self.shared_types.get(seg.as_str()).cloned() {
+                                return Some((seg.clone(), info));
+                            }
+                        }
+                    }
+                }
+            }
+        }
         let fn_name: String = match &expr.kind {
             ExprKind::Call { callee, .. } => match &callee.kind {
                 ExprKind::Identifier(n) => n.clone(),
