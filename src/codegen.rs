@@ -255,6 +255,24 @@ pub(super) struct Codegen<'ctx> {
     /// `emit_state_machine_state_constructors` after the poll-fn pass.
     /// Empty when no network-boundary functions exist.
     pub(crate) state_machine_state_constructors: HashMap<String, FunctionValue<'ctx>>,
+    /// State-struct destructor helpers (phase 6 line 26 slice 8u). Key:
+    /// same function key shape as `state_struct_types`. Value:
+    /// `define internal void @__kara_state_drop_<fn_key>(ptr %state)` —
+    /// walks the captured-local fields and frees any heap-bearing ones
+    /// (Vec/String `cap > 0 ? free(data)` pattern; shared-struct fields
+    /// `emit_refcount_dec` against the slot's loaded handle). The
+    /// state struct's own heap allocation is the *caller's* responsibility
+    /// to `free` after invoking the destructor — matches the constructor's
+    /// caller-allocates / caller-frees discipline (slice 8c). Slice 8u
+    /// ships the destructor as the unified unwind primitive both the
+    /// future `?`-error-propagation path (post-yield arm prologue when
+    /// the resumed call returned `Err`) and the cooperative-cancel path
+    /// (poll-fn's per-arm `*cancel == true` check) will share — neither
+    /// use site lands in slice 8u itself. Empty when no network-boundary
+    /// functions exist; also empty when none of the captured-local fields
+    /// has a heap-bearing type (the destructor would have an empty body
+    /// — skipped to avoid IR bloat).
+    pub(crate) state_machine_state_destructors: HashMap<String, FunctionValue<'ctx>>,
     /// Non-unit return-type marker for network-boundary functions
     /// (phase 6 line 26 slice 8i). Key: same function key shape as
     /// `state_struct_types`. Value: the LLVM type of the function's
@@ -1439,6 +1457,7 @@ impl<'ctx> Codegen<'ctx> {
             state_struct_types: HashMap::new(),
             state_machine_poll_fns: HashMap::new(),
             state_machine_state_constructors: HashMap::new(),
+            state_machine_state_destructors: HashMap::new(),
             state_machine_return_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
@@ -1734,6 +1753,13 @@ impl<'ctx> Codegen<'ctx> {
         // with a `__kara_state_new_<fn_key>` invocation + initial
         // poll-fn invocation.
         self.emit_state_machine_state_constructors(program);
+        // Phase 6 line 26 slice 8u: emit a state-struct destructor
+        // helper per state-struct entry with at least one heap-bearing
+        // captured-local (Vec/String, shared struct). The destructor is
+        // the unified unwind primitive the future `?`-Err-propagation
+        // and cooperative-cancel use sites both invoke; slice 8u lands
+        // the primitive only, not the use sites.
+        self.emit_state_machine_state_destructors(program);
         self.collect_soa_layouts(program);
         self.declare_extern_functions(program)?;
 

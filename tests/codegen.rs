@@ -17256,4 +17256,220 @@ fn main() {
             "h.helper(ref self) must receive the slice-8a h.slot pointer:\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8u: state-struct destructor helper ──────────
+    //
+    // For each network-boundary function whose state-struct holds at
+    // least one heap-bearing captured-local field, codegen emits an
+    // `define internal void @__kara_state_drop_<fn_key>(ptr %state)`
+    // helper that walks the captured-local fields and frees any
+    // heap-bearing ones (`cap > 0 ? free(data)` for Vec/String/VecDeque,
+    // `rc_dec` against the slot's loaded handle for shared struct
+    // fields). The destructor is the unified unwind primitive the
+    // future `?`-Err-propagation and cooperative-cancel use sites
+    // both invoke; slice 8u lands the primitive only.
+    //
+    // The state struct's own heap allocation is the *caller's*
+    // responsibility to `free` after invoking the destructor — matches
+    // the constructor's caller-allocates / caller-frees discipline.
+    // Skipped entirely when no captured-local field is heap-bearing
+    // (an empty destructor would be dead IR).
+
+    #[test]
+    fn test_state_destructor_emitted_for_state_struct_with_vec_captured_local() {
+        // A `Vec[i64]` captured local triggers destructor emission —
+        // the field's `cap > 0 ? free(data)` pattern is the v1
+        // heap-bearing arm.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let define_line = ir
+            .lines()
+            .find(|l| l.contains("@__kara_state_drop_driver"))
+            .unwrap_or_else(|| panic!("expected @__kara_state_drop_driver in IR:\n{ir}"));
+        assert!(
+            define_line.contains("define"),
+            "destructor should be defined: {define_line}"
+        );
+        assert!(
+            define_line.contains("internal"),
+            "destructor should have internal linkage: {define_line}"
+        );
+        assert!(
+            define_line.contains("void @__kara_state_drop_driver(ptr"),
+            "destructor signature must be `void @__kara_state_drop_driver(ptr ...)`: {define_line}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_emits_cap_gt_zero_free_for_vec_field() {
+        // The Vec captured-local field's destructor body emits the
+        // `cap > 0 ? free(data)` pattern: GEP into the state-struct
+        // field (offset 1, after tag), GEP cap (Vec struct field 2),
+        // load i64, icmp ugt 0, conditional branch to a free BB that
+        // loads the data ptr and calls free.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
+        // GEP captured-local field at struct-field idx 1 (tag at 0).
+        assert!(
+            body.contains("%items.drop.field_ptr"),
+            "destructor must GEP the captured-local field as %items.drop.field_ptr:\n{body}"
+        );
+        // Load Vec cap and compare against 0.
+        assert!(
+            body.contains("%items.drop.cap = load i64"),
+            "destructor must load Vec cap as i64:\n{body}"
+        );
+        assert!(
+            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            "destructor must compare cap > 0:\n{body}"
+        );
+        // The free branch loads data and calls free.
+        assert!(
+            body.contains("%items.drop.data = load ptr"),
+            "destructor's free branch must load the data ptr:\n{body}"
+        );
+        assert!(
+            body.contains("call void @free(ptr %items.drop.data)"),
+            "destructor's free branch must call free on the data ptr:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_emits_rc_dec_for_shared_struct_field() {
+        // A shared-struct captured local (`h: Hub` where `Hub` is a
+        // `shared struct`) lowers to a pointer-sized handle in the
+        // state struct. The destructor must load the handle,
+        // null-guard, and dispatch through the rc_dec machinery.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             shared struct Hub { count: i64 }
+             fn driver(h: Hub) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
+        // Load handle.
+        assert!(
+            body.contains("%h.drop.handle = load ptr"),
+            "destructor must load shared-struct handle:\n{body}"
+        );
+        // Null-guard: the slice-8a uninitialized-reload concern means
+        // we must compare the handle against null before dec'ing.
+        assert!(
+            body.contains("%h.drop.is_null = icmp eq ptr %h.drop.handle, null"),
+            "destructor must null-guard the shared-struct handle before rc_dec:\n{body}"
+        );
+        // The rc_dec branch GEPs the refcount field (Hub heap struct
+        // field 0) and decrements — the canonical `emit_rc_dec` IR shape.
+        assert!(
+            body.contains("%rc_ptr"),
+            "destructor must reach rc_dec's refcount GEP via %rc_ptr:\n{body}"
+        );
+        assert!(
+            body.contains("%rc_dec = sub i64 %rc, 1"),
+            "destructor must emit the rc -= 1 step:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_not_emitted_when_all_fields_primitive() {
+        // A primitive-only captured-local set (`i64`-typed param) has
+        // no heap-bearing field. Slice 8u skips destructor emission
+        // entirely — the destructor would have an `entry: ret void`
+        // body that's effectively dead code, and the absence is the
+        // fast "no cleanup to do" signal for the future use sites.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }",
+        );
+        assert!(
+            !ir.contains("@__kara_state_drop_driver"),
+            "primitive-only captures must not emit a destructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_not_emitted_for_pure_function() {
+        // Pure functions (no network-effect calls) have no state-struct
+        // entry and therefore no destructor.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn pure_helper(x: i64) -> i64 { x + 1 }",
+        );
+        assert!(
+            !ir.contains("@__kara_state_drop_pure_helper"),
+            "pure function must not emit a destructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_walks_multiple_heap_fields_in_source_order() {
+        // Two captured-local heap fields: `items: Vec[i64]` at source
+        // pos 0, `name: String` at source pos 1. Both lower to the
+        // same `{ptr, i64, i64}` inline layout but the destructor must
+        // emit per-field drop IR keyed by the source binding names,
+        // and the `items.*` block must precede the `name.*` block
+        // (strict source order). This pins both the multi-field
+        // walk and the source-order discipline that a future
+        // reverse-construction-order Drop hook needs to verify
+        // against.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64], name: String) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
+        let items_pos = body
+            .find("%items.drop.field_ptr")
+            .unwrap_or_else(|| panic!("missing %items.drop.field_ptr in destructor:\n{body}"));
+        let name_pos = body
+            .find("%name.drop.field_ptr")
+            .unwrap_or_else(|| panic!("missing %name.drop.field_ptr in destructor:\n{body}"));
+        assert!(
+            items_pos < name_pos,
+            "items drop must precede name drop (source order):\n{body}"
+        );
+        // Each field gets its own `cap > 0 ? free` pair.
+        assert!(
+            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            "items field needs its cap > 0 compare:\n{body}"
+        );
+        assert!(
+            body.contains("%name.drop.is_heap = icmp ugt i64 %name.drop.cap, 0"),
+            "name field needs its cap > 0 compare:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_state_destructor_returns_void() {
+        // Destructor's terminator is `ret void` — caller pairs the call
+        // with the state-struct's own `free`, so the destructor itself
+        // doesn't free the state pointer (matches the constructor's
+        // caller-allocates / caller-frees discipline).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
+        assert!(
+            body.contains("ret void"),
+            "destructor must end with ret void:\n{body}"
+        );
+        // Sanity: the destructor must NOT free the state ptr itself —
+        // that's the caller's job. A `call void @free(ptr %state)` shape
+        // would indicate the destructor doubled-up the free.
+        assert!(
+            !body.contains("call void @free(ptr %state)"),
+            "destructor must not free the state ptr (caller does):\n{body}"
+        );
+    }
 }

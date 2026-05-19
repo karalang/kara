@@ -1236,6 +1236,297 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    // ── State-struct destructor helper (line 26 slice 8u) ──────────────
+
+    /// Emit one destructor helper per network-boundary function whose
+    /// state-struct holds at least one heap-bearing captured-local
+    /// field: `define internal void @__kara_state_drop_<fn_key>(ptr
+    /// %state)`. The destructor walks the captured-local fields in
+    /// source-introduction order (matching `StateStructLayout.fields`)
+    /// and emits the per-field drop pattern:
+    ///
+    /// - `Vec` / `String` / `VecDeque` / `str` field: the `cap > 0 ?
+    ///   free(data)` pattern — GEP into the field's `{ptr, len, cap}`
+    ///   inline shape, load cap (struct-field index 2), branch on
+    ///   `cap > 0`, on the free branch load the data pointer (index 0)
+    ///   and call `free(data)`. Identical IR shape to
+    ///   `emit_struct_drop_synthesis`'s `FieldDrop::VecOrString` arm
+    ///   and `CleanupAction::FreeVecBuffer`'s scope-cleanup walker,
+    ///   so optimizer recognition / coverage parity holds across all
+    ///   three drop surfaces.
+    ///
+    /// - User-named `shared struct` field (the field's `type_name`
+    ///   resolves through `shared_types`): the field holds a
+    ///   pointer-sized handle to the heap-allocated rc-headed
+    ///   payload. Load the ptr; null-guard (slice-8a's reload over
+    ///   uninitialized state-struct fields may surface zero/poison —
+    ///   guard prevents a dec-on-null trap before the use sites are
+    ///   wired); on non-null dispatch to `emit_rc_dec` against the
+    ///   shared type's `heap_type`. The dec re-uses the existing
+    ///   recursive-drop chain (`rc_drop_fns`) so transitively-owned
+    ///   refs get released the same way they do for ordinary
+    ///   scope-exit cleanup.
+    ///
+    /// - Any other field (`Option[shared T]`, value-type struct with
+    ///   heap fields, enum with heap payload, `Map[K, V]` / `Set[T]`,
+    ///   primitives, unrecorded `None` type_name): silently skipped
+    ///   at v1. Mirrors the body-splitting walker's conservative
+    ///   coverage rule — the destructor's recognized set grows
+    ///   incrementally as the analyzer-side machinery threads more
+    ///   per-field type info through. Field positions still GEP'd in
+    ///   strict source order so a future slice extending the
+    ///   recognized set can drop in additional emission arms without
+    ///   re-ordering anything.
+    ///
+    /// Skips emission entirely when none of the captured-local fields
+    /// has a heap-bearing type — the destructor would have an
+    /// `entry: ret void` body that IR consumers would treat as dead
+    /// code anyway. The skip keeps the `state_machine_state_destructors`
+    /// map sparse so the future invocation use sites can check
+    /// presence as a fast "is there cleanup to do?" predicate without
+    /// calling an empty function.
+    ///
+    /// The state struct's own heap allocation is the **caller's**
+    /// responsibility to `free` after invoking the destructor. This
+    /// matches the constructor's caller-allocates / caller-frees
+    /// discipline (slice 8c): the runtime parked-task release path
+    /// already has the state pointer at hand and pairs the destructor
+    /// call with the free in one place, rather than baking the free
+    /// into every destructor body and forcing the caller to remember
+    /// not to free again.
+    ///
+    /// Cross-coordination with slice 1a (phase 7 line 67 — Result-slot
+    /// ABI + Err-triggers-cancel): the future post-yield-arm Err-route
+    /// and the per-arm `*cancel == true` check will both branch to an
+    /// `err_unwind` BB that invokes this destructor, writes the
+    /// terminal-result field's Err sentinel, and returns `i8 2`
+    /// (`KaracPollResult::Err`). Slice 8u lands the destructor as the
+    /// shared primitive; the two use sites land as follow-on slices
+    /// once the yield-call result-slot mechanism / cancel-flag check
+    /// are threaded through the body-splitting walker.
+    ///
+    /// Runs immediately after `emit_state_machine_state_constructors`
+    /// so the three state-machine helpers (poll-fn, constructor,
+    /// destructor) all land in one orchestration block. Independent
+    /// of the user-function declarations — only consults
+    /// `state_struct_layouts`, `state_struct_types`, `shared_types`,
+    /// and the runtime intrinsic `free_fn` / RC helpers.
+    pub(super) fn emit_state_machine_state_destructors(&mut self, program: &Program) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let vec_ty = self.vec_struct_type();
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
+        keys.sort();
+        for fn_key in keys {
+            let state_struct = match self.state_struct_types.get(fn_key) {
+                Some(st) => *st,
+                None => continue,
+            };
+            let layout = program
+                .state_struct_layouts
+                .get(fn_key)
+                .expect("layout exists for sorted key");
+            // Classify each captured-local field. The classification is
+            // hoisted out of the emission loop so we can decide whether
+            // to emit the destructor at all (skip when every field is
+            // `Skip`) before mutating the module.
+            #[derive(Clone, Copy, PartialEq, Eq)]
+            enum FieldDrop {
+                Skip,
+                VecOrString,
+                Shared,
+            }
+            let kinds: Vec<FieldDrop> = layout
+                .fields
+                .iter()
+                .map(|f| match f.type_name.as_deref() {
+                    Some("Vec") | Some("VecDeque") | Some("String") | Some("str") => {
+                        FieldDrop::VecOrString
+                    }
+                    Some(name) if self.shared_types.contains_key(name) => FieldDrop::Shared,
+                    _ => FieldDrop::Skip,
+                })
+                .collect();
+            if kinds.iter().all(|k| *k == FieldDrop::Skip) {
+                continue;
+            }
+
+            let drop_name = format!("__kara_state_drop_{fn_key}");
+            let drop_fn = self.module.add_function(&drop_name, drop_fn_ty, None);
+            drop_fn.set_linkage(Linkage::Internal);
+
+            // `emit_refcount_dec` and friends create basic blocks
+            // against `self.current_fn.unwrap()`. Swap to the
+            // destructor while emitting; restore at the end so the
+            // outer caller's builder state is untouched. Matches
+            // `emit_struct_drop_synthesis`'s save / restore
+            // discipline.
+            let saved_bb = self.builder.get_insert_block();
+            let saved_fn = self.current_fn;
+            self.current_fn = Some(drop_fn);
+
+            let entry = self.context.append_basic_block(drop_fn, "entry");
+            self.builder.position_at_end(entry);
+            let state_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+            for (field_idx, (field, kind)) in layout.fields.iter().zip(kinds.iter()).enumerate() {
+                // State-struct field index is `captured_idx + 1` (tag at
+                // 0). The strict source-order walk keeps the destructor's
+                // field traversal aligned with the layout — useful for
+                // both IR-grep tests and the future user-Drop hook that
+                // wants source-declaration order for reverse-construction
+                // discipline.
+                let struct_field_idx = (field_idx + 1) as u32;
+                match kind {
+                    FieldDrop::Skip => {}
+                    FieldDrop::VecOrString => {
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                state_struct,
+                                state_ptr,
+                                struct_field_idx,
+                                &format!("{}.drop.field_ptr", field.name),
+                            )
+                            .expect("GEP captured-local field for destructor");
+                        let cap_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                vec_ty,
+                                field_ptr,
+                                2,
+                                &format!("{}.drop.cap_ptr", field.name),
+                            )
+                            .expect("GEP Vec cap field for destructor");
+                        let cap = self
+                            .builder
+                            .build_load(i64_t, cap_ptr, &format!("{}.drop.cap", field.name))
+                            .expect("load Vec cap for destructor")
+                            .into_int_value();
+                        let zero = i64_t.const_int(0, false);
+                        let is_heap = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::UGT,
+                                cap,
+                                zero,
+                                &format!("{}.drop.is_heap", field.name),
+                            )
+                            .expect("compare cap > 0 for destructor");
+                        let free_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{}.drop.free", field.name));
+                        let skip_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
+                        self.builder
+                            .build_conditional_branch(is_heap, free_bb, skip_bb)
+                            .expect("branch on cap > 0 for destructor");
+                        self.builder.position_at_end(free_bb);
+                        let data_ptr_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                vec_ty,
+                                field_ptr,
+                                0,
+                                &format!("{}.drop.data_ptr_ptr", field.name),
+                            )
+                            .expect("GEP Vec data-ptr field for destructor");
+                        let data = self
+                            .builder
+                            .build_load(ptr_ty, data_ptr_ptr, &format!("{}.drop.data", field.name))
+                            .expect("load Vec data ptr for destructor")
+                            .into_pointer_value();
+                        self.builder
+                            .build_call(self.free_fn, &[data.into()], "")
+                            .expect("call free for captured-local Vec data");
+                        self.builder
+                            .build_unconditional_branch(skip_bb)
+                            .expect("branch to skip after free");
+                        self.builder.position_at_end(skip_bb);
+                    }
+                    FieldDrop::Shared => {
+                        // The shared-struct field stores a heap handle
+                        // (ptr to the rc-headed object). Look up the
+                        // heap_type from `shared_types`; load the ptr;
+                        // null-guard (slice-8a reload may surface
+                        // poison on uninitialized state-struct fields
+                        // before the use sites land) then dispatch
+                        // through `emit_refcount_dec` so the recursive
+                        // drop chain (`rc_drop_fns`) fires on
+                        // transitively-owned shared refs the same way
+                        // ordinary scope-exit cleanup does. The
+                        // shared type name is the field's recorded
+                        // `type_name` (guaranteed `Some` here by the
+                        // `FieldDrop::Shared` classification arm).
+                        let type_name = field
+                            .type_name
+                            .as_deref()
+                            .expect("FieldDrop::Shared implies recorded type_name");
+                        let heap_type = self
+                            .shared_types
+                            .get(type_name)
+                            .expect("FieldDrop::Shared implies shared_types entry")
+                            .heap_type;
+                        let field_ptr = self
+                            .builder
+                            .build_struct_gep(
+                                state_struct,
+                                state_ptr,
+                                struct_field_idx,
+                                &format!("{}.drop.field_ptr", field.name),
+                            )
+                            .expect("GEP shared captured-local field for destructor");
+                        let handle = self
+                            .builder
+                            .build_load(ptr_ty, field_ptr, &format!("{}.drop.handle", field.name))
+                            .expect("load shared captured-local handle for destructor")
+                            .into_pointer_value();
+                        let null = ptr_ty.const_null();
+                        let is_null = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                handle,
+                                null,
+                                &format!("{}.drop.is_null", field.name),
+                            )
+                            .expect("compare shared handle vs null for destructor");
+                        let dec_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{}.drop.dec", field.name));
+                        let skip_bb = self
+                            .context
+                            .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
+                        self.builder
+                            .build_conditional_branch(is_null, skip_bb, dec_bb)
+                            .expect("branch on shared handle null-check for destructor");
+                        self.builder.position_at_end(dec_bb);
+                        self.emit_refcount_dec(&field.name, heap_type, handle);
+                        self.builder
+                            .build_unconditional_branch(skip_bb)
+                            .expect("branch to skip after rc dec");
+                        self.builder.position_at_end(skip_bb);
+                    }
+                }
+            }
+
+            self.builder
+                .build_return(None)
+                .expect("ret void from state-struct destructor");
+
+            self.current_fn = saved_fn;
+            if let Some(bb) = saved_bb {
+                self.builder.position_at_end(bb);
+            }
+
+            self.state_machine_state_destructors
+                .insert(fn_key.clone(), drop_fn);
+        }
+    }
+
     /// Phase 6 line 26 slice 8q: materialize a `BodyArg` into a
     /// `BasicValueEnum` at the current builder position. v1 lowers
     /// integer arithmetic only: `IntLit` → `i64` constant; `Slot` →
