@@ -134,6 +134,7 @@ impl<'a> super::Resolver<'a> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Return(None)
             | ExprKind::Error => {}

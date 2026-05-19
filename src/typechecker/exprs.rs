@@ -1657,6 +1657,21 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Float(_, sfx) => Self::type_from_float_suffix(*sfx),
             ExprKind::CharLit(_) => Type::Char,
             ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => Type::Str,
+            // `c"..."` C-string literal — typed `ref CStr` per
+            // design.md § C-String Literals (v60 item 18). The
+            // underlying `CStr` type itself is Phase 8 stdlib work
+            // (methods `as_ptr`, `len`, etc.); slice 2 only commits
+            // the literal-expression's type. The spec asks for a
+            // `'static` lifetime annotation, which is aspirational —
+            // Kāra v1 has no lifetime surface (no `'static` syntactic
+            // form, no `Lifetime` carrier on `Type::Ref`), so `ref
+            // CStr` is the v1 form. Method dispatch on the bare
+            // `CStr` name will surface a NoMethodFound diagnostic
+            // until Phase 8's stdlib registration lands.
+            ExprKind::CStringLit { .. } => Type::Ref(Box::new(Type::Named {
+                name: "CStr".to_string(),
+                args: vec![],
+            })),
             ExprKind::InterpolatedStringLit(parts) => {
                 for part in parts {
                     if let ParsedInterpolationPart::Expr(inner_expr) = part {

@@ -54,6 +54,7 @@ fn stmt_is_constant_init(stmt: &Stmt) -> bool {
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
     )
@@ -964,6 +965,7 @@ impl<'a> ConcurrencyChecker<'a> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::SelfValue
             | ExprKind::SelfType
@@ -1343,6 +1345,7 @@ impl<'a> ConcurrencyChecker<'a> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }
             | ExprKind::Return(None)

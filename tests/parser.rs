@@ -9324,3 +9324,59 @@ fn mut_as_field_name_parses() {
     };
     assert_eq!(field, "mut");
 }
+
+// ── C-string literals (line 587 / v60 item 18) ───────────────────
+//
+// Parser-side: `c"..."` lexes to `Token::CStringLiteral` (line 507
+// shipped). Slice 1 here lowers it to `ExprKind::CStringLit { bytes,
+// source_len }` carrying the raw bytes (no trailing NUL) and the
+// textual body length.
+
+#[test]
+fn c_string_literal_parses_ascii() {
+    let prog = parse_ok("fn main() {\n    let s = c\"hello\";\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::CStringLit { bytes, source_len } = &value.kind else {
+        panic!("expected CStringLit, got {:?}", value.kind);
+    };
+    assert_eq!(bytes, &b"hello".to_vec());
+    assert_eq!(*source_len, 5);
+}
+
+#[test]
+fn c_string_literal_parses_empty() {
+    let prog = parse_ok("fn main() {\n    let s = c\"\";\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::CStringLit { bytes, source_len } = &value.kind else {
+        panic!("expected CStringLit, got {:?}", value.kind);
+    };
+    assert!(bytes.is_empty());
+    assert_eq!(*source_len, 0);
+}
+
+#[test]
+fn c_string_literal_parses_with_hex_escape() {
+    // `\x41` → byte 0x41 = 'A'. Lexer slice already handled the
+    // decode; parser just propagates the bytes.
+    let prog = parse_ok("fn main() {\n    let s = c\"\\x41B\";\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let StmtKind::Let { value, .. } = &f.body.stmts[0].kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::CStringLit { bytes, .. } = &value.kind else {
+        panic!("expected CStringLit, got {:?}", value.kind);
+    };
+    assert_eq!(bytes, &b"AB".to_vec());
+}

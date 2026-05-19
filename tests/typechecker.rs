@@ -17418,6 +17418,66 @@ fn struct_drop_impl_unaffected_by_union_arm() {
     );
 }
 
+// ── C-string literals (line 587 / v60 item 18) ───────────────────
+//
+// Slice 2: typechecker assigns `ref CStr` to `c"..."` expressions.
+// The underlying `CStr` type itself is Phase 8 stdlib work; v1
+// commits the literal-expression's type. Bare `CStr` method calls
+// route through standard method-call dispatch and produce
+// NoMethodFound until the stdlib type lands.
+
+#[test]
+fn c_string_literal_typechecks_to_ref_cstr() {
+    // Bare-let binding accepts the literal; the typechecker assigns
+    // `ref CStr` and records it into expr_types. An explicit
+    // `let s: ref CStr` annotation would also work once a CStr
+    // type-env entry exists (Phase 8 stdlib registration), but the
+    // bare-let form is the canonical v1 use site.
+    typecheck_ok("fn main() {\n    let s = c\"hello\";\n}");
+}
+
+#[test]
+fn c_string_literal_empty_typechecks() {
+    typecheck_ok("fn main() {\n    let s = c\"\";\n}");
+}
+
+#[test]
+fn c_string_literal_with_non_nul_escapes_typechecks() {
+    // Note: interior-NUL escapes (`\\x00`, `\\u{0}`, `\\0`) are
+    // rejected at the lexer (line 507's E_INTERIOR_NUL_IN_C_STRING).
+    // This test covers the well-formed escape surface that survives
+    // lex into a Token::CStringLiteral.
+    typecheck_ok("fn main() {\n    let s = c\"line1\\nline2\\ttab\";\n}");
+}
+
+#[test]
+fn multiple_c_string_literals_typecheck() {
+    typecheck_ok("fn main() {\n    let s = c\"abc\";\n    let t = c\"def\";\n}");
+}
+
+#[test]
+fn c_string_literal_expr_type_records_ref_cstr() {
+    // Verifies the type-table entry directly — exposes the typed
+    // surface (`ref CStr`) so Phase 8's stdlib + codegen wiring can
+    // consume it. Uses the public TypeCheckResult.expr_types map.
+    let result = typecheck_ok("fn main() {\n    let s = c\"hi\";\n}");
+    let cstr_entry = result.expr_types.iter().find_map(|(_, ty)| {
+        if let Type::Ref(inner) = ty {
+            if let Type::Named { name, .. } = inner.as_ref() {
+                if name == "CStr" {
+                    return Some(ty.clone());
+                }
+            }
+        }
+        None
+    });
+    assert!(
+        cstr_entry.is_some(),
+        "expected an expr_types entry of type `ref CStr`, got: {:?}",
+        result.expr_types.values().collect::<Vec<_>>()
+    );
+}
+
 // ── Raw pointer construction (line 573 / v60 item 19) ────────────
 //
 // `ptr.const(place)` / `ptr.mut(place)` — Slice 1b: typechecker

@@ -318,6 +318,7 @@ impl<'a> Lowerer<'a> {
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
             | ExprKind::Path { .. }

@@ -340,6 +340,7 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Path { .. }
             | ExprKind::SelfType
             | ExprKind::PipePlaceholder

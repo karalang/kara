@@ -723,6 +723,7 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }
             | ExprKind::Return(None)

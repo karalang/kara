@@ -34,6 +34,16 @@ pub enum ExprKind {
     StringLit(String),
     MultiStringLit(String),
     InterpolatedStringLit(Vec<ParsedInterpolationPart>),
+    /// `c"..."` C-string literal — UTF-8 bytes without the trailing
+    /// NUL (codegen appends it). `source_len` records the textual
+    /// length of the body so `len()` / `as_bytes()` can return the
+    /// pre-NUL byte count without re-walking. Spec: design.md §
+    /// C-String Literals (v60 item 18); tracker: phase-5-diagnostics
+    /// lines 507 (lex acceptance, shipped) / 587 (parser + stdlib).
+    CStringLit {
+        bytes: Vec<u8>,
+        source_len: usize,
+    },
     Bool(bool),
 
     // Identifiers

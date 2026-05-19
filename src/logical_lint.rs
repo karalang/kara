@@ -301,6 +301,7 @@ fn walk_expr_children(expr: &Expr, level: LintLevel, diags: &mut Vec<LintDiagnos
         | ExprKind::CharLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
+        | ExprKind::CStringLit { .. }
         | ExprKind::Bool(_)
         | ExprKind::SelfValue
         | ExprKind::SelfType

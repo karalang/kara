@@ -32,6 +32,25 @@ impl super::Formatter {
                 self.write_str(s);
                 self.write_str("\"\"\"");
             }
+            ExprKind::CStringLit { bytes, .. } => {
+                // `c"..."` — re-emit by escaping the bytes. The
+                // formatter's job is to produce a syntactically
+                // equivalent literal; the lexer's escape rules apply
+                // when the byte is non-printable ASCII or non-ASCII.
+                self.write_str("c\"");
+                for &b in bytes {
+                    match b {
+                        b'"' => self.write_str("\\\""),
+                        b'\\' => self.write_str("\\\\"),
+                        b'\n' => self.write_str("\\n"),
+                        b'\r' => self.write_str("\\r"),
+                        b'\t' => self.write_str("\\t"),
+                        0x20..=0x7e => self.output.push(b as char),
+                        _ => write!(self.output, "\\x{:02x}", b).unwrap(),
+                    }
+                }
+                self.write_str("\"");
+            }
             ExprKind::InterpolatedStringLit(parts) => {
                 self.write_str("f\"");
                 for part in parts {

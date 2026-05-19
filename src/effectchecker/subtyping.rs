@@ -388,6 +388,7 @@ impl<'a> super::EffectChecker<'a> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Continue { .. }
             | ExprKind::Return(None)

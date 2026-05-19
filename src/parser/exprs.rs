@@ -493,6 +493,19 @@ impl super::Parser {
                     kind: ExprKind::MultiStringLit(s),
                 })
             }
+            Token::CStringLiteral { bytes, source_len } => {
+                // `c"..."` C-string literal — bytes come from the lexer
+                // without the trailing NUL; codegen appends it at the
+                // global-constant emission site. Spec: design.md §
+                // C-String Literals (v60 item 18); tracker:
+                // phase-5-diagnostics line 587.
+                let bytes = bytes.clone();
+                self.advance();
+                Some(Expr {
+                    span: self.span_from(&start),
+                    kind: ExprKind::CStringLit { bytes, source_len },
+                })
+            }
             Token::InterpolatedStringLiteral(raw_parts) => {
                 let raw_parts = raw_parts.clone();
                 self.advance();

@@ -1213,6 +1213,7 @@ impl YieldPointWalker<'_> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
             | ExprKind::Path { .. }
@@ -1700,6 +1701,7 @@ impl StateStructLayoutWalker<'_> {
             | ExprKind::CharLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(_)
             | ExprKind::Identifier(_)
             | ExprKind::Path { .. }

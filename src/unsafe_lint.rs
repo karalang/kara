@@ -446,6 +446,7 @@ fn walk_expr(expr: &Expr, lines: &[&str], level: LintLevel, diags: &mut Vec<Lint
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::InterpolatedStringLit(..)
+        | ExprKind::CStringLit { .. }
         | ExprKind::Bool(..)
         | ExprKind::Identifier(..)
         | ExprKind::Path { .. }
@@ -929,6 +930,7 @@ impl OpWalker<'_> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(..)
             | ExprKind::Identifier(..)
             | ExprKind::Path { .. }

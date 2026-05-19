@@ -529,6 +529,7 @@ impl Walker<'_> {
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)
+            | ExprKind::CStringLit { .. }
             | ExprKind::Bool(..)
             | ExprKind::Identifier(..)
             | ExprKind::Path { .. }
