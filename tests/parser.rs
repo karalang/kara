@@ -9249,3 +9249,78 @@ fn union_pub_visibility_parses() {
     assert!(u.fields[0].is_pub);
     assert!(!u.fields[1].is_pub);
 }
+
+// ── Raw pointer construction (line 573 / v60 item 19) ────────────
+//
+// `ptr.const(x)` / `ptr.mut(x)` parse as ordinary MethodCall nodes
+// with method names "const" / "mut". This requires the parser to
+// accept the `const` / `mut` keywords as method-name tokens after `.`
+// (weak-keyword treatment, mirroring `union` for `Set.union(...)`).
+
+#[test]
+fn ptr_const_method_call_parses() {
+    let prog = parse_ok("fn main() {\n    let x: i32 = 7;\n    let p = ptr.const(x);\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let last_stmt = f.body.stmts.last().unwrap();
+    let StmtKind::Let { value, .. } = &last_stmt.kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+        panic!("expected MethodCall, got {:?}", value.kind);
+    };
+    assert_eq!(method, "const");
+    assert_eq!(args.len(), 1);
+}
+
+#[test]
+fn ptr_mut_method_call_parses() {
+    let prog = parse_ok("fn main() {\n    let mut x: i32 = 7;\n    let p = ptr.mut(x);\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let last_stmt = f.body.stmts.last().unwrap();
+    let StmtKind::Let { value, .. } = &last_stmt.kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::MethodCall { method, args, .. } = &value.kind else {
+        panic!("expected MethodCall, got {:?}", value.kind);
+    };
+    assert_eq!(method, "mut");
+    assert_eq!(args.len(), 1);
+}
+
+#[test]
+fn const_as_field_name_parses() {
+    // Weak-keyword treatment: `x.const` is a field access, not a syntax
+    // error. Mirrors `Set.union(...)` precedent for `union`.
+    let prog = parse_ok("fn main() {\n    let x: i32 = 7;\n    let y = x.const;\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let last_stmt = f.body.stmts.last().unwrap();
+    let StmtKind::Let { value, .. } = &last_stmt.kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::FieldAccess { field, .. } = &value.kind else {
+        panic!("expected FieldAccess, got {:?}", value.kind);
+    };
+    assert_eq!(field, "const");
+}
+
+#[test]
+fn mut_as_field_name_parses() {
+    let prog = parse_ok("fn main() {\n    let x: i32 = 7;\n    let y = x.mut;\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    let last_stmt = f.body.stmts.last().unwrap();
+    let StmtKind::Let { value, .. } = &last_stmt.kind else {
+        panic!("expected Let");
+    };
+    let ExprKind::FieldAccess { field, .. } = &value.kind else {
+        panic!("expected FieldAccess, got {:?}", value.kind);
+    };
+    assert_eq!(field, "mut");
+}

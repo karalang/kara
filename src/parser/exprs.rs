@@ -105,17 +105,24 @@ impl super::Parser {
                                 },
                             };
                         }
-                        Token::Identifier { .. } | Token::Union => {
-                            // `union` is a keyword at item position only —
-                            // in field- or method-name position it must be
-                            // accepted as a plain identifier so existing
-                            // stdlib methods like `Set.union(...)` and any
-                            // user-defined field named `union` keep working.
-                            // This is the standard "weak keyword" treatment
-                            // (Rust does the same).
+                        Token::Identifier { .. } | Token::Union | Token::Const | Token::Mut => {
+                            // `union`, `const`, and `mut` are keywords at item
+                            // / type / parameter position only — in field- or
+                            // method-name position they're accepted as plain
+                            // identifiers so existing surfaces like
+                            // `Set.union(...)`, `ptr.const(x)`, and
+                            // `ptr.mut(x)` (raw-pointer construction —
+                            // design.md § Raw Pointer Construction) keep
+                            // working. Standard "weak keyword" treatment.
                             let method = if self.check(&Token::Union) {
                                 self.advance();
                                 "union".to_string()
+                            } else if self.check(&Token::Const) {
+                                self.advance();
+                                "const".to_string()
+                            } else if self.check(&Token::Mut) {
+                                self.advance();
+                                "mut".to_string()
                             } else {
                                 self.expect_identifier()?
                             };

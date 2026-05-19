@@ -967,6 +967,96 @@ fn main() {
         );
     }
 
+    // ── ptr.null / ptr.dangling / ptr.is_null (line 573 slice 3) ─────
+
+    #[test]
+    fn test_ir_ptr_null_compiles() {
+        let ir = ir_for("fn caller() -> *const i32 { ptr.null() } fn main() {}");
+        assert!(
+            ir.contains("@caller"),
+            "caller fn should be emitted; got IR:\n{ir}"
+        );
+        assert!(
+            !ir.contains("method dispatch fell through"),
+            "ptr.null dispatch must not fall through; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_null_mut_compiles() {
+        let ir = ir_for("fn caller() -> *mut i64 { ptr.null_mut() } fn main() {}");
+        assert!(
+            ir.contains("@caller"),
+            "caller fn should be emitted; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_dangling_compiles() {
+        let ir = ir_for("fn caller() -> *const u8 { ptr.dangling() } fn main() {}");
+        assert!(
+            ir.contains("@caller"),
+            "caller fn should be emitted; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_is_null_compiles() {
+        let ir = ir_for("fn caller(p: *const i32) -> bool { ptr.is_null(p) } fn main() {}");
+        assert!(
+            ir.contains("@caller"),
+            "caller fn should be emitted; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_ptr_null_is_null_round_trips_to_true() {
+        // ptr.is_null(ptr.null()) must observe true. Pins the
+        // null-pointer constant + the EQ-against-zero compare.
+        let src = "fn main() { \
+                       let p: *const i32 = ptr.null(); \
+                       if ptr.is_null(p) { println(1); } else { println(0); } \
+                   }";
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "1\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_ptr_dangling_is_not_null() {
+        // ptr.dangling() returns a non-null pointer; ptr.is_null
+        // observes false.
+        let src = "fn main() { \
+                       let p: *const u8 = ptr.dangling(); \
+                       if ptr.is_null(p) { println(1); } else { println(0); } \
+                   }";
+        let out = run_program(src);
+        if let Some(out) = out {
+            assert_eq!(out, "0\n");
+        }
+    }
+
+    // ── ptr.const / ptr.mut construction (line 573 slices 1a-1b) ─────
+
+    #[test]
+    fn test_ir_ptr_const_on_local_compiles() {
+        let ir = ir_for("fn main() { let x: i32 = 7; let p: *const i32 = ptr.const(x); }");
+        assert!(
+            !ir.contains("method dispatch fell through"),
+            "ptr.const dispatch must not fall through; got IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ptr_mut_on_local_compiles() {
+        let ir = ir_for("fn main() { let mut x: i32 = 7; let p: *mut i32 = ptr.mut(x); }");
+        assert!(
+            !ir.contains("method dispatch fell through"),
+            "ptr.mut dispatch must not fall through; got IR:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_e2e_and_short_circuit_skips_rhs_call() {
         // `false and boom()` must not call boom() at runtime.

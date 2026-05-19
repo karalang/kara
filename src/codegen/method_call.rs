@@ -709,6 +709,93 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(Some(result.into()))
             }
+            // `ptr.const(place)` / `ptr.mut(place)` — raw pointer
+            // construction from a place expression (typechecker
+            // place-validator gate is upstream — design.md § Raw
+            // Pointer Construction, v60 item 19). Under the i64-
+            // pointer ABI, the result is the place's storage address
+            // coerced to i64. v1 covers the two common shapes:
+            //  - Identifier place: look up the binding's storage
+            //    slot via `get_data_ptr` (handles owned alloca and
+            //    ref-param indirection), then `ptrtoint` to i64.
+            //  - Deref of an already-pointer SSA: the operand's i64
+            //    value *is* the address; emit the operand's compile
+            //    result directly.
+            // Field / index / nested-deref places fall through to
+            // the generic identifier path via the synth-identifier
+            // mechanism if reachable; a focused diagnostic for
+            // unsupported shapes lands as a follow-up.
+            "const" | "mut" if args.len() == 1 => {
+                let place = &args[0].value;
+                match &place.kind {
+                    ExprKind::Identifier(name) => {
+                        if let Some(ptr) = self.get_data_ptr(name) {
+                            let bits = self
+                                .builder
+                                .build_ptr_to_int(ptr, i64_ty, "ptr.place.addr")
+                                .unwrap();
+                            return Ok(Some(bits.into()));
+                        }
+                        // Identifier didn't resolve to a binding (e.g.
+                        // a free function name reached here). Fall
+                        // through to the generic method-call path,
+                        // which will surface its own diagnostic.
+                        Ok(None)
+                    }
+                    ExprKind::Unary {
+                        op: UnaryOp::Deref,
+                        operand,
+                    } => {
+                        let v = self.compile_expr(operand)?;
+                        Ok(Some(to_i64(self, v, "ptr.place.deref")))
+                    }
+                    _ => Ok(None),
+                }
+            }
+            // `ptr.null[T]()` / `ptr.null_mut[T]()` -> the all-zeroes
+            // pointer (LLVM null). Under the current i64-pointer ABI,
+            // this is the i64 constant 0. The two methods differ only
+            // in their typechecker-reported return type (`*const T`
+            // vs `*mut T`); the codegen value is identical.
+            "null" | "null_mut" if args.is_empty() => Ok(Some(i64_ty.const_int(0, false).into())),
+            // `ptr.dangling[T]()` / `ptr.dangling_mut[T]()` -> a
+            // non-null pointer aligned to T's natural alignment, *not*
+            // dereferenceable. Spec: design.md § Raw Pointer
+            // Construction (v60 item 19); mirrors Rust's
+            // `NonNull::dangling` (= `align_of::<T>() as *const T`).
+            //
+            // T-aware lowering would consult the type argument and
+            // emit `align_of[T]`. The current i64-pointer ABI does
+            // not thread the type argument to this hook, so v1 emits
+            // a fixed alignment of 8 (the max alignment of any built-
+            // in primitive on a 64-bit target — correct for every T
+            // whose alignment is <= 8, conservative for over-aligned
+            // SIMD / `#[repr(align(N))]` types). The actual deref of
+            // a dangling pointer is unsafe and *always* UB; the only
+            // observable property is non-null + alignment, both of
+            // which hold here. Tracker: phase-5-diagnostics line 573.
+            "dangling" | "dangling_mut" if args.is_empty() => {
+                Ok(Some(i64_ty.const_int(8, false).into()))
+            }
+            // `ptr.is_null[T](p)` -> `p == 0` as bool (i1). The
+            // typechecker reports the result as `Type::Bool`; codegen
+            // returns an i1 matching how the BinOp::Eq path produces
+            // bool values (`build_int_compare(EQ, ...)`).
+            "is_null" if args.len() == 1 => {
+                let p = self.compile_expr(&args[0].value)?;
+                let p_i64 = to_i64(self, p, "ptr.is_null.p");
+                let zero = i64_ty.const_zero();
+                let result = self
+                    .builder
+                    .build_int_compare(
+                        IntPredicate::EQ,
+                        p_i64.into_int_value(),
+                        zero,
+                        "ptr.is_null",
+                    )
+                    .unwrap();
+                Ok(Some(result.into()))
+            }
             _ => Ok(None),
         }
     }

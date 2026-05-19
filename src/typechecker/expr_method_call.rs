@@ -512,6 +512,12 @@ impl<'a> super::TypeChecker<'a> {
         // is registered with `SymbolKind::Module` but local-scope wins
         // by name resolution, mirroring the spec's prelude-shadow rule.
         if let ExprKind::Identifier(mod_name) = &object.kind {
+            if mod_name == "ptr"
+                && self.local_scope.lookup("ptr").is_none()
+                && (method == "const" || method == "mut")
+            {
+                return self.infer_ptr_construction(method, args, span);
+            }
             if mod_name == "ptr" && self.local_scope.lookup("ptr").is_none() {
                 let dotted = format!("ptr.{}", method);
                 if let Some(sig) = self.env.functions.get(&dotted).cloned() {
@@ -1671,6 +1677,176 @@ impl<'a> super::TypeChecker<'a> {
                     self.type_error(msg, span.clone(), TypeErrorKind::NoMethodFound);
                 }
                 Type::Error
+            }
+        }
+    }
+
+    // ── Raw Pointer Construction ────────────────────────────────
+    //
+    // `ptr.const(place)` / `ptr.mut(place)` produce `*const T` /
+    // `*mut T` from a place expression rooted at a binding. The
+    // argument is parsed as an ordinary expression but typechecked
+    // against the place-expression validator instead of the value-
+    // expression typecheck — non-place arguments route to
+    // `E_PTR_CONST_REQUIRES_PLACE` / `E_PTR_MUT_REQUIRES_PLACE`. The
+    // `.mut` form additionally rejects structurally-immutable places
+    // (`ref T` root, deref of `*const T`) with
+    // `E_PTR_MUT_REQUIRES_MUTABLE_PLACE`, mirroring the structural
+    // mut-reachability rule used by `place_root_is_mut_borrow` for
+    // mut-ref call-site forwarding. Spec: design.md § Raw Pointer
+    // Construction (v60 item 19); tracker: phase-5-diagnostics line
+    // 573.
+    pub(super) fn infer_ptr_construction(
+        &mut self,
+        method: &str,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Type {
+        let is_mut = method == "mut";
+        let dotted = if is_mut { "ptr.mut" } else { "ptr.const" };
+
+        // Arity: exactly one positional argument.
+        if args.len() != 1 {
+            self.type_error(
+                format!(
+                    "'{}' expects 1 argument (the place to take a raw pointer to), found {}",
+                    dotted,
+                    args.len()
+                ),
+                span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+            for arg in args {
+                self.infer_expr(&arg.value);
+            }
+            return Type::Pointer {
+                is_mut,
+                inner: Box::new(Type::Error),
+            };
+        }
+        let arg = &args[0];
+        if arg.label.is_some() {
+            self.type_error(
+                format!("'{}' does not accept labeled arguments", dotted),
+                arg.value.span.clone(),
+                TypeErrorKind::WrongNumberOfArgs,
+            );
+        }
+
+        let inner = self.infer_expr(&arg.value);
+
+        // Place-form validation. Structural: chains of binding /
+        // field-access / index / tuple-index / deref over those.
+        if !Self::is_place_expression(&arg.value) {
+            let code = if is_mut {
+                "E_PTR_MUT_REQUIRES_PLACE"
+            } else {
+                "E_PTR_CONST_REQUIRES_PLACE"
+            };
+            self.type_error(
+                format!(
+                    "error[{}]: '{}' requires a place expression — a binding, field access, \
+                     index, or dereference; got a value-producing expression that has no \
+                     stable address",
+                    code, dotted
+                ),
+                arg.value.span.clone(),
+                TypeErrorKind::InvalidUnaryOp,
+            );
+            return Type::Pointer {
+                is_mut,
+                inner: Box::new(inner),
+            };
+        }
+
+        // Mutable-place validation (structural, type-driven). Mirrors
+        // the rule in `place_root_is_mut_borrow`: root binding's type
+        // alone decides reachability — `Type::Ref(_)` → not mutable;
+        // deref of `*const T` → not mutable; everything else accepted.
+        // Owned-binding `let mut` enforcement is the ownership
+        // checker's responsibility.
+        if is_mut && !self.place_is_mut_reachable(&arg.value) {
+            self.type_error(
+                "error[E_PTR_MUT_REQUIRES_MUTABLE_PLACE]: 'ptr.mut' requires a mutably \
+                 reachable place — the rooted binding is a shared reference ('ref T') or \
+                 the deref chain passes through a '*const T', neither of which permits \
+                 mutation"
+                    .to_string(),
+                arg.value.span.clone(),
+                TypeErrorKind::InvalidUnaryOp,
+            );
+        }
+
+        // Peel `Type::Ref` / `Type::MutRef` so a bare ref-typed
+        // binding place (`r: ref T` → `ptr.const(r)`) produces
+        // `*const T`, not `*const ref T`. The place's *value* is
+        // the underlying T; ref/mut-ref are borrow modes, not
+        // distinct address-space layers.
+        let pointee = match inner {
+            Type::Ref(inner) | Type::MutRef(inner) => *inner,
+            other => other,
+        };
+
+        Type::Pointer {
+            is_mut,
+            inner: Box::new(pointee),
+        }
+    }
+
+    /// Structural place-expression predicate for `ptr.const` /
+    /// `ptr.mut`. Matches the borrow-rooting rules: bindings,
+    /// `self`, field access, tuple index, index, and dereference of
+    /// a place. Method calls / function calls / binops / literals
+    /// are not places — they produce values without stable addresses.
+    fn is_place_expression(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Identifier(_) | ExprKind::SelfValue => true,
+            ExprKind::FieldAccess { object, .. } => Self::is_place_expression(object),
+            ExprKind::TupleIndex { object, .. } => Self::is_place_expression(object),
+            ExprKind::Index { object, .. } => Self::is_place_expression(object),
+            ExprKind::Unary {
+                op: UnaryOp::Deref,
+                operand,
+            } => Self::is_place_expression(operand),
+            _ => false,
+        }
+    }
+
+    /// Walk the place chain to find its root and check that mutation
+    /// can structurally reach the leaf. Returns `true` when the root
+    /// binding's type is not `Type::Ref(_)` and no deref step on the
+    /// path passes through a `*const T` / `Type::Ref(_)`. Owned
+    /// bindings (`let x = ...` vs `let mut x = ...`) are always
+    /// accepted at this layer — the ownership checker handles
+    /// binding-level `let mut` enforcement.
+    fn place_is_mut_reachable(&self, expr: &Expr) -> bool {
+        let mut e = expr;
+        loop {
+            match &e.kind {
+                ExprKind::Identifier(name) => {
+                    return !matches!(self.local_scope.lookup(name), Some(Type::Ref(_)));
+                }
+                ExprKind::SelfValue => {
+                    return !matches!(self.local_scope.lookup("self"), Some(Type::Ref(_)));
+                }
+                ExprKind::FieldAccess { object, .. } => e = object,
+                ExprKind::TupleIndex { object, .. } => e = object,
+                ExprKind::Index { object, .. } => e = object,
+                ExprKind::Unary {
+                    op: UnaryOp::Deref,
+                    operand,
+                } => {
+                    let operand_ty = self
+                        .expr_types
+                        .get(&SpanKey::from_span(&operand.span))
+                        .cloned();
+                    match operand_ty {
+                        Some(Type::Ref(_)) => return false,
+                        Some(Type::Pointer { is_mut: false, .. }) => return false,
+                        _ => e = operand,
+                    }
+                }
+                _ => return true,
             }
         }
     }

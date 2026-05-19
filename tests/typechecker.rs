@@ -17417,3 +17417,269 @@ fn struct_drop_impl_unaffected_by_union_arm() {
          impl Drop for Point { fn drop(mut ref self) {} }",
     );
 }
+
+// ── Raw pointer construction (line 573 / v60 item 19) ────────────
+//
+// `ptr.const(place)` / `ptr.mut(place)` — Slice 1b: typechecker
+// place-form validator and 3 focused diagnostics.
+
+#[test]
+fn ptr_const_on_local_binding_accepts() {
+    typecheck_ok("fn main() {\n    let x: i32 = 7;\n    let p: *const i32 = ptr.const(x);\n}");
+}
+
+#[test]
+fn ptr_mut_on_local_binding_accepts() {
+    typecheck_ok("fn main() {\n    let mut x: i32 = 7;\n    let p: *mut i32 = ptr.mut(x);\n}");
+}
+
+#[test]
+fn ptr_const_on_field_access_accepts() {
+    typecheck_ok(
+        "struct Point { x: i32, y: i32 }\n\
+         fn main() {\n    \
+            let p: Point = Point { x: 1, y: 2 };\n    \
+            let q: *const i32 = ptr.const(p.x);\n\
+         }",
+    );
+}
+
+#[test]
+fn ptr_const_on_value_expression_rejected() {
+    // Binary op produces a value, not a place — no stable address.
+    let errs = typecheck_errors("fn main() {\n    let p = ptr.const(1 + 2);\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_PTR_CONST_REQUIRES_PLACE")),
+        "expected E_PTR_CONST_REQUIRES_PLACE, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ptr_mut_on_value_expression_rejected() {
+    let errs = typecheck_errors("fn main() {\n    let p = ptr.mut(1 + 2);\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_PTR_MUT_REQUIRES_PLACE")),
+        "expected E_PTR_MUT_REQUIRES_PLACE, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ptr_const_on_function_call_rejected() {
+    // Function call returns a value — no place to point at.
+    let errs = typecheck_errors(
+        "fn make() -> i32 { 7 }\n\
+         fn main() {\n    let p = ptr.const(make());\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_PTR_CONST_REQUIRES_PLACE")),
+        "expected E_PTR_CONST_REQUIRES_PLACE, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ptr_mut_on_shared_ref_root_rejected() {
+    // Place is rooted at a `ref T` binding — structurally immutable;
+    // `.mut` rejects with E_PTR_MUT_REQUIRES_MUTABLE_PLACE while
+    // `.const` would accept (a `*const T` view of a shared place is
+    // valid).
+    let errs = typecheck_errors(
+        "fn take(r: ref i32) {\n    let p = ptr.mut(r);\n}\n\
+         fn main() {\n    let x: i32 = 5;\n    take(x);\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_PTR_MUT_REQUIRES_MUTABLE_PLACE")),
+        "expected E_PTR_MUT_REQUIRES_MUTABLE_PLACE, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ptr_const_on_shared_ref_root_accepts() {
+    // `ptr.const(r)` where `r: ref T` is valid — taking a `*const T`
+    // view of a shared place doesn't introduce mutation rights.
+    typecheck_ok(
+        "fn take(r: ref i32) {\n    let p: *const i32 = ptr.const(r);\n}\n\
+         fn main() {\n    let x: i32 = 5;\n    take(x);\n}",
+    );
+}
+
+#[test]
+fn ptr_const_returns_const_pointer_type() {
+    // Result type is `*const T` matching the place's type — verifies
+    // by assigning to a typed binding (would mismatch if the result
+    // were `*mut i32` or anything else).
+    typecheck_ok("fn main() {\n    let x: i32 = 7;\n    let p: *const i32 = ptr.const(x);\n}");
+}
+
+#[test]
+fn ptr_mut_returns_mut_pointer_type() {
+    typecheck_ok("fn main() {\n    let mut x: i32 = 7;\n    let p: *mut i32 = ptr.mut(x);\n}");
+}
+
+#[test]
+fn ptr_const_arity_zero_rejected() {
+    let errs = typecheck_errors("fn main() {\n    let p = ptr.const();\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expects 1 argument")),
+        "expected arity diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ptr_mut_arity_two_rejected() {
+    let errs = typecheck_errors(
+        "fn main() {\n    let mut x = 1;\n    let mut y = 2;\n    let p = ptr.mut(x, y);\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("expects 1 argument")),
+        "expected arity diagnostic, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+// ── Slice 2: `&T as *const T` / `&mut T as *mut T` rejection ────
+
+#[test]
+fn ref_to_const_ptr_cast_rejected() {
+    // A `ref T` parameter cast to `*const T` via `as` is the C-style
+    // raw-pointer construction route. Forbidden — use `ptr.const(...)`.
+    let errs = typecheck_errors(
+        "fn build(r: ref i32) -> *const i32 { r as *const i32 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let p = build(x);\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_REF_TO_RAW_PTR_CAST_FORBIDDEN")),
+        "expected E_REF_TO_RAW_PTR_CAST_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn mut_ref_to_mut_ptr_cast_rejected() {
+    let errs = typecheck_errors(
+        "fn build(r: mut ref i32) -> *mut i32 { r as *mut i32 }\n\
+         fn main() {\n    let mut x: i32 = 7;\n    let p = build(mut x);\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_REF_TO_RAW_PTR_CAST_FORBIDDEN")),
+        "expected E_REF_TO_RAW_PTR_CAST_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn ref_to_mut_ptr_cast_rejected() {
+    // Cross-mutability ref→raw is also rejected. The fix suggestion
+    // names `ptr.mut(...)` for the to-mut form.
+    let errs = typecheck_errors(
+        "fn build(r: ref i32) -> *mut i32 { r as *mut i32 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let p = build(x);\n}",
+    );
+    let matched: Vec<&String> = errs
+        .iter()
+        .map(|e| &e.message)
+        .filter(|m| m.contains("E_REF_TO_RAW_PTR_CAST_FORBIDDEN"))
+        .collect();
+    assert!(
+        !matched.is_empty(),
+        "expected E_REF_TO_RAW_PTR_CAST_FORBIDDEN, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+    assert!(
+        matched[0].contains("ptr.mut"),
+        "fix-suggestion should name 'ptr.mut' for to-mut form, got: {}",
+        matched[0]
+    );
+}
+
+#[test]
+fn const_ptr_to_mut_ptr_cast_accepted() {
+    // `*const T as *mut T` is a raw-pointer-to-raw-pointer cast —
+    // both sides carry pointer provenance, so the strict-provenance
+    // contract is unaffected. Accepted.
+    typecheck_ok(
+        "fn promote(p: *const i32) -> *mut i32 { p as *mut i32 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let q = promote(ptr.const(x));\n}",
+    );
+}
+
+#[test]
+fn mut_ptr_to_const_ptr_cast_accepted() {
+    typecheck_ok(
+        "fn demote(p: *mut i32) -> *const i32 { p as *const i32 }\n\
+         fn main() {\n    let mut x: i32 = 7;\n    let q = demote(ptr.mut(x));\n}",
+    );
+}
+
+#[test]
+fn const_ptr_to_const_ptr_pointee_change_accepted() {
+    // Pointee-type change `*const i32 as *const u8` is a bitcast.
+    // Accepted — both sides are raw pointers.
+    typecheck_ok(
+        "fn reinterpret(p: *const i32) -> *const u8 { p as *const u8 }\n\
+         fn main() {\n    let x: i32 = 7;\n    let q = reinterpret(ptr.const(x));\n}",
+    );
+}
+
+// ── Slice 3: null / dangling / is_null stdlib functions ─────────
+
+#[test]
+fn ptr_null_returns_const_pointer() {
+    typecheck_ok("fn main() {\n    let p: *const i32 = ptr.null[i32]();\n}");
+}
+
+#[test]
+fn ptr_null_mut_returns_mut_pointer() {
+    typecheck_ok("fn main() {\n    let p: *mut i64 = ptr.null_mut[i64]();\n}");
+}
+
+#[test]
+fn ptr_dangling_returns_const_pointer() {
+    typecheck_ok("fn main() {\n    let p: *const u8 = ptr.dangling[u8]();\n}");
+}
+
+#[test]
+fn ptr_dangling_mut_returns_mut_pointer() {
+    typecheck_ok("fn main() {\n    let p: *mut f64 = ptr.dangling_mut[f64]();\n}");
+}
+
+#[test]
+fn ptr_is_null_returns_bool() {
+    typecheck_ok(
+        "fn main() {\n    let p: *const i32 = ptr.null[i32]();\n    let b: bool = ptr.is_null[i32](p);\n}",
+    );
+}
+
+#[test]
+fn ptr_const_shadowed_by_local_falls_to_method_lookup() {
+    // When a local binding named `ptr` is in scope, the special-form
+    // recognition does not fire. The call routes to ordinary method-
+    // call lookup, which finds no method `const` on the local's type
+    // and surfaces a NoMethodFound diagnostic.
+    let errs = typecheck_errors(
+        "struct Box { x: i32 }\n\
+         fn main() {\n    \
+            let ptr: Box = Box { x: 1 };\n    \
+            let p = ptr.const(5);\n\
+         }",
+    );
+    assert!(
+        !errs
+            .iter()
+            .any(|e| e.message.contains("E_PTR_CONST_REQUIRES_PLACE")),
+        "place-form diagnostic must not fire when ptr is shadowed; got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}

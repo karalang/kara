@@ -1843,6 +1843,49 @@ impl<'a> TypeChecker<'a> {
             return;
         }
 
+        // Reference → raw pointer: forbidden. The construction sites
+        // for raw pointers are `ptr.const(place)` / `ptr.mut(place)`
+        // (design.md § Raw Pointer Construction, v60 item 19), which
+        // root the resulting pointer in the *place itself* rather
+        // than in an intermediate reference whose lifetime would
+        // already have ended when the cast result is used. This rule
+        // catches the foot-gun "C-style" form before any pointer
+        // arithmetic / dereference can witness the dangling result.
+        // Tracker: phase-5-diagnostics line 573.
+        if matches!(from_ty, Type::Ref(_) | Type::MutRef(_))
+            && matches!(to_ty, Type::Pointer { .. })
+        {
+            let suggested_form = match to_ty {
+                Type::Pointer { is_mut: true, .. } => "ptr.mut(place)",
+                _ => "ptr.const(place)",
+            };
+            self.type_error(
+                format!(
+                    "error[E_REF_TO_RAW_PTR_CAST_FORBIDDEN]: cannot cast \
+                     a reference to a raw pointer; references and raw \
+                     pointers have different rooting and lifetime \
+                     contracts. Use `{}` to construct a raw pointer \
+                     directly from the underlying place (got `{}` to \
+                     `{}`)",
+                    suggested_form,
+                    type_display(from_ty),
+                    type_display(to_ty)
+                ),
+                span.clone(),
+                TypeErrorKind::InvalidCast,
+            );
+            return;
+        }
+
+        // Raw pointer → raw pointer: accepted. Mutability changes
+        // (`*const T as *mut T`) and pointee changes (`*const T as
+        // *const U`) are both bitcasts at the IR level; the strict-
+        // provenance contract is unchanged because both sides carry
+        // pointer provenance.
+        if matches!(from_ty, Type::Pointer { .. }) && matches!(to_ty, Type::Pointer { .. }) {
+            return;
+        }
+
         // Anything else falls through to the generic diagnostic.
         self.type_error(
             format!(

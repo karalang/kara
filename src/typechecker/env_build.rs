@@ -665,6 +665,72 @@ impl<'a> super::TypeChecker<'a> {
             },
         );
 
+        // ── Null / dangling / is_null pointer primitives ─────────────────
+        // Spec: design.md § Raw Pointer Construction (v60 item 19).
+        // `null[T]()` / `null_mut[T]()` produce the all-zeroes pointer;
+        // `dangling[T]()` / `dangling_mut[T]()` produce a non-null
+        // pointer aligned to T's alignment that is *not* dereferenceable
+        // (analogous to Rust's `ptr::dangling`). `is_null[T](p)` returns
+        // `true` exactly when `p` was produced by `null` / `null_mut`
+        // (provenance-aware compare against the all-zeroes pointer).
+        // Construction is safe — only deref / arithmetic on these
+        // pointers requires `unsafe { }`.
+        // ptr.null[T]() -> *const T
+        self.env.functions.insert(
+            "ptr.null".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![],
+                params: vec![],
+                return_type: const_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.null_mut[T]() -> *mut T
+        self.env.functions.insert(
+            "ptr.null_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![],
+                params: vec![],
+                return_type: mut_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.dangling[T]() -> *const T
+        self.env.functions.insert(
+            "ptr.dangling".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![],
+                params: vec![],
+                return_type: const_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.dangling_mut[T]() -> *mut T
+        self.env.functions.insert(
+            "ptr.dangling_mut".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![],
+                params: vec![],
+                return_type: mut_ptr_t(),
+                where_clause: None,
+            },
+        );
+        // ptr.is_null[T](p: *const T) -> bool
+        self.env.functions.insert(
+            "ptr.is_null".to_string(),
+            FunctionSig {
+                generic_params: vec!["T".to_string()],
+                param_names: vec![Some("p".to_string())],
+                params: vec![const_ptr_t()],
+                return_type: Type::Bool,
+                where_clause: None,
+            },
+        );
+
         // ── Stats namespace ──────────────────────────────────────────────────
         // CR-202 slice 6.3: every Stats method now lives in baked source as
         // `impl Stats { #[compiler_builtin] fn ... }`. See
