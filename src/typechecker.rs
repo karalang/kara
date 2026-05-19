@@ -299,6 +299,15 @@ pub struct TypeError {
     /// replacement) and grows when richer multi-edit fix-its land.
     /// See `phase-5-diagnostics.md` § `#[non_exhaustive]`.
     pub fix_it: Option<FixIt>,
+    /// Diagnostic class for `karac explain --format=json` output —
+    /// the broad-category label (`TYPE_MISMATCH`, `INVALID_CAST`,
+    /// etc.) that machine consumers (LLM agents, IDE tooling) read
+    /// to filter and route diagnostics. Auto-derived from `kind` at
+    /// `type_error` construction time via
+    /// `class_for_type_error_kind`; unmapped kinds default to `None`
+    /// (which serialises as `OTHER` at the JSON-emit site). Line 619
+    /// slice 2 — see `phase-5-diagnostics.md`.
+    pub class: Option<crate::diagnostic_class::DiagnosticClass>,
 }
 
 /// One machine-applicable fix-it edit attached to a `TypeError`.
@@ -501,6 +510,76 @@ pub enum TypeErrorKind {
     /// suppresses uniformly. `W0249` (warning path);
     /// `#[deny(unfulfilled_lint_expectation)]` promotes to `E0249`.
     UnfulfilledLintExpectation,
+}
+
+/// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
+/// for `karac explain --format=json` output. Returns `None` for
+/// kinds whose class hasn't been individually settled — the JSON
+/// emitter renders `None` as `"OTHER"`, signalling a backfill
+/// opportunity rather than an error. Line 619 slice 2 — adding new
+/// classifications is purely additive; the mapping lives here
+/// (next to the kind enum) so kind additions / renames force a
+/// classification decision at the same edit site.
+pub(crate) fn class_for_type_error_kind(
+    kind: &TypeErrorKind,
+) -> Option<crate::diagnostic_class::DiagnosticClass> {
+    use crate::diagnostic_class::DiagnosticClass as DC;
+    match kind {
+        TypeErrorKind::TypeMismatch
+        | TypeErrorKind::UndefinedField
+        | TypeErrorKind::MissingField
+        | TypeErrorKind::ExtraField
+        | TypeErrorKind::NotCallable
+        | TypeErrorKind::NotAStruct
+        | TypeErrorKind::ConditionNotBool
+        | TypeErrorKind::BranchTypeMismatch
+        | TypeErrorKind::ReturnTypeMismatch
+        | TypeErrorKind::InvalidTupleIndex
+        | TypeErrorKind::LabelMismatch
+        | TypeErrorKind::NonContiguousLabels
+        | TypeErrorKind::OnceFnIntoFnSlot => Some(DC::TypeMismatch),
+
+        TypeErrorKind::WrongNumberOfArgs => Some(DC::WrongNumberOfArgs),
+        TypeErrorKind::NoMethodFound
+        | TypeErrorKind::AmbiguousAssocFn
+        | TypeErrorKind::AmbiguousMethod
+        | TypeErrorKind::CannotInferAssocFn => Some(DC::NoMethodFound),
+        TypeErrorKind::InvalidCast => Some(DC::InvalidCast),
+        TypeErrorKind::InvalidUnaryOp
+        | TypeErrorKind::InvalidBinaryOp
+        | TypeErrorKind::InvalidPipePlaceholder => Some(DC::InvalidUnaryOp),
+        TypeErrorKind::TraitBoundNotSatisfied | TypeErrorKind::MissingSupertrait => {
+            Some(DC::TraitBoundNotSatisfied)
+        }
+        TypeErrorKind::RefutablePattern => Some(DC::RefutablePattern),
+        TypeErrorKind::CannotInferTypeParam => Some(DC::CannotInferTypeParam),
+        TypeErrorKind::MissingMutMarker | TypeErrorKind::InvalidMutMarker => {
+            Some(DC::OwnershipBorrowConflict)
+        }
+
+        // Lint-surfaced kinds — keep at `LintWarning` regardless of
+        // underlying shape (the lint-emission helper sets this
+        // explicitly; the mapping here covers direct calls to
+        // `type_error` that route through these kinds).
+        TypeErrorKind::UnreachableArm
+        | TypeErrorKind::UnknownLint
+        | TypeErrorKind::Deprecated
+        | TypeErrorKind::ForbiddenLintAllow
+        | TypeErrorKind::ExpectOnUnfulfilled
+        | TypeErrorKind::UnfulfilledLintExpectation => Some(DC::LintWarning),
+
+        // Kinds not yet individually classified — `Other` at the JSON
+        // emit site. Backfill is incremental; each one is a small
+        // follow-up commit naming the slot.
+        TypeErrorKind::NonExhaustiveMatch
+        | TypeErrorKind::UnsupportedNumericSuffix
+        | TypeErrorKind::PrivateTypeInPublicSignature
+        | TypeErrorKind::ConflictingImpl
+        | TypeErrorKind::NonExhaustiveCrossPackageLiteral
+        | TypeErrorKind::NonExhaustiveCrossPackageMatch
+        | TypeErrorKind::NonExhaustiveCrossPackagePattern
+        | TypeErrorKind::MissingNonExhaustive => None,
+    }
 }
 
 impl std::fmt::Display for TypeError {
@@ -1391,12 +1470,14 @@ impl<'a> TypeChecker<'a> {
     }
 
     pub(super) fn type_error(&mut self, message: String, span: Span, kind: TypeErrorKind) {
+        let class = class_for_type_error_kind(&kind);
         self.errors.push(TypeError {
             message,
             span,
             kind,
             lint_name: None,
             fix_it: None,
+            class,
         });
     }
 
@@ -1414,12 +1495,14 @@ impl<'a> TypeChecker<'a> {
         kind: TypeErrorKind,
         fix_it: FixIt,
     ) {
+        let class = class_for_type_error_kind(&kind);
         self.errors.push(TypeError {
             message,
             span,
             kind,
             lint_name: None,
             fix_it: Some(fix_it),
+            class,
         });
     }
 
@@ -1550,12 +1633,18 @@ impl<'a> TypeChecker<'a> {
     ) {
         use crate::lints::LintLevel;
         let level = self.effective_lint_level(lint_name);
+        // Lint entries default to `LintWarning` regardless of the
+        // underlying kind so the JSON consumer can distinguish lint-
+        // surfaced diagnostics from hard rules without parsing the
+        // message body. The specific lint (`lint_name`) is already
+        // carried on the entry.
         let entry = TypeError {
             message,
             span,
             kind,
             lint_name: Some(lint_name.to_string()),
             fix_it: None,
+            class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
         };
         match level {
             LintLevel::Allow => {

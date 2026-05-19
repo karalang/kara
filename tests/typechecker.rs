@@ -17743,3 +17743,82 @@ fn ptr_const_shadowed_by_local_falls_to_method_lookup() {
         errs.iter().map(|e| &e.message).collect::<Vec<_>>()
     );
 }
+
+// ── DiagnosticClass wiring (line 619 slice 2) ─────────────────────
+//
+// Slice 2 threads `class: Option<DiagnosticClass>` through the
+// TypeError carrier struct, auto-derived from `kind` via
+// `class_for_type_error_kind`. These tests pin canonical-kind →
+// class mappings at the diagnostic-emission sites that exercise
+// them so the JSON-emit slice can rely on a stable wire shape.
+
+#[test]
+fn diagnostic_class_type_mismatch_for_assignment_failure() {
+    use karac::diagnostic_class::DiagnosticClass;
+    // Assigning a string literal to an i32 binding hits the
+    // TypeMismatch path. Class should be Some(TypeMismatch).
+    let errs = typecheck_errors("fn main() {\n    let x: i32 = \"hello\";\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::TypeMismatch)),
+        "expected TypeMismatch class on assignment failure; got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn diagnostic_class_invalid_cast_for_ptr_to_int_rejection() {
+    use karac::diagnostic_class::DiagnosticClass;
+    // `as`-cast rejection routes through TypeErrorKind::InvalidCast
+    // → DiagnosticClass::InvalidCast.
+    let errs = typecheck_errors(
+        "fn main() {\n    let x: i32 = 5;\n    let p = ptr.const(x);\n    let n = p as usize;\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::InvalidCast)),
+        "expected InvalidCast class on ptr→int rejection; got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn diagnostic_class_wrong_number_of_args() {
+    use karac::diagnostic_class::DiagnosticClass;
+    let errs = typecheck_errors("fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { add(1); }");
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::WrongNumberOfArgs)),
+        "expected WrongNumberOfArgs class; got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn diagnostic_class_no_method_found() {
+    use karac::diagnostic_class::DiagnosticClass;
+    let errs = typecheck_errors(
+        "struct Point { x: i32 }\nfn main() {\n    let p = Point { x: 5 };\n    p.nonexistent_method();\n}",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::NoMethodFound)),
+        "expected NoMethodFound class; got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn diagnostic_class_invalid_unary_op_for_ptr_const_on_value() {
+    use karac::diagnostic_class::DiagnosticClass;
+    // E_PTR_CONST_REQUIRES_PLACE uses TypeErrorKind::InvalidUnaryOp
+    // (see slice 1b's emission site) — should classify as
+    // InvalidUnaryOp.
+    let errs = typecheck_errors("fn main() {\n    let p = ptr.const(1 + 2);\n}");
+    assert!(
+        errs.iter()
+            .any(|e| e.class == Some(DiagnosticClass::InvalidUnaryOp)),
+        "expected InvalidUnaryOp class on ptr.const(non-place); got classes: {:?}",
+        errs.iter().map(|e| e.class).collect::<Vec<_>>()
+    );
+}
