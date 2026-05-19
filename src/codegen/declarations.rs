@@ -309,6 +309,15 @@ impl<'ctx> super::Codegen<'ctx> {
     /// transform passes can look up the struct type at body-rewrite time.
     pub(super) fn emit_state_struct_types(&mut self, program: &Program) {
         for (fn_key, layout) in &program.state_struct_layouts {
+            // Slice 8v: generic (un-monomorphized) functions don't get
+            // a base-name state-struct — their field types include
+            // unsubstituted type parameters that `llvm_type_for_name`
+            // would silently fall through to the i64 default for.
+            // Per-mono emission (under the mangled key) lands at
+            // `compile_generic_call` time once `type_subst` is active.
+            if is_generic_fn_key(program, fn_key) {
+                continue;
+            }
             let mut fields: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(1 + layout.fields.len());
             // Tag is i32 — yield-point indices for v1 fit comfortably in
             // 31 bits (designers expect single-digit yields per
@@ -408,6 +417,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
         keys.sort();
         for fn_key in keys {
+            // Slice 8v: skip generic functions — per-mono poll-fn
+            // emission at `compile_generic_call` time emits under
+            // the mangled key with `type_subst` active.
+            if is_generic_fn_key(program, fn_key) {
+                continue;
+            }
             let state_struct = match self.state_struct_types.get(fn_key) {
                 Some(st) => *st,
                 // Defensive: layout entry without a corresponding LLVM
@@ -1183,6 +1198,11 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
         keys.sort();
         for fn_key in keys {
+            // Slice 8v: skip generic functions — per-mono constructor
+            // emission lands at `compile_generic_call` time.
+            if is_generic_fn_key(program, fn_key) {
+                continue;
+            }
             let state_struct = match self.state_struct_types.get(fn_key) {
                 Some(st) => *st,
                 None => continue,
@@ -1320,6 +1340,13 @@ impl<'ctx> super::Codegen<'ctx> {
         let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
         keys.sort();
         for fn_key in keys {
+            // Slice 8v: skip generic functions — per-mono destructor
+            // emission lands at `compile_generic_call` time, with
+            // field-type classification using `llvm_type_for_name`
+            // against the active `type_subst`.
+            if is_generic_fn_key(program, fn_key) {
+                continue;
+            }
             let state_struct = match self.state_struct_types.get(fn_key) {
                 Some(st) => *st,
                 None => continue,
@@ -2205,6 +2232,29 @@ pub(super) fn is_i64_return_type(ty: &TypeExpr) -> bool {
 ///
 /// Used by phase 6 line 26 slice 8h's body-splitting walk to find
 /// the user's statements to emit per state arm.
+/// Phase 6 line 26 slice 8v: does `fn_key` refer to a generic
+/// (un-monomorphized) function or method? The base-name passes
+/// (slice 5 state-struct LLVM type, slice 6 poll-fn, slice 8c
+/// constructor, slice 8u destructor) skip generic entries because
+/// their captured-local field types reference type parameters
+/// (`T`, `U`, ...) that `llvm_type_for_name` would silently fall
+/// through to the i64 default for — producing dead-and-broken IR
+/// the slice 8d caller-side intercept can't reach anyway (the
+/// `compile_call` dispatch returns early through
+/// `compile_generic_call` for generics, bypassing the
+/// state-machine intercept on the polymorphic name). Per-mono
+/// emission then re-emits each helper at the mangled key with
+/// `type_subst` populated, so `llvm_type_for_name(T)` resolves to
+/// the concrete LLVM type for that monomorphization. Same
+/// fn_key shape as `find_function_ast`: `"name"` for free fns,
+/// `"Type.method"` for impl methods.
+pub(super) fn is_generic_fn_key(program: &Program, fn_key: &str) -> bool {
+    match find_function_ast(program, fn_key) {
+        Some(f) => f.generic_params.is_some(),
+        None => false,
+    }
+}
+
 pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Option<&'p Function> {
     for item in &program.items {
         match item {

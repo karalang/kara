@@ -17472,4 +17472,150 @@ fn main() {
             "destructor must not free the state ptr (caller does):\n{body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8v Phase 1: skip generics from base-name emission ──
+    //
+    // Polymorphic yielding functions (`fn driver[T](item: T) { fetch(); }`)
+    // get an entry in `state_struct_layouts` under their base name with
+    // a captured-local field whose `type_name` references the
+    // unsubstituted type parameter (`Some("T")`). Slices 5 / 6 / 8c / 8u
+    // run before any per-mono `type_subst` is active, so
+    // `llvm_type_for_name("T")` would fall through to the i64 default —
+    // producing dead-and-broken state-struct LLVM types / poll-fns /
+    // constructors / destructors that the caller-side intercept can't
+    // reach (the `compile_call` dispatch short-circuits through
+    // `compile_generic_call` for generics, bypassing the slice-8d
+    // intercept). Slice 8v Phase 1 detects generic entries via
+    // `is_generic_fn_key` and skips them entirely from all four
+    // base-name passes — removing the dead IR without affecting any
+    // non-generic state-machine emission. Per-mono emission + caller-
+    // side intercept routing land in slice 8v Phase 2.
+
+    #[test]
+    fn test_state_machine_skips_polymorphic_state_struct_type() {
+        // Polymorphic yielding fn produces no `%kara.state.<base>`
+        // LLVM struct type — slice 5's iteration over
+        // `state_struct_layouts` now filters via `is_generic_fn_key`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            !ir.contains("%kara.state.driver = type"),
+            "polymorphic driver must not emit a base-name state struct type:\n{ir}"
+        );
+        // Anchor global mirrors the state-struct type — both must
+        // disappear.
+        assert!(
+            !ir.contains("__kara_state_type_anchor_driver"),
+            "polymorphic driver must not emit a state-struct anchor global:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_machine_skips_polymorphic_poll_fn() {
+        // Polymorphic yielding fn produces no `__kara_poll_<base>`
+        // poll-fn — slice 6's iteration now filters generics.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            !ir.contains("@__kara_poll_driver"),
+            "polymorphic driver must not emit a base-name poll-fn:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_machine_skips_polymorphic_state_constructor() {
+        // Polymorphic yielding fn produces no `__kara_state_new_<base>`
+        // constructor — slice 8c's iteration now filters generics.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            !ir.contains("@__kara_state_new_driver"),
+            "polymorphic driver must not emit a base-name state constructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_machine_skips_polymorphic_state_destructor() {
+        // Polymorphic yielding fn whose captured-local would be
+        // heap-bearing on every monomorphization (here `items: Vec[T]`,
+        // type_name `Some("Vec")` — classifies as `FieldDrop::VecOrString`)
+        // still emits no base-name destructor — slice 8v Phase 1 skips
+        // the polymorphic key before the classification runs. Per-mono
+        // destructor emission lands the right shape at the mangled key
+        // in slice 8v Phase 2. Function need only be declared; the
+        // Phase 1 skip fires during the base-name iteration over
+        // `state_struct_layouts`, independent of any call sites.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](items: Vec[T]) { fetch(); }",
+        );
+        assert!(
+            !ir.contains("@__kara_state_drop_driver"),
+            "polymorphic driver must not emit a base-name state destructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_machine_still_emits_for_non_generic_concrete_function() {
+        // Sanity guard: slice 8v Phase 1's filter must NOT affect
+        // non-generic yielding fns — `caller()` here has no generic
+        // params and is itself transitively network-boundary
+        // (through `driver(42)`'s call to `fetch()`), so all four
+        // helpers must still emit under its base name.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            ir.contains("%kara.state.caller = type"),
+            "non-generic caller must still emit its state struct type:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__kara_poll_caller"),
+            "non-generic caller must still emit its poll-fn:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__kara_state_new_caller"),
+            "non-generic caller must still emit its state constructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_state_machine_skips_polymorphic_impl_method() {
+        // Polymorphic methods on a non-generic impl block also skip
+        // base-name emission — `is_generic_fn_key` resolves
+        // `"Hub.run"` to the impl method's AST and checks
+        // `generic_params.is_some()`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             shared struct Hub { count: i64 }
+             impl Hub {
+                 fn run[T](self, item: T) { fetch(); }
+             }",
+        );
+        assert!(
+            !ir.contains("%kara.state.Hub.run = type"),
+            "polymorphic Hub.run must not emit a base-name state struct type:\n{ir}"
+        );
+        assert!(
+            !ir.contains("@__kara_poll_Hub.run"),
+            "polymorphic Hub.run must not emit a base-name poll-fn:\n{ir}"
+        );
+    }
 }
