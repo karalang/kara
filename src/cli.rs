@@ -4355,6 +4355,7 @@ fn resolve_error_code(kind: &ResolveErrorKind) -> &'static str {
 
 fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
     for re in per_module {
+        let file = re.file.display().to_string();
         for err in &re.errors {
             let code = resolve_error_code(&err.kind);
             eprintln!(
@@ -4366,6 +4367,16 @@ fn print_resolve_errors_text(per_module: &[ModuleResolveErrors]) {
             );
             if let Some(ref s) = err.suggestion {
                 eprintln!("  help: did you mean `{s}`?");
+            }
+            if let Some(ref stub) = err.stub_hint {
+                let target_file = sibling_production_file(&file);
+                eprintln!(
+                    "  hint: stub `{}` in {} with inferred signature:",
+                    stub.callee_name, target_file
+                );
+                for line in stub.render_source().lines() {
+                    eprintln!("    {line}");
+                }
             }
         }
     }
