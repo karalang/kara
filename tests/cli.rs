@@ -509,6 +509,80 @@ fn test_json_suggestion_in_hints() {
     assert!(stdout.contains("\"hints\":[{\"description\":"));
 }
 
+// ── Signature-from-call-site stub diagnostic (line 633 slice 3) ────
+
+#[test]
+fn test_json_stub_hint_emits_diff_in_test_file() {
+    // An unresolved-call in a `_test.kara` file must produce a
+    // `hints[].diff` entry pointing at the sibling production file
+    // with the rendered stub source. Slice 2 inference flows through
+    // — unsuffixed int literals land as `i64` in the diff body.
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_test_stub_hint_test.kara");
+    std::fs::write(
+        &fixture,
+        "fn test_calls_missing() {\n    let _ = add(1, 2);\n}\n",
+    )
+    .expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_file(&fixture);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("\"diff\":{"),
+        "expected hints[].diff entry; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("stub `add`"),
+        "expected stub description; got: {}",
+        stdout
+    );
+    // The sibling production file path is the `_test.kara` →
+    // `.kara` munge. Pin the body shape too — i64 args + todo() body.
+    assert!(
+        stdout.contains("karac_test_stub_hint.kara"),
+        "expected sibling production filename in diff; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("fn add(arg0: i64, arg1: i64) -> _"),
+        "expected i64-inferred stub body; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("todo()"),
+        "expected todo() body; got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_json_stub_hint_absent_for_production_file() {
+    // Activation gate: a production-file (`*.kara`, not `*_test.kara`)
+    // unresolved-call must NOT carry a stub-hint diff. Mirrors the
+    // resolver-level gate test; this confirms the CLI emitter
+    // respects the absence too.
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_test_stub_hint_prod.kara");
+    std::fs::write(&fixture, "fn main() {\n    let _ = add(1, 2);\n}\n").expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_file(&fixture);
+    assert!(!out.status.success());
+    assert!(
+        !stdout.contains("\"diff\":"),
+        "production-file diagnostic must not carry hints[].diff; got: {}",
+        stdout
+    );
+}
+
 // ── JSONL Output Snapshots ──────────────────────────────────────
 
 #[test]

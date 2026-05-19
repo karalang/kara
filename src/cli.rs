@@ -434,7 +434,18 @@ impl Pipeline {
             return;
         }
         crate::desugar_program(&mut self.parsed.program);
-        self.resolved = Some(crate::resolve(&self.parsed.program));
+        // Single-file mode infers the test-file flag from the filename
+        // suffix — multi-module flows route through `resolve_modules`
+        // and read it off `Module.is_test_file`. Phase-5-diagnostics
+        // line 633 (signature-from-call-site stub) needs the flag set
+        // so it fires when `karac check foo_test.kara` surfaces an
+        // unresolved-call site.
+        let is_test_file = self.filename.ends_with("_test.kara");
+        self.resolved = Some(
+            crate::resolver::Resolver::new(&self.parsed.program)
+                .with_test_file(is_test_file)
+                .resolve(),
+        );
     }
 
     fn has_resolve_errors(&self) -> bool {
@@ -1820,6 +1831,15 @@ struct DiagEntry<'a> {
     /// Display form of the *got* / actual type at the diagnostic
     /// site. Mirror of `expected`. Line 619 slice 4.
     got: Option<&'a str>,
+    /// Pre-rendered JSON object for a `hints[]` entry carrying a
+    /// signature-from-call-site stub diff (phase-5-diagnostics line
+    /// 633). Set on unresolved-call diagnostics emitted inside a
+    /// `_test.kara` file; left `None` everywhere else. The string is
+    /// the inner JSON object `{"description":"…","diff":{"file":…,
+    /// "line":…,"old":"","new":"…"}}` — spliced into the unified
+    /// `hints` array alongside the existing `did you mean`
+    /// description entry when both are present.
+    stub_hint_json: Option<String>,
 }
 
 struct DiagnosticJson {
@@ -1844,8 +1864,21 @@ impl DiagnosticJson {
             span_to_json(d.span, d.filename),
             json_string(d.message),
         );
+        // Unified `hints` array: combines the (existing) `suggestion`
+        // description entry and any signature-from-call-site stub-diff
+        // entry (line 633). At least one of the two must be set for
+        // the field to appear; both can coexist on the same
+        // diagnostic (e.g. an unresolved-call in a test file that
+        // also has a `did you mean` neighbour).
+        let mut hints: Vec<String> = Vec::new();
         if let Some(s) = d.suggestion {
-            write!(entry, ",\"hints\":[{{\"description\":{}}}]", json_string(s)).unwrap();
+            hints.push(format!("{{\"description\":{}}}", json_string(s)));
+        }
+        if let Some(ref sj) = d.stub_hint_json {
+            hints.push(sj.clone());
+        }
+        if !hints.is_empty() {
+            write!(entry, ",\"hints\":[{}]", hints.join(",")).unwrap();
         }
         if let Some(name) = d.lint_name {
             write!(entry, ",\"lint_name\":{}", json_string(name)).unwrap();
@@ -1912,6 +1945,62 @@ impl DiagnosticJson {
     }
 }
 
+/// Munge the path of a `_test.kara` file to its sibling production
+/// file: `src/math_test.kara` → `src/math.kara`. Returns the input
+/// unchanged when the basename does not match the `_test.kara`
+/// convention — defensive fallback so a future test-file convention
+/// change does not silently mis-route the stub diff.
+fn sibling_production_file(test_path: &str) -> String {
+    // Split the last path component so the `_test.kara` suffix swap
+    // does not touch directory names containing `_test` substrings.
+    if let Some(stripped) = test_path.strip_suffix("_test.kara") {
+        format!("{stripped}.kara")
+    } else {
+        test_path.to_string()
+    }
+}
+
+/// Best-effort line count for the sibling production file. Used as the
+/// `line` field of the stub-hint diff so the consumer (LLM agent / IDE)
+/// knows where in the file the insertion lands. When the file does not
+/// exist yet (pure-TDD opener: test file written first, production
+/// file not yet created), returns `1` so the diff describes "create
+/// the file with this body."
+fn target_append_line(target_file: &str) -> u32 {
+    match std::fs::read_to_string(target_file) {
+        Ok(contents) => {
+            // Append after the last existing line. Line count + 1 even
+            // when the file ends with a trailing newline — the new
+            // content lands on the line *after* the trailing newline.
+            let line_count = contents.lines().count();
+            (line_count as u32) + 1
+        }
+        Err(_) => 1,
+    }
+}
+
+/// Render a single `hints[]` entry carrying a signature-from-call-site
+/// stub diff (phase-5-diagnostics line 633). The output is the inner
+/// JSON object — the surrounding `[ ]` is added by `DiagnosticJson::add`
+/// when assembling the unified hints array.
+fn render_stub_hint_json(filename: &str, hint: &crate::resolver::StubHint) -> String {
+    let target_file = sibling_production_file(filename);
+    let line = target_append_line(&target_file);
+    let new_source = hint.render_source();
+    let description = format!(
+        "stub `{}` in {} with inferred signature",
+        hint.callee_name, target_file
+    );
+    format!(
+        "{{\"description\":{},\"diff\":{{\"file\":{},\"line\":{},\"old\":{},\"new\":{}}}}}",
+        json_string(&description),
+        json_string(&target_file),
+        line,
+        json_string(""),
+        json_string(&new_source),
+    )
+}
+
 fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
     let mut diags = DiagnosticJson::new();
     let filename = &pipeline.filename;
@@ -1935,6 +2024,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             class: None,
             expected: None,
             got: None,
+            stub_hint_json: None,
         });
     }
 
@@ -1985,6 +2075,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&r.replacement),
                 )
             });
+            let stub_hint_json = err
+                .stub_hint
+                .as_ref()
+                .map(|s| render_stub_hint_json(filename, s));
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -2001,6 +2095,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json,
             });
         }
     }
@@ -2082,6 +2177,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: Some(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
                 expected: err.expected.as_deref(),
                 got: err.got.as_deref(),
+                stub_hint_json: None,
             });
         }
         for warn in &t.warnings {
@@ -2111,6 +2207,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: Some(warn.class.map(|c| c.as_str()).unwrap_or("OTHER")),
                 expected: warn.expected.as_deref(),
                 got: warn.got.as_deref(),
+                stub_hint_json: None,
             });
         }
     }
@@ -2167,6 +2264,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json: None,
             });
         }
     }
@@ -2224,6 +2322,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json: None,
             });
         }
         for note in &o.notes {
@@ -2256,6 +2355,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json: None,
             });
         }
     }
@@ -2280,6 +2380,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json: None,
             });
         }
     }
@@ -2304,6 +2405,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 class: None,
                 expected: None,
                 got: None,
+                stub_hint_json: None,
             });
         }
     }
@@ -4298,8 +4400,9 @@ fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 None => String::new(),
             };
             let replacement = replacement_json_tail(err);
+            let hints = stub_hints_tail(&file, err);
             out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}}}",
+                "{{\"severity\":\"error\",\"phase\":\"resolve\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}}}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
@@ -4307,6 +4410,7 @@ fn resolve_errors_json(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 json_string(&err.message),
                 suggestion,
                 replacement,
+                hints,
             ));
         }
     }
@@ -4324,8 +4428,9 @@ fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 None => String::new(),
             };
             let replacement = replacement_json_tail(err);
+            let hints = stub_hints_tail(&file, err);
             out.push(format!(
-                "{{\"type\":\"resolve_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}}}",
+                "{{\"type\":\"resolve_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}{}{}{}}}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
@@ -4333,10 +4438,23 @@ fn resolve_errors_jsonl(per_module: &[ModuleResolveErrors]) -> Vec<String> {
                 json_string(&err.message),
                 suggestion,
                 replacement,
+                hints,
             ));
         }
     }
     out
+}
+
+/// Emit the `,"hints":[…]` JSON tail when `err` carries a stub hint —
+/// the multi-module resolve-error emitters' counterpart to the
+/// `hints[].diff` wiring inside `DiagnosticJson::add`. Returns the
+/// empty string when no stub hint is present so the JSON shape stays
+/// lean for the common case.
+fn stub_hints_tail(file: &str, err: &crate::resolver::ResolveError) -> String {
+    match err.stub_hint.as_ref() {
+        Some(s) => format!(",\"hints\":[{}]", render_stub_hint_json(file, s)),
+        None => String::new(),
+    }
 }
 
 /// Typechecker errors collected for one specific module.
@@ -6330,6 +6448,7 @@ mod diagnostic_json_tests {
             class: Some("OTHER"),
             expected: None,
             got: None,
+            stub_hint_json: None,
         });
         let json = diags.to_json_array();
         // Legacy field still present.
@@ -6375,6 +6494,7 @@ mod diagnostic_json_tests {
             class: Some("TYPE_MISMATCH"),
             expected: Some("i32"),
             got: Some("String"),
+            stub_hint_json: None,
         });
         let json = diags.to_json_array();
         assert!(!json.contains("\"fix_it\":"));
@@ -6413,6 +6533,7 @@ mod diagnostic_json_tests {
             class: Some("LINT_WARNING"),
             expected: None,
             got: None,
+            stub_hint_json: None,
         });
         let json = diags.to_json_array();
         assert!(
