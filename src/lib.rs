@@ -1,5 +1,6 @@
 pub mod ast;
 pub mod attribute_validator;
+pub mod call_graph;
 pub mod catalog;
 pub mod cfg;
 pub mod cli;

@@ -4129,3 +4129,168 @@ fn test_catalog_missing_file_arg_rejected() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("missing file argument"), "got: {stderr}");
 }
+
+// ── karac query affected-by ─────────────────────────────────────
+
+fn affected_by_tmp_path(label: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!(
+        "karac-cli-affected-by-{label}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    ))
+}
+
+#[test]
+fn test_affected_by_emits_envelope_with_callers_and_callees() {
+    let path = affected_by_tmp_path("simple");
+    let src =
+        "fn leaf() -> i64 { 0 }\nfn middle() -> i64 { leaf() }\nfn top() -> i64 { middle() }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = format!("{}:middle", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "affected-by", &target])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(
+        out.status.success(),
+        "karac query affected-by should exit 0; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    assert!(line.starts_with('{') && line.ends_with('}'), "got: {line}");
+    assert!(line.contains("\"type\":\"affected_by\""), "got: {line}");
+    assert!(line.contains("\"input\":\"middle\""), "got: {line}");
+    assert!(line.contains("\"fn\":\"top\""), "got: {line}");
+    assert!(line.contains("\"fn\":\"leaf\""), "got: {line}");
+}
+
+#[test]
+fn test_affected_by_direction_callees_suppresses_callers() {
+    let path = affected_by_tmp_path("direction");
+    let src =
+        "fn leaf() -> i64 { 0 }\nfn middle() -> i64 { leaf() }\nfn top() -> i64 { middle() }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = format!("{}:top", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "affected-by", &target, "--direction=callees"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    assert!(
+        !line.contains("\"callers\""),
+        "callers must be omitted; got: {line}"
+    );
+    assert!(
+        !line.contains("\"tests\""),
+        "tests must be omitted under callees; got: {line}"
+    );
+    assert!(line.contains("\"callees\":["), "got: {line}");
+    assert!(line.contains("\"fn\":\"leaf\""), "got: {line}");
+    assert!(line.contains("\"fn\":\"middle\""), "got: {line}");
+}
+
+#[test]
+fn test_affected_by_tests_only_filters_to_test_fns() {
+    let parent = std::env::temp_dir();
+    let unique = format!(
+        "karac-cli-affby-tests-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0)
+    );
+    let test_path = parent.join(format!("{unique}_test.kara"));
+    let src = "fn helper() -> i64 { 0 }\nfn test_helper_baseline() { let _ = helper(); }\nfn non_test_caller() -> i64 { helper() }\n";
+    std::fs::write(&test_path, src).unwrap();
+    let target = format!("{}:helper", test_path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "affected-by", &target, "--tests-only"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&test_path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    assert!(!line.contains("\"callers\""), "got: {line}");
+    assert!(!line.contains("\"callees\""), "got: {line}");
+    assert!(line.contains("\"tests\":["), "got: {line}");
+    assert!(
+        line.contains("\"fn\":\"test_helper_baseline\""),
+        "got: {line}"
+    );
+    assert!(
+        !line.contains("\"fn\":\"non_test_caller\""),
+        "non-test caller must not appear in --tests-only output; got: {line}",
+    );
+}
+
+#[test]
+fn test_affected_by_file_target_unions_per_seed_reach() {
+    let path = affected_by_tmp_path("file_target");
+    let src = "fn root_a() -> i64 { 1 }\nfn root_b() -> i64 { 2 }\nfn user_a() -> i64 { root_a() }\nfn user_b() -> i64 { root_b() }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = path.to_str().unwrap().to_string();
+    let out = karac_bin()
+        .args(["query", "affected-by", &target])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    assert!(line.contains("\"fn\":\"user_a\""), "got: {line}");
+    assert!(line.contains("\"fn\":\"user_b\""), "got: {line}");
+}
+
+#[test]
+fn test_affected_by_file_range_filters_by_line() {
+    let path = affected_by_tmp_path("range");
+    let src =
+        "fn alpha() -> i64 { 1 }\nfn beta() -> i64 { alpha() }\nfn gamma() -> i64 { beta() }\n";
+    std::fs::write(&path, src).unwrap();
+    let target = format!("{}:2-2", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "affected-by", &target])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let line = stdout.trim();
+    assert!(line.contains("\"fn\":\"gamma\""), "got: {line}");
+    assert!(line.contains("\"fn\":\"alpha\""), "got: {line}");
+}
+
+#[test]
+fn test_affected_by_unknown_direction_rejected() {
+    let path = affected_by_tmp_path("bad_dir");
+    std::fs::write(&path, "fn f() {}\n").unwrap();
+    let target = format!("{}:f", path.to_str().unwrap());
+    let out = karac_bin()
+        .args(["query", "affected-by", &target, "--direction=sideways"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown --direction"), "got: {stderr}");
+}
+
+#[test]
+fn test_subcommand_help_query_advertises_affected_by() {
+    let out = karac_bin().args(["query", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("affected-by"), "got: {stdout}");
+    assert!(stdout.contains("--tests-only"), "got: {stdout}");
+    assert!(stdout.contains("--direction"), "got: {stdout}");
+}

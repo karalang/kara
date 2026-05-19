@@ -44,6 +44,8 @@ COMMANDS:
                                            Arc-provider wraps, borrow flags)
                         monomorphization - per-generic instantiation counts
                                            + per-instance type tuples
+                        affected-by      - call-graph reach query (callers,
+                                           callees, reaching tests)
     catalog <file>    Emit the file's public API surface as JSONL on stdout
                       (one record per exported item with signature shape,
                       generics, parameters with modes, return type,
@@ -204,10 +206,24 @@ KINDS:
                        Properties. v1 reports type tuples; the
                        per-instance `effects` slot is reserved and
                        always empty in v1.
+    affected-by        Call-graph reach query. Target forms:
+                         <file.kara>                whole-file seed
+                         <file.kara>:<line>         single line seed
+                         <file.kara>:<lo>-<hi>      inclusive range
+                         <file.kara>:<fn|Type.fn>   single fn seed
+                       Emits one JSONL record with `callers`,
+                       `callees`, and reaching `tests` arrays. See
+                       design.md § AI-First Compiler Interface and
+                       `docs/deferred.md § karac query affected-by`.
 
 OPTIONS:
-    --tool=PREFIX      attributes only: first-segment match filter
-    -h, --help         Print this message"
+    --tool=PREFIX                 attributes only: first-segment match filter
+    --tests-only                  affected-by only: emit just the `tests` array
+    --direction=callers|callees|all
+                                  affected-by only (default `all`):
+                                  `callers` suppresses callees,
+                                  `callees` suppresses callers + tests.
+    -h, --help                    Print this message"
         }
         "fmt" => {
             "\

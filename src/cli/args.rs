@@ -708,19 +708,25 @@ fn parse_explain_command(args: &[String]) -> Command {
 fn parse_query_command(args: &[String]) -> Command {
     if args.len() < 4 {
         eprintln!(
-            "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes|queries|monomorphization> [flags] <target>"
+            "Usage: karac query <effects|ownership|concurrency|cost-summary|attributes|queries|monomorphization|affected-by> [flags] <target>"
         );
         eprintln!("       <target> is `<file>.<function>` for the per-function kinds,");
-        eprintln!("                or `<file>` for cost-summary, attributes, queries, and monomorphization.");
+        eprintln!("                or `<file>` for cost-summary, attributes, queries, and monomorphization,");
+        eprintln!("                or `<file>[:<line>|<line>-<line>|<fn>]` for affected-by.");
         eprintln!("       attributes accepts `--tool=PREFIX` to filter by first-segment match.");
+        eprintln!(
+            "       affected-by accepts `--tests-only` and `--direction=callers|callees|all`."
+        );
         process::exit(1);
     }
-    // The `attributes` kind accepts an optional `--tool=PREFIX` flag
-    // before the file target — collect any flags after the kind word
-    // so the target is whatever comes next. The per-function and
-    // cost-summary kinds don't accept flags today.
+    // The `attributes` and `affected-by` kinds accept flags before
+    // the target — collect them so the target is whatever comes
+    // next. The per-function and cost-summary kinds don't accept
+    // flags today.
     let kind_str = args[2].as_str();
     let mut tool_prefix: Option<String> = None;
+    let mut tests_only = false;
+    let mut direction = crate::cli::AffectedByDirection::All;
     let mut target_idx = 3;
     if kind_str == "attributes" {
         while target_idx < args.len() {
@@ -743,6 +749,55 @@ fn parse_query_command(args: &[String]) -> Command {
             eprintln!("error: `karac query attributes` requires a file target");
             process::exit(1);
         }
+    } else if kind_str == "affected-by" {
+        // Allow flags interspersed with the positional target — the
+        // user can write either `--tests-only foo.kara:bar` or
+        // `foo.kara:bar --tests-only`. Walk every arg from index 3
+        // onward, classifying flags into the slot above and the
+        // last non-flag arg into the target.
+        let mut positional: Option<String> = None;
+        let mut idx = 3;
+        while idx < args.len() {
+            let a = &args[idx];
+            if a == "--tests-only" {
+                tests_only = true;
+            } else if let Some(rest) = a.strip_prefix("--direction=") {
+                direction = match rest {
+                    "callers" => crate::cli::AffectedByDirection::Callers,
+                    "callees" => crate::cli::AffectedByDirection::Callees,
+                    "all" => crate::cli::AffectedByDirection::All,
+                    other => {
+                        eprintln!(
+                            "error: unknown --direction value '{other}' (supported: callers, callees, all)"
+                        );
+                        process::exit(1);
+                    }
+                };
+            } else if a.starts_with("--") {
+                eprintln!("error: unknown flag '{a}' for `karac query affected-by`");
+                process::exit(1);
+            } else if positional.is_some() {
+                eprintln!("error: `karac query affected-by` takes a single target");
+                process::exit(1);
+            } else {
+                positional = Some(a.clone());
+            }
+            idx += 1;
+        }
+        let Some(raw) = positional else {
+            eprintln!("error: `karac query affected-by` requires a target");
+            process::exit(1);
+        };
+        let (file, target_spec) = parse_affected_by_target(&raw);
+        return Command::Query {
+            kind: QueryKind::AffectedBy {
+                target: target_spec,
+                tests_only,
+                direction,
+            },
+            file,
+            function: String::new(),
+        };
     }
     let kind = match kind_str {
         "effects" => QueryKind::Effects,
@@ -752,9 +807,11 @@ fn parse_query_command(args: &[String]) -> Command {
         "attributes" => QueryKind::Attributes { tool_prefix },
         "queries" => QueryKind::Queries,
         "monomorphization" => QueryKind::Monomorphization,
+        // `affected-by` returns via the dedicated branch above and
+        // never reaches this match arm.
         other => {
             eprintln!(
-                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', 'attributes', 'queries', or 'monomorphization'."
+                "error: unknown query kind '{other}'. Use 'effects', 'ownership', 'concurrency', 'cost-summary', 'attributes', 'queries', 'monomorphization', or 'affected-by'."
             );
             process::exit(1);
         }
@@ -768,6 +825,7 @@ fn parse_query_command(args: &[String]) -> Command {
         | QueryKind::Attributes { .. }
         | QueryKind::Queries
         | QueryKind::Monomorphization => (target.clone(), String::new()),
+        QueryKind::AffectedBy { .. } => unreachable!("affected-by returned via dedicated branch"),
         _ => match target.rsplit_once('.') {
             Some((f, func)) => (f.to_string(), func.to_string()),
             None => {
@@ -781,4 +839,68 @@ fn parse_query_command(args: &[String]) -> Command {
         file,
         function,
     }
+}
+
+/// Parse the `<target>` argument of `karac query affected-by` into
+/// `(file_path, TargetSpec)`. Supported forms:
+///   - `src/foo.kara`            → File
+///   - `src/foo.kara:42`         → FileRange (single line)
+///   - `src/foo.kara:42-58`      → FileRange (inclusive)
+///   - `src/foo.kara:my_fn`      → Function (bare)
+///   - `src/foo.kara:Type.method`→ Function (qualified)
+fn parse_affected_by_target(raw: &str) -> (String, crate::call_graph::TargetSpec) {
+    // The `:` separator divides a file path from an optional
+    // qualifier. Windows-style absolute paths use `C:` too — but
+    // that's not a v1 platform concern (Kāra single-file mode is
+    // unix-style today).
+    let Some(colon) = raw.find(':') else {
+        return (
+            raw.to_string(),
+            crate::call_graph::TargetSpec::File(raw.to_string()),
+        );
+    };
+    let (file, rest) = raw.split_at(colon);
+    let rest = &rest[1..]; // skip the `:`
+    if rest.is_empty() {
+        eprintln!("error: empty target qualifier after `:` in '{raw}'");
+        process::exit(1);
+    }
+    // Numeric forms are line / line-range.
+    let starts_with_digit = rest.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if starts_with_digit {
+        if let Some((lo_str, hi_str)) = rest.split_once('-') {
+            let lo: usize = lo_str.parse().unwrap_or_else(|_| {
+                eprintln!("error: invalid line range start '{lo_str}' in '{raw}'");
+                process::exit(1);
+            });
+            let hi: usize = hi_str.parse().unwrap_or_else(|_| {
+                eprintln!("error: invalid line range end '{hi_str}' in '{raw}'");
+                process::exit(1);
+            });
+            if lo > hi {
+                eprintln!("error: line range start ({lo}) exceeds end ({hi}) in '{raw}'");
+                process::exit(1);
+            }
+            return (
+                file.to_string(),
+                crate::call_graph::TargetSpec::FileRange(file.to_string(), lo, hi),
+            );
+        }
+        let line: usize = rest.parse().unwrap_or_else(|_| {
+            eprintln!("error: invalid line number '{rest}' in '{raw}'");
+            process::exit(1);
+        });
+        return (
+            file.to_string(),
+            crate::call_graph::TargetSpec::FileRange(file.to_string(), line, line),
+        );
+    }
+    // Otherwise treat the rest as a function key. `::`-joined paths
+    // (multi-module convention) collapse to a `.`-joined key so the
+    // resolver sees the canonical call-graph shape.
+    let name = rest.replace("::", ".");
+    (
+        file.to_string(),
+        crate::call_graph::TargetSpec::Function(name),
+    )
 }

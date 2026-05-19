@@ -273,6 +273,20 @@ pub enum QueryKind {
     Effects,
     Ownership,
     Concurrency,
+    /// `karac query affected-by <target>` — call-graph reach query.
+    /// Surfaces the call graph (already computed for effect
+    /// inference and shared with codegen) as a public JSONL view:
+    /// given a function, file, or file:line range, return the
+    /// transitive callers, callees, and reaching test functions.
+    /// Structural prerequisite for the `karac tdd` `--related` /
+    /// `--since` test-selection flags and `karac test --coverage`'s
+    /// `coverage_delta` event. See `docs/deferred.md § karac query
+    /// affected-by`.
+    AffectedBy {
+        target: crate::call_graph::TargetSpec,
+        tests_only: bool,
+        direction: AffectedByDirection,
+    },
     /// Whole-file cost-surface aggregator. Unlike the per-function query
     /// kinds above, this one ignores the `function` slot — the static
     /// counts are reported per-function inside the JSON envelope.
@@ -301,6 +315,17 @@ pub enum QueryKind {
     /// `(T1..Tk)` tuples. Whole-file kind — the `function` slot is
     /// unused.
     Monomorphization,
+}
+
+/// Direction filter for `karac query affected-by`. Default `All`
+/// emits both `callers` and `callees`; `Callers` skips the callees
+/// array (still always emits `tests`, which derives from callers
+/// independently); `Callees` skips both `callers` and `tests`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum AffectedByDirection {
+    Callers,
+    Callees,
+    All,
 }
 
 // ── Command Execution ───────────────────────────────────────────
@@ -4918,7 +4943,152 @@ fn cmd_query(kind: QueryKind, filename: &str, function: &str) {
             pipeline.typecheck();
             query_monomorphization(&pipeline);
         }
+        QueryKind::AffectedBy {
+            target,
+            tests_only,
+            direction,
+        } => {
+            // Call-graph query — pure AST walk; resolution and
+            // typecheck are not required (the graph is built from
+            // the parsed program). Single-file mode infers the
+            // test-file flag from the filename suffix per the same
+            // `*_test.kara` heuristic the resolver uses.
+            let is_test_file = filename.ends_with("_test.kara");
+            let graph = crate::call_graph::build(&pipeline.parsed.program, filename, is_test_file);
+            query_affected_by(&graph, &target, tests_only, direction, filename);
+        }
     }
+}
+
+fn query_affected_by(
+    graph: &crate::call_graph::CallGraph,
+    target: &crate::call_graph::TargetSpec,
+    tests_only: bool,
+    direction: AffectedByDirection,
+    filename: &str,
+) {
+    let seeds = graph.resolve_target(target);
+    let input_label = render_target_label(target, filename);
+    // Union the per-seed reach sets so a multi-seed target (file or
+    // file:range) collapses to a single envelope. De-dup happens via
+    // BTreeMap keyed on node `key`.
+    let mut callers: std::collections::BTreeMap<String, &crate::call_graph::NodeInfo> =
+        std::collections::BTreeMap::new();
+    let mut callees: std::collections::BTreeMap<String, &crate::call_graph::NodeInfo> =
+        std::collections::BTreeMap::new();
+    let mut tests: std::collections::BTreeMap<String, &crate::call_graph::NodeInfo> =
+        std::collections::BTreeMap::new();
+    for seed in &seeds {
+        if matches!(
+            direction,
+            AffectedByDirection::Callers | AffectedByDirection::All
+        ) {
+            for n in graph.transitive_callers(seed) {
+                callers.insert(n.key.clone(), n);
+                if n.is_test {
+                    tests.insert(n.key.clone(), n);
+                }
+            }
+        }
+        if matches!(
+            direction,
+            AffectedByDirection::Callees | AffectedByDirection::All
+        ) {
+            for n in graph.transitive_callees(seed) {
+                callees.insert(n.key.clone(), n);
+            }
+        }
+    }
+    // `--tests-only` suppresses both callers and callees and emits
+    // just the test set. Useful for the test-selection consumer.
+    if tests_only {
+        let line = render_affected_by_envelope_tests_only(&input_label, &tests);
+        println!("{line}");
+        return;
+    }
+    let line = render_affected_by_envelope(&input_label, &callers, &callees, &tests, direction);
+    println!("{line}");
+}
+
+fn render_target_label(target: &crate::call_graph::TargetSpec, _filename: &str) -> String {
+    match target {
+        crate::call_graph::TargetSpec::File(f) => f.clone(),
+        crate::call_graph::TargetSpec::FileRange(f, lo, hi) => {
+            if lo == hi {
+                format!("{f}:{lo}")
+            } else {
+                format!("{f}:{lo}-{hi}")
+            }
+        }
+        crate::call_graph::TargetSpec::Function(name) => name.clone(),
+    }
+}
+
+fn render_affected_by_envelope(
+    input: &str,
+    callers: &std::collections::BTreeMap<String, &crate::call_graph::NodeInfo>,
+    callees: &std::collections::BTreeMap<String, &crate::call_graph::NodeInfo>,
+    tests: &std::collections::BTreeMap<String, &crate::call_graph::NodeInfo>,
+    direction: AffectedByDirection,
+) -> String {
+    let mut s = String::new();
+    s.push('{');
+    s.push_str("\"type\":\"affected_by\",");
+    write!(s, "\"input\":{}", json_string(input)).unwrap();
+    if matches!(
+        direction,
+        AffectedByDirection::Callers | AffectedByDirection::All
+    ) {
+        s.push(',');
+        write!(s, "\"callers\":{}", render_node_array(callers)).unwrap();
+    }
+    if matches!(
+        direction,
+        AffectedByDirection::Callees | AffectedByDirection::All
+    ) {
+        s.push(',');
+        write!(s, "\"callees\":{}", render_node_array(callees)).unwrap();
+    }
+    if matches!(
+        direction,
+        AffectedByDirection::Callers | AffectedByDirection::All
+    ) {
+        s.push(',');
+        write!(s, "\"tests\":{}", render_node_array(tests)).unwrap();
+    }
+    s.push('}');
+    s
+}
+
+fn render_affected_by_envelope_tests_only(
+    input: &str,
+    tests: &std::collections::BTreeMap<String, &crate::call_graph::NodeInfo>,
+) -> String {
+    let mut s = String::new();
+    s.push('{');
+    s.push_str("\"type\":\"affected_by\",");
+    write!(s, "\"input\":{}", json_string(input)).unwrap();
+    s.push(',');
+    write!(s, "\"tests\":{}", render_node_array(tests)).unwrap();
+    s.push('}');
+    s
+}
+
+fn render_node_array(
+    nodes: &std::collections::BTreeMap<String, &crate::call_graph::NodeInfo>,
+) -> String {
+    let entries: Vec<String> = nodes
+        .values()
+        .map(|n| {
+            format!(
+                "{{\"fn\":{},\"file\":{},\"line\":{}}}",
+                json_string(&n.key),
+                json_string(&n.file),
+                n.line
+            )
+        })
+        .collect();
+    format!("[{}]", entries.join(","))
 }
 
 /// Phase-8 stdlib-floor § Compiler queries channel sub-item 3.
