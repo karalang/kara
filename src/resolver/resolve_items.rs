@@ -301,6 +301,7 @@ impl<'a> super::Resolver<'a> {
                 "implement `{source_trait}` instead; `x.into()` will dispatch through it"
             )),
             replacement: None,
+            stub_hint: None,
         });
     }
 
@@ -333,6 +334,7 @@ impl<'a> super::Resolver<'a> {
                     .to_string(),
             ),
             replacement: None,
+            stub_hint: None,
         });
     }
 
@@ -392,6 +394,7 @@ impl<'a> super::Resolver<'a> {
             kind: ResolveErrorKind::OperatorTraitImplRestricted,
             suggestion,
             replacement: None,
+            stub_hint: None,
         });
     }
 

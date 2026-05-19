@@ -481,6 +481,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UndefinedName,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
             // Resolve parameterized resource expression

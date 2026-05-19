@@ -4208,6 +4208,7 @@ fn resolve_modules(tree: &ProgramTree) -> Vec<ModuleResolveErrors> {
         };
         let result = Resolver::new(&program)
             .with_tree(tree, id as ModuleId)
+            .with_test_file(m.is_test_file)
             .resolve();
         if !result.errors.is_empty() {
             out.push(ModuleResolveErrors {

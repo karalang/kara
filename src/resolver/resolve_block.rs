@@ -163,6 +163,7 @@ impl<'a> super::Resolver<'a> {
                                     name
                                 )),
                                 replacement: None,
+                stub_hint: None,
                             });
                         }
                         None => {
@@ -172,6 +173,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedLabel,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         }
                     }
@@ -191,6 +193,7 @@ impl<'a> super::Resolver<'a> {
                             kind: ResolveErrorKind::UndefinedLabel,
                             suggestion: None,
                             replacement: None,
+                            stub_hint: None,
                         });
                     }
                 }
@@ -228,6 +231,7 @@ impl<'a> super::Resolver<'a> {
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
+                        stub_hint: None,
                     });
                 }
             }
@@ -243,6 +247,7 @@ impl<'a> super::Resolver<'a> {
                         kind: ResolveErrorKind::UndefinedName,
                         suggestion: None,
                         replacement: None,
+                        stub_hint: None,
                     });
                 }
             }
@@ -278,13 +283,26 @@ impl<'a> super::Resolver<'a> {
                 // suppresses the undefined-name error and lets the typechecker
                 // produce a more targeted diagnostic if no expected type is
                 // available.
+                //
+                // Test-file unresolved-call: when the file is `_test.kara`
+                // and the callee is a bare unresolved identifier that is
+                // not a trait-assoc-fn name, emit the augmented
+                // `UndefinedName` carrying a `StubHint` (phase-5-diagnostics
+                // line 633). Production-file calls keep the plain
+                // diagnostic.
                 let mut deferred = false;
+                let mut handled = false;
                 if let ExprKind::Identifier(name) = &callee.kind {
-                    if self.table.lookup(name).is_none() && self.is_trait_assoc_fn_name(name) {
-                        deferred = true;
+                    if self.table.lookup(name).is_none() {
+                        if self.is_trait_assoc_fn_name(name) {
+                            deferred = true;
+                        } else if self.is_test_file {
+                            self.error_undefined_call_with_stub(name, callee.span.clone(), args);
+                            handled = true;
+                        }
                     }
                 }
-                if !deferred {
+                if !deferred && !handled {
                     self.resolve_expr(callee);
                 }
                 for arg in args {
@@ -474,6 +492,7 @@ impl<'a> super::Resolver<'a> {
                             kind: ResolveErrorKind::UndefinedLabel,
                             suggestion: None,
                             replacement: None,
+                            stub_hint: None,
                         });
                     }
                 }
@@ -615,6 +634,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedName,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         }
                         None => {
@@ -624,6 +644,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedName,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         }
                     }

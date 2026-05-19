@@ -316,6 +316,7 @@ impl SymbolTable {
                     kind: ResolveErrorKind::ReservedIdentifier,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -336,6 +337,7 @@ impl SymbolTable {
                     kind: ResolveErrorKind::DuplicateDefinition,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -486,6 +488,67 @@ pub struct ResolveError {
     /// case (most errors carry no edit) doesn't bloat the enum's payload
     /// in fallible-resolver paths that return `Result<_, ResolveError>`.
     pub replacement: Option<Box<TextEdit>>,
+    /// Signature-from-call-site stub proposal for unresolved-call sites
+    /// inside `_test.kara` files (phase-5-diagnostics line 633). Carries
+    /// the inferred function signature so the CLI JSON envelope can emit
+    /// a `hints[].diff` entry pointing at the sibling production file.
+    /// `None` for every other resolver diagnostic. Slice 1 ships with
+    /// all-`_` argument types; slice 2 fills literal-derived types where
+    /// the resolver can infer them locally.
+    pub stub_hint: Option<Box<StubHint>>,
+}
+
+/// A signature proposal emitted alongside an unresolved-call diagnostic
+/// inside a `_test.kara` file — the classic TDD red opener where the test
+/// references a function the user is about to write. The CLI lifts this
+/// into a `hints[].diff` entry whose `new` field is the rendered stub
+/// source. See deferred.md § P1 § Signature-from-Call-Site Stub
+/// Diagnostic.
+#[derive(Debug, Clone)]
+pub struct StubHint {
+    /// The unresolved callee name — becomes the function name in the
+    /// proposed stub.
+    pub callee_name: String,
+    /// One entry per call argument. Slice 1 always emits
+    /// `inferred_type: None` (rendered as `_`); slice 2 fills literal-
+    /// derived types (`add(2, 3)` → `i32, i32`).
+    pub args: Vec<StubArg>,
+    /// Return type when the resolver can infer it locally (e.g. from a
+    /// surrounding `assert_eq(call, literal)` context). `None` →
+    /// rendered as `_`. Slice 1 always emits `None`.
+    pub return_type: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StubArg {
+    /// `None` → `_` placeholder. Some(type) → concrete type from
+    /// best-effort literal-argument inference (slice 2).
+    pub inferred_type: Option<String>,
+}
+
+impl StubHint {
+    /// Render the proposed stub as a self-contained Kāra item — a
+    /// `fn name(arg0: T0, arg1: T1) -> R { todo() }` block, trailing
+    /// newline included. Slot all unknown types as `_` per the deferred-
+    /// design contract.
+    pub fn render_source(&self) -> String {
+        let params: Vec<String> = self
+            .args
+            .iter()
+            .enumerate()
+            .map(|(i, a)| {
+                let ty = a.inferred_type.as_deref().unwrap_or("_");
+                format!("arg{}: {}", i, ty)
+            })
+            .collect();
+        let ret = self.return_type.as_deref().unwrap_or("_");
+        format!(
+            "fn {}({}) -> {} {{\n    todo()\n}}\n",
+            self.callee_name,
+            params.join(", "),
+            ret
+        )
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -782,6 +845,14 @@ pub struct Resolver<'a> {
     /// has no other effect — name resolution semantics are otherwise
     /// identical between user code and stdlib source.
     pub(crate) is_stdlib_source: bool,
+    /// True iff the program being resolved originates from a `_test.kara`
+    /// file (or a merged test-companion module). Gates the signature-from-
+    /// call-site stub diagnostic (phase-5-diagnostics line 633): an
+    /// unresolved-identifier *call* in a test file becomes the augmented
+    /// `UndefinedName` carrying a `StubHint`; in production files the
+    /// plain diagnostic is emitted. The CLI sets this via
+    /// `Resolver::with_test_file(module.is_test_file)`.
+    pub(crate) is_test_file: bool,
 }
 
 impl<'a> Resolver<'a> {
@@ -796,6 +867,7 @@ impl<'a> Resolver<'a> {
             current_impl_type: None,
             loop_labels: Vec::new(),
             is_stdlib_source: false,
+            is_test_file: false,
         }
     }
 
@@ -814,6 +886,16 @@ impl<'a> Resolver<'a> {
     /// is permitted; when unset (the default), it is rejected with `E0237`.
     pub fn with_stdlib_source(mut self, is_stdlib: bool) -> Self {
         self.is_stdlib_source = is_stdlib;
+        self
+    }
+
+    /// Mark the module being resolved as a `_test.kara` file (or merged
+    /// test companion). Enables the signature-from-call-site stub
+    /// diagnostic (phase-5-diagnostics line 633) on unresolved-identifier
+    /// calls. Defaults to `false` — production files keep the plain
+    /// diagnostic.
+    pub fn with_test_file(mut self, is_test: bool) -> Self {
+        self.is_test_file = is_test;
         self
     }
 
@@ -864,6 +946,56 @@ impl<'a> Resolver<'a> {
             kind: ResolveErrorKind::UndefinedName,
             suggestion,
             replacement,
+            stub_hint: None,
+        });
+    }
+
+    /// Variant of `error_undefined_name` used at call positions inside a
+    /// `_test.kara` file. Attaches a `StubHint` that the CLI lifts into a
+    /// `hints[].diff` entry proposing a stub for the missing function in
+    /// the sibling production file. Slice 1: argument types ship as `_`
+    /// placeholders unless [`infer_stub_arg_type`] can read a literal
+    /// expression (slice 2 extends inference to explicit-typed bindings
+    /// and to comparison-context return types). Reuses the existing
+    /// `did you mean` suggestion logic so the diagnostic remains useful
+    /// when the unresolved name is in fact a typo.
+    pub(crate) fn error_undefined_call_with_stub(
+        &mut self,
+        name: &str,
+        span: Span,
+        args: &[CallArg],
+    ) {
+        let visible = self.table.visible_names();
+        let suggestion = suggest_similar(name, &visible);
+        let mut message = format!("undefined name '{}'", name);
+        if let Some(ref s) = suggestion {
+            message.push_str(&format!(", did you mean '{}'?", s));
+        }
+        let replacement = suggestion.as_ref().map(|s| {
+            Box::new(TextEdit {
+                offset: span.offset,
+                length: span.length,
+                replacement: s.clone(),
+            })
+        });
+        let stub_args: Vec<StubArg> = args
+            .iter()
+            .map(|a| StubArg {
+                inferred_type: infer_stub_arg_type(&a.value),
+            })
+            .collect();
+        let stub = Box::new(StubHint {
+            callee_name: name.to_string(),
+            args: stub_args,
+            return_type: None,
+        });
+        self.errors.push(ResolveError {
+            message,
+            span,
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion,
+            replacement,
+            stub_hint: Some(stub),
         });
     }
 
@@ -887,10 +1019,20 @@ impl<'a> Resolver<'a> {
             kind: ResolveErrorKind::UndefinedType,
             suggestion,
             replacement,
+            stub_hint: None,
         });
     }
 
     fn record_resolution(&mut self, span: &Span, id: SymbolId) {
         self.resolutions.insert(SpanKey::from_span(span), id);
     }
+}
+
+/// Best-effort local inference of a call-argument's type for the
+/// signature-from-call-site stub diagnostic. Returns `None` (rendered as
+/// `_`) when the expression's type depends on type-checker state the
+/// resolver cannot consult. Slice 1 always returns `None` — the
+/// scaffolding lands; slice 2 fills in literal-derived inference.
+fn infer_stub_arg_type(_expr: &Expr) -> Option<String> {
+    None
 }

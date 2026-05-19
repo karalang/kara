@@ -231,6 +231,7 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                     kind: ResolveErrorKind::UnknownAttribute,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         } else if KnownAttributeNamespace::from_first_segment(&attr.path[0]).is_some() {
@@ -288,6 +289,7 @@ fn visit_attrs(attrs: &[Attribute], errors: &mut Vec<ResolveError>) {
                 kind: ResolveErrorKind::QueryResolutionConflict,
                 suggestion: None,
                 replacement: None,
+                stub_hint: None,
             });
         }
     }

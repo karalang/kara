@@ -89,6 +89,7 @@ impl<'a> super::Resolver<'a> {
                         kind: ResolveErrorKind::UndefinedType,
                         suggestion: None,
                         replacement: None,
+                        stub_hint: None,
                     });
                     return;
                 }
@@ -122,6 +123,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UndefinedType,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
                 return;
             }
@@ -146,6 +148,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: Some("use split_by_variant instead of group".to_string()),
                                 replacement: None,
+                stub_hint: None,
                             });
                     }
                 }
@@ -179,6 +182,7 @@ impl<'a> super::Resolver<'a> {
                             name
                         )),
                         replacement: None,
+                stub_hint: None,
                     });
                 }
                 return;
@@ -189,6 +193,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UndefinedType,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
                 return;
             }
@@ -199,6 +204,7 @@ impl<'a> super::Resolver<'a> {
                 kind: ResolveErrorKind::UndefinedType,
                 suggestion: None,
                 replacement: None,
+                stub_hint: None,
             });
             return;
         };
@@ -225,6 +231,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         } else if !assigned.insert(field.clone()) {
                             self.errors.push(ResolveError {
@@ -236,6 +243,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::DuplicateDefinition,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         }
                     }
@@ -252,6 +260,7 @@ impl<'a> super::Resolver<'a> {
                                     "common values: 8, 16, 32, 64 (cache line), 128 (Apple Silicon cache line)".to_string(),
                                 ),
                                 replacement: None,
+                stub_hint: None,
                             });
                         }
                     }
@@ -268,6 +277,7 @@ impl<'a> super::Resolver<'a> {
                             kind: ResolveErrorKind::DuplicateDefinition,
                             suggestion: None,
                             replacement: None,
+                stub_hint: None,
                         });
                     }
                     for field in fields {
@@ -281,6 +291,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::UndefinedField,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         } else if !assigned.insert(field.clone()) {
                             self.errors.push(ResolveError {
@@ -292,6 +303,7 @@ impl<'a> super::Resolver<'a> {
                                 kind: ResolveErrorKind::DuplicateDefinition,
                                 suggestion: None,
                                 replacement: None,
+                                stub_hint: None,
                             });
                         }
                     }
@@ -304,6 +316,7 @@ impl<'a> super::Resolver<'a> {
                         kind: ResolveErrorKind::UndefinedField,
                         suggestion: None,
                         replacement: None,
+                        stub_hint: None,
                     });
                 }
             }
@@ -330,6 +343,7 @@ impl<'a> super::Resolver<'a> {
                 kind: ResolveErrorKind::UndefinedField,
                 suggestion: Some("assign all fields to groups, or suppress with #[allow(layout_unassigned_fields)]".to_string()),
                 replacement: None,
+                stub_hint: None,
             });
         }
     }
@@ -353,6 +367,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::DeprecatedOnImpl,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -378,6 +393,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::DeprecatedOnField,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -414,6 +430,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::TrackCallerInvalidTarget,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -438,6 +455,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::ProfileInvalidTarget,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -470,6 +488,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UnknownProfile,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -505,6 +524,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::NonExhaustiveInvalidTarget,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -530,6 +550,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::CompilerBuiltinReserved,
                     suggestion: None,
                     replacement: None,
+                stub_hint: None,
                 });
             }
         }
@@ -628,6 +649,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UnionNonExhaustiveForbidden,
                     suggestion: None,
                     replacement: None,
+                    stub_hint: None,
                 });
             }
         }
@@ -864,6 +886,7 @@ impl<'a> super::Resolver<'a> {
                 kind: ResolveErrorKind::ReservedEffectResource,
                 suggestion: None,
                 replacement: None,
+                stub_hint: None,
             });
             return;
         }
@@ -1052,6 +1075,7 @@ impl<'a> super::Resolver<'a> {
                 kind: ResolveErrorKind::UnknownModule,
                 suggestion,
                 replacement,
+                stub_hint: None,
             });
             // Still register names locally so downstream passes do not
             // compound with cascading UndefinedName errors.
@@ -1122,6 +1146,7 @@ impl<'a> super::Resolver<'a> {
                     kind: ResolveErrorKind::UnknownItemInModule,
                     suggestion,
                     replacement,
+                    stub_hint: None,
                 });
             } else if binds_item {
                 // Slice 6 + 7: enforce three-level visibility against the
@@ -1155,6 +1180,7 @@ impl<'a> super::Resolver<'a> {
                                 def_name
                             )),
                             replacement: None,
+                            stub_hint: None,
                         });
                     }
                 }

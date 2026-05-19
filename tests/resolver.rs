@@ -4,6 +4,25 @@ use karac::ast::TraitBound;
 use karac::resolver::*;
 use karac::{desugar_program, parse, resolve};
 
+/// Resolve `source` with `with_test_file(true)` so the signature-from-
+/// call-site stub diagnostic fires (phase-5-diagnostics line 633).
+fn resolve_as_test_file(source: &str) -> ResolveResult {
+    let parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Resolver::new(&parsed.program)
+        .with_test_file(true)
+        .resolve()
+}
+
 // ── Test Helpers ────────────────────────────────────────────────
 
 fn resolve_ok(source: &str) -> ResolveResult {
@@ -3994,5 +4013,117 @@ layout entities: Vec[Entity] {
     group combat { hp }
 }
 "#,
+    );
+}
+
+// ── Signature-from-call-site stub diagnostic (phase-5-diagnostics line 633) ─
+
+#[test]
+fn unresolved_call_in_production_file_has_no_stub_hint() {
+    // Activation gate: production-file (`is_test_file=false`)
+    // unresolved-call sites keep the plain `UndefinedName` diagnostic —
+    // no stub hint attached. Mirrors design.md § Signature-from-Call-Site
+    // Stub: stubs are a TDD-loop affordance, not a production-code one.
+    let errs = resolve_errors(
+        r#"
+fn main() {
+    add(1, 2);
+}
+"#,
+    );
+    let undefined = errs
+        .iter()
+        .find(|e| matches!(e.kind, ResolveErrorKind::UndefinedName) && e.message.contains("'add'"))
+        .expect("expected UndefinedName for 'add'");
+    assert!(
+        undefined.stub_hint.is_none(),
+        "production-file unresolved call must not carry stub_hint, got: {:?}",
+        undefined.stub_hint
+    );
+}
+
+#[test]
+fn unresolved_call_in_test_file_carries_stub_hint() {
+    // Test-file (`is_test_file=true`) unresolved-call sites enrich the
+    // `UndefinedName` diagnostic with a `StubHint` carrying one entry
+    // per argument. Slice 1: every inferred_type is `None` (rendered as
+    // `_`); slice 2 fills literal-derived types.
+    let result = resolve_as_test_file(
+        r#"
+fn test_add_two_and_three() {
+    let _ = add(2, 3);
+}
+"#,
+    );
+    let undefined = result
+        .errors
+        .iter()
+        .find(|e| matches!(e.kind, ResolveErrorKind::UndefinedName) && e.message.contains("'add'"))
+        .expect("expected UndefinedName for 'add'");
+    let stub = undefined
+        .stub_hint
+        .as_ref()
+        .expect("test-file unresolved call must carry stub_hint");
+    assert_eq!(stub.callee_name, "add");
+    assert_eq!(stub.args.len(), 2);
+    assert!(
+        stub.args.iter().all(|a| a.inferred_type.is_none()),
+        "slice 1: all inferred_type fields should be None"
+    );
+    assert!(stub.return_type.is_none());
+}
+
+#[test]
+fn stub_hint_render_source_emits_compiling_skeleton() {
+    // The rendered stub is what the CLI emits as the `hints[].diff.new`
+    // field — must be syntactically a valid Kāra fn item with a
+    // `todo()` body per the design.md compiling-skeleton convention.
+    let hint = StubHint {
+        callee_name: "add".to_string(),
+        args: vec![
+            StubArg {
+                inferred_type: None,
+            },
+            StubArg {
+                inferred_type: None,
+            },
+        ],
+        return_type: None,
+    };
+    assert_eq!(
+        hint.render_source(),
+        "fn add(arg0: _, arg1: _) -> _ {\n    todo()\n}\n"
+    );
+}
+
+#[test]
+fn stub_hint_render_source_zero_args() {
+    // Zero-arg call (`init()`) renders an empty parameter list. Pins
+    // the format string against accidental ", " injection.
+    let hint = StubHint {
+        callee_name: "init".to_string(),
+        args: vec![],
+        return_type: None,
+    };
+    assert_eq!(hint.render_source(), "fn init() -> _ {\n    todo()\n}\n");
+}
+
+#[test]
+fn test_file_resolves_visible_callee_without_stub_hint() {
+    // Sanity / regression: a *resolved* call in a test file produces
+    // no diagnostic at all — the stub-hint enrichment must fire only
+    // on the unresolved path, not on every call.
+    let result = resolve_as_test_file(
+        r#"
+fn add(a: i32, b: i32) -> i32 { a + b }
+fn test_add_visible() {
+    let _ = add(1, 2);
+}
+"#,
+    );
+    assert!(
+        result.errors.is_empty(),
+        "expected clean resolve, got: {:?}",
+        result.errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }
