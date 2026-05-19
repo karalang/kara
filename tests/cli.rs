@@ -3551,6 +3551,132 @@ fn test_explain_rejects_unknown_flag() {
     assert!(stderr.contains("unknown flag '--banana'"));
 }
 
+// ── karac explain --class=NAME + --format=json (line 619 slice 3) ──
+
+#[test]
+fn test_explain_class_text_renders_description() {
+    // `karac explain --class=TYPE_MISMATCH` (text mode) renders a
+    // catalogue entry with the class name as a header and the prose
+    // description below. Pin the class name and a recognisable
+    // fragment of the description so a copyedit can't silently drop
+    // the header structure.
+    let out = karac_bin()
+        .args(["explain", "--class=TYPE_MISMATCH"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "explain --class=TYPE_MISMATCH should exit 0; stderr was: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("TYPE_MISMATCH"));
+    assert!(
+        stdout.contains("expected slot"),
+        "description body should appear; got: {}",
+        stdout
+    );
+}
+
+#[test]
+fn test_explain_class_json_emits_envelope() {
+    // `karac explain --class=INVALID_CAST --format=json` returns a
+    // single JSON record. Pin the envelope keys (`kind`, `class`,
+    // `description`) and the class value; the description is
+    // checked via a fragment to allow future copyedits.
+    let out = karac_bin()
+        .args(["explain", "--class=INVALID_CAST", "--format=json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"kind\":\"diagnostic_class\""),
+        "JSON envelope should carry kind=diagnostic_class; got: {}",
+        stdout
+    );
+    assert!(stdout.contains("\"class\":\"INVALID_CAST\""));
+    assert!(stdout.contains("\"description\":"));
+    // ptr.const / ptr.mut suggestions appear in the description.
+    assert!(stdout.contains("ptr.const"));
+}
+
+#[test]
+fn test_explain_class_json_escapes_quotes_and_newlines() {
+    // The description for TYPE_MISMATCH contains apostrophes and
+    // multiple sentences. JSON output must escape any embedded `"` /
+    // `\` / control chars; this test verifies the envelope is
+    // single-line and parseable shape (one record per call).
+    let out = karac_bin()
+        .args(["explain", "--class=TYPE_MISMATCH", "--format=json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Single record => single line.
+    let line_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(
+        line_count, 1,
+        "explain --class --format=json must emit exactly one record; got:\n{}",
+        stdout
+    );
+    // No unescaped raw newlines or quotes in the value bodies (any
+    // `"` between the outer object braces must be field delimiters
+    // or escape sequences).
+    assert!(!stdout.contains("\n\""));
+}
+
+#[test]
+fn test_explain_concept_json_envelope_carries_body() {
+    // `karac explain --concept=closures --format=json` emits a
+    // `{ kind, concept, body }` record. The body is the same prose
+    // the text mode renders, embedded as a JSON-escaped string.
+    let out = karac_bin()
+        .args(["explain", "--concept=closures", "--format=json"])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("\"kind\":\"concept\""));
+    assert!(stdout.contains("\"concept\":\"closures\""));
+    assert!(stdout.contains("\"body\":"));
+}
+
+#[test]
+fn test_explain_rejects_unknown_class_with_supported_set() {
+    let out = karac_bin()
+        .args(["explain", "--class=NOT_A_REAL_CLASS"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown diagnostic class 'NOT_A_REAL_CLASS'"));
+    // The supported-set message should list at least one real class.
+    assert!(stderr.contains("TYPE_MISMATCH"));
+}
+
+#[test]
+fn test_explain_rejects_unknown_format() {
+    let out = karac_bin()
+        .args(["explain", "--class=TYPE_MISMATCH", "--format=yaml"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown --format value 'yaml'"));
+}
+
+#[test]
+fn test_explain_rejects_both_concept_and_class() {
+    let out = karac_bin()
+        .args(["explain", "--concept=closures", "--class=TYPE_MISMATCH"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("mutually exclusive"));
+}
+
 // ── Lint level CLI flags (-A/-W/-D/-F + -D warnings, slice 4b polish) ──
 
 /// Build a temp `.kara` file with a function whose `match` body has

@@ -1,11 +1,18 @@
 //! Static concept-level explainer pages surfaced by `karac explain`.
 //!
-//! Each page is a `&'static str` rendered verbatim. The text shape is
-//! frozen by tests in `tests/cli.rs` — diagnostic-redirect wording and
-//! cross-references must stay aligned with the implementation surface
-//! they describe (the ownership checker, `karac query ownership`, and
-//! the design.md sections the page cites).
+//! Each concept page is a `&'static str` rendered verbatim in text
+//! mode. The text shape is frozen by tests in `tests/cli.rs` —
+//! diagnostic-redirect wording and cross-references must stay aligned
+//! with the implementation surface they describe (the ownership
+//! checker, `karac query ownership`, and the design.md sections the
+//! page cites).
+//!
+//! Line 619 slice 3 widens the surface from concept-only to
+//! concept-or-class lookup and adds `--format=json` for the
+//! machine-consumable shape that LLM agents and IDE tooling need.
 
+use crate::cli::{ExplainFormat, ExplainTarget};
+use crate::diagnostic_class::DiagnosticClass;
 use std::process;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -26,26 +33,275 @@ impl ExplainConcept {
             ExplainConcept::Closures => CLOSURES_PAGE,
         }
     }
+
+    /// Wire-form name for the JSON envelope.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ExplainConcept::Closures => "closures",
+        }
+    }
 }
 
-/// Render the requested concept page to stdout and return. Exits the
-/// process non-zero if the concept name is unknown, with a focused
+/// Render the requested target in the requested format. Exits the
+/// process non-zero if the lookup name is unknown, with a focused
 /// hint listing the supported set.
-pub fn render(concept_name: &str) {
-    let Some(concept) = ExplainConcept::parse(concept_name) else {
+pub fn render(target: &ExplainTarget, format: ExplainFormat) {
+    match target {
+        ExplainTarget::Concept(name) => render_concept(name, format),
+        ExplainTarget::Class(name) => render_class(name, format),
+    }
+}
+
+fn render_concept(name: &str, format: ExplainFormat) {
+    let Some(concept) = ExplainConcept::parse(name) else {
         eprintln!(
-            "error: unknown concept '{concept_name}'. Supported: {}.",
+            "error: unknown concept '{name}'. Supported: {}.",
             concept_list(),
         );
         process::exit(1);
     };
-    println!("{}", concept.page());
+    match format {
+        ExplainFormat::Text => println!("{}", concept.page()),
+        ExplainFormat::Json => println!("{}", render_concept_json(concept)),
+    }
+}
+
+fn render_class(name: &str, format: ExplainFormat) {
+    let Some(class) = parse_class_name(name) else {
+        eprintln!(
+            "error: unknown diagnostic class '{name}'. Supported: {}.",
+            class_list(),
+        );
+        process::exit(1);
+    };
+    match format {
+        ExplainFormat::Text => println!("{}", render_class_text(class)),
+        ExplainFormat::Json => println!("{}", render_class_json(class)),
+    }
 }
 
 fn concept_list() -> String {
     // Single concept today; the list shape future-proofs against
     // additional pages without rewriting the dispatch surface.
     "closures".to_string()
+}
+
+fn parse_class_name(name: &str) -> Option<DiagnosticClass> {
+    all_classes()
+        .iter()
+        .find(|&&cls| cls.as_str() == name)
+        .copied()
+}
+
+fn all_classes() -> &'static [DiagnosticClass] {
+    &[
+        DiagnosticClass::TypeMismatch,
+        DiagnosticClass::UndefinedType,
+        DiagnosticClass::WrongNumberOfArgs,
+        DiagnosticClass::NoMethodFound,
+        DiagnosticClass::InvalidCast,
+        DiagnosticClass::InvalidUnaryOp,
+        DiagnosticClass::TraitBoundNotSatisfied,
+        DiagnosticClass::RefutablePattern,
+        DiagnosticClass::CannotInferTypeParam,
+        DiagnosticClass::UndefinedName,
+        DiagnosticClass::DuplicateDefinition,
+        DiagnosticClass::EffectUndeclared,
+        DiagnosticClass::EffectConflict,
+        DiagnosticClass::OwnershipMoveAfterUse,
+        DiagnosticClass::OwnershipBorrowConflict,
+        DiagnosticClass::OwnershipUseOfUninitialized,
+        DiagnosticClass::TargetIncompatible,
+        DiagnosticClass::UnsafeRequired,
+        DiagnosticClass::FfiViolation,
+        DiagnosticClass::LayoutQueryInvalid,
+        DiagnosticClass::LintWarning,
+        DiagnosticClass::Other,
+    ]
+}
+
+fn class_list() -> String {
+    all_classes()
+        .iter()
+        .map(|c| c.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn render_class_text(class: DiagnosticClass) -> String {
+    format!(
+        "karac explain — diagnostic class: {}\n\n{}\n",
+        class.as_str(),
+        class_description(class)
+    )
+}
+
+/// Render a diagnostic-class entry as a JSON object. The envelope
+/// is deliberately small at slice 3 — future slices (4: typed
+/// expected/got, 5: fixes) extend the shape; consumers should treat
+/// unknown keys as forward-compatibility growth, not breakage. The
+/// `class` field's value is the same UPPER_SNAKE wire form returned
+/// by `DiagnosticClass::as_str()` and embedded in build-time
+/// diagnostic records.
+fn render_class_json(class: DiagnosticClass) -> String {
+    // Hand-rolled JSON keeps the dep surface small and matches the
+    // existing emitter style in `src/cli.rs` (no serde wrapper for
+    // this surface). String escapes: `\` and `"` only — the
+    // descriptions are ASCII without control chars.
+    let class_str = class.as_str();
+    let description = class_description(class);
+    let description_escaped = escape_json_string(description);
+    format!(
+        "{{\"kind\":\"diagnostic_class\",\"class\":\"{}\",\"description\":\"{}\"}}",
+        class_str, description_escaped
+    )
+}
+
+fn render_concept_json(concept: ExplainConcept) -> String {
+    // The concept body is multi-line static text — escape for JSON
+    // embedding so consumers receive a single JSON record.
+    let body_escaped = escape_json_string(concept.page());
+    format!(
+        "{{\"kind\":\"concept\",\"concept\":\"{}\",\"body\":\"{}\"}}",
+        concept.as_str(),
+        body_escaped
+    )
+}
+
+fn escape_json_string(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for ch in s.chars() {
+        match ch {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                out.push_str(&format!("\\u{:04x}", c as u32));
+            }
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Prose description for each diagnostic class. Single source of
+/// truth for both text and JSON output. Keep concise — these are
+/// catalogue entries, not concept pages.
+fn class_description(class: DiagnosticClass) -> &'static str {
+    match class {
+        DiagnosticClass::TypeMismatch => {
+            "Operand, argument, or return-value type doesn't match the expected slot. \
+             Covers assignment type mismatch, branch-arm mismatch, return-type mismatch, \
+             missing or extra struct fields, non-callable invocation targets, and the \
+             once-fn-into-fn-slot narrowing failure."
+        }
+        DiagnosticClass::UndefinedType => {
+            "A name in type position doesn't resolve to a known type. Triggered by \
+             unknown type names in annotations, generic arguments, parameter types, and \
+             return types."
+        }
+        DiagnosticClass::WrongNumberOfArgs => {
+            "A call site supplies the wrong number of positional, labeled, or variadic \
+             arguments for the callee's signature."
+        }
+        DiagnosticClass::NoMethodFound => {
+            "Method-call dispatch found no matching impl for the receiver type. May \
+             carry a `did you mean 'X'?` suggestion when an edit-distance-≤2 candidate \
+             exists. Also covers ambiguous-method and cannot-infer-assoc-fn failures."
+        }
+        DiagnosticClass::InvalidCast => {
+            "An `as` cast was rejected. Covers strict-provenance ptr↔int casts \
+             (`ptr.addr` / `ptr.with_addr` instead), char→narrow-int (use `as u32 as \
+             T`), int→char (use `char.try_from`), int→bool / float→bool (use explicit \
+             predicates), and reference→raw-pointer (use `ptr.const` / `ptr.mut`)."
+        }
+        DiagnosticClass::InvalidUnaryOp => {
+            "A unary or pipe-style operator was applied to an unsupported operand. \
+             Includes raw-pointer place-form rejections (`ptr.const(non-place)`), \
+             deref of non-pointer values, and pipe-placeholder misuse."
+        }
+        DiagnosticClass::TraitBoundNotSatisfied => {
+            "A required trait bound isn't satisfied by the supplied type. Routes \
+             inline bound failures (`T: Ord`) and `where`-clause failures, plus \
+             missing-supertrait diagnostics on impl blocks."
+        }
+        DiagnosticClass::RefutablePattern => {
+            "A `let PAT = expr;` binding uses a refutable pattern — one that may not \
+             match every value of the bound type. Use `let ... else { ... }`, \
+             `if let`, or `match` instead."
+        }
+        DiagnosticClass::CannotInferTypeParam => {
+            "A generic type parameter couldn't be inferred from the surrounding \
+             context. Add a turbofish annotation (`f[T](...)`) or a binding-type \
+             annotation that pins the parameter."
+        }
+        DiagnosticClass::UndefinedName => {
+            "An identifier in value position doesn't resolve to a binding, function, \
+             constant, or import."
+        }
+        DiagnosticClass::DuplicateDefinition => {
+            "A definition would shadow an existing item that the resolver treats as \
+             an error rather than a shadow (e.g., duplicate function / type / impl \
+             names in the same scope)."
+        }
+        DiagnosticClass::EffectUndeclared => {
+            "A public function uses an effect that isn't listed in its declared \
+             effect row. Add the effect to the signature, or wrap the call in a \
+             handler that discharges it."
+        }
+        DiagnosticClass::EffectConflict => {
+            "Two concurrent or interleaved computations have conflicting effects \
+             (e.g., parallel `writes(R)` against the same resource)."
+        }
+        DiagnosticClass::OwnershipMoveAfterUse => {
+            "A binding was used after its value was moved. Clone before the move, \
+             borrow with `ref` / `mut ref`, or restructure to avoid the second use."
+        }
+        DiagnosticClass::OwnershipBorrowConflict => {
+            "A live borrow conflicts with a later operation. Includes ref-vs-mut-ref \
+             overlap, slice-vs-ref overlap, drop-of-borrowed-source, and call-site \
+             mut-marker requirements that aren't met."
+        }
+        DiagnosticClass::OwnershipUseOfUninitialized => {
+            "A binding was read before it was initialised. The let-uninit DFA tracks \
+             initialisation through later assignments; this fires when a read \
+             precedes the first assignment."
+        }
+        DiagnosticClass::TargetIncompatible => {
+            "A cross-target violation: file-suffix conditional compilation \
+             mismatch, target-feature-gated intrinsic used outside its target, or \
+             cross-target effect violation. Shared family — all target-incompatibility \
+             classes route here."
+        }
+        DiagnosticClass::UnsafeRequired => {
+            "An operation requires an enclosing `unsafe { }` block (raw-pointer \
+             deref, raw-pointer arithmetic, union field read, etc.) and none is \
+             present."
+        }
+        DiagnosticClass::FfiViolation => {
+            "An FFI-shape rule was violated: invalid union declaration (missing \
+             `#[repr(C)]`, non-Copy field, `Drop` impl), FFI-float equality without \
+             tolerance, opaque-type constraint violation, or repr/layout mismatch."
+        }
+        DiagnosticClass::LayoutQueryInvalid => {
+            "A `size_of[T]()` / `align_of[T]()` / `offset_of[T](path)` call has the \
+             wrong shape — missing type argument, generic-parameter target, unknown \
+             field path, opaque-type target, or non-struct target."
+        }
+        DiagnosticClass::LintWarning => {
+            "A lint-level diagnostic surfaced as warning or error per `#[allow]` / \
+             `#[warn]` / `#[deny]` controls. The specific lint name lives in the \
+             diagnostic record's `lint_name` field; this class tag signals the \
+             diagnostic came from the lint machinery rather than a hard rule."
+        }
+        DiagnosticClass::Other => {
+            "Diagnostic emitted but not yet individually classified. Backfill is \
+             incremental work; the JSON contract treats this as a valid class while \
+             the classification spreads through the codebase."
+        }
+    }
 }
 
 /// Concept page for `karac explain --concept=closures`. Describes

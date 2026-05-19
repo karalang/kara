@@ -213,11 +213,46 @@ pub enum Command {
     /// diagnostic shapes, and inspection commands. The concept name is
     /// validated against the registered set at render time so a typo
     /// produces a focused diagnostic listing the supported set.
+    ///
+    /// Line 619 slice 3 adds `--class=NAME` for diagnostic-class
+    /// lookup (`karac explain --class=TYPE_MISMATCH` returns the
+    /// catalogue entry for a class) and `--format=json` for opt-in
+    /// machine-consumable output. `--concept` and `--class` are
+    /// mutually exclusive; exactly one must be supplied.
     Explain {
-        concept: String,
+        target: ExplainTarget,
+        format: ExplainFormat,
     },
     Help,
     Version,
+}
+
+/// What `karac explain` should look up. Line 619 slice 3 widens the
+/// command from concept-only to concept-or-class so the diagnostic
+/// catalogue surface (`DiagnosticClass` enum, slice 1) is
+/// reachable from the CLI. Future slices extend this with
+/// `--code=E_XXX` for direct E_*-code lookups when the per-code
+/// catalogue stabilises.
+#[derive(Debug, Clone)]
+pub enum ExplainTarget {
+    /// `--concept=NAME` — concept-page surface (closures, …).
+    Concept(String),
+    /// `--class=NAME` — diagnostic-class catalogue lookup. NAME is
+    /// the UPPER_SNAKE wire form (`TYPE_MISMATCH`, `INVALID_CAST`,
+    /// etc.). Slice 1 minted the enum; slice 3 surfaces it via the
+    /// CLI.
+    Class(String),
+}
+
+/// Output format selector for `karac explain`. Defaults to `Text`
+/// (human prose, the existing surface); `--format=json` opts into
+/// the machine-consumable shape that line 619's deferred entry asks
+/// for. The JSON envelope is documented per command in
+/// `src/cli/explain.rs::render_json`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ExplainFormat {
+    Text,
+    Json,
 }
 
 #[derive(Debug)]
@@ -320,7 +355,7 @@ pub fn execute(cmd: Command) {
         Command::Clean { global } => cmd_clean(global),
         Command::Install { spec } => cmd_install(&spec),
         Command::Vendor => cmd_vendor(),
-        Command::Explain { concept } => explain::render(&concept),
+        Command::Explain { target, format } => explain::render(&target, format),
     }
 }
 

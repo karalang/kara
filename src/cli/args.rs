@@ -610,13 +610,17 @@ fn parse_fix_command(args: &[String]) -> Command {
     Command::Fix { file, dry_run }
 }
 
-/// Parser for `karac explain --concept=<name>`. The concept is required;
-/// missing or unrecognized flag forms abort with a usage diagnostic that
-/// names the canonical form. The concept *name* itself is validated at
-/// render time so the supported-set message lives in one place
-/// (`src/cli/explain.rs`).
+/// Parser for `karac explain --concept=NAME [--format=FMT]` and
+/// `karac explain --class=NAME [--format=FMT]`. Exactly one of
+/// `--concept` / `--class` is required. `--format` defaults to
+/// `text`; `--format=json` opts into the machine-consumable shape
+/// minted by line 619 slice 3. The concept / class *name* itself
+/// is validated at render time so the supported-set message lives
+/// in one place (`src/cli/explain.rs`).
 fn parse_explain_command(args: &[String]) -> Command {
     let mut concept: Option<String> = None;
+    let mut class: Option<String> = None;
+    let mut format: Option<crate::cli::ExplainFormat> = None;
     for arg in args.iter().skip(2) {
         if let Some(rest) = arg.strip_prefix("--concept=") {
             if rest.is_empty() {
@@ -628,21 +632,53 @@ fn parse_explain_command(args: &[String]) -> Command {
                 process::exit(1);
             }
             concept = Some(rest.to_string());
+        } else if let Some(rest) = arg.strip_prefix("--class=") {
+            if rest.is_empty() {
+                eprintln!("error: --class requires a name (e.g. --class=TYPE_MISMATCH)");
+                process::exit(1);
+            }
+            if class.is_some() {
+                eprintln!("error: --class may only be specified once");
+                process::exit(1);
+            }
+            class = Some(rest.to_string());
+        } else if let Some(rest) = arg.strip_prefix("--format=") {
+            if format.is_some() {
+                eprintln!("error: --format may only be specified once");
+                process::exit(1);
+            }
+            format = Some(match rest {
+                "text" => crate::cli::ExplainFormat::Text,
+                "json" => crate::cli::ExplainFormat::Json,
+                other => {
+                    eprintln!("error: unknown --format value '{other}' (supported: text, json)");
+                    process::exit(1);
+                }
+            });
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}' for `karac explain`");
             process::exit(1);
         } else {
-            eprintln!(
-                "error: unexpected argument '{arg}' (use --concept=NAME to select a concept)"
-            );
+            eprintln!("error: unexpected argument '{arg}' (use --concept=NAME or --class=NAME)");
             process::exit(1);
         }
     }
-    let Some(concept) = concept else {
-        eprintln!("error: `karac explain` requires --concept=NAME (e.g. --concept=closures)");
-        process::exit(1);
+    let target = match (concept, class) {
+        (Some(c), None) => crate::cli::ExplainTarget::Concept(c),
+        (None, Some(c)) => crate::cli::ExplainTarget::Class(c),
+        (Some(_), Some(_)) => {
+            eprintln!("error: --concept and --class are mutually exclusive");
+            process::exit(1);
+        }
+        (None, None) => {
+            eprintln!(
+                "error: `karac explain` requires --concept=NAME or --class=NAME (e.g. --concept=closures, --class=TYPE_MISMATCH)"
+            );
+            process::exit(1);
+        }
     };
-    Command::Explain { concept }
+    let format = format.unwrap_or(crate::cli::ExplainFormat::Text);
+    Command::Explain { target, format }
 }
 
 fn parse_query_command(args: &[String]) -> Command {
