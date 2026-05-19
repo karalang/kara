@@ -308,6 +308,22 @@ pub struct TypeError {
     /// (which serialises as `OTHER` at the JSON-emit site). Line 619
     /// slice 2 — see `phase-5-diagnostics.md`.
     pub class: Option<crate::diagnostic_class::DiagnosticClass>,
+    /// Display form of the *expected* type / shape at this
+    /// diagnostic site, when the kind warrants the field. Populated
+    /// by `type_error_with_types` for `TypeMismatch`-family kinds
+    /// (assignment, branch arms, return values, function args).
+    /// Surfaces in the `--output=json` / `--output=jsonl`
+    /// diagnostic record's `expected` field so machine consumers
+    /// don't have to parse it out of the prose message body. Line
+    /// 619 slice 4.
+    pub expected: Option<String>,
+    /// Display form of the *got* / actual type at this diagnostic
+    /// site. Mirror of `expected`. `None` when the kind doesn't have
+    /// a meaningful "actual type" (e.g., wrong-number-of-args
+    /// carries argument counts, not types) or when the call site
+    /// hasn't been migrated to the typed-fields helper yet. Line
+    /// 619 slice 4.
+    pub got: Option<String>,
 }
 
 /// One machine-applicable fix-it edit attached to a `TypeError`.
@@ -1478,6 +1494,36 @@ impl<'a> TypeChecker<'a> {
             lint_name: None,
             fix_it: None,
             class,
+            expected: None,
+            got: None,
+        });
+    }
+
+    /// `type_error` with typed `expected` / `got` fields populated
+    /// from the actual `Type` values at the diagnostic site. Use for
+    /// TypeMismatch-family diagnostics where the JSON consumer can
+    /// usefully filter by the type shapes involved (e.g., "all
+    /// places we tried to assign String to i32"). Routes through
+    /// `type_display` so the wire form matches the prose message.
+    /// Line 619 slice 4.
+    pub(super) fn type_error_with_types(
+        &mut self,
+        message: String,
+        span: Span,
+        kind: TypeErrorKind,
+        expected: &types::Type,
+        got: &types::Type,
+    ) {
+        let class = class_for_type_error_kind(&kind);
+        self.errors.push(TypeError {
+            message,
+            span,
+            kind,
+            lint_name: None,
+            fix_it: None,
+            class,
+            expected: Some(types::type_display(expected)),
+            got: Some(types::type_display(got)),
         });
     }
 
@@ -1503,6 +1549,8 @@ impl<'a> TypeChecker<'a> {
             lint_name: None,
             fix_it: Some(fix_it),
             class,
+            expected: None,
+            got: None,
         });
     }
 
@@ -1645,6 +1693,8 @@ impl<'a> TypeChecker<'a> {
             lint_name: Some(lint_name.to_string()),
             fix_it: None,
             class: Some(crate::diagnostic_class::DiagnosticClass::LintWarning),
+            expected: None,
+            got: None,
         };
         match level {
             LintLevel::Allow => {
@@ -2272,7 +2322,11 @@ impl<'a> TypeChecker<'a> {
                 return false;
             }
         }
-        self.type_error(
+        // Canonical assignment-mismatch site. Use the typed-fields
+        // helper so the JSON consumer gets `expected` / `got` as
+        // structured fields rather than having to parse the prose
+        // message body. Line 619 slice 4.
+        self.type_error_with_types(
             format!(
                 "expected '{}', found '{}'",
                 type_display(expected),
@@ -2280,6 +2334,8 @@ impl<'a> TypeChecker<'a> {
             ),
             span,
             TypeErrorKind::TypeMismatch,
+            expected,
+            found,
         );
         false
     }

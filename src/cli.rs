@@ -1805,6 +1805,21 @@ struct DiagEntry<'a> {
     /// message text. `None` for every other diagnostic; widens as
     /// more producers land.
     fix_it: Option<&'a crate::typechecker::FixIt>,
+    /// Broad-category class label for the structured-diagnostic
+    /// JSON envelope (`karac --output=json` consumers — LLM agents,
+    /// IDE tooling). Auto-derived from the typechecker error's
+    /// `kind` at `TypeError` construction time; the wire form is
+    /// the UPPER_SNAKE `DiagnosticClass::as_str()`. Line 619 slice
+    /// 4 surfaces it on every type/effect/lint diagnostic.
+    class: Option<&'static str>,
+    /// Display form of the *expected* type / shape at the diagnostic
+    /// site, when populated by the typechecker via the typed-fields
+    /// helper. Surfaces as `"expected":"i32"` in the JSON record.
+    /// Line 619 slice 4.
+    expected: Option<&'a str>,
+    /// Display form of the *got* / actual type at the diagnostic
+    /// site. Mirror of `expected`. Line 619 slice 4.
+    got: Option<&'a str>,
 }
 
 struct DiagnosticJson {
@@ -1834,6 +1849,15 @@ impl DiagnosticJson {
         }
         if let Some(name) = d.lint_name {
             write!(entry, ",\"lint_name\":{}", json_string(name)).unwrap();
+        }
+        if let Some(class) = d.class {
+            write!(entry, ",\"class\":{}", json_string(class)).unwrap();
+        }
+        if let Some(expected) = d.expected {
+            write!(entry, ",\"expected\":{}", json_string(expected)).unwrap();
+        }
+        if let Some(got) = d.got {
+            write!(entry, ",\"got\":{}", json_string(got)).unwrap();
         }
         if let Some(fix) = d.fix_it {
             // `#[non_exhaustive]` slice 7 — surface the
@@ -1886,6 +1910,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
             extra_json: None,
             lint_name: None,
             fix_it: None,
+            class: None,
+            expected: None,
+            got: None,
         });
     }
 
@@ -1949,6 +1976,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: replacement_json,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
     }
@@ -2027,6 +2057,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: None,
                 lint_name: err.lint_name.as_deref(),
                 fix_it: err.fix_it.as_ref(),
+                class: Some(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
+                expected: err.expected.as_deref(),
+                got: err.got.as_deref(),
             });
         }
         for warn in &t.warnings {
@@ -2053,6 +2086,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: None,
                 lint_name: warn.lint_name.as_deref(),
                 fix_it: warn.fix_it.as_ref(),
+                class: Some(warn.class.map(|c| c.as_str()).unwrap_or("OTHER")),
+                expected: warn.expected.as_deref(),
+                got: warn.got.as_deref(),
             });
         }
     }
@@ -2106,6 +2142,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
     }
@@ -2160,6 +2199,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: replacement_json,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
         for note in &o.notes {
@@ -2189,6 +2231,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: replacement_json,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
     }
@@ -2210,6 +2255,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: None,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
     }
@@ -2231,6 +2279,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 extra_json: None,
                 lint_name: None,
                 fix_it: None,
+                class: None,
+                expected: None,
+                got: None,
             });
         }
     }
@@ -4347,14 +4398,23 @@ fn type_errors_json(per_module: &[ModuleTypeErrors]) -> Vec<String> {
         let file = te.file.display().to_string();
         for err in &te.errors {
             let code = type_error_code(&err.kind);
-            out.push(format!(
-                "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+            let mut record = format!(
+                "{{\"severity\":\"error\",\"phase\":\"typecheck\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
                 json_string(&err.message),
-            ));
+                json_string(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
+            );
+            if let Some(expected) = &err.expected {
+                record.push_str(&format!(",\"expected\":{}", json_string(expected)));
+            }
+            if let Some(got) = &err.got {
+                record.push_str(&format!(",\"got\":{}", json_string(got)));
+            }
+            record.push('}');
+            out.push(record);
         }
     }
     out
@@ -4366,14 +4426,23 @@ fn type_errors_jsonl(per_module: &[ModuleTypeErrors]) -> Vec<String> {
         let file = te.file.display().to_string();
         for err in &te.errors {
             let code = type_error_code(&err.kind);
-            out.push(format!(
-                "{{\"type\":\"type_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{}}}",
+            let mut record = format!(
+                "{{\"type\":\"type_error\",\"code\":{},\"file\":{},\"line\":{},\"column\":{},\"message\":{},\"class\":{}",
                 json_string(code),
                 json_string(&file),
                 err.span.line,
                 err.span.column,
                 json_string(&err.message),
-            ));
+                json_string(err.class.map(|c| c.as_str()).unwrap_or("OTHER")),
+            );
+            if let Some(expected) = &err.expected {
+                record.push_str(&format!(",\"expected\":{}", json_string(expected)));
+            }
+            if let Some(got) = &err.got {
+                record.push_str(&format!(",\"got\":{}", json_string(got)));
+            }
+            record.push('}');
+            out.push(record);
         }
     }
     out

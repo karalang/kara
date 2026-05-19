@@ -17822,3 +17822,74 @@ fn diagnostic_class_invalid_unary_op_for_ptr_const_on_value() {
         errs.iter().map(|e| e.class).collect::<Vec<_>>()
     );
 }
+
+// ── Slice 4: typed expected/got fields on TypeMismatch ───────────
+
+#[test]
+fn type_mismatch_carries_typed_expected_got() {
+    // Assignment site routes through `check_assignable`, which now
+    // uses the typed-fields helper. The TypeError record must carry
+    // both `expected` and `got` populated with the display form of
+    // the types involved — JSON consumers read these directly.
+    let errs = typecheck_errors("fn main() {\n    let x: i32 = \"hello\";\n}");
+    let mismatch = errs
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::TypeMismatch && e.expected.is_some())
+        .expect("should have a typed TypeMismatch error");
+    assert_eq!(
+        mismatch.expected.as_deref(),
+        Some("i32"),
+        "expected field should carry 'i32'; got: {:?}",
+        mismatch.expected
+    );
+    assert!(
+        mismatch.got.is_some(),
+        "got field should be populated; mismatch: {:?}",
+        mismatch
+    );
+}
+
+#[test]
+fn type_mismatch_typed_fields_match_message_prose() {
+    // Sanity: the prose message and the typed fields agree on the
+    // expected/got types. Failure here would mean the helper and
+    // the message-format expression went out of sync.
+    let errs = typecheck_errors("fn main() {\n    let x: bool = 42;\n}");
+    let mismatch = errs
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::TypeMismatch && e.expected.is_some())
+        .expect("should have a typed TypeMismatch error");
+    let expected = mismatch.expected.as_deref().unwrap();
+    let got = mismatch.got.as_deref().unwrap();
+    assert!(
+        mismatch.message.contains(expected),
+        "message body '{}' should mention expected '{}'",
+        mismatch.message,
+        expected
+    );
+    assert!(
+        mismatch.message.contains(got),
+        "message body '{}' should mention got '{}'",
+        mismatch.message,
+        got
+    );
+}
+
+#[test]
+fn non_type_mismatch_diagnostics_leave_expected_got_unset() {
+    // Diagnostics that don't have a meaningful expected/got pair
+    // (e.g., wrong-number-of-args) should leave the typed fields
+    // as None so JSON consumers can distinguish "no shape data
+    // available" from "expected = some type, got = none".
+    let errs = typecheck_errors("fn add(a: i32, b: i32) -> i32 { a + b }\nfn main() { add(1); }");
+    let wrong_args = errs
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::WrongNumberOfArgs)
+        .expect("should have a WrongNumberOfArgs error");
+    assert!(
+        wrong_args.expected.is_none(),
+        "WrongNumberOfArgs should not populate expected field; got: {:?}",
+        wrong_args.expected
+    );
+    assert!(wrong_args.got.is_none());
+}

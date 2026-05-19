@@ -430,6 +430,47 @@ fn test_json_type_error_snapshot() {
     assert!(json.contains("\"phase\":\"typecheck\""));
     assert!(json.contains("\"code\":\"E0202\""));
     assert!(json.contains("expected 2 argument(s), found 3"));
+    // Line 619 slice 2 added a `class` field to typecheck diagnostic
+    // records; WrongNumberOfArgs maps to WRONG_NUMBER_OF_ARGS.
+    assert!(
+        json.contains("\"class\":\"WRONG_NUMBER_OF_ARGS\""),
+        "JSON output should carry the class field; got: {}",
+        json
+    );
+}
+
+#[test]
+fn test_json_type_mismatch_carries_class_and_typed_fields() {
+    // Line 619 slice 4: a TypeMismatch diagnostic emitted via
+    // `--output=json` must carry `class`, `expected`, and `got` as
+    // structured fields. Write an inline fixture rather than reuse a
+    // snapshot so the test owns its trigger shape.
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_test_type_mismatch_json.kara");
+    std::fs::write(&fixture, "fn main() {\n    let x: i32 = \"hello\";\n}\n")
+        .expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        stdout.contains("\"class\":\"TYPE_MISMATCH\""),
+        "JSON output should carry TYPE_MISMATCH class; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\"expected\":\"i32\""),
+        "JSON output should carry expected field with 'i32'; got: {}",
+        stdout
+    );
+    assert!(
+        stdout.contains("\"got\":"),
+        "JSON output should carry got field; got: {}",
+        stdout
+    );
+    let _ = std::fs::remove_file(&fixture);
 }
 
 #[test]
