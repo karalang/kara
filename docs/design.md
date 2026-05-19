@@ -10035,6 +10035,26 @@ The `#[target(...)]` attribute marks an item as compiled **only** when the curre
 
 When a package declares multiple targets in its build configuration, `karac check` type-checks and effect-checks the source tree **once per target**, parameterizing the target-provided resource set each time. Diagnostics are tagged with the target that produced them. This is bounded because the target set is closed (four targets in v1).
 
+#### CPU Baseline Targeting
+
+Within a single `native` target, karac maintains a **per-target-triple CPU baseline table** that mirrors `rustc`'s target-spec defaults. LLVM's `"generic"` setting emits ARMv8.0-A on aarch64 and the original AMD64 baseline on x86_64 — conservative but appropriate for fleets with high CPU variance. On targets where the hardware is curated (notably `aarch64-apple-darwin`, where every shipping device is Apple Silicon M1 or newer), the generic baseline is strictly worse than the platform-specific baseline with no portability benefit.
+
+The v1 table:
+
+| Target triple | Default `cpu` | Default `features` | Rationale |
+|---|---|---|---|
+| `aarch64-apple-darwin` | `apple-m1` | (M1 ISA implied by CPU) | Apple-controlled fleet; M1 is the lowest shipping Apple Silicon. M2/M3/M4/M5 are supersets. |
+| `aarch64-unknown-linux-gnu` | `generic` | `+v8a,+outline-atomics` | Fleet variance (Pi, Graviton 1–4, NXP, Ampere) requires conservative default. |
+| `x86_64-unknown-linux-gnu` | `x86-64` | (none) | Original AMD64 baseline (v1); broadest server compatibility. |
+| `x86_64-apple-darwin` | `core2` | (none) | Matches `rustc` for the Intel-Mac legacy target. |
+| _(any other triple)_ | `generic` | (none) | Safe fallback for unknown targets — a portable binary beats one that won't load. |
+
+**Compilation contract.** A `karac build` with no override produces a binary that runs on every CPU the target triple promises. Widening the baseline (`apple-m1` → `apple-m4`, `x86-64` → `x86-64-v3`) narrows the deploy set in exchange for sharper codegen — explicit user choice, not a silent default change.
+
+**Override mechanism (v1.x).** Users specify a non-default baseline via — in precedence order — `--target-cpu=<name>` (CLI flag), `KARAC_TARGET_CPU=<name>` (environment variable), or `[release] target-cpu = "<name>"` in `kara.toml`. Validation rejects unknown CPU names per the active target with a `karac --target-cpu=help`-style hint listing supported values. The default-table fix lands ahead of the override mechanism so the silently-neutered case is closed in the v1 trunk regardless of opt-in adoption.
+
+**What this is not.** The baseline is *not* a substitute for function multiversioning (per-function feature dispatch at runtime), which lives in v1.x or v2 territory. The baseline is the floor every monomorphized function compiles against; multiversioning is the ceiling specific functions can opt up to. They compose: a v1.x build with `--target-cpu=apple-m1` and a `@target("apple-m4")` multiversioned hot path stays portable to every Apple Silicon Mac and dispatches the wider implementation on M4-or-newer at runtime.
+
 ### Concurrency Across Targets
 
 `spawn` / channel / `par` semantics are specified **target-agnostically at the source level**. A Kāra program that spawns tasks or sends values through channels compiles against the same language rules on every target; how those primitives are realized at runtime is a target-specific lowering concern, but the source language does not bifurcate.

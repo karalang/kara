@@ -176,16 +176,52 @@ pub(super) fn create_target_machine() -> Result<TargetMachine, String> {
     let target =
         Target::from_triple(&triple).map_err(|e| format!("Failed to get target: {}", e))?;
 
+    let triple_str = triple.as_str().to_str().unwrap_or("");
+    let (cpu, features) = default_cpu_and_features(triple_str);
+
     target
         .create_target_machine(
             &triple,
-            "generic",
-            "",
+            cpu,
+            features,
             backend_optimization_level(),
             RelocMode::Default,
             CodeModel::Default,
         )
         .ok_or_else(|| "Failed to create target machine".to_string())
+}
+
+/// Per-target CPU + feature defaults, mirroring rustc's target-spec baselines.
+///
+/// LLVM's `"generic"` default emits ARMv8.0-A on aarch64 and v1 AMD64 on
+/// x86_64 — strictly conservative, but on `aarch64-apple-darwin` that means
+/// shipping pre-M1 instructions to a fleet where every device is M1 or newer.
+/// rustc encodes the right per-target baseline in its target-spec JSON; this
+/// table mirrors those values so karac-built binaries don't lag what every
+/// other shipping compiler produces.
+///
+/// Override via `--target-cpu` / `KARAC_TARGET_CPU` / `[release] target-cpu`
+/// in `kara.toml` lands as a follow-up (see phase-10-targets.md). The
+/// fallback `("generic", "")` is intentional for unknown triples: better a
+/// portable binary than one that won't load.
+///
+/// See `design.md § CPU Baseline Targeting`.
+fn default_cpu_and_features(triple: &str) -> (&'static str, &'static str) {
+    // Triples vary in suffix shape (`arm64-apple-darwin25.0.0` vs
+    // `aarch64-apple-darwin`), so match on the arch prefix and OS
+    // substring instead of equality on the full string.
+    let is_aarch64 = triple.starts_with("aarch64-") || triple.starts_with("arm64-");
+    let is_x86_64 = triple.starts_with("x86_64-");
+    let is_darwin = triple.contains("-apple-darwin");
+    let is_linux = triple.contains("-linux-");
+
+    match (is_aarch64, is_x86_64, is_darwin, is_linux) {
+        (true, false, true, false) => ("apple-m1", ""),
+        (true, false, false, true) => ("generic", "+v8a,+outline-atomics"),
+        (false, true, false, true) => ("x86-64", ""),
+        (false, true, true, false) => ("core2", ""),
+        _ => ("generic", ""),
+    }
 }
 
 /// Resolve the optimization level used by both the **target machine** (LLVM
@@ -316,4 +352,46 @@ pub(super) fn read_runtime_debug_metadata_env() -> bool {
 /// compile-time check reads naturally as `if self.auto_par_disabled`.
 pub(super) fn read_auto_par_env() -> bool {
     !matches!(std::env::var("KARAC_AUTO_PAR"), Ok(v) if v == "0")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::default_cpu_and_features;
+
+    #[test]
+    fn aarch64_apple_darwin_defaults_to_apple_m1() {
+        assert_eq!(
+            default_cpu_and_features("aarch64-apple-darwin"),
+            ("apple-m1", "")
+        );
+        // Tolerate inkwell's `arm64-apple-darwin25.0.0` shape too.
+        assert_eq!(
+            default_cpu_and_features("arm64-apple-darwin25.0.0"),
+            ("apple-m1", "")
+        );
+    }
+
+    #[test]
+    fn aarch64_linux_keeps_generic_with_v8a_features() {
+        assert_eq!(
+            default_cpu_and_features("aarch64-unknown-linux-gnu"),
+            ("generic", "+v8a,+outline-atomics")
+        );
+    }
+
+    #[test]
+    fn x86_64_linux_defaults_to_x86_64_baseline() {
+        assert_eq!(
+            default_cpu_and_features("x86_64-unknown-linux-gnu"),
+            ("x86-64", "")
+        );
+    }
+
+    #[test]
+    fn unknown_triple_falls_back_to_generic() {
+        assert_eq!(
+            default_cpu_and_features("riscv64-unknown-elf"),
+            ("generic", "")
+        );
+    }
 }
