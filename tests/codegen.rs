@@ -54,6 +54,71 @@ mod codegen_tests {
         assert!(ir.contains("fdiv"), "should use float div");
     }
 
+    // ── Type-aware operator dispatch: signed vs unsigned ─────────
+    //
+    // Signedness-sensitive integer ops (Div/Mod/Lt/LtEq/Gt/GtEq/Shr)
+    // must dispatch through the operand source type, not always-signed.
+    // Lowering rewrites `a / b` for `b: u64` into
+    // `Call(Path([u64, div]), [a, b])`; the assoc-call dispatch in
+    // `compile_assoc_call` reads `type_name` and threads the
+    // is-unsigned flag through `compile_binop_typed`.
+
+    #[test]
+    fn test_ir_signed_int_div_mod() {
+        let ir = ir_for("fn calc(a: i64, b: i64) -> i64 { (a / b) + (a % b) }");
+        assert!(ir.contains("sdiv i64"), "i64 / must emit sdiv:\n{ir}");
+        assert!(ir.contains("srem i64"), "i64 % must emit srem:\n{ir}");
+    }
+
+    #[test]
+    fn test_ir_unsigned_int_div_mod() {
+        let ir = ir_for("fn calc(a: u64, b: u64) -> u64 { (a / b) + (a % b) }");
+        assert!(ir.contains("udiv i64"), "u64 / must emit udiv:\n{ir}");
+        assert!(ir.contains("urem i64"), "u64 % must emit urem:\n{ir}");
+        assert!(
+            !ir.contains("sdiv i64") && !ir.contains("srem i64"),
+            "u64 ops must not emit signed div/rem:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_signed_int_comparisons() {
+        let ir = ir_for("fn cmp(a: i64, b: i64) -> bool { a < b }");
+        assert!(ir.contains("icmp slt"), "i64 < must emit slt:\n{ir}");
+    }
+
+    #[test]
+    fn test_ir_unsigned_int_comparisons() {
+        // Drive all four ordering predicates through usize and confirm
+        // they emit the unsigned ult/ule/ugt/uge forms.
+        for (op, want) in [
+            ("<", "icmp ult"),
+            ("<=", "icmp ule"),
+            (">", "icmp ugt"),
+            (">=", "icmp uge"),
+        ] {
+            let src = format!("fn cmp(a: u64, b: u64) -> bool {{ a {op} b }}");
+            let ir = ir_for(&src);
+            assert!(ir.contains(want), "u64 `{op}` must emit `{want}`:\n{ir}");
+        }
+    }
+
+    #[test]
+    fn test_ir_signed_right_shift_is_arithmetic() {
+        let ir = ir_for("fn shift(a: i64, b: i64) -> i64 { a >> b }");
+        assert!(ir.contains("ashr i64"), "i64 >> must emit ashr:\n{ir}");
+    }
+
+    #[test]
+    fn test_ir_unsigned_right_shift_is_logical() {
+        let ir = ir_for("fn shift(a: u64, b: u64) -> u64 { a >> b }");
+        assert!(ir.contains("lshr i64"), "u64 >> must emit lshr:\n{ir}");
+        assert!(
+            !ir.contains("ashr i64"),
+            "u64 >> must not emit arithmetic shift:\n{ir}"
+        );
+    }
+
     // ── Variables and let bindings ───────────────────────────────
 
     #[test]

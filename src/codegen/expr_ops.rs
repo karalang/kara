@@ -1043,6 +1043,25 @@ impl<'ctx> super::Codegen<'ctx> {
         lhs: BasicValueEnum<'ctx>,
         rhs: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.compile_binop_typed(op, lhs, rhs, false)
+    }
+
+    /// Type-aware sibling to `compile_binop`. `is_unsigned == true` switches
+    /// signedness-sensitive integer ops to their unsigned forms:
+    /// `Div`/`Mod` → `build_int_unsigned_{div,rem}`, comparison predicates
+    /// `Lt/LtEq/Gt/GtEq` → `ULT/ULE/UGT/UGE`, and `Shr` → logical (zero-fill)
+    /// instead of arithmetic. Lowered primitive trait-method calls
+    /// (`assoc_call.rs`) feed this with the type-name's signedness so e.g.
+    /// `usize.lt(a, b)` lowers to `icmp ult` rather than `icmp slt` — without
+    /// which LLVM emits the signed-aware `subs + cinc + asr` mid-point
+    /// computation for `(lo + hi) / 2` shapes even on `u`-typed sources.
+    pub(super) fn compile_binop_typed(
+        &mut self,
+        op: &BinOp,
+        lhs: BasicValueEnum<'ctx>,
+        rhs: BasicValueEnum<'ctx>,
+        is_unsigned: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
         // Struct path: strings or user-defined structs.
         if lhs.is_struct_value() && rhs.is_struct_value() {
             let ls = lhs.into_struct_value();
@@ -1073,8 +1092,20 @@ impl<'ctx> super::Codegen<'ctx> {
             BinOp::Add => self.builder.build_int_nsw_add(lv, rv, "add").unwrap(),
             BinOp::Sub => self.builder.build_int_nsw_sub(lv, rv, "sub").unwrap(),
             BinOp::Mul => self.builder.build_int_nsw_mul(lv, rv, "mul").unwrap(),
-            BinOp::Div => self.builder.build_int_signed_div(lv, rv, "div").unwrap(),
-            BinOp::Mod => self.builder.build_int_signed_rem(lv, rv, "mod").unwrap(),
+            BinOp::Div => {
+                if is_unsigned {
+                    self.builder.build_int_unsigned_div(lv, rv, "div").unwrap()
+                } else {
+                    self.builder.build_int_signed_div(lv, rv, "div").unwrap()
+                }
+            }
+            BinOp::Mod => {
+                if is_unsigned {
+                    self.builder.build_int_unsigned_rem(lv, rv, "mod").unwrap()
+                } else {
+                    self.builder.build_int_signed_rem(lv, rv, "mod").unwrap()
+                }
+            }
             BinOp::Eq => self
                 .builder
                 .build_int_compare(IntPredicate::EQ, lv, rv, "eq")
@@ -1085,19 +1116,55 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap(),
             BinOp::Lt => self
                 .builder
-                .build_int_compare(IntPredicate::SLT, lv, rv, "lt")
+                .build_int_compare(
+                    if is_unsigned {
+                        IntPredicate::ULT
+                    } else {
+                        IntPredicate::SLT
+                    },
+                    lv,
+                    rv,
+                    "lt",
+                )
                 .unwrap(),
             BinOp::LtEq => self
                 .builder
-                .build_int_compare(IntPredicate::SLE, lv, rv, "le")
+                .build_int_compare(
+                    if is_unsigned {
+                        IntPredicate::ULE
+                    } else {
+                        IntPredicate::SLE
+                    },
+                    lv,
+                    rv,
+                    "le",
+                )
                 .unwrap(),
             BinOp::Gt => self
                 .builder
-                .build_int_compare(IntPredicate::SGT, lv, rv, "gt")
+                .build_int_compare(
+                    if is_unsigned {
+                        IntPredicate::UGT
+                    } else {
+                        IntPredicate::SGT
+                    },
+                    lv,
+                    rv,
+                    "gt",
+                )
                 .unwrap(),
             BinOp::GtEq => self
                 .builder
-                .build_int_compare(IntPredicate::SGE, lv, rv, "ge")
+                .build_int_compare(
+                    if is_unsigned {
+                        IntPredicate::UGE
+                    } else {
+                        IntPredicate::SGE
+                    },
+                    lv,
+                    rv,
+                    "ge",
+                )
                 .unwrap(),
             BinOp::And => self.builder.build_and(lv, rv, "and").unwrap(),
             BinOp::Or => self.builder.build_or(lv, rv, "or").unwrap(),
@@ -1105,7 +1172,10 @@ impl<'ctx> super::Codegen<'ctx> {
             BinOp::BitOr => self.builder.build_or(lv, rv, "bitor").unwrap(),
             BinOp::BitXor => self.builder.build_xor(lv, rv, "bitxor").unwrap(),
             BinOp::Shl => self.builder.build_left_shift(lv, rv, "shl").unwrap(),
-            BinOp::Shr => self.builder.build_right_shift(lv, rv, true, "shr").unwrap(),
+            BinOp::Shr => self
+                .builder
+                .build_right_shift(lv, rv, !is_unsigned, "shr")
+                .unwrap(),
             _ => return Err(format!("Unsupported binary op: {:?}", op)),
         };
         Ok(result.into())

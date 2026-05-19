@@ -90,15 +90,17 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             if let Some(op) = bin_op {
                 if _args.len() == 2 {
-                    let synth = Expr {
-                        span: _args[0].value.span.clone(),
-                        kind: ExprKind::Binary {
-                            op,
-                            left: Box::new(_args[0].value.clone()),
-                            right: Box::new(_args[1].value.clone()),
-                        },
-                    };
-                    return self.compile_expr(&synth);
+                    // Compile operands directly and emit through the typed
+                    // binop helper so unsigned primitives (`u8`/.../`usize`)
+                    // dispatch to unsigned LLVM ops. Round-tripping through
+                    // a synthesized `ExprKind::Binary` would lose the
+                    // type-name's signedness — the AST node carries only the
+                    // `BinOp` symbol, not the operand type.
+                    let lhs = self.compile_expr(&_args[0].value)?;
+                    let rhs = self.compile_expr(&_args[1].value)?;
+                    let is_unsigned =
+                        matches!(type_name, "u8" | "u16" | "u32" | "u64" | "u128" | "usize");
+                    return self.compile_binop_typed(&op, lhs, rhs, is_unsigned);
                 }
             }
             if method == "neg" && _args.len() == 1 {
