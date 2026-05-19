@@ -484,6 +484,15 @@ impl<'ctx> super::Codegen<'ctx> {
                                 current_names.insert(name.clone());
                             }
                         }
+                        // Slice 8t: a let RHS may contain nested yield-
+                        // point calls (e.g. `let x = some_async();`).
+                        // Advance cur_arm by the count so subsequent
+                        // stmts land in the correct arm.
+                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                        for _ in 0..nested {
+                            cur_arm += 1;
+                            current_names = layout_names.clone();
+                        }
                         continue;
                     }
                     // Slice 8p: `name = value` assignment. Walker
@@ -505,6 +514,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                     });
                                 }
                             }
+                        }
+                        // Slice 8t: same nested-yield descent as the
+                        // Let branch; an Assign RHS may contain CF or
+                        // yield calls.
+                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                        for _ in 0..nested {
+                            cur_arm += 1;
+                            current_names = layout_names.clone();
                         }
                         continue;
                     }
@@ -551,6 +568,13 @@ impl<'ctx> super::Codegen<'ctx> {
                                     });
                                 }
                             }
+                        }
+                        // Slice 8t: nested-yield descent for the
+                        // compound-assign RHS too.
+                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                        for _ in 0..nested {
+                            cur_arm += 1;
+                            current_names = layout_names.clone();
                         }
                         continue;
                     }
@@ -634,7 +658,25 @@ impl<'ctx> super::Codegen<'ctx> {
                                 });
                             }
                         }
-                        _ => {}
+                        // Slice 8t: stmt-expr is control flow (`if cond
+                        // { fetch(); }`, `while !done { fetch(); }`,
+                        // `for x in xs { fetch(); }`, `match cond { ...
+                        // }`) or another unrecognised shape. Slice 2's
+                        // walker already recorded any nested yield-
+                        // points inside the CF body; this descent
+                        // advances `cur_arm` for each, so post-CF
+                        // statements get queued into the correct (post-
+                        // yield) arm. The CF expression itself is
+                        // dropped from the IR — a follow-on slice
+                        // rebuilds it as branching codegen.
+                        _ => {
+                            let nested =
+                                count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                            for _ in 0..nested {
+                                cur_arm += 1;
+                                current_names = layout_names.clone();
+                            }
+                        }
                     }
                 }
                 // Slice 8o: capture the block's trailing expression (if
@@ -1901,6 +1943,43 @@ pub(super) fn find_function_ast<'p>(program: &'p Program, fn_key: &str) -> Optio
         }
     }
     None
+}
+
+/// Phase 6 line 26 slice 8t: count yield-point spans whose source
+/// range is contained inside the given statement's span. Used by the
+/// body-splitting walker when a stmt isn't classified as a top-level
+/// yield or a top-level Call/MethodCall enqueue — typically when the
+/// stmt is control flow (`if cond { fetch(); }`, `while not_done {
+/// fetch(); }`, etc.) whose nested yields slice 2's enumeration has
+/// already recorded but slice 8's body splitter would otherwise miss.
+///
+/// Span-containment is a sound count because slice 2's
+/// `YieldPointWalker` records yield-points in source order, so once
+/// a yield's offset is past the statement's end, all subsequent
+/// yields are also past it (the `take_while` short-circuits there).
+/// The `filter` defensively guards against a yield ordered before the
+/// statement-start (a slice-2 ordering bug if it ever happens).
+///
+/// **v1 limitation:** advancing `cur_arm` by the count makes post-CF
+/// statements correctly classified into the post-yield arm, but the
+/// CF expression itself is dropped from the IR. The conditional /
+/// looping structure isn't preserved — the function suspends-then-
+/// resumes uniformly. A follow-on slice rebuilds the CF in IR by
+/// branching into state-machine arm blocks at yield points.
+fn count_yields_inside_span(
+    stmt_span: &crate::token::Span,
+    yield_points: &[YieldPoint],
+    start_idx: usize,
+) -> usize {
+    let stmt_end = stmt_span.offset + stmt_span.length;
+    yield_points
+        .iter()
+        .skip(start_idx)
+        .take_while(|yp| yp.span.offset < stmt_end)
+        .filter(|yp| {
+            yp.span.offset >= stmt_span.offset && yp.span.offset + yp.span.length <= stmt_end
+        })
+        .count()
 }
 
 /// Phase 6 line 26 slice 8k: classify a call arg into the recognised

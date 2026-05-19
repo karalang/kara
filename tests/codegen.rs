@@ -16555,6 +16555,193 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8t: control flow inside arms ────────────────
+    //
+    // Body-splitting walker now descends into stmt-position CF expressions
+    // (if / while / for / match / loop / labeled-block) to count nested
+    // yield-point spans, advancing `cur_arm` so post-CF statements get
+    // queued into the post-yield arm. v1 scope: the CF expression itself
+    // is dropped from the IR — only `cur_arm` advancement is preserved.
+    // A follow-on slice rebuilds CF as branching codegen.
+
+    #[test]
+    fn test_body_splitting_8t_yield_inside_if_advances_arm_for_post_if_stmt() {
+        // `fn driver() { if cond { fetch(); } take(42); }` — without
+        // slice 8t, the if-stmt drops silently and `take(42)` lands in
+        // state_0 (the pre-yield arm). With slice 8t, the descent finds
+        // the yield inside the if-body, advances cur_arm to 1, and
+        // `take(42)` lands in state_1 (post-yield / terminal). The IR
+        // difference: state_0 has just reload + state-transition +
+        // Pending; state_1 has reload + take(42) + terminal return.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(cond: bool) with sends(Network) receives(Network) {
+                 if cond { fetch(); }
+                 take(42);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // `take(42)` must be present (post-CF stmt is preserved).
+        assert!(
+            body.contains("call void @take(i64 42)"),
+            "post-CF take(42) must be emitted:\n{body}"
+        );
+        // The call's position relative to the state-transition matters
+        // — slice 8t puts the call in state_1 (post-yield arm). The
+        // state-transition writes tag=1 then returns Pending; the call
+        // must come AFTER the Pending return in IR text (since state_1
+        // appears after state_0 in the switch arm sequence).
+        let pending_return_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition store should be present");
+        let take_call_pos = body
+            .find("call void @take(i64 42)")
+            .expect("take call should be present");
+        assert!(
+            take_call_pos > pending_return_pos,
+            "take(42) must be in state_1 (after state_0's transition):\nstate_0_pos={pending_return_pos} take_pos={take_call_pos}\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8t_yield_inside_while_advances_arm() {
+        // `while !done { fetch(); }` followed by a post-loop call —
+        // descent into the while-body finds the yield, advances arm.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(done: bool) with sends(Network) receives(Network) {
+                 while not done { fetch(); }
+                 take(7);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let transition_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition store should be present");
+        let take_pos = body
+            .find("call void @take(i64 7)")
+            .expect("take call should be present");
+        assert!(
+            take_pos > transition_pos,
+            "take(7) must land in state_1 (after the while-loop yield):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8t_yield_inside_for_advances_arm() {
+        // `for x in items { fetch(); }` followed by a post-loop call.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(items: Vec[i64]) with sends(Network) receives(Network) {
+                 for x in items.iter() { fetch(); }
+                 take(11);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let transition_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition store should be present");
+        let take_pos = body
+            .find("call void @take(i64 11)")
+            .expect("take call should be present");
+        assert!(
+            take_pos > transition_pos,
+            "take(11) must land in state_1 (after the for-loop yield):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8t_yield_inside_match_advances_arm() {
+        // `match cond { true => fetch(), false => {} }` followed by a
+        // post-match call. Descent walks match arms in source order.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(cond: bool) with sends(Network) receives(Network) {
+                 match cond { true => fetch(), false => {} }
+                 take(23);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let transition_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition store should be present");
+        let take_pos = body
+            .find("call void @take(i64 23)")
+            .expect("take call should be present");
+        assert!(
+            take_pos > transition_pos,
+            "take(23) must land in state_1 (after the match-arm yield):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8t_multi_yield_in_multi_if_advances_per_yield() {
+        // Two yields in two distinct ifs — descent must advance cur_arm
+        // twice. `take(99)` lands in state_2 (the terminal arm after
+        // two yields).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(a: bool, b: bool) with sends(Network) receives(Network) {
+                 if a { fetch(); }
+                 if b { fetch(); }
+                 take(99);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Three arms: state_0, state_1, state_2 (terminal).
+        // Both state_0 and state_1 are non-terminal (transition+Pending).
+        let s0_transition_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition should be present");
+        let s1_transition_pos = body
+            .find("store i32 2, ptr %state_1.next_tag_ptr")
+            .expect("state_1 transition should be present");
+        let take_pos = body
+            .find("call void @take(i64 99)")
+            .expect("take call should be present");
+        assert!(
+            take_pos > s0_transition_pos && take_pos > s1_transition_pos,
+            "take(99) must land in state_2 (terminal arm, after both transitions):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_body_splitting_8t_nested_cf_descent_finds_inner_yield() {
+        // `if a { if b { fetch(); } }` — descent recurses through nested
+        // CF to find the inner yield. Equivalent to one yield-point;
+        // post-CF call lands in state_1.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn take(n: i64) {}
+             fn driver(a: bool, b: bool) with sends(Network) receives(Network) {
+                 if a { if b { fetch(); } }
+                 take(5);
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        let transition_pos = body
+            .find("store i32 1, ptr %state_0.next_tag_ptr")
+            .expect("state_0 transition should be present");
+        let take_pos = body
+            .find("call void @take(i64 5)")
+            .expect("take call should be present");
+        assert!(
+            take_pos > transition_pos,
+            "take(5) must land in state_1 (after nested-CF yield):\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8o: terminal-arm final-expression value ─────
     //
     // The terminal-arm store into the state-struct terminal field now
