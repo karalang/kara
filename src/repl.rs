@@ -1132,19 +1132,87 @@ impl Session {
             eprintln!("(no cells to save)");
             return;
         }
-        let mut out = String::new();
-        out.push_str("// Saved Kāra REPL session.\n\n");
-        for cell in &self.cell_history {
-            out.push_str(cell);
-            if !cell.ends_with('\n') {
-                out.push('\n');
-            }
-            out.push('\n');
-        }
+        let out = self.render_exported_session();
         match std::fs::write(path, out) {
             Ok(()) => println!("session saved to {path}"),
             Err(e) => eprintln!("error: failed to write {path}: {e}"),
         }
+    }
+
+    /// Render the session's cells as a single `.kara` source string that
+    /// `karac build` accepts and that reproduces the session's observable
+    /// behavior when run. Items are hoisted to file scope (using
+    /// `items_source`, which is already shadow-pruned so the latest
+    /// definition of a re-declared item is the only one emitted).
+    /// Statement-style cells are concatenated, in submission order, into
+    /// the body of a synthetic `fn main()`. The effect annotations on
+    /// `main` mirror the session's accumulated effect set as inferred
+    /// from the synthesized program — over-declaration is harmless and
+    /// matches the spec promise that the wrapper carries declared
+    /// effects. Auto-clone rewrites land in `cell_history` in lockstep
+    /// at insertion time, so they ride out of this method unchanged.
+    ///
+    /// Public so integration tests can inspect the rendered string
+    /// without an intermediate file write.
+    pub fn render_exported_session(&self) -> String {
+        let items_section = self.items_source.trim_end().to_string();
+        let stmt_cells: Vec<&str> = self
+            .cell_history
+            .iter()
+            .filter(|c| classify_input(c) != CellShape::PureItems)
+            .map(String::as_str)
+            .collect();
+
+        let body = render_main_body(&stmt_cells);
+        let effects = self.compute_main_effect_decls(&items_section, &body);
+
+        let mut out = String::new();
+        out.push_str("// Saved Kāra REPL session.\n");
+        out.push_str("// Re-runs via `karac build` for identical observable behavior.\n");
+        if self.auto_clone {
+            out.push_str(
+                "// (`--auto-clone` insertions, if any, are baked into the cell bodies below.)\n",
+            );
+        }
+        out.push('\n');
+        if !items_section.is_empty() {
+            out.push_str(&items_section);
+            out.push_str("\n\n");
+        }
+        out.push_str("fn main()");
+        if !effects.is_empty() {
+            out.push(' ');
+            out.push_str(&effects);
+        }
+        out.push_str(" {\n");
+        out.push_str(&body);
+        out.push_str("}\n");
+        out
+    }
+
+    /// Build a synthetic single-file program and look up `main`'s
+    /// inferred effect set, rendered as `writes(A, B) reads(C)` etc.
+    /// Returns `""` when no effects fired (a pure session) or when the
+    /// synthesized source fails to parse (defensive — `render_exported_session`
+    /// still emits the wrapper, the build pass surfaces the real error).
+    fn compute_main_effect_decls(&self, items_section: &str, main_body: &str) -> String {
+        let mut synth = String::new();
+        if !items_section.is_empty() {
+            synth.push_str(items_section);
+            synth.push_str("\n\n");
+        }
+        synth.push_str("fn main() {\n");
+        synth.push_str(main_body);
+        synth.push_str("}\n");
+        let parsed = crate::parse(&synth);
+        if !parsed.errors.is_empty() {
+            return String::new();
+        }
+        let effects = crate::effectcheck(&parsed.program);
+        let Some(set) = effects.inferred_effects.get("main") else {
+            return String::new();
+        };
+        render_effect_decls(set)
     }
 
     /// Handle a `:dep <name> = <spec>` line. Parses the right-hand side

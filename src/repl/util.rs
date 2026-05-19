@@ -163,6 +163,107 @@ Cell semantics (v1 MVP):
     );
 }
 
+/// Render statement-style cell bodies into the body of a synthetic
+/// `fn main()`, in submission order, with four-space indentation. Empty
+/// lines are preserved (without indentation) so the exported source
+/// keeps the user's visual cell grouping. Trailing newlines are
+/// normalized — every emitted cell ends with `\n` and a blank separator
+/// line so the boundary between two cells is visible in the export.
+pub(super) fn render_main_body(stmt_cells: &[&str]) -> String {
+    let mut s = String::new();
+    for (idx, cell) in stmt_cells.iter().enumerate() {
+        if idx > 0 {
+            s.push('\n');
+        }
+        for line in cell.lines() {
+            if line.trim().is_empty() {
+                s.push('\n');
+            } else {
+                s.push_str("    ");
+                s.push_str(line);
+                s.push('\n');
+            }
+        }
+    }
+    s
+}
+
+/// Render an `EffectSet` as a sequence of declared-effect clauses
+/// suitable for splicing after `fn main()` in the exported source.
+/// Verbs are emitted in a fixed order matching design.md (resource
+/// verbs first, then execution verbs); within each verb the resources
+/// are sorted lexicographically for deterministic output. Returns `""`
+/// for an empty set so the caller can skip the keyword block.
+pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> String {
+    use crate::ast::EffectVerbKind;
+    use std::collections::BTreeMap;
+
+    // Group resources per verb. Resources are deduplicated via the
+    // BTreeMap-of-BTreeSet shape; execution verbs (Blocks / Suspends)
+    // never carry a resource — they map to an empty set.
+    let mut by_verb: BTreeMap<usize, (EffectVerbKind, std::collections::BTreeSet<String>)> =
+        BTreeMap::new();
+    for traced in &set.effects {
+        let order = verb_emit_order(&traced.effect.verb);
+        let entry = by_verb.entry(order).or_insert_with(|| {
+            (
+                traced.effect.verb.clone(),
+                std::collections::BTreeSet::new(),
+            )
+        });
+        if !traced.effect.resource.is_empty() {
+            entry.1.insert(traced.effect.resource.clone());
+        }
+    }
+    if by_verb.is_empty() {
+        return String::new();
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (_, (verb, resources)) in by_verb {
+        let name = verb_keyword(&verb);
+        if resources.is_empty() {
+            // Execution verbs (blocks / suspends) take no parenthesized
+            // resource list; user-defined verbs without resources also
+            // emit as a bare keyword.
+            parts.push(name.to_string());
+        } else {
+            let list: Vec<String> = resources.into_iter().collect();
+            parts.push(format!("{name}({})", list.join(", ")));
+        }
+    }
+    parts.join(" ")
+}
+
+fn verb_keyword(verb: &crate::ast::EffectVerbKind) -> String {
+    use crate::ast::EffectVerbKind;
+    match verb {
+        EffectVerbKind::Reads => "reads".to_string(),
+        EffectVerbKind::Writes => "writes".to_string(),
+        EffectVerbKind::Sends => "sends".to_string(),
+        EffectVerbKind::Receives => "receives".to_string(),
+        EffectVerbKind::Allocates => "allocates".to_string(),
+        EffectVerbKind::Panics => "panics".to_string(),
+        EffectVerbKind::Blocks => "blocks".to_string(),
+        EffectVerbKind::Suspends => "suspends".to_string(),
+        EffectVerbKind::UserDefined(name) => name.clone(),
+    }
+}
+
+fn verb_emit_order(verb: &crate::ast::EffectVerbKind) -> usize {
+    use crate::ast::EffectVerbKind;
+    match verb {
+        EffectVerbKind::Reads => 0,
+        EffectVerbKind::Writes => 1,
+        EffectVerbKind::Sends => 2,
+        EffectVerbKind::Receives => 3,
+        EffectVerbKind::Allocates => 4,
+        EffectVerbKind::Panics => 5,
+        EffectVerbKind::Blocks => 6,
+        EffectVerbKind::Suspends => 7,
+        EffectVerbKind::UserDefined(_) => 8,
+    }
+}
+
 /// Cell input shape. The parser only accepts top-level items, so any
 /// cell that begins with a statement (raw expression, `let`, etc.) needs
 /// the synthetic `fn main()` wrapper to parse at all.

@@ -758,3 +758,235 @@ fn auto_clone_export_preserves_inserted_clones() {
         "the bare `consume(s)` form must not survive after auto-clone rewrites; got:\n{consuming}",
     );
 }
+
+// ── Session export — `:save` fidelity ──────────────────────────────────────
+
+/// Helper: parse + resolve + typecheck an exported session string. Returns
+/// the joined error message (empty string on clean compile) so the test
+/// can assert the fidelity guarantee from line 679 of the tracker:
+/// "the exported file compiles with `karac build`".
+fn compile_exported(src: &str) -> String {
+    let parsed = karac::parse(src);
+    if !parsed.errors.is_empty() {
+        return parsed
+            .errors
+            .iter()
+            .map(|e| format!("parse: {}", e.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let resolved = karac::resolve(&parsed.program);
+    if !resolved.errors.is_empty() {
+        return resolved
+            .errors
+            .iter()
+            .map(|e| format!("resolve: {}", e.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    if !typed.errors.is_empty() {
+        return typed
+            .errors
+            .iter()
+            .map(|e| format!("type: {}", e.message))
+            .collect::<Vec<_>>()
+            .join("\n");
+    }
+    String::new()
+}
+
+#[test]
+fn export_wraps_statements_in_synthetic_main() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
+    s.evaluate_cell_captured("let x = add(2, 3);");
+    s.evaluate_cell_captured("println(x);");
+
+    let exported = s.render_exported_session();
+    // Items section sits at file scope (before `fn main()`).
+    let items_idx = exported.find("fn add").expect("items missing from export");
+    let main_idx = exported
+        .find("fn main()")
+        .expect("synthetic main missing from export");
+    assert!(
+        items_idx < main_idx,
+        "items must appear before `fn main()` in the export; got:\n{exported}",
+    );
+    // Statement cells got hoisted into the main body.
+    let body_start = main_idx + "fn main()".len();
+    let body = &exported[body_start..];
+    assert!(
+        body.contains("let x = add(2, 3);"),
+        "expected the `let x` cell inside `fn main()` body; got body:\n{body}",
+    );
+    assert!(
+        body.contains("println(x);"),
+        "expected the println cell inside `fn main()` body; got body:\n{body}",
+    );
+}
+
+#[test]
+fn export_compiles_with_karac_build() {
+    // Fidelity guarantee #1: the exported file compiles cleanly.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
+    s.evaluate_cell_captured("let x = add(2, 3);");
+    s.evaluate_cell_captured("println(x);");
+
+    let exported = s.render_exported_session();
+    let errs = compile_exported(&exported);
+    assert!(
+        errs.is_empty(),
+        "exported session must compile cleanly; errors:\n{errs}\nexported:\n{exported}",
+    );
+}
+
+#[test]
+fn export_reproduces_observable_behavior() {
+    // Fidelity guarantee #2: running the exported file produces the same
+    // observable behavior as the original session. We approximate "run"
+    // by re-evaluating the exported source through a fresh Session as a
+    // single statement-style cell (the source IS already a `fn main()`,
+    // so we feed it via items_source + a trivial trigger cell).
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn square(n: i64) -> i64 { n * n }");
+    let r1 = s.evaluate_cell_captured("println(square(7));");
+    let r2 = s.evaluate_cell_captured("let q = square(3); println(q);");
+    let session_output = format!("{}{}", r1.stdout, r2.stdout);
+
+    let exported = s.render_exported_session();
+
+    // Run the export end-to-end via the same interpreter the REPL uses.
+    let parsed = karac::parse(&exported);
+    assert!(
+        parsed.errors.is_empty(),
+        "exported parse: {:?}",
+        parsed.errors,
+    );
+    let resolved = karac::resolve(&parsed.program);
+    assert!(
+        resolved.errors.is_empty(),
+        "exported resolve: {:?}",
+        resolved.errors,
+    );
+    let mut program = parsed.program;
+    let typed = karac::typecheck(&program, &resolved);
+    assert!(typed.errors.is_empty(), "exported type: {:?}", typed.errors);
+    karac::lower(&mut program, &typed);
+    let mut interp = karac::interpreter::Interpreter::new(&program, &typed);
+    interp.captured_output = Some(Vec::new());
+    interp.run();
+    let exported_output = interp.captured_output.take().unwrap_or_default().join("");
+    assert_eq!(
+        exported_output, session_output,
+        "exported run must reproduce the session's observable output;\nexported:\n{exported}",
+    );
+}
+
+#[test]
+fn export_declares_effect_set_on_main() {
+    // Spec promise: declared effects on main mirror the session's
+    // accumulated effect set. `env.set` is seeded as `writes(Env)` by
+    // the effect checker (see `EffectCheck::check`'s stdlib block);
+    // a session calling it lands at least that verb on main's
+    // signature. We pick `env.set` because it's a clean, single-effect
+    // stdlib call — `println` is intentionally NOT effect-propagating
+    // in the current design (matches the "fn main() {}" wrapper the
+    // REPL itself uses for plain print sessions).
+    let mut s = Session::new();
+    s.evaluate_cell_captured("env.set(\"KARA_REPL_SAVE_TEST\", \"1\");");
+
+    let exported = s.render_exported_session();
+    let main_line = exported
+        .lines()
+        .find(|l| l.starts_with("fn main()"))
+        .expect("main missing");
+    assert!(
+        main_line.contains("writes(Env)"),
+        "expected `writes(Env)` on the exported main; got: {main_line}\nexport:\n{exported}",
+    );
+    // And the exported file still compiles — over-declaration is
+    // legal; the body must respect the declared upper bound.
+    let errs = compile_exported(&exported);
+    assert!(
+        errs.is_empty(),
+        "effect-declared export must still compile; errors:\n{errs}\nexport:\n{exported}",
+    );
+}
+
+#[test]
+fn export_omits_item_cells_from_main_body() {
+    // Items get hoisted to file scope; they must NOT appear duplicated
+    // inside `fn main()`. Cells that are *pure items* are filtered out
+    // of the main-body assembly walk.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn one() -> i64 { 1 }");
+    s.evaluate_cell_captured("println(one());");
+
+    let exported = s.render_exported_session();
+    let main_idx = exported.find("fn main()").expect("main missing");
+    let body = &exported[main_idx..];
+    // `fn one()` should appear once (at file scope, before main), never
+    // duplicated inside main's body.
+    let fn_count = exported.matches("fn one()").count();
+    assert_eq!(
+        fn_count, 1,
+        "expected one definition of fn one (file scope), got {fn_count}; export:\n{exported}",
+    );
+    assert!(
+        body.contains("println(one());"),
+        "expected the call cell inside main; got body:\n{body}",
+    );
+}
+
+#[test]
+fn export_no_statement_cells_emits_empty_main() {
+    // Item-only sessions still produce a valid main wrapper — empty
+    // body, no effect annotations. This is the regression pin for the
+    // "no statements" edge case.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn ten() -> i64 { 10 }");
+
+    let exported = s.render_exported_session();
+    assert!(exported.contains("fn ten"), "items must export");
+    assert!(
+        exported.contains("fn main() {\n}\n"),
+        "expected an empty `fn main()` wrapper for the item-only session; got:\n{exported}",
+    );
+    let errs = compile_exported(&exported);
+    assert!(
+        errs.is_empty(),
+        "empty-main session must still compile cleanly; errors:\n{errs}",
+    );
+}
+
+#[test]
+fn export_preserves_auto_clone_insertions_in_main_body() {
+    // Auto-clone insertions land in cell_history at insertion time
+    // (via apply_auto_clone_rewrites). The exported main body picks
+    // them up from cell_history unchanged — fidelity guarantee from
+    // the spec's "if auto-clone was enabled, the inserted clones
+    // appear in the exported file unchanged."
+    let mut s = Session::with_options(ReplOptions { auto_clone: true });
+    s.evaluate_cell_captured("fn consume(s: String) {}");
+    s.evaluate_cell_captured("let s = \"persist\";");
+    s.evaluate_cell_captured("let _t = consume(s);");
+    let _ = s.evaluate_cell_captured("println(s);");
+
+    let exported = s.render_exported_session();
+    assert!(
+        exported.contains("consume(s.clone())"),
+        "expected the auto-clone rewrite to ride into the exported main body; export:\n{exported}",
+    );
+    assert!(
+        !exported.contains("consume(s);"),
+        "bare consume(s) must NOT appear after the auto-clone rewrite; export:\n{exported}",
+    );
+    // Sanity: header note announces the bake-in so a reader of the
+    // exported file knows what they're looking at.
+    assert!(
+        exported.contains("--auto-clone"),
+        "auto-clone bake-in should be noted in the export header; export:\n{exported}",
+    );
+}
