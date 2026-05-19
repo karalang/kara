@@ -164,6 +164,30 @@ pub struct Interpreter<'a> {
     /// hand-rolled struct literal that bypassed `Pool.new`) can be
     /// distinguished from a legitimate pool.
     pub(crate) pool_handle_counter: i64,
+    /// REPL value-snapshot replay. When a `StmtKind::Let { pattern:
+    /// PatternKind::Binding(name), .. }` evaluates and `name` is a key
+    /// here, the RHS is **not** evaluated — the binding is created from
+    /// the pre-loaded value instead. Empty for ordinary single-file
+    /// runs; populated by the REPL between cells so a `let x =
+    /// expensive()` from cell N does not re-run `expensive()` when
+    /// cell N+1's synthetic source-replay includes the same `let`.
+    /// Pattern lets (tuple / struct destructuring / `let-else`) and
+    /// `let mut` rebindings fall through the normal RHS-eval path
+    /// because keying on a single name does not cover them
+    /// faithfully; the source-replay model retains its semantics for
+    /// those forms (RHS re-runs each cell, mutation does not survive).
+    pub let_value_overrides: HashMap<String, Value>,
+    /// REPL value-snapshot capture set. The bound value of any
+    /// `StmtKind::Let { pattern: PatternKind::Binding(name), .. }` whose
+    /// `name` is in this set is recorded into `captured_let_values`
+    /// after binding. The REPL drains this map after `run()` returns
+    /// so the next cell can use the captured values as overrides.
+    pub let_snapshot_watch: HashSet<String>,
+    /// REPL value-snapshot output channel. Populated by the Let arm of
+    /// `eval_stmt_cf` whenever the binding name is in
+    /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
+    /// non-REPL callers ignore it.
+    pub captured_let_values: HashMap<String, Value>,
 }
 
 /// Per-pool state for the `Pool[T]` intrinsic. Lives in
@@ -275,6 +299,9 @@ impl<'a> Interpreter<'a> {
             child_table: HashMap::new(),
             pool_table: HashMap::new(),
             pool_handle_counter: 0,
+            let_value_overrides: HashMap::new(),
+            let_snapshot_watch: HashSet::new(),
+            captured_let_values: HashMap::new(),
         }
     }
 

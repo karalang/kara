@@ -990,3 +990,160 @@ fn export_preserves_auto_clone_insertions_in_main_body() {
         "auto-clone bake-in should be noted in the export header; export:\n{exported}",
     );
 }
+
+// ── Value-snapshot persistent-let model ────────────────────────────────────
+
+#[test]
+fn let_value_snapshot_records_cached_value() {
+    // Cell 1 binds `x = 5`. The session's value-snapshot store must
+    // record the bound value so cell 2 can replay it without re-
+    // evaluating the RHS. Inspects `let_snapshots()` directly so the
+    // test exercises the snapshot bookkeeping even before any cross-
+    // cell reuse fires.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("let x = 5;");
+    assert!(r.errors.is_empty(), "cell 1 errors: {:?}", r.errors);
+    let snap = s.let_snapshots();
+    let v = snap
+        .get("x")
+        .expect("expected `x` to be in the snapshot store after cell 1");
+    // The captured value is the integer literal 5.
+    assert!(
+        format!("{:?}", v).contains('5'),
+        "expected snapshot value to be the bound integer; got {:?}",
+        v,
+    );
+}
+
+#[test]
+fn let_value_snapshot_rhs_does_not_re_fire_across_cells() {
+    // The headline guarantee. Cell 1 binds `x` to the result of a fn
+    // call with an observable side effect (a `println` line); cell 2
+    // reads `x`. The source-replay form would re-emit the let into
+    // cell 2's synthetic main, RE-EVALUATING the side-effecting RHS
+    // and emitting a duplicate println line. The value-snapshot path
+    // pre-loads `x` from the snapshot store and skips the RHS — so
+    // only ONE "compute" line should fire across the two cells.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("fn compute() -> i64 { println(\"compute fired\"); 42 }");
+    let r1 = s.evaluate_cell_captured("let x = compute();");
+    let r2 = s.evaluate_cell_captured("println(x);");
+    assert!(r1.errors.is_empty(), "cell 2 errors: {:?}", r1.errors);
+    assert!(r2.errors.is_empty(), "cell 3 errors: {:?}", r2.errors);
+    // Cell 2 ran compute() once.
+    assert_eq!(
+        r1.stdout.matches("compute fired").count(),
+        1,
+        "cell 2 should fire `compute()` exactly once; stdout:\n{}",
+        r1.stdout,
+    );
+    // Cell 3 must NOT re-fire compute(). The value-snapshot path
+    // skipped the RHS and used the cached value. We see the printed
+    // `x` (`42`) but NOT a second "compute fired".
+    assert!(
+        !r2.stdout.contains("compute fired"),
+        "cell 3 must reuse the snapshot — `compute()` must not re-run; stdout:\n{}",
+        r2.stdout,
+    );
+    assert!(
+        r2.stdout.contains("42"),
+        "cell 3 should still print the cached value; stdout:\n{}",
+        r2.stdout,
+    );
+}
+
+#[test]
+fn let_value_snapshot_chains_across_three_cells() {
+    // Pinning that the snapshot model survives more than one hop.
+    // Cell 1 binds x; cell 2 binds y from x; cell 3 reads both. The
+    // side-effecting RHS on x must fire exactly once across all three
+    // cells.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("fn once() -> i64 { println(\"once\"); 7 }");
+    let _ = s.evaluate_cell_captured("let x = once();");
+    let r2 = s.evaluate_cell_captured("let y = x + 1;");
+    let r3 = s.evaluate_cell_captured("println(x); println(y);");
+    assert!(r2.errors.is_empty(), "cell 3 errors: {:?}", r2.errors);
+    assert!(r3.errors.is_empty(), "cell 4 errors: {:?}", r3.errors);
+    assert!(
+        !r2.stdout.contains("once"),
+        "cell 3 must not re-run `once()`; stdout:\n{}",
+        r2.stdout,
+    );
+    assert!(
+        !r3.stdout.contains("once"),
+        "cell 4 must not re-run `once()`; stdout:\n{}",
+        r3.stdout,
+    );
+    let trimmed = r3.stdout.trim();
+    assert_eq!(
+        trimmed, "7\n8",
+        "cell 4 should print the chained snapshot values; got: {trimmed:?}",
+    );
+}
+
+#[test]
+fn let_value_snapshot_rebinding_drops_stale_entry() {
+    // When a later cell re-binds `x` to a different type, the stale
+    // snapshot must be dropped so the new RHS evaluates normally and
+    // seeds a fresh snapshot. Without this guard, the override would
+    // splice in the prior `i64` value where the typechecker expects a
+    // `String` — type-confusion at runtime.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("let x = 5;");
+    assert_eq!(
+        s.let_snapshots()
+            .get("x")
+            .map(|v| format!("{v:?}").contains('5')),
+        Some(true)
+    );
+    let _ = s.evaluate_cell_captured("let x = \"hello\";");
+    let snap = s.let_snapshots();
+    let v = snap
+        .get("x")
+        .expect("expected the new `x` in the snapshot store");
+    assert!(
+        format!("{v:?}").contains("hello"),
+        "expected the snapshot to reflect the latest binding; got {v:?}",
+    );
+    // And reading the new x in a third cell uses the new value.
+    let r = s.evaluate_cell_captured("println(x);");
+    assert_eq!(r.stdout.trim(), "hello");
+}
+
+#[test]
+fn let_value_snapshot_reset_clears_cache() {
+    // `:reset` clears the persistent-let source-replay buffer; it
+    // must also clear the snapshot cache so a subsequent re-bind
+    // does not accidentally pick up a stale value. The source-replay
+    // buffer being empty after reset means no override would fire on
+    // the next cell anyway, but the explicit clear keeps the two
+    // stores in lockstep.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("let x = 99;");
+    assert!(s.let_snapshots().contains_key("x"));
+    let _ = s.dispatch_meta(":reset");
+    assert!(
+        s.let_snapshots().is_empty(),
+        "expected :reset to clear the value-snapshot cache; got {:?}",
+        s.let_snapshots(),
+    );
+}
+
+#[test]
+fn let_value_snapshot_unused_binding_still_visible() {
+    // A let whose binding is never referenced in subsequent cells
+    // must still snapshot — future cells might pull it in. Edge
+    // case: the watch set must include *every* persistent_lets
+    // binding name, not just ones the current cell touches.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("let unused = 123;");
+    assert!(
+        s.let_snapshots().contains_key("unused"),
+        "snapshot should capture every persistent-let binding regardless of later use",
+    );
+    // Confirm that reading it in a later cell works — the override
+    // wires the binding through without re-running the literal.
+    let r = s.evaluate_cell_captured("println(unused);");
+    assert_eq!(r.stdout.trim(), "123");
+}

@@ -33,11 +33,13 @@
 //!   display all ship as separate items in the Interactive Development
 //!   chapter of `roadmap.md`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::ops::Range;
 
 use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
+
+use crate::interpreter::Value;
 
 mod util;
 use util::*;
@@ -236,6 +238,22 @@ pub struct Session {
     /// note onto the cell's `notes` channel — never silent (design.md §
     /// Interactive Evaluation Model > Ownership Across Cells).
     auto_clone: bool,
+    /// Cached `Value`s from prior cells' top-level `let` bindings,
+    /// keyed by binding name. Drives the value-snapshot persistent-let
+    /// model: cell N's `let x = expensive();` records the bound value
+    /// here; cell N+1's source-replay re-emits the same `let x =
+    /// expensive();` slice into the synthetic main, but the
+    /// interpreter consults `let_value_overrides` and uses this cached
+    /// value instead of re-running `expensive()`. The source-replay
+    /// form is what the parser / resolver / typechecker see (so `x`
+    /// resolves and has a recorded type); only the interpreter's
+    /// runtime evaluation of the RHS is short-circuited. Pattern lets
+    /// (`let (a, b) = …`, `let-else`) and `let mut` rebindings stay on
+    /// the source-replay path because keying the override on a single
+    /// name does not cover them; this map only holds entries for
+    /// simple `PatternKind::Binding` lets, matching the interpreter
+    /// hook's classification.
+    let_snapshots: HashMap<String, Value>,
     /// In-memory `[dependencies]` table built up via the `:dep` meta-command.
     /// Each entry is `name → normalized TOML value` (e.g. `"\"1.2\""` for a
     /// bare semver, `"{ git = \"...\" }"` for an inline-table form). v1
@@ -263,8 +281,17 @@ impl Session {
             persistent_let_origin: Vec::new(),
             cell_byte_ranges: Vec::new(),
             auto_clone: false,
+            let_snapshots: HashMap::new(),
             pending_deps: BTreeMap::new(),
         }
+    }
+
+    /// Inspector for the value-snapshot store. Returns the map of
+    /// persistent-let binding names to their cached `Value`s. Used by
+    /// integration tests that verify side-effecting RHS expressions
+    /// only run once across cells.
+    pub fn let_snapshots(&self) -> &HashMap<String, Value> {
+        &self.let_snapshots
     }
 
     /// Construct a session pre-configured from caller-supplied
@@ -631,7 +658,46 @@ impl Session {
             if capture {
                 interp.captured_output = Some(Vec::new());
             }
+            // Value-snapshot replay: install pre-loaded values for every
+            // persistent-let binding that has a cached value in the
+            // session snapshot. The interpreter's Let arm consults
+            // `let_value_overrides` keyed on the binding name and skips
+            // the RHS when a hit occurs — that's what makes a prior
+            // `let log = read_file(…);` stop re-reading the file on
+            // subsequent cells. Names from the current cell are NOT
+            // overridden (their RHS runs normally and seeds the
+            // snapshot for the *next* cell).
+            for prior_let in &self.persistent_lets {
+                let names = parse_let_binding_names(prior_let);
+                for name in names {
+                    if let Some(v) = self.let_snapshots.get(&name) {
+                        interp.let_value_overrides.insert(name, v.clone());
+                    }
+                }
+            }
+            // Watch every top-level `let` binding in the just-built
+            // synthetic source (both replayed persistent_lets and the
+            // current cell's body). For overridden names the captured
+            // value matches the override; for fresh names this is
+            // what seeds the snapshot for future cells.
+            let mut watch_names: std::collections::HashSet<String> =
+                std::collections::HashSet::new();
+            for prior_let in &self.persistent_lets {
+                for n in parse_let_binding_names(prior_let) {
+                    watch_names.insert(n);
+                }
+            }
+            for entry in scan_top_level_lets(cell_src) {
+                for n in entry.names {
+                    watch_names.insert(n);
+                }
+            }
+            interp.let_snapshot_watch = watch_names;
             interp.run();
+            let captured = std::mem::take(&mut interp.captured_let_values);
+            for (name, val) in captured {
+                self.let_snapshots.insert(name, val);
+            }
             return Ok(WrapperOutcome {
                 stdout: interp.captured_output.take().unwrap_or_default(),
                 errors: Vec::new(),
@@ -1023,6 +1089,18 @@ impl Session {
         if new_names.is_empty() {
             return;
         }
+        // Drop snapshot entries for any name the new cell is about to
+        // re-bind. Without this, a `let x = 5;` (i64) followed by `let
+        // x = "hello";` (String) would re-use the stale i64 snapshot
+        // when cell 2's source-replay form runs in cell 3+. Clearing
+        // here forces the new RHS to evaluate the first time it
+        // appears (it's the *current* cell's let, not a replay, so the
+        // override is empty anyway — but if the user submits the same
+        // cell again later, the override would otherwise kick in with
+        // the stale type).
+        for name in &new_names {
+            self.let_snapshots.remove(name);
+        }
         // Walk persistent_lets and persistent_let_origin in lockstep so
         // the parallel cell-origin tags stay aligned with the slices.
         let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
@@ -1039,10 +1117,15 @@ impl Session {
     }
 
     /// Drop every persistent `let` binding accumulated so far. Items
-    /// (`fn` / `struct` / etc.) and cell history are left intact.
+    /// (`fn` / `struct` / etc.) and cell history are left intact. Also
+    /// clears the value-snapshot cache so a subsequent re-bind starts
+    /// fresh (the source-replay buffer being empty means there's
+    /// nothing to override on the next cell anyway, but the explicit
+    /// clear keeps the two stores in sync).
     pub fn reset_persistent_lets(&mut self) {
         self.persistent_lets.clear();
         self.persistent_let_origin.clear();
+        self.let_snapshots.clear();
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside

@@ -445,9 +445,36 @@ impl<'a> super::Interpreter<'a> {
     fn eval_stmt_cf(&mut self, stmt: &Stmt) -> EvalResult {
         match &stmt.kind {
             StmtKind::Let { pattern, value, .. } => {
-                let val = self.eval_expr_inner(value);
-                if let Some(cf) = self.pending_cf.take() {
-                    return Err(cf);
+                // REPL value-snapshot replay: when the binding pattern is
+                // a single `Binding(name)` and `name` is in
+                // `let_value_overrides`, skip RHS evaluation entirely and
+                // use the pre-loaded value. This is what makes `let x =
+                // read_file("…");` from cell N stop re-reading the file
+                // when cell N+1's source-replay reintroduces the same
+                // `let`. Pattern lets fall through the normal path.
+                let val = if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
+                    if let Some(snapshot) = self.let_value_overrides.get(name) {
+                        snapshot.clone()
+                    } else {
+                        let v = self.eval_expr_inner(value);
+                        if let Some(cf) = self.pending_cf.take() {
+                            return Err(cf);
+                        }
+                        v
+                    }
+                } else {
+                    let v = self.eval_expr_inner(value);
+                    if let Some(cf) = self.pending_cf.take() {
+                        return Err(cf);
+                    }
+                    v
+                };
+                // Capture for snapshot if this name is being watched.
+                // We must clone before `bind_pattern` consumes `val`.
+                if let crate::ast::PatternKind::Binding(name) = &pattern.kind {
+                    if self.let_snapshot_watch.contains(name) {
+                        self.captured_let_values.insert(name.clone(), val.clone());
+                    }
                 }
                 self.bind_pattern(pattern, val);
             }
