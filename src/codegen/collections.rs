@@ -1010,10 +1010,9 @@ impl<'ctx> super::Codegen<'ctx> {
     ///
     /// Without this arm, `compile_index_store` falls through to its
     /// "Index assignment target must be a variable" error, forcing
-    /// users into flat-layout workarounds (see kata 6
-    /// `bench/row_buffers_faster.kara`'s `rows_flat` trick: it
-    /// computes `cur * len + end` by hand because the natural
-    /// `rows[cur][end]` write didn't compile).
+    /// users into a flat-layout workaround: a single `Vec[T]` of size
+    /// `outer*len` with the natural `rows[cur][end]` write rewritten
+    /// by hand as `rows_flat[cur * len + end] = X`.
     pub(super) fn compile_nested_vec_vec_index_store(
         &mut self,
         outer_name: &str,
@@ -1237,8 +1236,8 @@ impl<'ctx> super::Codegen<'ctx> {
         // Nested indexed assignment: `outer[oi][ii] = val` where outer
         // is a named Vec[Vec[T]] binding. Dispatched before the
         // "must be a variable" gate below — without this arm the user
-        // is forced into a flat-layout workaround (see kata 6
-        // bench/row_buffers_faster.kara).
+        // is forced into a flat-layout workaround
+        // (single Vec[T] of size outer*len with hand-computed strides).
         if let ExprKind::Index {
             object: outer,
             index: outer_idx,
