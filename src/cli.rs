@@ -1874,6 +1874,28 @@ impl DiagnosticJson {
                 json_string(&fix.replacement),
             )
             .unwrap();
+            // Line 619 slice 5 — also emit the multi-edit `fixes`
+            // array form per the structured-diagnostic spec. The
+            // single-edit `fix_it` field stays for back-compat with
+            // existing consumers; the array form is what new LLM /
+            // IDE consumers should consume going forward. Each fix
+            // carries a `description` (derived from the lint name
+            // when available, else a generic "apply suggested
+            // edit") and an `edits` array of `{span, replacement}`
+            // entries. v1 ships one entry per fix; the array shape
+            // is forward-compatible with multi-edit fixes when they
+            // land.
+            let description = d.lint_name.unwrap_or("apply suggested edit");
+            write!(
+                entry,
+                ",\"fixes\":[{{\"description\":{},\"edits\":[{{\"span\":{{{},\"offset\":{},\"length\":{}}},\"replacement\":{}}}]}}]",
+                json_string(description),
+                span_to_json(&fix.span, d.filename),
+                fix.span.offset,
+                fix.span.length,
+                json_string(&fix.replacement),
+            )
+            .unwrap();
         }
         if let Some(ref extra) = d.extra_json {
             write!(entry, ",{}", extra).unwrap();
@@ -6253,4 +6275,148 @@ fn cmd_vendor() {
          Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
     );
     process::exit(2);
+}
+
+#[cfg(test)]
+mod diagnostic_json_tests {
+    //! Direct-construction tests for the `DiagnosticJson` JSON
+    //! emitter. The CLI integration tests in `tests/cli.rs`
+    //! exercise the same emitter via real fixtures; these unit tests
+    //! pin the *shape* against a synthetic `DiagEntry` so the
+    //! field-by-field wire format is testable without standing up a
+    //! full pipeline.
+    use super::{DiagEntry, DiagnosticJson};
+    use crate::token::Span;
+    use crate::typechecker::FixIt;
+
+    fn synth_span() -> Span {
+        Span {
+            line: 1,
+            column: 5,
+            offset: 4,
+            length: 0,
+        }
+    }
+
+    #[test]
+    fn fix_it_emits_both_legacy_field_and_fixes_array() {
+        // Line 619 slice 5 pin — a DiagEntry carrying a FixIt
+        // produces both the legacy `fix_it` object (single-edit
+        // form, kept for backward compat) and the new `fixes` array
+        // (the spec's preferred shape per `docs/deferred.md` §
+        // Structured Diagnostics). Both wire from the same FixIt
+        // data; the legacy form has no `description` field, the
+        // array form does.
+        let mut diags = DiagnosticJson::new();
+        let span = synth_span();
+        let fix = FixIt {
+            span: span.clone(),
+            replacement: ", ..".to_string(),
+        };
+        diags.add(DiagEntry {
+            id: "d1",
+            severity: "error",
+            phase: "typecheck",
+            code: "E_NON_EXHAUSTIVE_CROSS_PACKAGE_PATTERN",
+            category: "typecheck",
+            message: "test message",
+            filename: "test.kara",
+            span: &span,
+            suggestion: None,
+            extra_json: None,
+            lint_name: None,
+            fix_it: Some(&fix),
+            class: Some("OTHER"),
+            expected: None,
+            got: None,
+        });
+        let json = diags.to_json_array();
+        // Legacy field still present.
+        assert!(
+            json.contains("\"fix_it\":"),
+            "expected legacy fix_it field; got: {json}"
+        );
+        // New array form.
+        assert!(
+            json.contains("\"fixes\":["),
+            "expected fixes array; got: {json}"
+        );
+        // Array entry carries description + edits.
+        assert!(json.contains("\"description\":"));
+        assert!(json.contains("\"edits\":[{"));
+        // Edits entry carries span + replacement.
+        assert!(json.contains("\"replacement\":\", ..\""));
+        // No fix-it on plain diagnostics — confirm the field is
+        // omitted when fix_it: None.
+    }
+
+    #[test]
+    fn no_fix_it_omits_both_fix_fields() {
+        // When `fix_it: None`, neither the legacy `fix_it` field nor
+        // the new `fixes` array should appear in the JSON — keeps
+        // the lean shape that consumers expect for diagnostics
+        // without machine-applicable patches.
+        let mut diags = DiagnosticJson::new();
+        let span = synth_span();
+        diags.add(DiagEntry {
+            id: "d1",
+            severity: "error",
+            phase: "typecheck",
+            code: "E_TYPE_MISMATCH",
+            category: "typecheck",
+            message: "test",
+            filename: "test.kara",
+            span: &span,
+            suggestion: None,
+            extra_json: None,
+            lint_name: None,
+            fix_it: None,
+            class: Some("TYPE_MISMATCH"),
+            expected: Some("i32"),
+            got: Some("String"),
+        });
+        let json = diags.to_json_array();
+        assert!(!json.contains("\"fix_it\":"));
+        assert!(!json.contains("\"fixes\":"));
+        // Typed fields are still present.
+        assert!(json.contains("\"class\":\"TYPE_MISMATCH\""));
+        assert!(json.contains("\"expected\":\"i32\""));
+        assert!(json.contains("\"got\":\"String\""));
+    }
+
+    #[test]
+    fn fixes_array_description_falls_back_to_lint_name() {
+        // When the diagnostic carries a `lint_name`, the fix's
+        // description uses it instead of the generic "apply
+        // suggested edit". Gives LLM/IDE consumers a recognisable
+        // anchor for which rule the fix derives from.
+        let mut diags = DiagnosticJson::new();
+        let span = synth_span();
+        let fix = FixIt {
+            span: span.clone(),
+            replacement: "_".to_string(),
+        };
+        diags.add(DiagEntry {
+            id: "d1",
+            severity: "warning",
+            phase: "typecheck",
+            code: "W0246",
+            category: "typecheck",
+            message: "test",
+            filename: "test.kara",
+            span: &span,
+            suggestion: None,
+            extra_json: None,
+            lint_name: Some("missing_non_exhaustive"),
+            fix_it: Some(&fix),
+            class: Some("LINT_WARNING"),
+            expected: None,
+            got: None,
+        });
+        let json = diags.to_json_array();
+        assert!(
+            json.contains("\"description\":\"missing_non_exhaustive\""),
+            "fix description should adopt lint_name; got: {json}"
+        );
+    }
 }
