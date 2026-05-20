@@ -41,7 +41,9 @@ use rustyline::DefaultEditor;
 
 use crate::interpreter::Value;
 
+mod display;
 mod util;
+pub use display::{render_display, render_text_plain, DisplayBundle};
 use util::*;
 
 /// Caller-supplied options for `run_with_options` — mirrors the flags
