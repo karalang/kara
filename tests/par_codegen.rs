@@ -2791,6 +2791,107 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_memory_bound_body_skips_par_reduce() {
+        // kata-153's find_min shape — body has an Index (nums[i]) and
+        // only minimal compute (cond + assign), no function calls. The
+        // memory-bound gate (slice: memory-bound rejection, 2026-05-20)
+        // detects this and skips the lowering, falling back to
+        // sequential codegen. Without this gate, the runtime cost gate
+        // would dispatch (per_iter * iter_total = 10M > 180k threshold)
+        // for no wall-clock benefit (the workload is bandwidth-bound),
+        // paying ~3.4× User-CPU and +262 KiB binary.
+        let src = r#"
+fn find_min(nums: Slice[i64]) -> i64 {
+    let n = nums.len();
+    let mut m = nums[0];
+    for i in 1i64..n {
+        let x = nums[i];
+        if x < m {
+            m = x;
+        }
+    }
+    m
+}
+fn main() {
+    let mut v: Vec[i64] = Vec.filled(10i64, 5i64);
+    println(find_min(v.as_slice()));
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "memory-bound find_min body (Index + minimal compute, no call) should be \
+             rejected by the memory-bound gate; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_memory_bound_gate_allows_substantial_call() {
+        // Mirror of the memory-bound test: body has Index AND a free-fn
+        // Call. The call signals "compute work beyond the memory access"
+        // — the gate doesn't fire, the lowering proceeds (subject to
+        // the cost-model gates). Test asserts par_reduce IS emitted to
+        // pin that has-call escapes the memory-bound rejection.
+        let src = r#"
+fn heavy(x: i64) -> i64 {
+    let mut acc: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < x {
+        acc = acc + k;
+        k = k + 1i64;
+    }
+    acc
+}
+fn main() {
+    let v: Vec[i64] = Vec.filled(1000i64, 5i64);
+    let s = v.as_slice();
+    let mut sum: i64 = 0i64;
+    for k in 0i64..3000i64 {
+        sum = sum + s[k % 1000i64] + heavy(50i64);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        // The body has both Index (s[k % 1000]) and a substantial Call
+        // (heavy(50)) — the call signal trumps the index signal, so
+        // the memory-bound gate doesn't fire and the cost-model lets
+        // it through.
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "body with both Index and substantial Call should bypass memory-bound gate; got:\n{ir}"
+        );
+    }
+
+    #[test]
     fn test_ir_cost_gate_recursive_callee_terminates_via_depth_cap() {
         // Indirect recursion `a() -> b()`, `b() -> a()` — the inliner
         // must terminate (not infinite-loop) and fall back to the

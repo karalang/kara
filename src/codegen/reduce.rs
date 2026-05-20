@@ -113,6 +113,30 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
+        // Memory-bound gate (slice: memory-bound rejection, 2026-05-20).
+        // Surfaced by the Min/Max slice's kata-153 measurement: the
+        // existing cost gates (3b.5 compile-time + 3b.8 runtime-time)
+        // are compute-units-aware but not memory-bandwidth-aware. For
+        // a body that's mostly memory-streaming (`let x = nums[i]; if
+        // x < m { m = x; }`), the compute-unit estimate looks
+        // parallelizable (10M units >> 180k threshold for N=2M) but the
+        // wall-clock is bottlenecked on memory bandwidth — splitting the
+        // work across workers doesn't reduce wall, but does pay the
+        // dispatch overhead + extra User-CPU (kata-153 saw 3.5ms → 11.8ms
+        // User-CPU with no wall improvement, plus a +262 KiB binary
+        // from linking par_reduce). Heuristic: skip the lowering when
+        // the body has at least one Index/FieldAccess (memory access)
+        // AND no substantial function/method call (a substantial call
+        // suggests compute work beyond the memory access). Trivial
+        // accessor MethodCalls — `len`, `is_empty`, `as_slice`,
+        // `as_str` — don't count as substantial; they're just shape
+        // queries on the collection. The gate fires *before* the
+        // cost-model gates so the per-iter estimate isn't wasted on a
+        // loop we'll reject anyway.
+        if body_is_memory_bound(&shape.body) {
+            return Ok(None);
+        }
+
         // Estimate per-iter body cost once — used for both the codegen-
         // time gate (literal-K loops) below and the runtime-time gate
         // (slice 3b.8) via the descriptor's `per_iter_cost_units` field.
@@ -1802,4 +1826,188 @@ fn expr_has_early_exit(expr: &Expr) -> bool {
         ExprKind::Tuple(elems) => elems.iter().any(expr_has_early_exit),
         _ => false,
     }
+}
+
+// ── Memory-bound rejection (2026-05-20) ──────────────────────────────
+//
+// The cost-model gates count compute units (arithmetic, branches,
+// estimated callee bodies), but treat each memory access (`Index`,
+// `FieldAccess` on a collection) at the same low weight as a single
+// compute op. For a body that's dominated by memory reads with little
+// compute beside it (kata-153's `find_min` inner `let x = nums[i];
+// if x < m { m = x; }`), the cost-units estimate looks parallelizable
+// (~10M units total for N=2M) but the wall-clock is bandwidth-bound:
+// every worker fights for the same memory channel, splitting the
+// scan across cores doesn't reduce wall-clock, and the par_reduce
+// dispatch adds both User-CPU cost (workers spinning + dispatching
+// across cores) and binary size (+262 KiB to link the runtime).
+//
+// Heuristic: skip the lowering when the body's per-iter shape is
+// `read + minimal compute` (at least one Index/FieldAccess, no
+// substantial function call). A "substantial" call is any free-fn
+// Call or any MethodCall whose method isn't a known trivial accessor
+// (`len`, `is_empty`, `as_slice`, `as_str`) — these accessors just
+// shape-query the collection and don't add real per-iter compute.
+// Bodies with a substantial call (e.g. `sum + reverse(inputs[k])`
+// in kata-7's outer loop) bypass this gate because the call usually
+// contributes enough compute to amortize the dispatch overhead
+// regardless of the indexed read alongside it.
+//
+// False-positive risk: pure compute-bound loops with no memory access
+// pass through (no Index → memory_count == 0 → gate doesn't fire),
+// which is correct. False-negative risk: a body with a heavy Call
+// + heavy Index (e.g., `f(big_index_chain)`) gets parallelized even
+// though it's probably memory-bound — the call carries the gate over.
+// Accepting this false-negative direction is the safer bias: missing
+// a parallelism win on a hybrid workload is recoverable (we can land
+// a smarter detector later), but over-parallelizing memory-bound work
+// pays cost every run.
+
+fn body_is_memory_bound(body: &Block) -> bool {
+    let mut detector = MemoryBoundDetector {
+        memory_count: 0,
+        substantial_call: false,
+    };
+    detector.visit_body(body);
+    detector.memory_count > 0 && !detector.substantial_call
+}
+
+struct MemoryBoundDetector {
+    memory_count: u32,
+    substantial_call: bool,
+}
+
+impl MemoryBoundDetector {
+    fn visit_body(&mut self, body: &Block) {
+        for stmt in &body.stmts {
+            self.visit_stmt(stmt);
+        }
+        if let Some(e) = &body.final_expr {
+            self.visit_expr(e);
+        }
+    }
+
+    fn visit_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => self.visit_expr(value),
+            StmtKind::Assign { target, value } => {
+                self.visit_expr(target);
+                self.visit_expr(value);
+            }
+            StmtKind::CompoundAssign { target, value, .. } => {
+                self.visit_expr(target);
+                self.visit_expr(value);
+            }
+            StmtKind::Expr(e) => self.visit_expr(e),
+            StmtKind::LetUninit { .. } => {}
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => self.visit_body(body),
+        }
+    }
+
+    fn visit_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Index { object, index } => {
+                self.memory_count = self.memory_count.saturating_add(1);
+                self.visit_expr(object);
+                self.visit_expr(index);
+            }
+            ExprKind::FieldAccess { object, .. } => {
+                self.memory_count = self.memory_count.saturating_add(1);
+                self.visit_expr(object);
+            }
+            ExprKind::Call { callee, args } => {
+                // The lowering pass rewrites every primitive binop /
+                // comparison into a `Call(Path([type, op_method]), [a, b])`
+                // shape (e.g. `x < m` → `Call(Path(["i64", "lt"]), [x, m])`).
+                // These are intrinsic operator dispatches, not real
+                // function calls — counting them as `substantial_call`
+                // would defeat the memory-bound gate for every body that
+                // has any arithmetic or comparison post-lowering (which
+                // is every kata's body). Filter those out before tagging
+                // the call as substantial.
+                if !is_lowered_primitive_op_call(callee) {
+                    self.substantial_call = true;
+                }
+                self.visit_expr(callee);
+                for arg in args {
+                    self.visit_expr(&arg.value);
+                }
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                if !is_trivial_accessor_method(method) {
+                    self.substantial_call = true;
+                }
+                self.visit_expr(object);
+                for arg in args {
+                    self.visit_expr(&arg.value);
+                }
+            }
+            ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
+                self.visit_expr(left);
+                self.visit_expr(right);
+            }
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                self.visit_expr(operand);
+            }
+            ExprKind::Cast { expr: inner, .. } => self.visit_expr(inner),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.visit_expr(condition);
+                self.visit_body(then_block);
+                if let Some(e) = else_branch {
+                    self.visit_expr(e);
+                }
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.visit_body(b),
+            // Other shapes (literals, identifiers, paths, etc.) contribute
+            // no memory access or call signal.
+            _ => {}
+        }
+    }
+}
+
+fn is_trivial_accessor_method(method: &str) -> bool {
+    matches!(
+        method,
+        "len" | "is_empty" | "as_slice" | "as_str" | "as_bytes"
+    )
+}
+
+/// Recognize the lowering-pass-emitted shape for a primitive operator
+/// dispatch — `Call(Path([type, op_method]), [a, b])` where `op_method`
+/// is one of the standard arithmetic / comparison / bitwise / shift
+/// methods. These are intrinsic op calls and should not count as
+/// "substantial" callees for the memory-bound gate.
+fn is_lowered_primitive_op_call(callee: &Expr) -> bool {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return false;
+    };
+    if segments.len() != 2 {
+        return false;
+    }
+    matches!(
+        segments[1].as_str(),
+        // Arithmetic
+        "add" | "sub" | "mul" | "div" | "rem" | "neg"
+        // Comparison
+        | "eq" | "ne" | "lt" | "le" | "gt" | "ge"
+        // Bitwise
+        | "bitor" | "bitand" | "bitxor" | "bitnot"
+        // Shifts
+        | "shl" | "shr"
+        // Min/Max — added by the combined Min/Max slice (2026-05-20)
+        | "min" | "max"
+    )
 }
