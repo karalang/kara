@@ -218,6 +218,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut concurrency_report = false;
     let mut offline = false;
     let mut enable_hot_swap = false;
+    let mut no_proxy = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -232,6 +233,8 @@ fn parse_build_command(args: &[String]) -> Command {
             offline = true;
         } else if arg == "--enable-hot-swap" {
             enable_hot_swap = true;
+        } else if arg == "--no-proxy" {
+            no_proxy = true;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -258,12 +261,14 @@ fn parse_build_command(args: &[String]) -> Command {
             concurrency_report,
             offline,
             enable_hot_swap,
+            no_proxy,
             lint_overrides,
         },
         None => Command::BuildProject {
             output,
             offline,
             enable_hot_swap,
+            no_proxy,
         },
     }
 }
@@ -316,24 +321,37 @@ fn parse_install_command(args: &[String]) -> Command {
 }
 
 fn parse_vendor_command(args: &[String]) -> Command {
-    if let Some(arg) = args.get(2) {
-        eprintln!("error: `karac vendor` takes no arguments (got '{arg}')");
-        process::exit(1);
+    let mut no_proxy = false;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--no-proxy" => no_proxy = true,
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac vendor`");
+                process::exit(1);
+            }
+            other => {
+                eprintln!("error: `karac vendor` takes no positional arguments (got '{other}')");
+                process::exit(1);
+            }
+        }
     }
-    Command::Vendor
+    Command::Vendor { no_proxy }
 }
 
 fn parse_update_command(args: &[String]) -> Command {
-    // `karac update [<pkg>] [--output=json|jsonl]` — at most one positional.
-    // Slice 1 of line 843 parses both forms; slice 2 wires the surgical
-    // <pkg> validation against the resolution.
+    // `karac update [<pkg>] [--output=json|jsonl] [--no-proxy]` — at most
+    // one positional. Slice 1 of line 843 parses both forms; slice 2
+    // wires the surgical <pkg> validation against the resolution.
     let mut package: Option<String> = None;
     let mut output = OutputMode::Text;
+    let mut no_proxy = false;
     for arg in args.iter().skip(2) {
         if arg == "--output=json" {
             output = OutputMode::Json;
         } else if arg == "--output=jsonl" {
             output = OutputMode::Jsonl;
+        } else if arg == "--no-proxy" {
+            no_proxy = true;
         } else if let Some(rest) = arg.strip_prefix("--output=") {
             eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
             process::exit(1);
@@ -347,7 +365,11 @@ fn parse_update_command(args: &[String]) -> Command {
             package = Some(arg.clone());
         }
     }
-    Command::Update { package, output }
+    Command::Update {
+        package,
+        output,
+        no_proxy,
+    }
 }
 
 /// Try to consume a lint-level CLI flag at `args[*i]`. Returns

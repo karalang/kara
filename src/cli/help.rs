@@ -161,6 +161,13 @@ OPTIONS:
                             forward-compatible with the post-v1 continuous-
                             PGO + shared-object reload story. Off by default.
                             Incompatible with embedded / kernel profiles.
+    --no-proxy              Opt out of the registry proxy at
+                            proxy.kara-lang.org (override the URL with the
+                            KARAC_REGISTRY_PROXY env var). Registry / git
+                            deps would then have to be fetched
+                            direct-from-source — a v1.1.x carve-out; today
+                            the flag is honored at the parse layer and
+                            surfaces a confirmation note.
     -h, --help              Print this message"
         }
         "query" => {
@@ -438,16 +445,21 @@ OPTIONS:
 karac vendor - Copy resolved dependencies into ./vendor/
 
 USAGE:
-    karac vendor
+    karac vendor [options]
 
 Air-gap workflow for regulated environments and offline CI. Pairs with
 `karac build --offline`, which reads dependencies only from ./vendor/
 and refuses any network access.
 
-v1 status: the subcommand parses cleanly but the resolver wiring lands
-alongside the dependency-resolution slice. Pair the canonical flag
-shape (`karac vendor` + `karac build --offline`) into your CI scripts
-today; the implementation swap is non-breaking."
+OPTIONS:
+    --no-proxy        Opt out of the registry proxy at
+                      proxy.kara-lang.org. v1.1.x carve-out; the flag
+                      is plumbed today and the path-dep copy is
+                      unaffected.
+    -h, --help        Print this message
+
+Path-deps are copied verbatim today; registry / git vendoring lands
+alongside the registry-proxy fetch surface (tracker line 851)."
         }
         "update" => {
             "\
@@ -459,6 +471,9 @@ USAGE:
 OPTIONS:
     --output=json     Structured JSON output on stdout
     --output=jsonl    Streaming JSONL output on stdout
+    --no-proxy        Opt out of the registry proxy at
+                      proxy.kara-lang.org. v1.1.x carve-out; the flag
+                      is plumbed today.
     -h, --help        Print this message
 
 Bare form refreshes every locked package; surgical form targets one

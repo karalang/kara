@@ -3394,7 +3394,7 @@ fn test_vendor_rejects_extra_args() {
     let out = karac_bin().args(["vendor", "extra"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(stderr.contains("takes no arguments"));
+    assert!(stderr.contains("takes no positional arguments"));
 }
 
 #[test]
@@ -5253,5 +5253,197 @@ shared = { workspace = true }
     assert!(
         stderr.contains("error[E_WORKSPACE_DEP_OUTSIDE_WORKSPACE]"),
         "expected E_WORKSPACE_DEP_OUTSIDE_WORKSPACE; stderr={stderr}",
+    );
+}
+
+// ── --no-proxy plumbing (slice 2 of phase-5 line 851) ────────────────
+//
+// The flag is parse-honored on `karac build`, `karac update`, and
+// `karac vendor` today. A confirmation `note:` line is emitted when
+// `--no-proxy` is set; absent the flag, no proxy-related text appears
+// in stderr (the existing registry-dep-unsupported warning carries any
+// status). v1.1.x lands the live HTTP fetch — until then the surface
+// is the flag + the note so CI scripts can already pin against the
+// final name.
+
+fn no_proxy_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-no-proxy-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+fn write_no_proxy_path_dep_project(root: &std::path::Path) {
+    std::fs::create_dir_all(root.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("vendor/child/src")).unwrap();
+    std::fs::write(
+        root.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "vendor/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        root.join("vendor/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(root.join("vendor/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+}
+
+#[test]
+fn test_no_proxy_flag_parses_on_build() {
+    let tmp = no_proxy_tempdir("build-parse");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("build")
+        .arg("--no-proxy")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        stderr.contains("--no-proxy active"),
+        "expected the --no-proxy confirmation note; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("proxy.kara-lang.org"),
+        "the note should mention the proxy URL; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_no_proxy_flag_parses_on_update() {
+    let tmp = no_proxy_tempdir("update-parse");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("update")
+        .arg("--no-proxy")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac update --no-proxy should succeed on a path-dep project; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("--no-proxy active"),
+        "expected the --no-proxy confirmation note on update; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_no_proxy_flag_parses_on_vendor() {
+    let tmp = no_proxy_tempdir("vendor-parse");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("vendor")
+        .arg("--no-proxy")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac vendor --no-proxy should succeed; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("--no-proxy active"),
+        "expected the --no-proxy confirmation note on vendor; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_no_proxy_absent_does_not_emit_note() {
+    // Regression pin: the proxy note must only fire when --no-proxy is
+    // explicitly set. The default behavior is silent so existing CI
+    // output doesn't churn.
+    let tmp = no_proxy_tempdir("absent");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("update")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !stderr.contains("--no-proxy"),
+        "no proxy mention expected when flag absent; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_no_proxy_env_var_overrides_url_in_note() {
+    // Pin: when KARAC_REGISTRY_PROXY is set, the note must render the
+    // override URL rather than the default. We assert the substring so
+    // a future tweak to the surrounding sentence doesn't break.
+    let tmp = no_proxy_tempdir("env-override");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("update")
+        .arg("--no-proxy")
+        .env("KARAC_REGISTRY_PROXY", "https://mirror.example.com")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        stderr.contains("https://mirror.example.com"),
+        "expected the env-override URL in the note; got: {stderr}",
+    );
+    assert!(
+        !stderr.contains("proxy.kara-lang.org"),
+        "default URL should not appear when env var overrides; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_vendor_rejects_unknown_flag() {
+    // Slice 2 stiffens parse_vendor_command: the only recognized flag
+    // is --no-proxy. An unknown --foo errors with a clear message.
+    let tmp = no_proxy_tempdir("unknown-flag");
+    write_no_proxy_path_dep_project(&tmp);
+
+    let out = karac_bin()
+        .arg("vendor")
+        .arg("--made-up")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(!out.status.success(), "should reject unknown flag");
+    assert!(
+        stderr.contains("unknown flag '--made-up'"),
+        "expected unknown-flag error; got: {stderr}",
     );
 }

@@ -108,6 +108,14 @@ pub enum Command {
         /// codegen consumption lands in slice 2 of phase-7 line 5;
         /// slice 1 plumbs the flag and gates incompatible profiles.
         enable_hot_swap: bool,
+        /// `--no-proxy`: opt out of the registry proxy at
+        /// `proxy.kara-lang.org` (or whatever `KARAC_REGISTRY_PROXY`
+        /// names). Registry / git deps would then have to be fetched
+        /// direct-from-source — a v1.1.x carve-out; today the flag
+        /// is honored at the parse layer and surfaces a confirmation
+        /// `note:` so CI scripts pinning to the flag can already
+        /// scaffold against the final name.
+        no_proxy: bool,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -125,6 +133,8 @@ pub enum Command {
         /// dynamic-symbol-resolution machinery hot-swap requires, so
         /// the combination hard-errors before codegen.
         enable_hot_swap: bool,
+        /// `--no-proxy` — see `Build.no_proxy` above.
+        no_proxy: bool,
     },
     Query {
         kind: QueryKind,
@@ -204,10 +214,13 @@ pub enum Command {
     },
     /// Copy all resolved dependencies into a project-root `vendor/`
     /// directory. Subsequent `karac build --offline` reads from
-    /// `vendor/` and refuses network access. v1 surface — the resolver
-    /// wiring lands in a follow-up; this arm currently emits a
-    /// "not yet wired" diagnostic.
-    Vendor,
+    /// `vendor/` and refuses network access.
+    Vendor {
+        /// `--no-proxy` — see `Build.no_proxy`. Registry-proxy fetch
+        /// is a v1.1.x follow-up; today the flag is plumbed and the
+        /// path-dep copy is unaffected.
+        no_proxy: bool,
+    },
     /// Re-run the resolver and rewrite `kara.lock`. Bare form refreshes
     /// every locked package; surgical form (`karac update <pkg>`) targets
     /// one package. v1.1 with path-deps only: bumping isn't meaningful
@@ -217,6 +230,8 @@ pub enum Command {
     Update {
         package: Option<String>,
         output: OutputMode,
+        /// `--no-proxy` — see `Build.no_proxy`.
+        no_proxy: bool,
     },
     /// Emit the project's public API surface as JSONL on stdout. One record
     /// per exported item (`fn`, `struct`, `enum`, `trait`, `const`,
@@ -369,6 +384,7 @@ pub fn execute(cmd: Command) {
             concurrency_report,
             offline,
             enable_hot_swap,
+            no_proxy,
             lint_overrides,
         } => cmd_build(
             &file,
@@ -376,13 +392,15 @@ pub fn execute(cmd: Command) {
             concurrency_report,
             offline,
             enable_hot_swap,
+            no_proxy,
             lint_overrides,
         ),
         Command::BuildProject {
             output,
             offline,
             enable_hot_swap,
-        } => cmd_build_project(output, offline, enable_hot_swap),
+            no_proxy,
+        } => cmd_build_project(output, offline, enable_hot_swap, no_proxy),
         Command::Query {
             kind,
             file,
@@ -402,8 +420,12 @@ pub fn execute(cmd: Command) {
         Command::Doc => cmd_doc(),
         Command::Clean { global } => cmd_clean(global),
         Command::Install { spec } => cmd_install(&spec),
-        Command::Vendor => cmd_vendor(),
-        Command::Update { package, output } => cmd_update(package.as_deref(), output),
+        Command::Vendor { no_proxy } => cmd_vendor(no_proxy),
+        Command::Update {
+            package,
+            output,
+            no_proxy,
+        } => cmd_update(package.as_deref(), output, no_proxy),
         Command::Explain { target, format } => explain::render(&target, format),
         Command::Catalog { file } => cmd_catalog(&file),
     }
@@ -3413,6 +3435,7 @@ fn cmd_build(
     concurrency_report: bool,
     offline: bool,
     enable_hot_swap: bool,
+    no_proxy: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     if offline {
@@ -3426,6 +3449,8 @@ fn cmd_build(
         );
     }
     let _ = offline;
+    emit_no_proxy_note(no_proxy);
+    let _ = no_proxy;
     #[cfg(feature = "llvm")]
     {
         let source = read_source(filename);
@@ -3685,13 +3710,15 @@ fn effect_set_to_display(
 /// (`E0223`), and runs cross-module name resolution per module
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
-fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool) {
+fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, no_proxy: bool) {
     if offline {
         eprintln!(
             "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
         );
     }
     let _ = offline;
+    emit_no_proxy_note(no_proxy);
+    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -5048,6 +5075,25 @@ fn emit_dep_diagnostic(
             );
         }
     }
+}
+
+/// Emit a one-line confirmation `note:` when `--no-proxy` is set. The note
+/// reports both the active proxy URL (so the operator sees what `karac`
+/// would have consulted) and a pointer at the v1.1.x registry-proxy
+/// follow-up. Silent when `--no-proxy` is absent — the proxy is the
+/// default and the existing registry-dep-unsupported warning carries the
+/// status. Emitted on the first cmd_* entry point so it is consistent
+/// across `build`, `update`, and `vendor`.
+fn emit_no_proxy_note(no_proxy: bool) {
+    if !no_proxy {
+        return;
+    }
+    let config =
+        crate::registry_proxy::ProxyConfig::from_env(crate::registry_proxy::ProxyMode::Disabled);
+    eprintln!(
+        "note: --no-proxy active; registry deps will not consult the proxy at {} (registry-proxy fetch ships in v1.1.x)",
+        config.url
+    );
 }
 
 fn emit_walker_error(e: &walker::WalkerError, output: OutputMode) {
@@ -6799,7 +6845,9 @@ fn cmd_install(spec: &str) {
 // flag pairing (`vendor` + `build --offline`) so air-gap CI scripts
 // can be scaffolded against the final surface today.
 
-fn cmd_vendor() {
+fn cmd_vendor(no_proxy: bool) {
+    emit_no_proxy_note(no_proxy);
+    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -6936,7 +6984,9 @@ fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io:
 //
 // Tracker: docs/implementation_checklist/phase-5-diagnostics.md line 843.
 
-fn cmd_update(package: Option<&str>, output: OutputMode) {
+fn cmd_update(package: Option<&str>, output: OutputMode, no_proxy: bool) {
+    emit_no_proxy_note(no_proxy);
+    let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
