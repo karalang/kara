@@ -37,9 +37,11 @@
 //! existing sequential codegen path; the analyzer tag is preserved,
 //! ready for broader lowering when those follow-ups land.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use crate::ast::{BinOp, Block, CompoundOp, Expr, ExprKind, PatternKind, Stmt, StmtKind};
+use crate::ast::{
+    BinOp, Block, CompoundOp, Expr, ExprKind, Function, Item, PatternKind, Program, Stmt, StmtKind,
+};
 use crate::concurrency::{LoopReduction, ReductionOp};
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
@@ -116,8 +118,15 @@ impl<'ctx> super::Codegen<'ctx> {
         // (slice 3b.8) via the descriptor's `per_iter_cost_units` field.
         // The body walker bottoms at 1, never 0, so a sentinel-0 in the
         // emitted descriptor only happens if codegen-side estimation is
-        // intentionally skipped (it isn't here).
-        let per_iter_cost = estimate_body_cost_units(&shape.body);
+        // intentionally skipped (it isn't here). Uses `program_snapshot`
+        // to thread a free-fn body lookup into the estimator so calls
+        // into known callees fold the callee's body cost into the per-
+        // iter total instead of counting them as the opaque CALL_COST_UNITS
+        // constant (slice: cost-gate fn-call body cost, 2026-05-20).
+        let per_iter_cost = match &self.program_snapshot {
+            Some(prog) => CostEstimator::new(prog).estimate_body(&shape.body),
+            None => estimate_body_cost_units(&shape.body),
+        };
 
         // Cost-model gate (slice 3b.5, 2026-05-20). When the iteration
         // count is statically known and the per-iter cost estimate puts
@@ -1160,56 +1169,365 @@ fn const_eval_int_literal(expr: &Expr) -> Option<i64> {
     }
 }
 
-/// Estimate the per-iter body cost in "1 unit ≈ 1 ns." Recursive walk of
-/// the AST with weights chosen to bias toward the actual code shape:
-/// arithmetic / comparison / cast each cost a small constant; function
-/// and method calls dominate (`CALL_COST_UNITS`) because the runtime
-/// can't see through to the callee at codegen time; control-flow takes
-/// the max-arm path (conservative for cost, so the gate over-counts and
+/// Codegen-time per-iter body-cost estimator. Walks the AST with weights
+/// chosen to bias toward the actual code shape: arithmetic / comparison
+/// / cast each cost a small constant; function and method calls fall
+/// back to `CALL_COST_UNITS` for opaque callees but recursively estimate
+/// the callee's body when it's a known free function in this program
+/// (up to `INLINE_DEPTH_CAP` levels deep). Control-flow takes the
+/// max-arm path (conservative for cost, so the gate over-counts and
 /// thus over-parallelizes — acceptable bias for v1). Nested loops use a
 /// fixed multiplier (`NESTED_LOOP_MULTIPLIER`) since the inner-trip
 /// count is unknown at codegen time.
-fn estimate_body_cost_units(body: &Block) -> u64 {
-    let mut total: u64 = 0;
-    for stmt in &body.stmts {
-        total = total.saturating_add(estimate_stmt_cost_units(stmt));
-    }
-    if let Some(e) = &body.final_expr {
-        total = total.saturating_add(estimate_expr_cost_units(e));
-    }
-    // Bound at 1 so a trivially-empty body (no stmts, no final expr —
-    // analyzer rejects this earlier but the codegen helper stays safe)
-    // doesn't gate out every loop at K * 0 = 0 < threshold.
-    total.max(1)
+///
+/// The inlining-aware path (slice: cost-gate fn-call body cost,
+/// 2026-05-20) addresses the constant-10 underestimate surfaced by the
+/// post-3b.10 re-bench sweep: `for _ in 0..K { sum += f(big_input); }`
+/// shapes scored as `K * 10` cost units regardless of what `f` did,
+/// so K=10 outer reductions over heavy callees (kata-121's max_profit,
+/// kata-153's find_min) failed the cost gate and ran sequentially. By
+/// recursing into resolvable callees the gate now reflects the callee's
+/// structural cost (number of stmts, branches, inner loops) rather than
+/// a constant.
+struct CostEstimator<'a> {
+    /// Free-function bodies keyed by source name. Built once from
+    /// `Program.items` at construction; method bodies are not included
+    /// at v1 (`MethodCall` and 2+-segment `Path` calls keep the
+    /// `CALL_COST_UNITS` fallback — adding receiver-type-resolved
+    /// method lookup needs typechecker info threaded in, deferred).
+    fn_bodies: HashMap<String, &'a Function>,
+    /// Current inlining recursion depth. Bounded by `INLINE_DEPTH_CAP`
+    /// to prevent unbounded recursion on indirect-recursive call graphs
+    /// (`A → B → A`) without needing a visited-set: the depth alone is
+    /// a safe upper bound because each recursive call increments it.
+    depth: u32,
 }
 
-fn estimate_stmt_cost_units(stmt: &Stmt) -> u64 {
-    match &stmt.kind {
-        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
-            1u64.saturating_add(estimate_expr_cost_units(value))
+impl<'a> CostEstimator<'a> {
+    /// Recursion cap for body inlining. Three levels = the caller, one
+    /// callee, one grand-callee — enough to estimate a `sum += f(...)`
+    /// shape that hides a real-work-doing loop inside `f`, without
+    /// blowing up on deep call chains. Past the cap, calls fall back
+    /// to `CALL_COST_UNITS` so the estimator always terminates.
+    const INLINE_DEPTH_CAP: u32 = 3;
+
+    fn new(program: &'a Program) -> Self {
+        let mut fn_bodies = HashMap::new();
+        for item in &program.items {
+            if let Item::Function(f) = item {
+                fn_bodies.insert(f.name.clone(), f);
+            }
         }
-        StmtKind::Assign { target, value } => 1u64
-            .saturating_add(estimate_expr_cost_units(target))
-            .saturating_add(estimate_expr_cost_units(value)),
-        StmtKind::CompoundAssign { target, value, .. } => 2u64
-            .saturating_add(estimate_expr_cost_units(target))
-            .saturating_add(estimate_expr_cost_units(value)),
-        StmtKind::Expr(e) => estimate_expr_cost_units(e),
-        StmtKind::LetUninit { .. } => 1,
-        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            // Defer bodies run at scope exit, not per-iter — but in the
-            // worker-fn the worker scope IS the iter scope (one alloca
-            // frame), so count once. Conservative; the slice-3b worker-
-            // fn synth pushes one cleanup frame per call anyway.
-            estimate_body_cost_units(body)
+        Self {
+            fn_bodies,
+            depth: 0,
         }
     }
+
+    /// Body-cost entry point. Per-iter cost in "1 unit ≈ 1 ns" —
+    /// matches the calibration unit of `DISPATCH_OVERHEAD_PER_CALL_UNITS`
+    /// so threshold math stays apples-to-apples.
+    fn estimate_body(&mut self, body: &Block) -> u64 {
+        let mut total: u64 = 0;
+        for stmt in &body.stmts {
+            total = total.saturating_add(self.estimate_stmt(stmt));
+        }
+        if let Some(e) = &body.final_expr {
+            total = total.saturating_add(self.estimate_expr(e));
+        }
+        // Bound at 1 so a trivially-empty body (no stmts, no final expr
+        // — analyzer rejects this earlier but the helper stays safe)
+        // doesn't gate out every loop at K * 0 = 0 < threshold.
+        total.max(1)
+    }
+
+    fn estimate_stmt(&mut self, stmt: &Stmt) -> u64 {
+        match &stmt.kind {
+            StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+                1u64.saturating_add(self.estimate_expr(value))
+            }
+            StmtKind::Assign { target, value } => 1u64
+                .saturating_add(self.estimate_expr(target))
+                .saturating_add(self.estimate_expr(value)),
+            StmtKind::CompoundAssign { target, value, .. } => 2u64
+                .saturating_add(self.estimate_expr(target))
+                .saturating_add(self.estimate_expr(value)),
+            StmtKind::Expr(e) => self.estimate_expr(e),
+            StmtKind::LetUninit { .. } => 1,
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                // Defer bodies run at scope exit, not per-iter — but in
+                // the worker-fn the worker scope IS the iter scope (one
+                // alloca frame), so count once. Conservative; the
+                // slice-3b worker-fn synth pushes one cleanup frame per
+                // call anyway.
+                self.estimate_body(body)
+            }
+        }
+    }
+
+    /// Resolve a Call's callee identifier to a free-fn body cost when
+    /// possible. Returns `CALL_COST_UNITS` when the callee shape isn't
+    /// a known free-fn name, or when the recursion depth cap is hit.
+    /// Caller is responsible for adding arg costs separately — this
+    /// returns the body-walk cost only (mirrors the prior CALL_COST_UNITS
+    /// semantics, which represented the callee body opaquely).
+    fn call_body_cost(&mut self, callee: &Expr) -> u64 {
+        if self.depth >= Self::INLINE_DEPTH_CAP {
+            return CALL_COST_UNITS;
+        }
+        let name = match &callee.kind {
+            ExprKind::Identifier(n) => Some(n.clone()),
+            ExprKind::Path { segments, .. } if segments.len() == 1 => Some(segments[0].clone()),
+            _ => None,
+        };
+        let Some(name) = name else {
+            return CALL_COST_UNITS;
+        };
+        let Some(f) = self.fn_bodies.get(&name).copied() else {
+            return CALL_COST_UNITS;
+        };
+        self.depth += 1;
+        let cost = self.estimate_body(&f.body);
+        self.depth -= 1;
+        cost
+    }
+
+    fn estimate_expr(&mut self, expr: &Expr) -> u64 {
+        match &expr.kind {
+            // Free: leaf literals + identifier loads. SSA-promoted alloca
+            // reads compile to a single load that the LLVM backend almost
+            // always folds into the consuming instruction.
+            ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::Bool(_)
+            | ExprKind::CharLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType => 0,
+
+            // Arithmetic / bitwise / comparison: 1 unit each plus operand costs.
+            ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => 1u64
+                .saturating_add(self.estimate_expr(left))
+                .saturating_add(self.estimate_expr(right)),
+            ExprKind::NilCoalesce { left, right } => 1u64
+                .saturating_add(self.estimate_expr(left))
+                .saturating_add(self.estimate_expr(right)),
+            ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+                1u64.saturating_add(self.estimate_expr(operand))
+            }
+            ExprKind::Cast { expr: inner, .. } => 1u64.saturating_add(self.estimate_expr(inner)),
+
+            // Indexing: 2 units (GEP + load + bounds check) plus operand costs.
+            ExprKind::Index { object, index } => 2u64
+                .saturating_add(self.estimate_expr(object))
+                .saturating_add(self.estimate_expr(index)),
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                1u64.saturating_add(self.estimate_expr(object))
+            }
+
+            // Calls: try to inline the callee's body cost when the callee
+            // is a known free fn within the recursion depth cap; else
+            // fall back to `CALL_COST_UNITS`. Args + callee-expr eval
+            // costs added separately.
+            ExprKind::Call { callee, args } => {
+                let mut c: u64 = self.call_body_cost(callee);
+                c = c.saturating_add(self.estimate_expr(callee));
+                for arg in args {
+                    c = c.saturating_add(self.estimate_expr(&arg.value));
+                }
+                c
+            }
+            ExprKind::MethodCall { object, args, .. } => {
+                // Method receiver type resolution isn't threaded into
+                // the estimator at v1 — keep the opaque CALL_COST_UNITS
+                // fallback. Adding receiver-type-aware method lookup
+                // requires the typechecker's method_callee_types table.
+                let mut c: u64 = CALL_COST_UNITS;
+                c = c.saturating_add(self.estimate_expr(object));
+                for arg in args {
+                    c = c.saturating_add(self.estimate_expr(&arg.value));
+                }
+                c
+            }
+            ExprKind::OptionalChain { object, args, .. } => {
+                let mut c: u64 = CALL_COST_UNITS;
+                c = c.saturating_add(self.estimate_expr(object));
+                if let Some(args) = args {
+                    for arg in args {
+                        c = c.saturating_add(self.estimate_expr(&arg.value));
+                    }
+                }
+                c
+            }
+
+            // Control-flow: walk arms, take the max (conservative cost).
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                let cond = self.estimate_expr(condition);
+                let then_cost = self.estimate_body(then_block);
+                let else_cost = else_branch
+                    .as_ref()
+                    .map(|e| self.estimate_expr(e))
+                    .unwrap_or(0);
+                cond.saturating_add(then_cost.max(else_cost))
+            }
+            ExprKind::IfLet {
+                value,
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let v = self.estimate_expr(value);
+                let then_cost = self.estimate_body(then_block);
+                let else_cost = else_branch
+                    .as_ref()
+                    .map(|e| self.estimate_expr(e))
+                    .unwrap_or(0);
+                v.saturating_add(then_cost.max(else_cost))
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                let s = self.estimate_expr(scrutinee);
+                let arm_max = arms
+                    .iter()
+                    .map(|a| self.estimate_expr(&a.body))
+                    .max()
+                    .unwrap_or(0);
+                s.saturating_add(arm_max)
+            }
+
+            // Inner loops: multiply by a fixed assumed trip-count.
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                let c = self.estimate_expr(condition);
+                let b = self.estimate_body(body);
+                NESTED_LOOP_MULTIPLIER.saturating_mul(c.saturating_add(b))
+            }
+            ExprKind::WhileLet { value, body, .. } => {
+                let v = self.estimate_expr(value);
+                let b = self.estimate_body(body);
+                NESTED_LOOP_MULTIPLIER.saturating_mul(v.saturating_add(b))
+            }
+            ExprKind::For { iterable, body, .. } => {
+                let it = self.estimate_expr(iterable);
+                let b = self.estimate_body(body);
+                NESTED_LOOP_MULTIPLIER.saturating_mul(it.saturating_add(b))
+            }
+            ExprKind::Loop { body, .. } => {
+                NESTED_LOOP_MULTIPLIER.saturating_mul(self.estimate_body(body))
+            }
+
+            // Blocks and other shape-passthrough nodes: cost of the contained block.
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
+                self.estimate_body(b)
+            }
+            ExprKind::Par(b) => self.estimate_body(b),
+            ExprKind::Lock { body, .. } => self.estimate_body(body),
+            ExprKind::LabeledBlock { body, .. } => self.estimate_body(body),
+
+            // Composite literals — cost is sum of element costs.
+            ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+                let mut c: u64 = 0;
+                for e in elems {
+                    c = c.saturating_add(self.estimate_expr(e));
+                }
+                c
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => 1u64
+                .saturating_add(self.estimate_expr(value))
+                .saturating_add(self.estimate_expr(count)),
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                let mut c: u64 = 1;
+                for e in items {
+                    c = c.saturating_add(self.estimate_expr(e));
+                }
+                c
+            }
+            ExprKind::MapLiteral(entries) => {
+                let mut c: u64 = 1;
+                for (k, v) in entries {
+                    c = c.saturating_add(self.estimate_expr(k));
+                    c = c.saturating_add(self.estimate_expr(v));
+                }
+                c
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                let mut c: u64 = 1;
+                for f in fields {
+                    c = c.saturating_add(self.estimate_expr(&f.value));
+                }
+                if let Some(s) = spread {
+                    c = c.saturating_add(self.estimate_expr(s));
+                }
+                c
+            }
+            ExprKind::Range { start, end, .. } => {
+                let mut c: u64 = 0;
+                if let Some(s) = start {
+                    c = c.saturating_add(self.estimate_expr(s));
+                }
+                if let Some(e) = end {
+                    c = c.saturating_add(self.estimate_expr(e));
+                }
+                c
+            }
+            ExprKind::Closure { body, .. } => self.estimate_expr(body),
+            ExprKind::Providers { bindings, body } => {
+                let mut c: u64 = 0;
+                for b in bindings {
+                    c = c.saturating_add(self.estimate_expr(&b.value));
+                }
+                c.saturating_add(self.estimate_body(body))
+            }
+            ExprKind::Return(Some(inner)) => self.estimate_expr(inner),
+            ExprKind::Break { value: Some(v), .. } => self.estimate_expr(v),
+            ExprKind::InterpolatedStringLit(parts) => {
+                let mut c: u64 = 1;
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(inner) = part {
+                        c = c.saturating_add(self.estimate_expr(inner));
+                    }
+                }
+                c
+            }
+
+            // Pure control-edge shapes.
+            ExprKind::Continue { .. }
+            | ExprKind::Return(None)
+            | ExprKind::Break { value: None, .. }
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => 0,
+        }
+    }
+}
+
+/// Free-fn wrapper kept for backward compatibility with internal call
+/// sites that don't need the inlining-aware path. Internally builds an
+/// estimator with an empty `fn_bodies` map — semantically equivalent
+/// to "every call is opaque, return CALL_COST_UNITS" — so it matches
+/// the pre-slice behavior on its own.
+fn estimate_body_cost_units(body: &Block) -> u64 {
+    let mut est = CostEstimator {
+        fn_bodies: HashMap::new(),
+        depth: 0,
+    };
+    est.estimate_body(body)
 }
 
 /// Function-call cost — function-call ABI alone is on the order of 5–20
 /// ns (PLT + arg marshalling + branch); add ~10 units for the callee
-/// body (no codegen-time visibility into the callee, so the body cost
-/// is a fixed-constant guess). Method calls share the same weight.
+/// body when the callee is opaque (Method call, multi-segment Path,
+/// past the recursion-depth cap). When the callee is a resolvable free
+/// fn within the cap, the body's actual structural cost replaces this
+/// constant — see `CostEstimator::call_body_cost`.
 const CALL_COST_UNITS: u64 = 10;
 
 /// Nested-loop multiplier — `for i in body { for j in inner_body { ... } }`
@@ -1219,215 +1537,6 @@ const CALL_COST_UNITS: u64 = 10;
 /// the gate on small nested loops while still flagging genuinely
 /// expensive bodies. Could be tuned per-bench later.
 const NESTED_LOOP_MULTIPLIER: u64 = 16;
-
-fn estimate_expr_cost_units(expr: &Expr) -> u64 {
-    match &expr.kind {
-        // Free: leaf literals + identifier loads. SSA-promoted alloca
-        // reads compile to a single load that the LLVM backend almost
-        // always folds into the consuming instruction.
-        ExprKind::Integer(_, _)
-        | ExprKind::Float(_, _)
-        | ExprKind::Bool(_)
-        | ExprKind::CharLit(_)
-        | ExprKind::StringLit(_)
-        | ExprKind::MultiStringLit(_)
-        | ExprKind::CStringLit { .. }
-        | ExprKind::Identifier(_)
-        | ExprKind::Path { .. }
-        | ExprKind::SelfValue
-        | ExprKind::SelfType => 0,
-
-        // Arithmetic / bitwise / comparison: 1 unit each plus operand costs.
-        ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => 1u64
-            .saturating_add(estimate_expr_cost_units(left))
-            .saturating_add(estimate_expr_cost_units(right)),
-        ExprKind::NilCoalesce { left, right } => 1u64
-            .saturating_add(estimate_expr_cost_units(left))
-            .saturating_add(estimate_expr_cost_units(right)),
-        ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
-            1u64.saturating_add(estimate_expr_cost_units(operand))
-        }
-        ExprKind::Cast { expr: inner, .. } => 1u64.saturating_add(estimate_expr_cost_units(inner)),
-
-        // Indexing: 2 units (GEP + load + bounds check) plus operand costs.
-        ExprKind::Index { object, index } => 2u64
-            .saturating_add(estimate_expr_cost_units(object))
-            .saturating_add(estimate_expr_cost_units(index)),
-        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
-            1u64.saturating_add(estimate_expr_cost_units(object))
-        }
-
-        // Calls dominate per-iter cost — assume opaque body cost.
-        ExprKind::Call { callee, args } => {
-            let mut c: u64 = CALL_COST_UNITS;
-            c = c.saturating_add(estimate_expr_cost_units(callee));
-            for arg in args {
-                c = c.saturating_add(estimate_expr_cost_units(&arg.value));
-            }
-            c
-        }
-        ExprKind::MethodCall { object, args, .. } => {
-            let mut c: u64 = CALL_COST_UNITS;
-            c = c.saturating_add(estimate_expr_cost_units(object));
-            for arg in args {
-                c = c.saturating_add(estimate_expr_cost_units(&arg.value));
-            }
-            c
-        }
-        ExprKind::OptionalChain { object, args, .. } => {
-            let mut c: u64 = CALL_COST_UNITS;
-            c = c.saturating_add(estimate_expr_cost_units(object));
-            if let Some(args) = args {
-                for arg in args {
-                    c = c.saturating_add(estimate_expr_cost_units(&arg.value));
-                }
-            }
-            c
-        }
-
-        // Control-flow: walk arms, take the max (conservative cost).
-        ExprKind::If {
-            condition,
-            then_block,
-            else_branch,
-        } => {
-            let cond = estimate_expr_cost_units(condition);
-            let then_cost = estimate_body_cost_units(then_block);
-            let else_cost = else_branch
-                .as_ref()
-                .map(|e| estimate_expr_cost_units(e))
-                .unwrap_or(0);
-            cond.saturating_add(then_cost.max(else_cost))
-        }
-        ExprKind::IfLet {
-            value,
-            then_block,
-            else_branch,
-            ..
-        } => {
-            let v = estimate_expr_cost_units(value);
-            let then_cost = estimate_body_cost_units(then_block);
-            let else_cost = else_branch
-                .as_ref()
-                .map(|e| estimate_expr_cost_units(e))
-                .unwrap_or(0);
-            v.saturating_add(then_cost.max(else_cost))
-        }
-        ExprKind::Match { scrutinee, arms } => {
-            let s = estimate_expr_cost_units(scrutinee);
-            let arm_max = arms
-                .iter()
-                .map(|a| estimate_expr_cost_units(&a.body))
-                .max()
-                .unwrap_or(0);
-            s.saturating_add(arm_max)
-        }
-
-        // Inner loops: multiply by a fixed assumed trip-count.
-        ExprKind::While {
-            condition, body, ..
-        } => {
-            let c = estimate_expr_cost_units(condition);
-            let b = estimate_body_cost_units(body);
-            NESTED_LOOP_MULTIPLIER.saturating_mul(c.saturating_add(b))
-        }
-        ExprKind::WhileLet { value, body, .. } => {
-            let v = estimate_expr_cost_units(value);
-            let b = estimate_body_cost_units(body);
-            NESTED_LOOP_MULTIPLIER.saturating_mul(v.saturating_add(b))
-        }
-        ExprKind::For { iterable, body, .. } => {
-            let it = estimate_expr_cost_units(iterable);
-            let b = estimate_body_cost_units(body);
-            NESTED_LOOP_MULTIPLIER.saturating_mul(it.saturating_add(b))
-        }
-        ExprKind::Loop { body, .. } => {
-            NESTED_LOOP_MULTIPLIER.saturating_mul(estimate_body_cost_units(body))
-        }
-
-        // Blocks and other shape-passthrough nodes: cost of the contained block.
-        ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::Try(b) | ExprKind::Seq(b) => {
-            estimate_body_cost_units(b)
-        }
-        ExprKind::Par(b) => estimate_body_cost_units(b),
-        ExprKind::Lock { body, .. } => estimate_body_cost_units(body),
-        ExprKind::LabeledBlock { body, .. } => estimate_body_cost_units(body),
-
-        // Composite literals — cost is sum of element costs.
-        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
-            let mut c: u64 = 0;
-            for e in elems {
-                c = c.saturating_add(estimate_expr_cost_units(e));
-            }
-            c
-        }
-        ExprKind::RepeatLiteral { value, count, .. } => 1u64
-            .saturating_add(estimate_expr_cost_units(value))
-            .saturating_add(estimate_expr_cost_units(count)),
-        ExprKind::PrefixCollectionLiteral { items, .. } => {
-            let mut c: u64 = 1;
-            for e in items {
-                c = c.saturating_add(estimate_expr_cost_units(e));
-            }
-            c
-        }
-        ExprKind::MapLiteral(entries) => {
-            let mut c: u64 = 1;
-            for (k, v) in entries {
-                c = c.saturating_add(estimate_expr_cost_units(k));
-                c = c.saturating_add(estimate_expr_cost_units(v));
-            }
-            c
-        }
-        ExprKind::StructLiteral { fields, spread, .. } => {
-            let mut c: u64 = 1;
-            for f in fields {
-                c = c.saturating_add(estimate_expr_cost_units(&f.value));
-            }
-            if let Some(s) = spread {
-                c = c.saturating_add(estimate_expr_cost_units(s));
-            }
-            c
-        }
-        ExprKind::Range { start, end, .. } => {
-            let mut c: u64 = 0;
-            if let Some(s) = start {
-                c = c.saturating_add(estimate_expr_cost_units(s));
-            }
-            if let Some(e) = end {
-                c = c.saturating_add(estimate_expr_cost_units(e));
-            }
-            c
-        }
-        ExprKind::Closure { body, .. } => estimate_expr_cost_units(body),
-        ExprKind::Providers { bindings, body } => {
-            let mut c: u64 = 0;
-            for b in bindings {
-                c = c.saturating_add(estimate_expr_cost_units(&b.value));
-            }
-            c.saturating_add(estimate_body_cost_units(body))
-        }
-        ExprKind::Return(Some(inner)) => estimate_expr_cost_units(inner),
-        ExprKind::Break { value: Some(v), .. } => estimate_expr_cost_units(v),
-        ExprKind::InterpolatedStringLit(parts) => {
-            let mut c: u64 = 1;
-            for part in parts {
-                if let crate::ast::ParsedInterpolationPart::Expr(inner) = part {
-                    c = c.saturating_add(estimate_expr_cost_units(inner));
-                }
-            }
-            c
-        }
-
-        // Pure control-edge shapes.
-        ExprKind::Continue { .. }
-        | ExprKind::Return(None)
-        | ExprKind::Break { value: None, .. }
-        | ExprKind::PipePlaceholder
-        | ExprKind::OffsetOf { .. }
-        | ExprKind::Error => 0,
-    }
-}
 
 /// Canonical shape of a recognized reduction loop. Built by
 /// `extract_loop_shape` from either the `for k in lo..hi` shape

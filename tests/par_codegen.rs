@@ -2663,4 +2663,168 @@ fn main() {
         let Some(out) = run_program(src) else { return };
         assert_eq!(out.trim(), "-999999");
     }
+
+    // ── Slice: cost-gate function-call body cost (2026-05-20) ────────
+    //
+    // Codegen's cost-model gate used to treat every function/method call
+    // as `CALL_COST_UNITS = 10` regardless of what the callee did,
+    // bottoming out the K=N-small-outer + heavy-callee patterns
+    // (kata-121's `for _ in 0..10 { sum = sum + max_profit(slice); }`).
+    // The slice plumbs `Program.items`-derived free-fn bodies into a
+    // `CostEstimator` struct that recursively estimates known callees
+    // up to `INLINE_DEPTH_CAP = 3` levels, falling back to `CALL_COST_UNITS`
+    // when callee shape is opaque (method, multi-segment Path, past cap).
+
+    #[test]
+    fn test_ir_cost_gate_trivial_inlined_callee_still_blocks() {
+        // Counterpart to slice-3b.5's `test_ir_cost_gate_blocks_small_loop_with_method_call`:
+        // callee body has cost ~1 (single binary op), per-iter post-inline
+        // = 1 (body) + 1 (caller's `sum + ...`) = 2; K=100 → 200 unit-iters,
+        // well below the 80,000 threshold. Pins that inlining a trivial
+        // callee doesn't accidentally unlock parallelism for small loops.
+        let src = r#"
+fn double(x: i64) -> i64 { x + x }
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100i64 {
+        sum = sum + double(k);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "K=100 with trivial inlined callee still below gate; should block. Got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cost_gate_inlined_callee_with_inner_loop_unlocks_parallelism() {
+        // Callee `helper()` has a literal-bounded inner for-loop. The
+        // inner is recognized as a reduction but its own cost gate
+        // (K=50, body cost ≈ 2, total = 100) blocks it, so the inner
+        // never emits a par_reduce call regardless of inlining. That
+        // isolation lets the OUTER `for k in 0..3000` be the discriminator
+        // — par_reduce appears in the IR iff the outer's gate passes,
+        // which only happens when the cost estimator inlines helper()'s
+        // body cost (~33 units via NESTED_LOOP_MULTIPLIER on the inner
+        // for) instead of the opaque CALL_COST_UNITS = 10. Math:
+        //   - Without inlining: per-iter = 1+0+1+0+10 = 12; K=3000 → 36000 < 80000 → block
+        //   - With inlining:    per-iter = 1+0+1+0+33 = 35; K=3000 → 105000 ≥ 80000 → pass
+        let src = r#"
+fn helper() -> i64 {
+    let mut acc: i64 = 0i64;
+    for j in 0i64..50i64 {
+        acc = acc + j;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..3000i64 {
+        sum = sum + helper();
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "K=3000 outer with inlined helper() body cost (~33) should pass cost gate; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_cost_gate_inlined_callee_correctness() {
+        // E2E counterpart of the IR test above — verifies the par_reduce
+        // path produces the correct sink when the inlining-aware gate
+        // unlocks parallelism.
+        let src = r#"
+fn helper() -> i64 {
+    let mut acc: i64 = 0i64;
+    for j in 0i64..50i64 {
+        acc = acc + j;
+    }
+    acc
+}
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..3000i64 {
+        sum = sum + helper();
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ j for j in [0, 50) = 49 * 50 / 2 = 1225
+        // K=3000 outer * 1225 per helper call = 3_675_000
+        assert_eq!(out.trim(), "3675000");
+    }
+
+    #[test]
+    fn test_ir_cost_gate_recursive_callee_terminates_via_depth_cap() {
+        // Indirect recursion `a() -> b()`, `b() -> a()` — the inliner
+        // must terminate (not infinite-loop) and fall back to the
+        // CALL_COST_UNITS estimate past the depth cap. Test passes if
+        // compilation completes (codegen doesn't hang) regardless of
+        // whether the gate ends up blocking or passing.
+        let src = r#"
+fn a(n: i64) -> i64 { if n > 0 { b(n - 1i64) } else { 0i64 } }
+fn b(n: i64) -> i64 { if n > 0 { a(n - 1i64) } else { 0i64 } }
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..10i64 {
+        sum = sum + a(k);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        // No assertion on the gate outcome — just that codegen
+        // terminates within a reasonable bound (the test harness's
+        // implicit timeout). If the depth cap is broken, this hangs.
+        let _ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed (recursion should bottom out at depth cap)");
+    }
 }
