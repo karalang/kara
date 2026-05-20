@@ -16,10 +16,13 @@
 //!   prefixed cells, `evaluate_cell_captured` otherwise) and emits
 //!   the canonical broadcast triad on IOPub: busy → execute_input
 //!   → stream(stdout/stderr) → execute_result/error → idle.
-//!
-//! Slices 5+ extend the dispatch table (`complete_request`,
-//! `is_complete_request`, `interrupt_request`) by adding match
-//! arms; the pump itself stays the same.
+//! - **`complete_request`** (slice 5) — tab completion over the
+//!   built-in prelude + session-declared items + persistent lets.
+//! - **`is_complete_request`** (slice 5) — delimiter-balance
+//!   classifier for multi-line cell continuation in
+//!   `jupyter console`.
+//! - **`interrupt_request`** (slice 5) — sets the kernel's
+//!   `interrupt_flag`; interpreter-side polling is a follow-up.
 //!
 //! Heartbeat is a separate dedicated thread (see
 //! `Kernel::spawn_heartbeat`) — bare echo loop, no signing, no
@@ -142,6 +145,16 @@ pub struct Kernel<T: Transport + 'static> {
     /// peek at "which cell is running" without taking the session
     /// lock.
     execution_count: AtomicU64,
+    /// Set by `interrupt_request`; cleared at the start of every new
+    /// `execute_request`. The interpreter does not yet poll this
+    /// flag — interpreter-side cooperative cancellation is a slice
+    /// follow-up (the existing `par {}` cancellation token is
+    /// per-block, not per-process, so wiring it through to a
+    /// kernel-level interrupt requires a separate pass). The flag
+    /// is exposed via [`Kernel::interrupt_requested`] so that future
+    /// poll points can read it without going through the session
+    /// mutex.
+    interrupt_flag: std::sync::atomic::AtomicBool,
 }
 
 impl<T: Transport + 'static> Kernel<T> {
@@ -173,7 +186,17 @@ impl<T: Transport + 'static> Kernel<T> {
             msg_counter: Mutex::new(0),
             session: Mutex::new(Session::with_options(opts)),
             execution_count: AtomicU64::new(0),
+            interrupt_flag: std::sync::atomic::AtomicBool::new(false),
         }
+    }
+
+    /// Snapshot the interrupt flag set by the last
+    /// `interrupt_request`. Exposed for future interpreter-side
+    /// polling — slice 5 wires the request handler but the
+    /// interpreter does not yet poll, so today this is read-only
+    /// from the test surface.
+    pub fn interrupt_requested(&self) -> bool {
+        self.interrupt_flag.load(Ordering::Acquire)
     }
 
     /// Spawn the heartbeat thread. Bare REP echo loop with a short
@@ -235,14 +258,17 @@ impl<T: Transport + 'static> Kernel<T> {
             "kernel_info_request" => self.handle_kernel_info_request(channel, msg),
             "shutdown_request" => self.handle_shutdown_request(channel, msg),
             "execute_request" => self.handle_execute_request(channel, msg),
+            "complete_request" => self.handle_complete_request(channel, msg),
+            "is_complete_request" => self.handle_is_complete_request(channel, msg),
+            "interrupt_request" => self.handle_interrupt_request(channel, msg),
             other => {
-                // Slices 5+ extend this list (`complete_request`,
-                // `is_complete_request`, `interrupt_request`). Silent
-                // would hide bugs; log to stderr so anyone wiring up
-                // a frontend before those slices ship sees the gap.
+                // Slice 5 closed the MVP request surface. Anything
+                // still landing here is forward-compat noise from
+                // newer frontends — log to stderr so it's visible
+                // but don't crash the pump.
                 eprintln!(
                     "karac-kernel: unhandled msg_type {other:?} on {channel:?} \
-                     (slice 4 ships kernel_info / shutdown / execute only)"
+                     (slice 5 closed the MVP request surface)"
                 );
             }
         }
@@ -317,6 +343,14 @@ impl<T: Transport + 'static> Kernel<T> {
     /// `error`) + `execution_count` so the frontend can render the
     /// `Out[N]` prompt before the next cell submits.
     fn handle_execute_request(&self, channel: Channel, request: Message) {
+        // Clear any stale interrupt flag at the start of every new
+        // execute_request so the next cell starts uninterrupted.
+        // Once interpreter-side polling lands the flag will be
+        // checked during execution; for now this just keeps the
+        // surface honest.
+        self.interrupt_flag
+            .store(false, std::sync::atomic::Ordering::Release);
+
         let code = request
             .content
             .get("code")
@@ -400,6 +434,134 @@ impl<T: Transport + 'static> Kernel<T> {
         }
 
         self.broadcast_status("idle", &request.header);
+    }
+
+    /// Tab completion handler. Per the Jupyter spec the frontend
+    /// hands us the full cell `code` + a `cursor_pos` (byte offset);
+    /// we return the matching identifiers + the `cursor_start` /
+    /// `cursor_end` span the frontend should replace.
+    ///
+    /// Slice 5 uses a lightweight surface — no full
+    /// resolver/typecheck pass per keystroke. Candidates come from:
+    ///
+    /// 1. **Built-in prelude** — `println`, `print`, `len`, `Some`,
+    ///    `None`, `Ok`, `Err`, plus the eight effect verbs and a
+    ///    handful of common stdlib types. Hardcoded list kept in
+    ///    [`PRELUDE_IDENTIFIERS`] so it stays in one place.
+    /// 2. **Session items** — names extracted from
+    ///    [`Session::items_source`] via a regex that catches
+    ///    top-level `fn` / `struct` / `enum` / `const` / `type`
+    ///    declarations. The regex is best-effort by design — tab
+    ///    completion never needs to be sound, only useful.
+    /// 3. **Persistent lets** — names from
+    ///    [`Session::persistent_lets`], the bindings declared in
+    ///    prior statement cells.
+    ///
+    /// Matching is case-sensitive prefix-match (Jupyter's frontend
+    /// already applies fuzzy filtering on top of the kernel's
+    /// `matches` list).
+    fn handle_complete_request(&self, channel: Channel, request: Message) {
+        let code = request
+            .content
+            .get("code")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let cursor_pos = request
+            .content
+            .get("cursor_pos")
+            .and_then(JsonValue::as_u64)
+            .map(|n| n as usize)
+            .unwrap_or(code.len());
+
+        let (cursor_start, prefix) = identifier_prefix_at(code, cursor_pos);
+        let mut candidates = self.collect_completion_candidates();
+        candidates.retain(|c| c.starts_with(prefix));
+        candidates.sort();
+        candidates.dedup();
+
+        let reply_content = json!({
+            "status": "ok",
+            "matches": candidates,
+            "cursor_start": cursor_start,
+            "cursor_end": cursor_pos,
+            "metadata": {},
+        });
+        let reply = self.build_reply(&request, "complete_reply", reply_content);
+        if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
+            eprintln!("karac-kernel: failed to send complete_reply: {err}");
+        }
+    }
+
+    /// Enumerate all names the user might want to tab-complete at
+    /// the current session state. See [`handle_complete_request`]
+    /// for the three sources we pull from.
+    fn collect_completion_candidates(&self) -> Vec<String> {
+        let mut out: Vec<String> = PRELUDE_IDENTIFIERS
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let session = self.session.lock().unwrap();
+        out.extend(extract_top_level_names(session.items_source()));
+        out.extend(session.persistent_lets().iter().cloned());
+        out
+    }
+
+    /// `is_complete_request` — frontend probe used by
+    /// `jupyter console` (and JupyterLab's terminal-style REPL) to
+    /// decide whether to dispatch a multi-line cell on Enter or
+    /// keep accepting input. The spec defines four reply statuses:
+    ///
+    /// - `complete` — submit on Enter
+    /// - `incomplete` — show `indent` on the next line and keep input
+    /// - `invalid` — the cell can never parse; submit and let it
+    ///   error
+    /// - `unknown` — kernel can't tell; frontend uses its own
+    ///   heuristic
+    ///
+    /// Slice 5 uses a delimiter-balance heuristic with string- and
+    /// char-literal awareness (line comments + block comments
+    /// skipped). Robust enough for the common multi-line-`fn` and
+    /// multi-line-`if` cases; complex parser-state questions return
+    /// `unknown` so the frontend falls back to its own heuristic.
+    fn handle_is_complete_request(&self, channel: Channel, request: Message) {
+        let code = request
+            .content
+            .get("code")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("");
+        let (status, indent) = classify_completeness(code);
+        let reply_content = match status {
+            CompletenessStatus::Complete => json!({ "status": "complete" }),
+            CompletenessStatus::Invalid => json!({ "status": "invalid" }),
+            CompletenessStatus::Unknown => json!({ "status": "unknown" }),
+            CompletenessStatus::Incomplete => json!({
+                "status": "incomplete",
+                "indent": indent,
+            }),
+        };
+        let reply = self.build_reply(&request, "is_complete_reply", reply_content);
+        if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
+            eprintln!("karac-kernel: failed to send is_complete_reply: {err}");
+        }
+    }
+
+    /// `interrupt_request` (control channel) — flips the kernel's
+    /// interrupt flag and replies `{status: "ok"}`. Interpreter-side
+    /// polling against this flag is a follow-up: the existing
+    /// `par {}` cancellation token in `src/interpreter/exec.rs` is
+    /// per-block, not per-process, so wiring it through to a
+    /// kernel-level interrupt requires a separate pass through the
+    /// interpreter's main eval loops. Until that lands, the flag is
+    /// observable via [`Kernel::interrupt_requested`] so tests can
+    /// confirm the request was received.
+    fn handle_interrupt_request(&self, channel: Channel, request: Message) {
+        self.interrupt_flag
+            .store(true, std::sync::atomic::Ordering::Release);
+        let reply_content = json!({ "status": "ok" });
+        let reply = self.build_reply(&request, "interrupt_reply", reply_content);
+        if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
+            eprintln!("karac-kernel: failed to send interrupt_reply: {err}");
+        }
     }
 
     /// Run one cell through the session. `%`-prefixed cells route
@@ -610,6 +772,235 @@ fn iso8601_now() -> String {
         "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:06}",
         year, month, day, h, m, s, micros
     )
+}
+
+/// Hardcoded list of Kāra prelude identifiers tab-completion always
+/// surfaces. Keeps `handle_complete_request` independent of any
+/// stdlib-introspection mechanism the resolver might grow later.
+/// Names are sourced from `examples/*.kara` and the design spec's
+/// effect-verb list (Feature: Effects).
+const PRELUDE_IDENTIFIERS: &[&str] = &[
+    // Output / stdio
+    "println",
+    "print",
+    "eprintln",
+    "eprint",
+    // Common values / option / result
+    "true",
+    "false",
+    "Some",
+    "None",
+    "Ok",
+    "Err",
+    // Stdlib type names that appear ubiquitously in cell code
+    "Vec",
+    "Map",
+    "Set",
+    "String",
+    "i32",
+    "i64",
+    "u32",
+    "u64",
+    "f32",
+    "f64",
+    "bool",
+    "char",
+    // Effect verbs (Feature: Effects — eight built-ins)
+    "reads",
+    "writes",
+    "sends",
+    "receives",
+    "allocates",
+    "panics",
+    "blocks",
+    "suspends",
+    // Stdlib aggregators / iteration commonly used in cells
+    "sum",
+    "len",
+    "min",
+    "max",
+    "first",
+];
+
+/// Pull top-level declaration names out of `items_source` via a
+/// best-effort regex. Cheaper than running a full parse + resolve
+/// pass per tab keystroke and good enough for autocomplete (which
+/// is best-effort by definition — a missed candidate hurts the UX
+/// but doesn't break correctness).
+///
+/// Catches `fn <name>`, `struct <name>`, `enum <name>`, `trait
+/// <name>`, `const <name>`, `let <name>`, `type <name>`, `impl …
+/// for <name>`. Skips generic parameter lists (`fn foo[T: Ord]`)
+/// since the `<name>` capture lands before the bracket.
+fn extract_top_level_names(items_source: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    for line in items_source.lines() {
+        let trimmed = line.trim_start();
+        for kw in &[
+            "fn ",
+            "struct ",
+            "enum ",
+            "trait ",
+            "const ",
+            "let mut ",
+            "let ",
+            "type ",
+            "shared struct ",
+            "shared enum ",
+            "distinct ",
+        ] {
+            if let Some(rest) = trimmed.strip_prefix(kw) {
+                if let Some(name) = take_identifier(rest) {
+                    out.push(name);
+                }
+                break;
+            }
+        }
+    }
+    out
+}
+
+/// Take the leading identifier from `s` — letters / digits /
+/// underscore, must not start with a digit. Returns `None` for an
+/// empty leading slice.
+fn take_identifier(s: &str) -> Option<String> {
+    let mut end = 0;
+    for (i, c) in s.char_indices() {
+        if i == 0 {
+            if !(c.is_alphabetic() || c == '_') {
+                return None;
+            }
+        } else if !(c.is_alphanumeric() || c == '_') {
+            break;
+        }
+        end = i + c.len_utf8();
+    }
+    if end == 0 {
+        None
+    } else {
+        Some(s[..end].to_string())
+    }
+}
+
+/// Find the identifier-shaped run ending at `cursor_pos` in
+/// `code`. Returns `(cursor_start, prefix)` — `cursor_start` is the
+/// byte offset where the prefix begins (the value the frontend
+/// uses to compute the replacement span), and `prefix` is the
+/// literal substring `&code[cursor_start..cursor_pos]`.
+fn identifier_prefix_at(code: &str, cursor_pos: usize) -> (usize, &str) {
+    let bytes = code.as_bytes();
+    let cursor_pos = cursor_pos.min(code.len());
+    let mut start = cursor_pos;
+    while start > 0 {
+        let b = bytes[start - 1];
+        let is_ident_byte = b.is_ascii_alphanumeric() || b == b'_';
+        if !is_ident_byte {
+            break;
+        }
+        start -= 1;
+    }
+    (start, &code[start..cursor_pos])
+}
+
+/// Outcome of [`classify_completeness`] — maps directly to
+/// `is_complete_reply.status`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CompletenessStatus {
+    Complete,
+    Incomplete,
+    Invalid,
+    Unknown,
+}
+
+/// Decide whether `code` is a complete cell using a delimiter-
+/// balance heuristic that accounts for string + char literals + line
+/// comments + block comments. Returns the status + the indent
+/// string the frontend should prefix the next line with.
+///
+/// Rules:
+/// - Unclosed `{` / `[` / `(` → `incomplete`, indent = 4 spaces per
+///   open level
+/// - More closes than opens → `invalid` (the cell will hard-error at
+///   parse time; submit immediately so the diagnostic surfaces)
+/// - Empty cell → `complete` (matches Jupyter's "blank Enter" UX)
+/// - Otherwise → `complete`
+///
+/// Unclosed string / char literals fall back to `unknown` rather
+/// than `incomplete` — the frontend's own heuristic is usually
+/// better at multi-line raw strings than ours.
+fn classify_completeness(code: &str) -> (CompletenessStatus, String) {
+    if code.trim().is_empty() {
+        return (CompletenessStatus::Complete, String::new());
+    }
+
+    let mut depth: i32 = 0;
+    let mut in_string = false;
+    let mut in_char = false;
+    let mut chars = code.chars().peekable();
+    while let Some(c) = chars.next() {
+        if in_string {
+            match c {
+                '\\' => {
+                    chars.next(); // skip the escaped char
+                }
+                '"' => in_string = false,
+                _ => {}
+            }
+            continue;
+        }
+        if in_char {
+            match c {
+                '\\' => {
+                    chars.next();
+                }
+                '\'' => in_char = false,
+                _ => {}
+            }
+            continue;
+        }
+        match c {
+            '"' => in_string = true,
+            '\'' => in_char = true,
+            '/' if chars.peek() == Some(&'/') => {
+                // Line comment — consume to newline.
+                for nc in chars.by_ref() {
+                    if nc == '\n' {
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut prev = '\0';
+                for nc in chars.by_ref() {
+                    if prev == '*' && nc == '/' {
+                        break;
+                    }
+                    prev = nc;
+                }
+            }
+            '{' | '[' | '(' => depth += 1,
+            '}' | ']' | ')' => {
+                depth -= 1;
+                if depth < 0 {
+                    return (CompletenessStatus::Invalid, String::new());
+                }
+            }
+            _ => {}
+        }
+    }
+
+    if in_string || in_char {
+        // We can't tell — frontend's local heuristic is more
+        // reliable for multi-line literals than ours.
+        return (CompletenessStatus::Unknown, String::new());
+    }
+    if depth > 0 {
+        let indent = "    ".repeat(depth as usize);
+        (CompletenessStatus::Incomplete, indent)
+    } else {
+        (CompletenessStatus::Complete, String::new())
+    }
 }
 
 /// Convert "days since 1970-01-01" to (year, month, day) in the
@@ -1083,18 +1474,412 @@ mod tests {
 
     #[test]
     fn unhandled_msg_type_does_not_crash() {
-        // Slice 4 handles kernel_info / shutdown / execute. Anything
-        // else (slice 5's complete_request, is_complete_request,
-        // interrupt_request) is logged and skipped. Verify the pump
-        // returns cleanly and produces no shell output.
+        // Slice 5 closed the MVP request surface. Anything still
+        // landing in `other` is forward-compat noise from newer
+        // frontends (e.g. `comm_open` for widgets); log and skip.
         let transport = Arc::new(InMemoryTransport::new());
         let signer = Signer::new("k");
         let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
-        let request = build_request(&signer, "complete_request", json!({}), vec![]);
+        let request = build_request(&signer, "comm_open", json!({}), vec![]);
         transport.push_incoming(Channel::Shell, request);
         run_one_pass(&kernel);
         assert!(transport.drain_outgoing(Channel::Shell).is_empty());
         assert!(transport.drain_outgoing(Channel::IoPub).is_empty());
+    }
+
+    // --- Slice 5: complete_request / is_complete_request / interrupt_request ---
+
+    #[test]
+    fn complete_request_returns_prelude_identifier() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        // Type "prin" and ask for completions — `println` + `print`
+        // + `eprintln` + `eprint` are all in the prelude list.
+        let code = "prin";
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "complete_request",
+                json!({"code": code, "cursor_pos": code.len()}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        assert_eq!(shell.len(), 1);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.header.msg_type, "complete_reply");
+        assert_eq!(reply.content["status"], "ok");
+        assert_eq!(reply.content["cursor_start"], 0);
+        assert_eq!(reply.content["cursor_end"], code.len());
+        let matches: Vec<String> = reply.content["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(matches.contains(&"print".to_string()), "got {matches:?}");
+        assert!(matches.contains(&"println".to_string()));
+    }
+
+    #[test]
+    fn complete_request_includes_session_declared_items() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        // Land a `fn` declaration in the session, then ask for
+        // completions on its prefix.
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "fn my_helper(x: i32) -> i32 { x + 1 }", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let _ = transport.drain_outgoing(Channel::IoPub);
+
+        let code = "my_hel";
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "complete_request",
+                json!({"code": code, "cursor_pos": code.len()}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        let matches: Vec<String> = reply.content["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            matches.iter().any(|m| m == "my_helper"),
+            "expected my_helper in {matches:?}"
+        );
+    }
+
+    #[test]
+    fn complete_request_cursor_in_middle_of_token() {
+        // Cursor in the middle of a longer expression — the kernel
+        // should compute the prefix at the cursor (not the whole
+        // code) and return matches starting there.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        let code = "let x = prin"; // cursor at end of `prin`
+        let cursor_pos = code.len();
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "complete_request",
+                json!({"code": code, "cursor_pos": cursor_pos}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        // cursor_start should be the position where `prin` begins (8).
+        assert_eq!(reply.content["cursor_start"], 8);
+        assert_eq!(reply.content["cursor_end"], cursor_pos);
+    }
+
+    #[test]
+    fn is_complete_request_classifies_balanced_cell_as_complete() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "is_complete_request",
+                json!({"code": "let x = 1 + 2;"}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        assert_eq!(reply.header.msg_type, "is_complete_reply");
+        assert_eq!(reply.content["status"], "complete");
+    }
+
+    #[test]
+    fn is_complete_request_classifies_unclosed_fn_as_incomplete() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "is_complete_request",
+                json!({"code": "fn add(a: i32, b: i32) -> i32 {"}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        assert_eq!(reply.content["status"], "incomplete");
+        // One open brace → indent should be 4 spaces.
+        assert_eq!(reply.content["indent"], "    ");
+    }
+
+    #[test]
+    fn is_complete_request_classifies_extra_close_as_invalid() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "is_complete_request",
+                json!({"code": "let x = 1; }"}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        assert_eq!(reply.content["status"], "invalid");
+    }
+
+    #[test]
+    fn is_complete_request_handles_empty_cell() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(&signer, "is_complete_request", json!({"code": ""}), vec![]),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        assert_eq!(reply.content["status"], "complete");
+    }
+
+    #[test]
+    fn is_complete_request_returns_unknown_for_unclosed_string() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "is_complete_request",
+                json!({"code": "let s = \"unclosed"}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let reply = Message::decode(
+            transport
+                .drain_outgoing(Channel::Shell)
+                .remove(0)
+                .as_slice(),
+            &signer,
+        )
+        .unwrap();
+        assert_eq!(reply.content["status"], "unknown");
+    }
+
+    #[test]
+    fn interrupt_request_sets_flag_and_replies_ok() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        assert!(!kernel.interrupt_requested(), "flag must start clear");
+
+        transport.push_incoming(
+            Channel::Control,
+            build_request(&signer, "interrupt_request", json!({}), vec![]),
+        );
+        kernel.pump_once(Channel::Control);
+
+        let shell = transport.drain_outgoing(Channel::Control);
+        assert_eq!(shell.len(), 1);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.header.msg_type, "interrupt_reply");
+        assert_eq!(reply.content["status"], "ok");
+        assert!(
+            kernel.interrupt_requested(),
+            "interrupt_request must set the flag for slice-5-follow-up polling"
+        );
+    }
+
+    #[test]
+    fn execute_request_clears_interrupt_flag_at_cell_start() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        // Set the flag by sending an interrupt_request.
+        transport.push_incoming(
+            Channel::Control,
+            build_request(&signer, "interrupt_request", json!({}), vec![]),
+        );
+        kernel.pump_once(Channel::Control);
+        let _ = transport.drain_outgoing(Channel::Control);
+        assert!(kernel.interrupt_requested());
+
+        // Next execute_request should clear it so the cell starts
+        // uninterrupted.
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "let _q = 1;", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        assert!(
+            !kernel.interrupt_requested(),
+            "execute_request should clear the stale interrupt flag"
+        );
+    }
+
+    #[test]
+    fn extract_top_level_names_handles_common_forms() {
+        let src = "\
+fn add(a: i32, b: i32) -> i32 { a + b }
+struct Point { x: i32, y: i32 }
+enum Color { Red, Green, Blue }
+const PI: f64 = 3.14;
+let global = 42;
+let mut counter = 0;
+type Pair = (i32, i32);
+shared struct Buffer { data: Vec[u8] }
+";
+        let names = extract_top_level_names(src);
+        for expected in [
+            "add", "Point", "Color", "PI", "global", "counter", "Pair", "Buffer",
+        ] {
+            assert!(
+                names.iter().any(|n| n == expected),
+                "missing {expected} in {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn identifier_prefix_at_walks_back_to_token_start() {
+        // Plain identifier at the end.
+        let (start, prefix) = identifier_prefix_at("hello", 5);
+        assert_eq!((start, prefix), (0, "hello"));
+
+        // Cursor in the middle.
+        let (start, prefix) = identifier_prefix_at("hello world", 4);
+        assert_eq!((start, prefix), (0, "hell"));
+
+        // Identifier after non-ident chars.
+        let (start, prefix) = identifier_prefix_at("let x = foo", 11);
+        assert_eq!((start, prefix), (8, "foo"));
+
+        // Empty prefix (cursor after delimiter).
+        let (start, prefix) = identifier_prefix_at("foo ", 4);
+        assert_eq!((start, prefix), (4, ""));
+
+        // Cursor past end is clamped.
+        let (start, prefix) = identifier_prefix_at("foo", 999);
+        assert_eq!((start, prefix), (0, "foo"));
+    }
+
+    #[test]
+    fn classify_completeness_pins_known_shapes() {
+        assert_eq!(
+            classify_completeness("let x = 1;").0,
+            CompletenessStatus::Complete
+        );
+        assert_eq!(
+            classify_completeness("fn f() {").0,
+            CompletenessStatus::Incomplete
+        );
+        assert_eq!(
+            classify_completeness("let x = (1 + 2").0,
+            CompletenessStatus::Incomplete
+        );
+        assert_eq!(
+            classify_completeness("} extra").0,
+            CompletenessStatus::Invalid
+        );
+        assert_eq!(
+            classify_completeness("// just a comment").0,
+            CompletenessStatus::Complete
+        );
+        assert_eq!(
+            classify_completeness("/* block { unterminated */").0,
+            CompletenessStatus::Complete,
+            "braces inside a block comment must not count toward depth"
+        );
+        assert_eq!(
+            classify_completeness("let s = \"hello { world\";").0,
+            CompletenessStatus::Complete,
+            "braces inside a string literal must not count"
+        );
+        assert_eq!(
+            classify_completeness("let s = \"unclosed").0,
+            CompletenessStatus::Unknown
+        );
     }
 
     #[test]
