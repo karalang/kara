@@ -319,18 +319,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // group-start dispatch.
                 i += 1;
             } else {
-                // Auto-par reduction lowering (slice 3b, 2026-05-19).
-                // When the slice-1 analyzer tagged this top-level stmt
-                // as a reduction and the loop matches the v1 narrow
-                // shape (for k in 0..hi { acc = acc + ... } with i64
-                // accumulator and `+` op), lower it to a
-                // `karac_par_reduce` call instead of the sequential
-                // for-loop codegen. `Some(())` means lowered; `None`
-                // means the analyzer tagged it but the codegen v1
-                // doesn't yet handle that op/type/shape — fall through
-                // to sequential. Other recognized reductions land here
-                // unchanged when the lowering's allow-list grows.
-                let lowered = self.try_emit_reduction_lowering(i, &body.stmts[i])?;
+                // Auto-par reduction lowering (slice 3b / 3b.4, 2026-05-19).
+                // When the slice-1 analyzer tagged this top-level stmt as
+                // a reduction and the loop matches the v1 supported shape
+                // (`for k in 0..hi { ... }` or `while k < hi { ...; k = k
+                // + 1; }` with i64 accumulator and `+` op), lower to a
+                // `karac_par_reduce` call. Pass the parent body so the
+                // while-shape path can peek `body.stmts[i - 1]` for the
+                // loop var's `let mut k: T = 0;` init. `Some(())` means
+                // lowered; `None` means the analyzer tagged it but the
+                // codegen v1 doesn't yet handle that op/type/shape — fall
+                // through to sequential.
+                let lowered = self.try_emit_reduction_lowering(body, i)?;
                 if lowered.is_none() {
                     self.compile_stmt(&body.stmts[i])?;
                 }

@@ -33,7 +33,7 @@
 
 use std::collections::HashSet;
 
-use crate::ast::{Block, Expr, ExprKind, PatternKind, Stmt, StmtKind};
+use crate::ast::{BinOp, Block, CompoundOp, Expr, ExprKind, PatternKind, Stmt, StmtKind};
 use crate::concurrency::{LoopReduction, ReductionOp};
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
@@ -44,18 +44,25 @@ use inkwell::IntPredicate;
 use super::state::VarSlot;
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Try to lower the top-level statement at `stmt_index` as a recognized
-    /// reduction. Returns `Ok(Some(()))` if the statement was lowered (the
-    /// caller skips the normal stmt-compile path); `Ok(None)` if the shape
-    /// is outside the v1 supported set and the caller should fall back to
-    /// sequential codegen. `Err(_)` propagates a codegen error from inside
-    /// the worker-fn synthesis.
+    /// Try to lower the top-level statement at `stmt_index` (inside
+    /// `parent_body`) as a recognized reduction. Returns `Ok(Some(()))`
+    /// if the statement was lowered (the caller skips the normal
+    /// stmt-compile path); `Ok(None)` if the shape is outside the v1
+    /// supported set and the caller should fall back to sequential
+    /// codegen. `Err(_)` propagates a codegen error from inside the
+    /// worker-fn synthesis.
+    ///
+    /// `parent_body` is needed by the `while`-shape path (slice 3b.4)
+    /// to peek `parent_body.stmts[stmt_index - 1]` for the loop
+    /// variable's `let mut k: T = 0;` init.
     #[allow(clippy::result_large_err)]
     pub(super) fn try_emit_reduction_lowering(
         &mut self,
+        parent_body: &Block,
         stmt_index: usize,
-        stmt: &Stmt,
     ) -> Result<Option<()>, String> {
+        let stmt = &parent_body.stmts[stmt_index];
+
         let reduction = self.loop_reduction_for_stmt(stmt_index).cloned();
         let Some(reduction) = reduction else {
             return Ok(None);
@@ -67,43 +74,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // Unpack the loop expression. v1 only handles `for k in 0..hi`.
+        // Unpack the loop expression. Two shapes supported in v1:
+        //   - `for k in 0..hi { ... }` (slice 3b)
+        //   - `while k < hi { ...; k = k + 1; }` (slice 3b.4)
+        // Other loop expressions fall through.
         let StmtKind::Expr(expr) = &stmt.kind else {
             return Ok(None);
         };
-        let ExprKind::For {
-            pattern,
-            iterable,
-            body,
-            ..
-        } = &expr.kind
-        else {
+        let Some(shape) = self.extract_loop_shape(parent_body, stmt_index, expr) else {
             return Ok(None);
         };
-        let PatternKind::Binding(loop_var_name) = &pattern.kind else {
-            return Ok(None);
-        };
-        let ExprKind::Range {
-            start,
-            end,
-            inclusive: false,
-        } = &iterable.kind
-        else {
-            return Ok(None);
-        };
-        let Some(end_expr) = end else {
-            return Ok(None);
-        };
-        // v1 requires `lo == 0` so the worker's chunk-local index doubles
-        // as the source-level `k`. Non-zero starts land in 3b.1 by
-        // threading the offset through ctx and adding it at use sites.
-        let lo_is_zero = match start {
-            None => true,
-            Some(s) => matches!(s.kind, ExprKind::Integer(0, _)),
-        };
-        if !lo_is_zero {
-            return Ok(None);
-        }
 
         // Verify the accumulator's lowered type is i64. The reduction's
         // identity (0 for `+`) and combine op are type-specialized; other
@@ -116,18 +96,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
-        // Early exits in the body would cross the worker-fn boundary and
-        // generate a `ret <T>` inside a void worker fn → invalid IR.
-        // Mirrors the analyzer's existing `stmt_has_early_exit` rule
+        // Early exits in the (post-stripped) body would cross the worker-fn
+        // boundary and generate `ret <T>` inside a void worker fn → invalid
+        // IR. Mirrors the analyzer's existing `stmt_has_early_exit` rule
         // applied to par-group siblings.
-        if block_has_early_exit(body) {
+        if block_has_early_exit(&shape.body) {
             return Ok(None);
         }
 
         // Compile the end bound in the parent context. This is `iter_total`
-        // for the runtime (since lo == 0). Must be i64 — the descriptor
-        // and worker fn both treat the iteration index space as i64.
-        let end_val = self.compile_expr(end_expr)?.into_int_value();
+        // for the runtime (since lo == 0 — checked inside extract_loop_shape).
+        // Must be i64 — the descriptor and worker fn both treat the
+        // iteration index space as i64.
+        let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
 
         // Synthesize the per-(op, type) helper functions.
         let init_fn = self.emit_reduce_init_fn_add_i64();
@@ -138,15 +119,108 @@ impl<'ctx> super::Codegen<'ctx> {
         // introduced inside the body itself. Filtered to live entries in
         // `self.variables` so module-level functions, struct names, etc.
         // (which `refs_in_block` doesn't distinguish) drop out cleanly.
-        let captures = self.collect_reduction_captures(body, &reduction.accumulator, loop_var_name);
+        let captures =
+            self.collect_reduction_captures(&shape.body, &reduction.accumulator, &shape.loop_var);
 
-        let worker_fn = self.emit_reduce_worker_fn(&reduction, loop_var_name, body, &captures)?;
+        let worker_fn =
+            self.emit_reduce_worker_fn(&reduction, &shape.loop_var, &shape.body, &captures)?;
 
         self.emit_reduce_call(
             init_fn, worker_fn, combine_fn, end_val, acc_slot, &reduction, &captures,
         )?;
 
         Ok(Some(()))
+    }
+
+    /// Extract the canonical shape of a recognized reduction loop. Returns
+    /// `Some(LoopShape)` when the loop matches one of v1's supported shapes
+    /// (for-range with `lo == 0`, or while with an explicit `k = k + 1`
+    /// induction step preceded by `let mut k: T = 0;`), `None` otherwise.
+    /// Decouples the shape-parsing complexity from the lowering caller so
+    /// future shapes (non-zero `lo`, larger step constants, while_let,
+    /// loop with break, etc.) extend by adding match arms here without
+    /// changing the lowering body.
+    fn extract_loop_shape(
+        &self,
+        parent_body: &Block,
+        stmt_index: usize,
+        expr: &Expr,
+    ) -> Option<LoopShape> {
+        match &expr.kind {
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                let PatternKind::Binding(loop_var) = &pattern.kind else {
+                    return None;
+                };
+                let ExprKind::Range {
+                    start,
+                    end,
+                    inclusive: false,
+                } = &iterable.kind
+                else {
+                    return None;
+                };
+                let end_expr = end.as_ref()?;
+                // v1 requires `lo == 0` so the worker's chunk-local index
+                // doubles as the source-level `k`. Non-zero starts land in
+                // 3b.3 by threading the offset through ctx and adding it
+                // at use sites.
+                let lo_is_zero = match start {
+                    None => true,
+                    Some(s) => matches!(s.kind, ExprKind::Integer(0, _)),
+                };
+                if !lo_is_zero {
+                    return None;
+                }
+                Some(LoopShape {
+                    loop_var: loop_var.clone(),
+                    end_expr: (**end_expr).clone(),
+                    body: body.clone(),
+                })
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                // Pull `loop_var` and `end_expr` out of the condition.
+                // Accepts both `Binary { Lt, Ident(k), end }` (pre-
+                // lowering) and `Call(Path([T, "lt"]), [Ident(k), end])`
+                // (post-lowering). The body must contain exactly one step-
+                // 1 increment of the loop var as its terminal stmt; the
+                // recognizer (slice 1) already accepted the loop as an
+                // induction-step + reduction pair, so we can be opinionated
+                // about the shape here.
+                let (loop_var, end_expr) = parse_lt_condition(condition)?;
+
+                // The body's last stmt must be `loop_var = loop_var + 1`
+                // (or `loop_var += 1`, either pre- or post-lowered). Strip
+                // it so the worker's loop scaffolding handles the
+                // increment via the back-edge — same shape as the for-loop
+                // path, no need to re-think the worker fn synth.
+                let stripped_body = strip_terminal_step_one_increment(body, &loop_var)?;
+
+                // Verify the loop var was inited to 0 in the immediately
+                // preceding stmt: `let mut k: T = 0i*;`. Required so the
+                // worker's chunk-local index (which starts at 0) matches
+                // the source-level `k` at iteration 0.
+                if stmt_index == 0 {
+                    return None;
+                }
+                if !preceding_stmt_inits_to_zero(parent_body, stmt_index, &loop_var) {
+                    return None;
+                }
+
+                Some(LoopShape {
+                    loop_var,
+                    end_expr,
+                    body: stripped_body,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// The set of outer-scope variables the body reads, minus the
@@ -618,6 +692,178 @@ impl<'ctx> super::Codegen<'ctx> {
 
 /// Mirror of `crate::concurrency::block_has_early_exit` reachable from
 /// codegen. Cheap structural walk — returns true iff the block contains
+/// Canonical shape of a recognized reduction loop. Built by
+/// `extract_loop_shape` from either the `for k in 0..hi` shape (slice 3b)
+/// or the `while k < hi { ...; k = k + 1; }` shape (slice 3b.4) and
+/// consumed by the lowering path. `body` is the source body with the
+/// while-shape's terminal increment already stripped — so the worker fn
+/// synth treats both shapes identically and always emits its own back-
+/// edge `k += 1`.
+struct LoopShape {
+    loop_var: String,
+    end_expr: Expr,
+    body: Block,
+}
+
+/// Match a less-than condition into `(loop_var_name, end_expr)`.
+/// Accepts both pre-lowering `Binary { Lt, Ident(k), end }` and post-
+/// lowering `Call(Path([type, "lt"]), [Ident(k), end])` — the codegen
+/// pipeline runs `src/lowering.rs` before reaching us, so the post-
+/// lowering shape is the common case, but `compile_to_ir` tests that
+/// skip lowering need the pre-lowering arm too.
+fn parse_lt_condition(condition: &Expr) -> Option<(String, Expr)> {
+    match &condition.kind {
+        ExprKind::Binary {
+            op: BinOp::Lt,
+            left,
+            right,
+        } => {
+            let ExprKind::Identifier(name) = &left.kind else {
+                return None;
+            };
+            Some((name.clone(), (**right).clone()))
+        }
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 || segments[1] != "lt" || args.len() != 2 {
+                return None;
+            }
+            let ExprKind::Identifier(name) = &args[0].value.kind else {
+                return None;
+            };
+            Some((name.clone(), args[1].value.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// If the last stmt of `body` is `loop_var = loop_var + 1` or
+/// `loop_var += 1` (in either pre- or post-lowered form), return a
+/// fresh `Block` with that stmt removed. Returns `None` if the terminal
+/// shape doesn't match — the recognizer (slice 1) only emits a
+/// `LoopReduction` when the body has at most one induction step, so a
+/// loop tagged as a reduction whose body's terminal stmt isn't the
+/// step must have a non-canonical layout we don't handle in v1.
+///
+/// Also returns `None` when the loop variable is written anywhere else
+/// in the body (defense-in-depth — the analyzer already rejects that
+/// shape, but the codegen check costs nothing and pins the invariant).
+fn strip_terminal_step_one_increment(body: &Block, loop_var: &str) -> Option<Block> {
+    let last = body.stmts.last()?;
+    if !is_step_one_increment_stmt(last, loop_var) {
+        return None;
+    }
+    // Verify no other stmt in the body writes the loop variable. A
+    // body-internal `k = <expr>` in the middle would shift the worker
+    // fn out of the simple chunk-local-counter model.
+    for (idx, s) in body.stmts.iter().enumerate() {
+        if idx + 1 == body.stmts.len() {
+            break;
+        }
+        if stmt_writes_loop_var(s, loop_var) {
+            return None;
+        }
+    }
+    let mut stripped = body.clone();
+    stripped.stmts.pop();
+    Some(stripped)
+}
+
+/// True iff `stmt` is `loop_var = loop_var + 1` or `loop_var += 1`,
+/// in either pre-lowering or post-lowering form. The constant `1` is
+/// matched by value (any int suffix accepted; the recognizer already
+/// gates on int suffix at the analyzer level).
+fn is_step_one_increment_stmt(stmt: &Stmt, loop_var: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Assign { target, value } => {
+            if !is_named_identifier(target, loop_var) {
+                return false;
+            }
+            // Pre-lowering: Binary { Add, Ident(loop_var), Int(1) }.
+            // Lowered: Call(Path([T, "add"]), [Ident(loop_var), Int(1)]).
+            match &value.kind {
+                ExprKind::Binary {
+                    op: BinOp::Add,
+                    left,
+                    right,
+                } => is_loop_var_plus_one(left, right, loop_var),
+                ExprKind::Call { callee, args } => {
+                    let ExprKind::Path { segments, .. } = &callee.kind else {
+                        return false;
+                    };
+                    if segments.len() != 2 || segments[1] != "add" || args.len() != 2 {
+                        return false;
+                    }
+                    is_loop_var_plus_one(&args[0].value, &args[1].value, loop_var)
+                }
+                _ => false,
+            }
+        }
+        StmtKind::CompoundAssign {
+            target,
+            op: CompoundOp::Add,
+            value,
+        } => is_named_identifier(target, loop_var) && is_int_literal_one(value),
+        _ => false,
+    }
+}
+
+fn is_loop_var_plus_one(left: &Expr, right: &Expr, loop_var: &str) -> bool {
+    let left_is_var = matches!(&left.kind, ExprKind::Identifier(n) if n == loop_var);
+    let right_is_var = matches!(&right.kind, ExprKind::Identifier(n) if n == loop_var);
+    let left_is_one = is_int_literal_one(left);
+    let right_is_one = is_int_literal_one(right);
+    (left_is_var && right_is_one) || (right_is_var && left_is_one)
+}
+
+fn is_int_literal_one(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::Integer(1, _))
+}
+
+fn is_named_identifier(expr: &Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Identifier(n) if n == name)
+}
+
+/// Whether a stmt writes (Assign / CompoundAssign target = identifier)
+/// the named loop variable. Used to defense-in-depth the
+/// `strip_terminal_step_one_increment` body scan.
+fn stmt_writes_loop_var(stmt: &Stmt, loop_var: &str) -> bool {
+    match &stmt.kind {
+        StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+            is_named_identifier(target, loop_var)
+        }
+        _ => false,
+    }
+}
+
+/// True iff `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T
+/// = 0i*;` — the canonical init for the `while`-shape's induction var.
+/// The worker fn's chunk-local index starts at 0, so if the source-level
+/// init is non-zero (or is a runtime expression) the worker's `k` won't
+/// agree with the source's `k` at iteration 0; reject in that case.
+/// Caller guarantees `stmt_index > 0`.
+fn preceding_stmt_inits_to_zero(parent_body: &Block, stmt_index: usize, loop_var: &str) -> bool {
+    let prev = &parent_body.stmts[stmt_index - 1];
+    let StmtKind::Let {
+        pattern,
+        value,
+        is_mut: true,
+        ..
+    } = &prev.kind
+    else {
+        return false;
+    };
+    let PatternKind::Binding(name) = &pattern.kind else {
+        return false;
+    };
+    if name != loop_var {
+        return false;
+    }
+    matches!(value.kind, ExprKind::Integer(0, _))
+}
+
 /// a `return` / `break` / `continue` reachable from any statement or
 /// nested expression. Reductions whose body has an early exit are
 /// rejected at the lowering check, falling back to sequential codegen

@@ -1425,4 +1425,110 @@ fn main() {
         // Σ k for k in [0, 100000) = (100000 * 99999) / 2 = 4999950000
         assert_eq!(out.trim(), "4999950000");
     }
+
+    // ── Slice 3b.4: while-shape support ──────────────────────────────
+    //
+    // The kata-7 bench (and many real workloads) write the K-iter loop
+    // as `let mut k = 0; while k < K { ...; k = k + 1; }` instead of
+    // `for k in 0..K`. The recognizer (slice 1) already accepts both
+    // shapes — slice 3b.4 teaches codegen to lower the while shape too.
+    // Same fan-out + serial-combine machinery, just an extra shape
+    // extractor that strips the body's terminal `k = k + 1` increment
+    // and verifies the preceding `let mut k: T = 0;` init.
+
+    #[test]
+    fn test_ir_reduction_while_shape_emits_par_reduce_call_slice3b4() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 1000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "while-shape reduction should lower to karac_par_reduce; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_worker_"),
+            "expected synthesized worker fn; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_while_shape_matches_serial_slice3b4() {
+        // Same K, same Σ formula as the for-loop test — verifies the
+        // while-shape path produces the same value as the for-loop path
+        // and as the serial Σ formula.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 1000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "499500");
+    }
+
+    #[test]
+    fn test_e2e_reduction_while_shape_multi_worker_slice3b4() {
+        // Larger N to hit the multi-worker dispatch path.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "4999950000");
+    }
+
+    #[test]
+    fn test_e2e_reduction_while_compound_assign_increment_slice3b4() {
+        // The `k += 1` shape parses to CompoundAssign, not Assign. Both
+        // forms route through `is_step_one_increment_stmt`; this test
+        // pins that the compound-assign branch lands too.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 1000i64 {
+        sum = sum + k;
+        k += 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "499500");
+    }
 }
