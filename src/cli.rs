@@ -4887,7 +4887,10 @@ fn run_dep_resolution(
     };
     let active = crate::dep_resolver::active_toolchain_version();
     match crate::dep_resolver::resolve(&graph, &active) {
-        Ok(_) => true,
+        Ok(resolution) => {
+            persist_lockfile(root, &resolution, output);
+            true
+        }
         Err(boxed) => {
             let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
             let code = boxed.code();
@@ -4903,6 +4906,78 @@ fn run_dep_resolution(
             };
             emit_dep_diagnostic(&diag, output, severity);
             severity == "warning"
+        }
+    }
+}
+
+/// Slice 4 of the lockfile entry (phase-5 line 831). Materializes a fresh
+/// `kara.lock` from the resolver's output and writes it at the project root.
+/// On read-then-rewrite paths, suppresses the write when the bytes are
+/// identical so file mtimes are stable across no-op rebuilds. Any lockfile
+/// IO failure is emitted as a warning (build-blocking would be too strict
+/// in v1.1 — the resolver already succeeded; lockfile drift is recoverable
+/// on the next build). Errors mid-build don't fail the build.
+fn persist_lockfile(
+    root: &std::path::Path,
+    resolution: &crate::dep_resolver::Resolution,
+    output: OutputMode,
+) {
+    let lockfile = match crate::lockfile::Lockfile::from_resolution(
+        resolution,
+        root,
+        crate::lockfile::compute_path_dep_hash,
+    ) {
+        Ok(lf) => lf,
+        Err(e) => {
+            emit_lockfile_warning(&e, output);
+            return;
+        }
+    };
+
+    let lockfile_path = root.join("kara.lock");
+    let fresh_toml = lockfile.to_toml();
+
+    // No-op-when-unchanged: avoid touching file mtime on a quiet rebuild.
+    if let Ok(existing) = std::fs::read_to_string(&lockfile_path) {
+        if existing == fresh_toml {
+            return;
+        }
+    }
+
+    if let Err(io) = std::fs::write(&lockfile_path, &fresh_toml) {
+        let err = crate::lockfile::LockfileError::Io {
+            path: lockfile_path,
+            error: io.to_string(),
+        };
+        emit_lockfile_warning(&err, output);
+    }
+}
+
+fn emit_lockfile_warning(err: &crate::lockfile::LockfileError, output: OutputMode) {
+    let primary = err.to_string();
+    let code = err.code();
+    match output {
+        OutputMode::Text => {
+            eprintln!("warning[{code}]: {primary}");
+            eprintln!("   = note: the resolver succeeded; the lockfile write is a follow-up step");
+            eprintln!("   = help: check filesystem permissions for the project root");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"ok\",\"diagnostics\":[{{\"severity\":\"warning\",\"phase\":\"lockfile\",\"code\":{},\"message\":{}}}]}}",
+                json_string(code),
+                json_string(&primary),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "lockfile_warning",
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(code),
+                    json_string(&primary),
+                ),
+            );
         }
     }
 }
