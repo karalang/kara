@@ -288,26 +288,32 @@ impl<'ctx> super::Codegen<'ctx> {
                 // path, no need to re-think the worker fn synth.
                 let stripped_body = strip_terminal_step_one_increment(body, &loop_var)?;
 
-                // Verify the loop var was inited to 0 in the immediately
-                // preceding stmt: `let mut k: T = 0i*;`. Required so the
-                // worker's chunk-local index (which starts at 0) matches
-                // the source-level `k` at iteration 0.
+                // The immediately preceding stmt must be `let mut k: T =
+                // <int literal>;`. Slice 3b.9 normalizes the literal:
+                // `Integer(0)` → `lo_expr = None` (no shift math, current
+                // path); any other int literal → `lo_expr = Some(expr)`
+                // (same env-struct + shift machinery as slice 3b.3 for
+                // for-range). Variable / runtime init (e.g.
+                // `let mut k: T = lo;`) deferred to a future slice — it'd
+                // need to either re-evaluate the init at par_reduce
+                // dispatch time, or reach back into the parent's already-
+                // initialized k alloca.
                 if stmt_index == 0 {
                     return None;
                 }
-                if !preceding_stmt_inits_to_zero(parent_body, stmt_index, &loop_var) {
-                    return None;
-                }
+                let init_expr =
+                    preceding_stmt_int_literal_init(parent_body, stmt_index, &loop_var)?;
+                let lo_expr = if matches!(init_expr.kind, ExprKind::Integer(0, _)) {
+                    None
+                } else {
+                    Some(init_expr)
+                };
 
                 Some(LoopShape {
                     loop_var,
                     end_expr,
                     body: stripped_body,
-                    // While-shape continues to require literal-zero
-                    // init (preceding_stmt_inits_to_zero gates above);
-                    // non-zero init for the while-shape would land in a
-                    // future slice that mirrors 3b.3 for the while path.
-                    lo_expr: None,
+                    lo_expr,
                 })
             }
             _ => None,
@@ -1477,13 +1483,22 @@ fn stmt_writes_loop_var(stmt: &Stmt, loop_var: &str) -> bool {
     }
 }
 
-/// True iff `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T
-/// = 0i*;` — the canonical init for the `while`-shape's induction var.
-/// The worker fn's chunk-local index starts at 0, so if the source-level
-/// init is non-zero (or is a runtime expression) the worker's `k` won't
-/// agree with the source's `k` at iteration 0; reject in that case.
+/// If `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T = <int
+/// literal>;`, return the init expression. The literal value flows out
+/// via `LoopShape.lo_expr` for non-zero starts (slice 3b.9 — mirror of
+/// the for-range `lo` handling from slice 3b.3): the worker shifts its
+/// chunk-local index by the literal so the body's reads of `k` match
+/// the source-level value at iteration 0. Returns `None` if the
+/// preceding stmt isn't a let-mut of the loop var with an integer-
+/// literal init (non-literal init lands in a future slice — would need
+/// to either re-evaluate the init expression at par_reduce dispatch
+/// time, or reach back into the parent's already-initialized k alloca).
 /// Caller guarantees `stmt_index > 0`.
-fn preceding_stmt_inits_to_zero(parent_body: &Block, stmt_index: usize, loop_var: &str) -> bool {
+fn preceding_stmt_int_literal_init(
+    parent_body: &Block,
+    stmt_index: usize,
+    loop_var: &str,
+) -> Option<Expr> {
     let prev = &parent_body.stmts[stmt_index - 1];
     let StmtKind::Let {
         pattern,
@@ -1492,15 +1507,18 @@ fn preceding_stmt_inits_to_zero(parent_body: &Block, stmt_index: usize, loop_var
         ..
     } = &prev.kind
     else {
-        return false;
+        return None;
     };
     let PatternKind::Binding(name) = &pattern.kind else {
-        return false;
+        return None;
     };
     if name != loop_var {
-        return false;
+        return None;
     }
-    matches!(value.kind, ExprKind::Integer(0, _))
+    if !matches!(value.kind, ExprKind::Integer(_, _)) {
+        return None;
+    }
+    Some(value.clone())
 }
 
 /// a `return` / `break` / `continue` reachable from any statement or

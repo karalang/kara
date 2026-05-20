@@ -2246,4 +2246,111 @@ fn main() {
              sentinel = 'always dispatch'); got:\n{ir}"
         );
     }
+
+    // ── Slice 3b.9: while-shape non-zero literal init ────────────────
+    //
+    // Mirror of slice 3b.3 for the while-loop path. Today's
+    // preceding_stmt_int_literal_init returns Some(init_expr) for any
+    // int literal; the extract_loop_shape While arm normalizes Integer(0)
+    // → lo_expr = None (current path) and any other int literal →
+    // lo_expr = Some(expr). All the lo-shift machinery from 3b.3
+    // (env-struct field 0, worker fn start/end add) is reused unchanged.
+    // Variable init (e.g. `let mut k: T = lo;`) defers to a later slice.
+
+    #[test]
+    fn test_ir_reduction_while_shape_non_zero_init_slice3b9() {
+        // K = 100_000 puts the codegen-time cost gate above its threshold
+        // so the descriptor is actually emitted. Body has the same shape
+        // as the while-shape 3b.4 test (init + < + acc fold + k += 1)
+        // with the init bumped from 0 to 5.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 5i64;
+    while k < 100005i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "expected a karac_par_reduce call site for non-zero init while-shape; got:\n{ir}"
+        );
+        // Env-struct must exist + carry lo at field 0 + worker shifts
+        // raw_start/raw_end — same lo-threading IR shape as the for-
+        // range non-zero lo test (slice 3b.3), proving the mirror.
+        assert!(
+            ir.contains("__reduce_env"),
+            "expected env-struct alloca for init threading; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__reduce_lo"),
+            "expected lo unpack/insert symbol in worker fn; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("start.shift") && ir.contains("end.shift"),
+            "expected worker to shift raw_start and raw_end by init; got:\n{ir}"
+        );
+    }
+
+    /// Small-N E2E correctness for the while-shape non-zero init path.
+    /// Pin against the slice 3b.5 cost gate by keeping K=100 (gated to
+    /// sequential); even gated, lowering correctness should match the
+    /// closed-form serial sum.
+    #[test]
+    fn test_e2e_reduction_while_shape_non_zero_init_small_n_slice3b9() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 3i64;
+    while k < 103i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [3, 103) = (102 * 103 / 2) - (2 * 3 / 2) = 5253 - 3 = 5250
+        assert_eq!(out.trim(), "5250");
+    }
+
+    /// Multi-worker E2E: K = 100_000 init=10 → dispatches across pool
+    /// workers; the worker's chunk-local shift by init must agree across
+    /// workers so the combine yields the source-level Σ.
+    #[test]
+    fn test_e2e_reduction_while_shape_non_zero_init_multi_worker_slice3b9() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 10i64;
+    while k < 100010i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [10, 100010) = (100009 * 100010 / 2) - (9 * 10 / 2)
+        // = 5000950045 - 45 = 5000950000
+        assert_eq!(out.trim(), "5000950000");
+    }
 }
