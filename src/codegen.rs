@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
+use std::rc::Rc;
 
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -273,6 +274,22 @@ pub(super) struct Codegen<'ctx> {
     /// has a heap-bearing type (the destructor would have an empty body
     /// — skipped to avoid IR bloat).
     pub(crate) state_machine_state_destructors: HashMap<String, FunctionValue<'ctx>>,
+    /// Slice 8v Phase 2: cached `Program` snapshot used by the per-mono
+    /// state-machine emission path. `compile_generic_call` (in
+    /// `src/codegen/mono.rs`) needs access to the polymorphic
+    /// function's state-struct layout, yield points, and AST body to
+    /// emit the four per-mono state-machine helpers (state-struct
+    /// LLVM type, poll-fn, constructor, destructor) at the mangled
+    /// key. The existing call-site plumbing for `compile_generic_call`
+    /// doesn't thread `&Program` through `compile_expr` →
+    /// `compile_call` → `compile_generic_call`, so we snapshot a full
+    /// `Rc<Program>` clone at the top of `compile_program` and
+    /// dispense cheap `Rc` clones to per-mono callers as they fire.
+    /// The wrapping `Rc` avoids borrow-conflict pain when the per-mono
+    /// path needs both `&self` (for the snapshot read) and `&mut self`
+    /// (for the per-key emission helpers). Always populated for the
+    /// duration of `compile_program`; left `None` outside that scope.
+    pub(crate) program_snapshot: Option<Rc<Program>>,
     /// Non-unit return-type marker for network-boundary functions
     /// (phase 6 line 26 slice 8i). Key: same function key shape as
     /// `state_struct_types`. Value: the LLVM type of the function's
@@ -1458,6 +1475,7 @@ impl<'ctx> Codegen<'ctx> {
             state_machine_poll_fns: HashMap::new(),
             state_machine_state_constructors: HashMap::new(),
             state_machine_state_destructors: HashMap::new(),
+            program_snapshot: None,
             state_machine_return_types: HashMap::new(),
             struct_field_names: HashMap::new(),
             struct_field_type_names: HashMap::new(),
@@ -1740,6 +1758,13 @@ impl<'ctx> Codegen<'ctx> {
         // when computing primary-field alignment.
         self.declare_unions(program);
         self.declare_enums(program);
+        // Slice 8v Phase 2: snapshot the whole `Program` as `Rc<Program>`
+        // so the per-mono state-machine emission path triggered from
+        // `compile_generic_call` can access layouts / yield points /
+        // function ASTs without `&Program` being plumbed through
+        // `compile_expr` → `compile_call` → `compile_generic_call`.
+        // Cheap `Rc` clones flow to per-mono callers as they fire.
+        self.program_snapshot = Some(Rc::new(program.clone()));
         // Phase 6 line 26 slice 5: emit one `%kara.state.<fn_key>` LLVM
         // struct per entry in `program.state_struct_layouts` (populated
         // by the cli pipeline from slice 4). Must precede function-body

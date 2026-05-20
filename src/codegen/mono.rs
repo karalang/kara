@@ -104,6 +104,20 @@ impl<'ctx> super::Codegen<'ctx> {
             self.declare_mono_function(&generic_fn, &mangled)?;
             self.compile_mono_function(&generic_fn, &mangled)?;
 
+            // Slice 8v Phase 2: when the polymorphic source is a
+            // network-yielding fn (entry in `program.state_struct_layouts`
+            // under its base name), emit per-mono state-machine helpers
+            // (state-struct LLVM type + poll-fn + constructor +
+            // destructor) under the mangled key. `type_subst` is STILL
+            // ACTIVE here — the restore steps run after this — so
+            // `llvm_type_for_name("T")` inside the helpers resolves
+            // correctly to the per-mono concrete LLVM type. The
+            // orchestrator no-ops when the base key isn't in
+            // `state_struct_layouts` (non-yielding generic fn — the
+            // common case), so the cost for the common path is one
+            // HashMap lookup per generic-call mono.
+            self.emit_state_machine_helpers_for_mono(name, &mangled);
+
             // Restore state.
             self.const_subst = saved_const_subst;
             self.type_subst = saved_subst;
@@ -116,7 +130,165 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Call the specialized function.
+        // Slice 8v Phase 2: per-mono caller-side intercept. When
+        // the polymorphic source is a network-yielding fn, the
+        // per-mono state-machine helpers were emitted at the mangled
+        // key by `emit_state_machine_helpers_for_mono` above. Replace
+        // the direct `call @<mangled>(args)` with the state-machine
+        // invocation shape — mirrors slice 8d's caller-side intercept
+        // (in `src/codegen/call_dispatch.rs`) keyed on the mangled
+        // name instead of the source-level callee name:
+        //
+        //   %state  = call ptr @__kara_state_new_<mangled>()
+        //   store args into state struct captured-local fields
+        //   br label %kara.poll_loop
+        // kara.poll_loop:
+        //   %result = call i8 @__kara_poll_<mangled>(ptr %state, ptr null)
+        //   %pending = icmp eq i8 %result, 0
+        //   br i1 %pending, label %kara.poll_yield, label %kara.poll_done
+        // kara.poll_yield:
+        //   call i32 @sched_yield()
+        //   br label %kara.poll_loop
+        // kara.poll_done:
+        //   load terminal return value (if non-unit)
+        //   call void @free(ptr %state)
+        //
+        // Slice 8d's incomplete state-struct destructor invocation
+        // (the slice ships the destructor but doesn't yet call it
+        // from any use site) carries over here — destructor wiring
+        // for both the slice 8d and this per-mono intercept is a
+        // separate follow-on slice. Cooperative yield (`sched_yield`)
+        // matches the slice 8e shape so the parent task doesn't
+        // busy-spin between poll-fn invocations.
+        if let Some(ctor_fn) = self.state_machine_state_constructors.get(&mangled).copied() {
+            let poll_fn = self
+                .state_machine_poll_fns
+                .get(&mangled)
+                .copied()
+                .expect("poll-fn co-emitted with state-machine constructor");
+            let state_struct = self
+                .state_struct_types
+                .get(&mangled)
+                .copied()
+                .expect("state struct type co-emitted with constructor");
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let i8_ty = self.context.i8_type();
+            let cur_fn = self
+                .builder
+                .get_insert_block()
+                .and_then(|bb| bb.get_parent())
+                .expect("compile_generic_call inside a function context");
+
+            // Allocate the state struct via the constructor helper.
+            let state_call = self
+                .builder
+                .build_call(ctor_fn, &[], "kara.state")
+                .expect("call per-mono state-struct constructor");
+            let state_ptr = state_call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+
+            // Thread arg values into the state struct's captured-local
+            // slots — mirrors slice 8f's discipline. State-struct
+            // layout positions parameters first (1..=K after the tag
+            // at 0), so arg `i` goes into field `i + 1`. Per-mono
+            // emission used the active `type_subst` so the field
+            // types match `arg_vals[i].get_type()`.
+            for (i, val) in arg_vals.iter().enumerate() {
+                let field_idx = (i + 1) as u32;
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        state_struct,
+                        state_ptr,
+                        field_idx,
+                        &format!("kara.arg{i}.field_ptr"),
+                    )
+                    .expect("GEP per-mono state struct field for arg");
+                self.builder
+                    .build_store(field_ptr, *val)
+                    .expect("store arg into per-mono state struct field");
+            }
+
+            let loop_bb = self.context.append_basic_block(cur_fn, "kara.poll_loop");
+            let yield_bb = self.context.append_basic_block(cur_fn, "kara.poll_yield");
+            let done_bb = self.context.append_basic_block(cur_fn, "kara.poll_done");
+            self.builder
+                .build_unconditional_branch(loop_bb)
+                .expect("br to per-mono poll loop");
+            self.builder.position_at_end(loop_bb);
+            let null_cancel = ptr_ty.const_null();
+            let poll_call = self
+                .builder
+                .build_call(
+                    poll_fn,
+                    &[state_ptr.into(), null_cancel.into()],
+                    "kara.poll_result",
+                )
+                .expect("call per-mono poll-fn");
+            let poll_result = poll_call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_pending = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::EQ,
+                    poll_result,
+                    i8_ty.const_int(0, false),
+                    "kara.is_pending",
+                )
+                .expect("icmp eq i8 result, 0 for per-mono");
+            self.builder
+                .build_conditional_branch(is_pending, yield_bb, done_bb)
+                .expect("br on per-mono poll discriminant");
+
+            self.builder.position_at_end(yield_bb);
+            self.builder
+                .build_call(self.sched_yield_fn, &[], "kara.yield_result")
+                .expect("call sched_yield for per-mono cooperative yield");
+            self.builder
+                .build_unconditional_branch(loop_bb)
+                .expect("br back to per-mono poll loop after yield");
+
+            self.builder.position_at_end(done_bb);
+            // Slice 8i shape: when the mono's return type is non-unit
+            // (recorded under the mangled key by
+            // `emit_state_struct_type_for_key` when the polymorphic
+            // source had a non-unit return type and active `type_subst`
+            // resolved to a `state_machine_return_types`-eligible
+            // type), load the terminal field BEFORE freeing.
+            let call_result =
+                if let Some(ret_ty) = self.state_machine_return_types.get(&mangled).copied() {
+                    let n_fields = state_struct.count_fields();
+                    let terminal_idx = n_fields - 1;
+                    let terminal_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            terminal_idx,
+                            "kara.return.field_ptr",
+                        )
+                        .expect("GEP per-mono terminal return-value field on caller side");
+                    self.builder
+                        .build_load(ret_ty, terminal_ptr, "kara.return.value")
+                        .expect("load per-mono callee return value from terminal field")
+                } else {
+                    self.context.i64_type().const_int(0, false).into()
+                };
+            self.builder
+                .build_call(self.free_fn, &[state_ptr.into()], "")
+                .expect("call free on per-mono state struct");
+            return Ok(call_result);
+        }
+
+        // Non-yielding generic call: emit the direct call to the
+        // mono'd specialization. This is the common case for
+        // generic functions — most user generics aren't network-
+        // yielding (only those reachable to `sends(Network)` /
+        // `receives(Network)` end up in `state_struct_layouts`).
         let func = match self.module.get_function(&mangled) {
             Some(f) => f,
             None => return Ok(self.context.i64_type().const_int(0, false).into()),

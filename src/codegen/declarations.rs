@@ -11,6 +11,7 @@
 //! (`declare_extern_functions`, `declare_one_extern_function`).
 
 use std::collections::{HashMap, HashSet};
+use std::rc::Rc;
 
 use crate::ast::*;
 
@@ -318,55 +319,92 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_generic_fn_key(program, fn_key) {
                 continue;
             }
-            let mut fields: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(1 + layout.fields.len());
-            // Tag is i32 — yield-point indices for v1 fit comfortably in
-            // 31 bits (designers expect single-digit yields per
-            // network-boundary function; the headroom matches the
-            // `karac explain` predictability claim from the design spec).
-            fields.push(self.context.i32_type().into());
-            for field in &layout.fields {
-                let ty: BasicTypeEnum<'ctx> = match &field.type_name {
-                    Some(name) => self.llvm_type_for_name(name),
-                    None => self.context.i64_type().into(),
-                };
-                fields.push(ty);
-            }
-            // Phase 6 line 26 slice 8i: append a terminal return-value
-            // field when the function's return type is non-unit. v1
-            // records `i64` returns only — other types (Vec, struct,
-            // user-named, etc.) skip the terminal field and continue
-            // to use the unit-return path. The terminal arm of the
-            // poll-fn writes a placeholder into this field before
-            // Ready; caller-side intercepts load it as the call's
-            // return value.
-            if let Some(fn_ast) = find_function_ast(program, fn_key) {
-                if let Some(ret_te) = &fn_ast.return_type {
-                    if is_i64_return_type(ret_te) {
-                        let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
-                        fields.push(i64_ty);
-                        self.state_machine_return_types
-                            .insert(fn_key.clone(), i64_ty);
-                    }
+            self.emit_state_struct_type_for_key(program, fn_key, fn_key, layout);
+        }
+    }
+
+    /// Slice 8v Phase 2: per-key state-struct LLVM type emission. The
+    /// base-name pass (above) iterates `state_struct_layouts` and calls
+    /// this with `ast_key == emit_key`. The per-mono path
+    /// (`emit_state_machine_helpers_for_mono`) passes the polymorphic
+    /// base name as `ast_key` (used for `find_function_ast` to resolve
+    /// the return type) and the mangled name as `emit_key` (used in the
+    /// LLVM symbol names + the `state_struct_types` / `state_machine_return_types`
+    /// map keys). Field types resolve through `llvm_type_for_name` which
+    /// honors the active `self.type_subst`, so per-mono callers populate
+    /// the subst before calling this helper.
+    pub(super) fn emit_state_struct_type_for_key(
+        &mut self,
+        program: &Program,
+        ast_key: &str,
+        emit_key: &str,
+        layout: &crate::ast::StateStructLayout,
+    ) {
+        let mut fields: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(1 + layout.fields.len());
+        // Tag is i32 — yield-point indices for v1 fit comfortably in
+        // 31 bits (designers expect single-digit yields per
+        // network-boundary function; the headroom matches the
+        // `karac explain` predictability claim from the design spec).
+        fields.push(self.context.i32_type().into());
+        // Slice 8v Phase 2: for per-mono emission, the polymorphic
+        // source's `T`-typed params have `type_name: None` in the
+        // layout (the typechecker's `pattern_binding_types`
+        // recorder doesn't emit a surface name for type-parameter
+        // references). Look up each captured-local field's
+        // parameter declaration in `fn_ast.params` and use its
+        // `TypeExpr` through `llvm_type_for_type_expr` — which
+        // honors the active `type_subst` (e.g. `T → i32` for the
+        // i32 mono). Non-parameter fields (arm-local let-bindings)
+        // fall through to the existing `None → i64` fallback;
+        // generic-typed let-bindings inside the body aren't
+        // currently surfaced through the param-lookup, so
+        // those stay at the i64 over-approximation pending a
+        // follow-on slice that walks the body AST.
+        let fn_ast = find_function_ast(program, ast_key);
+        for field in &layout.fields {
+            let ty: BasicTypeEnum<'ctx> = match &field.type_name {
+                Some(name) => self.llvm_type_for_name(name),
+                None => lookup_param_type_expr(fn_ast, &field.name)
+                    .map(|te| self.llvm_type_for_type_expr(&te))
+                    .unwrap_or_else(|| self.context.i64_type().into()),
+            };
+            fields.push(ty);
+        }
+        // Phase 6 line 26 slice 8i: append a terminal return-value
+        // field when the function's return type is non-unit. v1
+        // records `i64` returns only — other types (Vec, struct,
+        // user-named, etc.) skip the terminal field and continue
+        // to use the unit-return path. The terminal arm of the
+        // poll-fn writes a placeholder into this field before
+        // Ready; caller-side intercepts load it as the call's
+        // return value.
+        if let Some(fn_ast) = fn_ast {
+            if let Some(ret_te) = &fn_ast.return_type {
+                if is_i64_return_type(ret_te) {
+                    let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+                    fields.push(i64_ty);
+                    self.state_machine_return_types
+                        .insert(emit_key.to_string(), i64_ty);
                 }
             }
-            let st = self
-                .context
-                .opaque_struct_type(&format!("kara.state.{}", fn_key));
-            st.set_body(&fields, false);
-            // LLVM `print_to_string` elides named types that no module
-            // entity references; without an anchor, the slice-5 type
-            // would exist in the context but not appear in the IR
-            // dump that codegen tests grep against. Emit a private
-            // zero-initialized global per state struct to keep the
-            // type referenced. Slice 6 (the poll-function body rewrite)
-            // will reference the same type from function signatures
-            // directly, at which point this anchor can be removed.
-            let anchor_name = format!("__kara_state_type_anchor_{}", fn_key);
-            let anchor = self.module.add_global(st, None, &anchor_name);
-            anchor.set_linkage(Linkage::Private);
-            anchor.set_initializer(&st.const_zero());
-            self.state_struct_types.insert(fn_key.clone(), st);
         }
+        let st = self
+            .context
+            .opaque_struct_type(&format!("kara.state.{}", emit_key));
+        st.set_body(&fields, false);
+        // LLVM `print_to_string` elides named types that no module
+        // entity references; without an anchor, the slice-5 type
+        // would exist in the context but not appear in the IR
+        // dump that codegen tests grep against. Emit a private
+        // zero-initialized global per state struct to keep the
+        // type referenced. Slice 6 (the poll-function body rewrite)
+        // will reference the same type from function signatures
+        // directly, at which point this anchor can be removed.
+        let anchor_name = format!("__kara_state_type_anchor_{}", emit_key);
+        let anchor = self.module.add_global(st, None, &anchor_name);
+        anchor.set_linkage(Linkage::Private);
+        anchor.set_initializer(&st.const_zero());
+        self.state_struct_types.insert(emit_key.to_string(), st);
     }
 
     // ── State-machine poll-function emission (line 26 slice 6) ────────
@@ -398,17 +436,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// codegen pieces, though the ordering doesn't matter — the SOA
     /// pass doesn't touch state structs.
     pub(super) fn emit_state_machine_poll_fns(&mut self, program: &Program) {
-        let i8_ty = self.context.i8_type();
-        let i32_ty = self.context.i32_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        // Poll-fn ABI: `i8 fn(ptr state, ptr cancel)`.
-        let fn_type = i8_ty.fn_type(
-            &[
-                BasicMetadataTypeEnum::from(ptr_ty),
-                BasicMetadataTypeEnum::from(ptr_ty),
-            ],
-            false,
-        );
         // Sort the keys for deterministic emission order — HashMap
         // iteration order is randomized, and we want the IR text to be
         // stable across runs so test grep is reproducible (the existing
@@ -423,750 +450,769 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_generic_fn_key(program, fn_key) {
                 continue;
             }
-            let state_struct = match self.state_struct_types.get(fn_key) {
-                Some(st) => *st,
-                // Defensive: layout entry without a corresponding LLVM
-                // struct type means slice-5 emit didn't run or the key
-                // shapes diverged. Skip rather than crash — the test
-                // suite will surface the divergence before users do.
-                None => continue,
-            };
-            let layout = program
-                .state_struct_layouts
-                .get(fn_key)
-                .expect("layout exists for sorted key");
+            self.emit_state_machine_poll_fn_for_key(program, fn_key, fn_key);
+        }
+    }
 
-            // Slice 8h/8j: build per-arm segments of user-code statements
-            // between yield-point spans. For each statement in the user
-            // function's body, classify it as either:
-            // - a yield-point Call/MethodCall (advances the current
-            //   segment index, statement itself isn't emitted — the
-            //   state-transition lowering handles it via tag-store +
-            //   Pending return),
-            // - an emittable void-call statement: slice 8h covers
-            //   `name()` (free-fn, no args, void return); slice 8j adds
-            //   `<self|name>.method()` (impl method, no args, void
-            //   return) where the receiver is `self` or a captured
-            //   layout field already reloaded into a slot by slice 8a,
-            // - any other shape (let bindings, control flow, non-void
-            //   calls, args-bearing calls, non-captured receivers) →
-            //   ignored at v1; future slices extend the supported set.
-            let yield_points = program
-                .yield_points
-                .get(fn_key)
-                .cloned()
-                .unwrap_or_default();
-            let layout_names: std::collections::HashSet<String> =
-                layout.fields.iter().map(|f| f.name.clone()).collect();
-            // Slice 8m: `current_names` extends `layout_names` with
-            // arm-local let-introduced bindings as the walker
-            // encounters them. Resets to `layout_names` at every yield
-            // (each new arm starts with only the slice-8a reload
-            // prologue contents visible — arm-local lets from prior
-            // arms aren't carried forward without state-struct write-
-            // back, which is a follow-on slice).
-            let mut current_names = layout_names.clone();
-            let mut per_arm_stmts: Vec<Vec<BodySplitStmt>> =
-                (0..yield_points.len() + 1).map(|_| Vec::new()).collect();
-            // Slice 8o: capture the user's final-expression value when
-            // it's a recognised `BodyArg` shape. The terminal-arm
-            // emission consults this instead of slice 8i's `i64 0`
-            // placeholder, threading the user's actual return value
-            // through the state-struct terminal field. Walker fills
-            // this AFTER the per-statement loop so the recognition
-            // uses the terminal arm's `current_names` (including any
-            // arm-local lets introduced in the terminal arm body).
-            let mut terminal_return: Option<BodyArg> = None;
-            if let Some(fn_ast) = find_function_ast(program, fn_key) {
-                let mut cur_arm = 0usize;
-                for stmt in &fn_ast.body.stmts {
-                    // Slice 8m: handle simple `let name = <recognised>`
-                    // statements between yields. The let is queued for
-                    // emission (alloca + RHS compute + store) and the
-                    // binding name is added to `current_names` so
-                    // subsequent calls in the same arm can reference
-                    // it. Non-binding-pattern shapes (destructuring,
-                    // struct patterns, etc.) and unrecognised RHS
-                    // shapes are silently skipped — same conservative
-                    // rule as the call-classification arms.
-                    if let StmtKind::Let { value, pattern, .. } = &stmt.kind {
-                        if let PatternKind::Binding(name) = &pattern.kind {
-                            if let Some(rhs) = recognize_body_arg(value, &current_names) {
-                                per_arm_stmts[cur_arm].push(BodySplitStmt::Let {
+    /// Slice 8v Phase 2: per-key poll-fn emission. The base-name pass
+    /// iterates `state_struct_layouts` and calls this with `ast_key ==
+    /// emit_key`. The per-mono path passes the polymorphic base name
+    /// as `ast_key` (used to look up the layout, yield-points table,
+    /// and function AST for the body-splitting walker) and the mangled
+    /// name as `emit_key` (used for the `__kara_poll_<emit_key>`
+    /// LLVM symbol name + the state-struct + return-type table
+    /// lookups). The body-splitting walker invokes
+    /// `self.materialize_body_arg` / `llvm_type_for_name` inside the
+    /// per-arm emission; those routines honor `self.type_subst`, so
+    /// per-mono callers populate the subst before calling this helper
+    /// to get the right concrete LLVM types for `T`-typed locals.
+    pub(super) fn emit_state_machine_poll_fn_for_key(
+        &mut self,
+        program: &Program,
+        ast_key: &str,
+        emit_key: &str,
+    ) {
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        // Poll-fn ABI: `i8 fn(ptr state, ptr cancel)`.
+        let fn_type = i8_ty.fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty),
+                BasicMetadataTypeEnum::from(ptr_ty),
+            ],
+            false,
+        );
+        let state_struct = match self.state_struct_types.get(emit_key) {
+            Some(st) => *st,
+            // Defensive: layout entry without a corresponding LLVM
+            // struct type means slice-5 emit didn't run or the key
+            // shapes diverged. Skip rather than crash — the test
+            // suite will surface the divergence before users do.
+            None => return,
+        };
+        let layout = match program.state_struct_layouts.get(ast_key) {
+            Some(l) => l,
+            None => return,
+        };
+
+        // Slice 8h/8j: build per-arm segments of user-code statements
+        // between yield-point spans. For each statement in the user
+        // function's body, classify it as either:
+        // - a yield-point Call/MethodCall (advances the current
+        //   segment index, statement itself isn't emitted — the
+        //   state-transition lowering handles it via tag-store +
+        //   Pending return),
+        // - an emittable void-call statement: slice 8h covers
+        //   `name()` (free-fn, no args, void return); slice 8j adds
+        //   `<self|name>.method()` (impl method, no args, void
+        //   return) where the receiver is `self` or a captured
+        //   layout field already reloaded into a slot by slice 8a,
+        // - any other shape (let bindings, control flow, non-void
+        //   calls, args-bearing calls, non-captured receivers) →
+        //   ignored at v1; future slices extend the supported set.
+        let yield_points = program
+            .yield_points
+            .get(ast_key)
+            .cloned()
+            .unwrap_or_default();
+        let layout_names: std::collections::HashSet<String> =
+            layout.fields.iter().map(|f| f.name.clone()).collect();
+        // Slice 8m: `current_names` extends `layout_names` with
+        // arm-local let-introduced bindings as the walker
+        // encounters them. Resets to `layout_names` at every yield
+        // (each new arm starts with only the slice-8a reload
+        // prologue contents visible — arm-local lets from prior
+        // arms aren't carried forward without state-struct write-
+        // back, which is a follow-on slice).
+        let mut current_names = layout_names.clone();
+        let mut per_arm_stmts: Vec<Vec<BodySplitStmt>> =
+            (0..yield_points.len() + 1).map(|_| Vec::new()).collect();
+        // Slice 8o: capture the user's final-expression value when
+        // it's a recognised `BodyArg` shape. The terminal-arm
+        // emission consults this instead of slice 8i's `i64 0`
+        // placeholder, threading the user's actual return value
+        // through the state-struct terminal field. Walker fills
+        // this AFTER the per-statement loop so the recognition
+        // uses the terminal arm's `current_names` (including any
+        // arm-local lets introduced in the terminal arm body).
+        let mut terminal_return: Option<BodyArg> = None;
+        if let Some(fn_ast) = find_function_ast(program, ast_key) {
+            let mut cur_arm = 0usize;
+            for stmt in &fn_ast.body.stmts {
+                // Slice 8m: handle simple `let name = <recognised>`
+                // statements between yields. The let is queued for
+                // emission (alloca + RHS compute + store) and the
+                // binding name is added to `current_names` so
+                // subsequent calls in the same arm can reference
+                // it. Non-binding-pattern shapes (destructuring,
+                // struct patterns, etc.) and unrecognised RHS
+                // shapes are silently skipped — same conservative
+                // rule as the call-classification arms.
+                if let StmtKind::Let { value, pattern, .. } = &stmt.kind {
+                    if let PatternKind::Binding(name) = &pattern.kind {
+                        if let Some(rhs) = recognize_body_arg(value, &current_names) {
+                            per_arm_stmts[cur_arm].push(BodySplitStmt::Let {
+                                name: name.clone(),
+                                rhs,
+                            });
+                            current_names.insert(name.clone());
+                        }
+                    }
+                    // Slice 8t: a let RHS may contain nested yield-
+                    // point calls (e.g. `let x = some_async();`).
+                    // Advance cur_arm by the count so subsequent
+                    // stmts land in the correct arm.
+                    let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                    for _ in 0..nested {
+                        cur_arm += 1;
+                        current_names = layout_names.clone();
+                    }
+                    continue;
+                }
+                // Slice 8p: `name = value` assignment. Walker
+                // accepts targets that are bare identifiers
+                // already in `current_names` (i.e. captured-local
+                // params OR arm-local lets); value must match the
+                // recognised `BodyArg` set. Non-identifier targets
+                // (field assignments, index assignments) and
+                // unrecognised values are silently skipped — same
+                // conservative rule.
+                if let StmtKind::Assign { target, value } = &stmt.kind {
+                    if let ExprKind::Identifier(name) = &target.kind {
+                        if current_names.contains(name) {
+                            if let Some(body_value) = recognize_body_arg(value, &current_names) {
+                                per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
                                     name: name.clone(),
-                                    rhs,
+                                    value: body_value,
                                 });
-                                current_names.insert(name.clone());
                             }
                         }
-                        // Slice 8t: a let RHS may contain nested yield-
-                        // point calls (e.g. `let x = some_async();`).
-                        // Advance cur_arm by the count so subsequent
-                        // stmts land in the correct arm.
-                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
-                        for _ in 0..nested {
-                            cur_arm += 1;
-                            current_names = layout_names.clone();
-                        }
-                        continue;
                     }
-                    // Slice 8p: `name = value` assignment. Walker
-                    // accepts targets that are bare identifiers
-                    // already in `current_names` (i.e. captured-local
-                    // params OR arm-local lets); value must match the
-                    // recognised `BodyArg` set. Non-identifier targets
-                    // (field assignments, index assignments) and
-                    // unrecognised values are silently skipped — same
-                    // conservative rule.
-                    if let StmtKind::Assign { target, value } = &stmt.kind {
-                        if let ExprKind::Identifier(name) = &target.kind {
-                            if current_names.contains(name) {
-                                if let Some(body_value) = recognize_body_arg(value, &current_names)
-                                {
-                                    per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
-                                        name: name.clone(),
-                                        value: body_value,
-                                    });
-                                }
-                            }
-                        }
-                        // Slice 8t: same nested-yield descent as the
-                        // Let branch; an Assign RHS may contain CF or
-                        // yield calls.
-                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
-                        for _ in 0..nested {
-                            cur_arm += 1;
-                            current_names = layout_names.clone();
-                        }
-                        continue;
+                    // Slice 8t: same nested-yield descent as the
+                    // Let branch; an Assign RHS may contain CF or
+                    // yield calls.
+                    let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                    for _ in 0..nested {
+                        cur_arm += 1;
+                        current_names = layout_names.clone();
                     }
-                    // Slice 8r: `name OP= value` compound assignment.
-                    // Desugars to `name = name OP value` so the
-                    // existing slice-8p Assign emission + slice-8q
-                    // Binary materialisation handle the actual codegen
-                    // unchanged. Walker accepts identifier targets in
-                    // `current_names` (captured-local OR arm-local
-                    // let) and value shapes in the slice-8q recognised
-                    // set. CompoundOp arms supported by slice 8r: Add
-                    // / Sub / Mul / Div / Mod — match the v1
-                    // arithmetic ops `BinaryArithOp` already lowers to
-                    // LLVM `build_int_*` calls. Bitwise / shift
-                    // compound ops (`&=` / `|=` / `^=` / `<<=` /
-                    // `>>=`) silently drop pending the same
-                    // recognition extension on the `Binary` side.
-                    if let StmtKind::CompoundAssign { target, op, value } = &stmt.kind {
-                        if let ExprKind::Identifier(name) = &target.kind {
-                            if current_names.contains(name) {
-                                let arith_op = match op {
-                                    CompoundOp::Add => Some(BinaryArithOp::Add),
-                                    CompoundOp::Sub => Some(BinaryArithOp::Sub),
-                                    CompoundOp::Mul => Some(BinaryArithOp::Mul),
-                                    CompoundOp::Div => Some(BinaryArithOp::Div),
-                                    CompoundOp::Mod => Some(BinaryArithOp::Mod),
-                                    CompoundOp::BitAnd
-                                    | CompoundOp::BitOr
-                                    | CompoundOp::BitXor
-                                    | CompoundOp::Shl
-                                    | CompoundOp::Shr => None,
-                                };
-                                if let (Some(arith_op), Some(rhs)) =
-                                    (arith_op, recognize_body_arg(value, &current_names))
-                                {
-                                    let lhs = BodyArg::Slot(name.clone());
-                                    per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
-                                        name: name.clone(),
-                                        value: BodyArg::Binary {
-                                            op: arith_op,
-                                            lhs: Box::new(lhs),
-                                            rhs: Box::new(rhs),
-                                        },
-                                    });
-                                }
-                            }
-                        }
-                        // Slice 8t: nested-yield descent for the
-                        // compound-assign RHS too.
-                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
-                        for _ in 0..nested {
-                            cur_arm += 1;
-                            current_names = layout_names.clone();
-                        }
-                        continue;
-                    }
-                    let StmtKind::Expr(expr) = &stmt.kind else {
-                        continue;
-                    };
-                    // Is this stmt-expr the yield-point call for the
-                    // next yield? Compare offsets — yield_points are
-                    // recorded in source order by slice 2's walker.
-                    if cur_arm < yield_points.len() {
-                        let yp_span = &yield_points[cur_arm].span;
-                        if expr.span.offset == yp_span.offset && expr.span.length == yp_span.length
-                        {
-                            cur_arm += 1;
-                            // Slice 8m: reset arm-local lets at yield
-                            // boundary. layout-captured bindings stay
-                            // available via slice-8a's reload prologue;
-                            // arm-local lets from the prior arm don't
-                            // survive without state-struct write-back.
-                            current_names = layout_names.clone();
-                            continue;
-                        }
-                    }
-                    match &expr.kind {
-                        // Slice 8h + 8k shape: bare-identifier free-fn
-                        // call with zero-or-more args, each arg in a
-                        // recognised shape (integer literal or
-                        // captured-local identifier reference). Calls
-                        // whose args fall outside the recognised set
-                        // are silently skipped — the walker's coverage
-                        // grows incrementally as arg shapes get
-                        // threaded through.
-                        ExprKind::Call { callee, args } => {
-                            if let ExprKind::Identifier(name) = &callee.kind {
-                                let body_args: Option<Vec<BodyArg>> = args
-                                    .iter()
-                                    .map(|a| recognize_body_arg(&a.value, &current_names))
-                                    .collect();
-                                if let Some(body_args) = body_args {
-                                    per_arm_stmts[cur_arm].push(BodySplitStmt::FreeFnCall {
-                                        name: name.clone(),
-                                        args: body_args,
-                                    });
-                                }
-                            }
-                        }
-                        // Slice 8j + 8l shape: `<recv>.method(args...)`
-                        // with zero-or-more recognised args. Receiver
-                        // must resolve to a layout field (so slice 8a's
-                        // reload prologue has already alloca'd a slot
-                        // for it); callee must resolve through
-                        // `method_callee_types` to a stable
-                        // `Type.method` symbol; each arg must match the
-                        // slice-8k `BodyArg` recognised set (any
-                        // unrecognised arg → whole call skipped).
-                        ExprKind::MethodCall { object, args, .. } => {
-                            let receiver_field = match &object.kind {
-                                ExprKind::SelfValue => Some("self".to_string()),
-                                ExprKind::Identifier(name)
-                                    if current_names.contains(name.as_str()) =>
-                                {
-                                    Some(name.clone())
-                                }
-                                _ => None,
+                    continue;
+                }
+                // Slice 8r: `name OP= value` compound assignment.
+                // Desugars to `name = name OP value` so the
+                // existing slice-8p Assign emission + slice-8q
+                // Binary materialisation handle the actual codegen
+                // unchanged. Walker accepts identifier targets in
+                // `current_names` (captured-local OR arm-local
+                // let) and value shapes in the slice-8q recognised
+                // set. CompoundOp arms supported by slice 8r: Add
+                // / Sub / Mul / Div / Mod — match the v1
+                // arithmetic ops `BinaryArithOp` already lowers to
+                // LLVM `build_int_*` calls. Bitwise / shift
+                // compound ops (`&=` / `|=` / `^=` / `<<=` /
+                // `>>=`) silently drop pending the same
+                // recognition extension on the `Binary` side.
+                if let StmtKind::CompoundAssign { target, op, value } = &stmt.kind {
+                    if let ExprKind::Identifier(name) = &target.kind {
+                        if current_names.contains(name) {
+                            let arith_op = match op {
+                                CompoundOp::Add => Some(BinaryArithOp::Add),
+                                CompoundOp::Sub => Some(BinaryArithOp::Sub),
+                                CompoundOp::Mul => Some(BinaryArithOp::Mul),
+                                CompoundOp::Div => Some(BinaryArithOp::Div),
+                                CompoundOp::Mod => Some(BinaryArithOp::Mod),
+                                CompoundOp::BitAnd
+                                | CompoundOp::BitOr
+                                | CompoundOp::BitXor
+                                | CompoundOp::Shl
+                                | CompoundOp::Shr => None,
                             };
-                            let callee_key = program
-                                .method_callee_types
-                                .get(&(expr.span.offset, expr.span.length))
-                                .cloned();
+                            if let (Some(arith_op), Some(rhs)) =
+                                (arith_op, recognize_body_arg(value, &current_names))
+                            {
+                                let lhs = BodyArg::Slot(name.clone());
+                                per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
+                                    name: name.clone(),
+                                    value: BodyArg::Binary {
+                                        op: arith_op,
+                                        lhs: Box::new(lhs),
+                                        rhs: Box::new(rhs),
+                                    },
+                                });
+                            }
+                        }
+                    }
+                    // Slice 8t: nested-yield descent for the
+                    // compound-assign RHS too.
+                    let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                    for _ in 0..nested {
+                        cur_arm += 1;
+                        current_names = layout_names.clone();
+                    }
+                    continue;
+                }
+                let StmtKind::Expr(expr) = &stmt.kind else {
+                    continue;
+                };
+                // Is this stmt-expr the yield-point call for the
+                // next yield? Compare offsets — yield_points are
+                // recorded in source order by slice 2's walker.
+                if cur_arm < yield_points.len() {
+                    let yp_span = &yield_points[cur_arm].span;
+                    if expr.span.offset == yp_span.offset && expr.span.length == yp_span.length {
+                        cur_arm += 1;
+                        // Slice 8m: reset arm-local lets at yield
+                        // boundary. layout-captured bindings stay
+                        // available via slice-8a's reload prologue;
+                        // arm-local lets from the prior arm don't
+                        // survive without state-struct write-back.
+                        current_names = layout_names.clone();
+                        continue;
+                    }
+                }
+                match &expr.kind {
+                    // Slice 8h + 8k shape: bare-identifier free-fn
+                    // call with zero-or-more args, each arg in a
+                    // recognised shape (integer literal or
+                    // captured-local identifier reference). Calls
+                    // whose args fall outside the recognised set
+                    // are silently skipped — the walker's coverage
+                    // grows incrementally as arg shapes get
+                    // threaded through.
+                    ExprKind::Call { callee, args } => {
+                        if let ExprKind::Identifier(name) = &callee.kind {
                             let body_args: Option<Vec<BodyArg>> = args
                                 .iter()
                                 .map(|a| recognize_body_arg(&a.value, &current_names))
                                 .collect();
-                            if let (Some(receiver_field), Some(callee_key), Some(body_args)) =
-                                (receiver_field, callee_key, body_args)
-                            {
-                                per_arm_stmts[cur_arm].push(BodySplitStmt::MethodCall {
-                                    receiver_field,
-                                    callee_key,
+                            if let Some(body_args) = body_args {
+                                per_arm_stmts[cur_arm].push(BodySplitStmt::FreeFnCall {
+                                    name: name.clone(),
                                     args: body_args,
                                 });
                             }
                         }
-                        // Slice 8t: stmt-expr is control flow (`if cond
-                        // { fetch(); }`, `while !done { fetch(); }`,
-                        // `for x in xs { fetch(); }`, `match cond { ...
-                        // }`) or another unrecognised shape. Slice 2's
-                        // walker already recorded any nested yield-
-                        // points inside the CF body; this descent
-                        // advances `cur_arm` for each, so post-CF
-                        // statements get queued into the correct (post-
-                        // yield) arm. The CF expression itself is
-                        // dropped from the IR — a follow-on slice
-                        // rebuilds it as branching codegen.
-                        _ => {
-                            let nested =
-                                count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
-                            for _ in 0..nested {
-                                cur_arm += 1;
-                                current_names = layout_names.clone();
+                    }
+                    // Slice 8j + 8l shape: `<recv>.method(args...)`
+                    // with zero-or-more recognised args. Receiver
+                    // must resolve to a layout field (so slice 8a's
+                    // reload prologue has already alloca'd a slot
+                    // for it); callee must resolve through
+                    // `method_callee_types` to a stable
+                    // `Type.method` symbol; each arg must match the
+                    // slice-8k `BodyArg` recognised set (any
+                    // unrecognised arg → whole call skipped).
+                    ExprKind::MethodCall { object, args, .. } => {
+                        let receiver_field = match &object.kind {
+                            ExprKind::SelfValue => Some("self".to_string()),
+                            ExprKind::Identifier(name) if current_names.contains(name.as_str()) => {
+                                Some(name.clone())
                             }
+                            _ => None,
+                        };
+                        let callee_key = program
+                            .method_callee_types
+                            .get(&(expr.span.offset, expr.span.length))
+                            .cloned();
+                        let body_args: Option<Vec<BodyArg>> = args
+                            .iter()
+                            .map(|a| recognize_body_arg(&a.value, &current_names))
+                            .collect();
+                        if let (Some(receiver_field), Some(callee_key), Some(body_args)) =
+                            (receiver_field, callee_key, body_args)
+                        {
+                            per_arm_stmts[cur_arm].push(BodySplitStmt::MethodCall {
+                                receiver_field,
+                                callee_key,
+                                args: body_args,
+                            });
+                        }
+                    }
+                    // Slice 8t: stmt-expr is control flow (`if cond
+                    // { fetch(); }`, `while !done { fetch(); }`,
+                    // `for x in xs { fetch(); }`, `match cond { ...
+                    // }`) or another unrecognised shape. Slice 2's
+                    // walker already recorded any nested yield-
+                    // points inside the CF body; this descent
+                    // advances `cur_arm` for each, so post-CF
+                    // statements get queued into the correct (post-
+                    // yield) arm. The CF expression itself is
+                    // dropped from the IR — a follow-on slice
+                    // rebuilds it as branching codegen.
+                    _ => {
+                        let nested = count_yields_inside_span(&stmt.span, &yield_points, cur_arm);
+                        for _ in 0..nested {
+                            cur_arm += 1;
+                            current_names = layout_names.clone();
                         }
                     }
                 }
-                // Slice 8o: capture the block's trailing expression (if
-                // any) as the terminal-arm return value, provided it
-                // matches the `BodyArg` recognised set. The walker
-                // reaches here after processing all `stmts`, with
-                // `current_names` reflecting the terminal arm's scope
-                // (layout-captured locals + any terminal-arm let
-                // bindings). Non-i64-returning functions still record
-                // the value here, but the terminal-arm emission only
-                // consults `terminal_return` when
-                // `state_machine_return_types` has an entry — so non-
-                // i64 returns stay on the unit path until follow-on
-                // slices widen the supported set.
-                if let Some(final_expr) = fn_ast.body.final_expr.as_deref() {
-                    terminal_return = recognize_body_arg(final_expr, &current_names);
+            }
+            // Slice 8o: capture the block's trailing expression (if
+            // any) as the terminal-arm return value, provided it
+            // matches the `BodyArg` recognised set. The walker
+            // reaches here after processing all `stmts`, with
+            // `current_names` reflecting the terminal arm's scope
+            // (layout-captured locals + any terminal-arm let
+            // bindings). Non-i64-returning functions still record
+            // the value here, but the terminal-arm emission only
+            // consults `terminal_return` when
+            // `state_machine_return_types` has an entry — so non-
+            // i64 returns stay on the unit path until follow-on
+            // slices widen the supported set.
+            if let Some(final_expr) = fn_ast.body.final_expr.as_deref() {
+                terminal_return = recognize_body_arg(final_expr, &current_names);
+            }
+        }
+        let poll_name = format!("__kara_poll_{emit_key}");
+        let poll_fn = self.module.add_function(&poll_name, fn_type, None);
+        // `Internal` rather than `Private`: both restrict visibility
+        // to the current module, but `Internal` is the conventional
+        // LLVM choice for codegen-synthesized helpers (the function
+        // appears as `define internal i8 @__kara_poll_<fn_key>`),
+        // while `Private` is reserved for symbols the linker should
+        // strip outright. Caller-side wiring in slice 7+ will load
+        // the FunctionValue through the side-table; the symbol need
+        // not be link-visible.
+        poll_fn.set_linkage(Linkage::Internal);
+
+        // Save outer builder position — slice 6 is invoked before
+        // function-body lowering runs, so there's no insert block
+        // to save, but the save/restore is cheap and future-proofs
+        // against re-ordering.
+        let saved_bb = self.builder.get_insert_block();
+
+        let entry = self.context.append_basic_block(poll_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // Typed GEP into the state struct's field 0 (the i32 tag).
+        // Keeps the named `%kara.state.<fn_key>` type referenced from
+        // a real instruction so LLVM's `print_to_string` retains the
+        // type-definition line.
+        let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 0, "tag_ptr")
+            .expect("state struct field 0 (tag) GEP must succeed");
+        // Load the tag — drives the slice-7 switch dispatch. The
+        // GEP + load are the prologue every subsequent sub-slice
+        // keeps; slice 7 adds the switch arms; slice 8 fills in
+        // per-yield-arm captured-locals reload + user-code resume.
+        let tag = self
+            .builder
+            .build_load(i32_ty, tag_ptr, "tag")
+            .expect("load tag from state struct")
+            .into_int_value();
+
+        // Slice 7: switch the tag against one arm per (initial-call
+        // state + per-yield post-resume state). For N yield points
+        // recorded on the function, emit N+1 arms — state 0 is the
+        // initial call (before any yield); states 1..=N are the
+        // post-yield resume points. The default arm is `unreachable`
+        // since the runtime never invokes the poll-fn with an
+        // out-of-range tag (the state-struct initializer pins tag=0
+        // at allocation time, and tag transitions are codegen-
+        // controlled). Slice 6's stub returned Pending
+        // unconditionally; slice 7 keeps each arm at Pending so the
+        // observable per-arm behavior is unchanged — slice 8 fills
+        // the arms with actual resume logic.
+        let yield_count = program
+            .yield_points
+            .get(ast_key)
+            .map(|v| v.len())
+            .unwrap_or(0);
+        let arm_count = yield_count + 1;
+        let default_block = self.context.append_basic_block(poll_fn, "tag_unreachable");
+        let arm_blocks: Vec<_> = (0..arm_count)
+            .map(|i| {
+                self.context
+                    .append_basic_block(poll_fn, &format!("state_{i}"))
+            })
+            .collect();
+        let cases: Vec<_> = arm_blocks
+            .iter()
+            .enumerate()
+            .map(|(i, bb)| (i32_ty.const_int(i as u64, false), *bb))
+            .collect();
+        self.builder
+            .build_switch(tag, default_block, &cases)
+            .expect("build switch on state tag");
+
+        // Slice-8a per-arm body: each state arm emits a uniform
+        // reload prologue — for every captured local in the
+        // layout, GEP into the corresponding state-struct field
+        // (`field_idx + 1` to skip the tag at field 0), load the
+        // value, alloca a slot for it, and store the loaded value
+        // into the slot. Slice 8b's body-splitting walks these
+        // allocas via the existing `variables` registry so the
+        // resumed user code references the reloaded values through
+        // the same alloca-load machinery as ordinary stack-bound
+        // locals.
+        //
+        // The reload runs uniformly across all state arms (state_0
+        // through state_N). For state_0 (initial call) some fields
+        // are uninitialized — only the locals live at the entry
+        // point (function parameters) carry meaningful data, the
+        // rest are zero from the caller-side state-struct
+        // allocator. Slice 8b's body-splitting won't reference the
+        // not-yet-bound locals at state_0, so the load-of-zero is
+        // harmless; uniform per-arm shape simplifies the codegen
+        // and matches the over-approximation from slice 4.
+        //
+        // Each arm still terminates with `ret i8 0` (Pending stub).
+        // Slice 8c+ replaces the unconditional return with the
+        // actual per-arm logic (run user code until next yield,
+        // store captured locals back, return Pending; or at the
+        // terminal arm return Ready with the result).
+        for (arm_idx, arm_bb) in arm_blocks.iter().enumerate() {
+            self.builder.position_at_end(*arm_bb);
+            // Slice-8a reload prologue + 8j slot map: walk every
+            // captured local and GEP/load/alloca/store it into a
+            // local slot. Stash each slot's pointer + element type
+            // by field name so slice-8j method-call emission below
+            // can re-load the receiver value (or pass the slot
+            // pointer directly for ref-self methods).
+            let mut slot_map: HashMap<String, (BasicTypeEnum<'ctx>, PointerValue<'ctx>)> =
+                HashMap::new();
+            for (field_idx, field) in layout.fields.iter().enumerate() {
+                let struct_field_idx = (field_idx + 1) as u32;
+                let field_ty = state_struct
+                    .get_field_type_at_index(struct_field_idx)
+                    .expect("state struct field type at captured-local index");
+                let field_ptr_name = format!("{}.field_ptr", field.name);
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(state_struct, state_ptr, struct_field_idx, &field_ptr_name)
+                    .expect("GEP captured-local field in state struct");
+                let reload_name = format!("{}.reload", field.name);
+                let loaded = self
+                    .builder
+                    .build_load(field_ty, field_ptr, &reload_name)
+                    .expect("load captured-local value from state struct");
+                let slot_name = format!("{}.slot", field.name);
+                let slot = self
+                    .builder
+                    .build_alloca(field_ty, &slot_name)
+                    .expect("alloca for reloaded captured-local slot");
+                self.builder
+                    .build_store(slot, loaded)
+                    .expect("store reloaded captured-local into slot");
+                slot_map.insert(field.name.clone(), (field_ty, slot));
+            }
+            // Slice 8h/8j body-splitting: emit each user-code
+            // statement queued for this arm. Slice 8h handles
+            // `name()` (free-fn, no args, void return); slice 8j
+            // handles `<recv>.method()` (self or captured-receiver,
+            // no args, void return) — looks up the Type.method
+            // symbol declared by the impl-block pass and threads
+            // the reloaded receiver through. Lookups use
+            // `module.get_function` against the user-level `@<sym>`
+            // shape. Non-void returns are skipped at v1 (the call
+            // would need a name binding which adds complexity we'll
+            // thread through a later slice).
+            if let Some(arm_stmts) = per_arm_stmts.get(arm_idx) {
+                for stmt in arm_stmts {
+                    match stmt {
+                        BodySplitStmt::FreeFnCall { name, args } => {
+                            let Some(callee_fn) = self.module.get_function(name) else {
+                                continue;
+                            };
+                            if callee_fn.get_type().get_return_type().is_some() {
+                                continue;
+                            }
+                            // Slice 8k + 8q: compile each recognised
+                            // arg into a BasicMetadataValueEnum via
+                            // the shared `materialize_body_arg`
+                            // helper. Skip the whole call if any arg
+                            // can't be materialised (e.g. a slot
+                            // lookup failed, or a binary operand
+                            // didn't lower to an int value).
+                            let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
+                                Vec::with_capacity(args.len());
+                            let mut arg_ok = true;
+                            for arg in args {
+                                let Some(val) = self.materialize_body_arg(arg, &slot_map, ".arg")
+                                else {
+                                    arg_ok = false;
+                                    break;
+                                };
+                                compiled.push(val.into());
+                            }
+                            if !arg_ok {
+                                continue;
+                            }
+                            self.builder
+                                .build_call(callee_fn, &compiled, "")
+                                .expect("emit slice-8h/8k void user call");
+                        }
+                        BodySplitStmt::MethodCall {
+                            receiver_field,
+                            callee_key,
+                            args,
+                        } => {
+                            let Some(callee_fn) = self.module.get_function(callee_key) else {
+                                continue;
+                            };
+                            if callee_fn.get_type().get_return_type().is_some() {
+                                continue;
+                            }
+                            let Some((slot_ty, slot_ptr)) = slot_map.get(receiver_field).copied()
+                            else {
+                                continue;
+                            };
+                            // Receiver ABI: mirror compile_method_call's
+                            // discipline. If the first param of the
+                            // resolved method is pointer-typed, the
+                            // method takes `ref self` / `mut ref self` —
+                            // pass the slot pointer directly. Otherwise
+                            // the method takes owned self — load the
+                            // slot's stored value and pass by value.
+                            let first_param_is_ptr = callee_fn
+                                .get_type()
+                                .get_param_types()
+                                .first()
+                                .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
+                                .unwrap_or(false);
+                            let recv_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr {
+                                slot_ptr.into()
+                            } else {
+                                let loaded = self
+                                    .builder
+                                    .build_load(
+                                        slot_ty,
+                                        slot_ptr,
+                                        &format!("{receiver_field}.recv"),
+                                    )
+                                    .expect("load receiver from reloaded slot");
+                                loaded.into()
+                            };
+                            // Slice 8l + 8q: compile method args via
+                            // the shared `materialize_body_arg`
+                            // helper. The receiver claims arg
+                            // position 0; method args follow at
+                            // 1..=N matching the source order.
+                            let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
+                                Vec::with_capacity(args.len() + 1);
+                            compiled.push(recv_arg);
+                            let mut arg_ok = true;
+                            for arg in args {
+                                let Some(val) = self.materialize_body_arg(arg, &slot_map, ".marg")
+                                else {
+                                    arg_ok = false;
+                                    break;
+                                };
+                                compiled.push(val.into());
+                            }
+                            if !arg_ok {
+                                continue;
+                            }
+                            self.builder
+                                .build_call(callee_fn, &compiled, "")
+                                .expect("emit slice-8j/8l void method call");
+                        }
+                        BodySplitStmt::Let { name, rhs } => {
+                            // Slice 8m + 8q + 8s: arm-local let
+                            // binding — materialise the RHS via the
+                            // shared helper, alloca a slot whose
+                            // type matches the materialised value
+                            // (slice 8s: was hardcoded i64 prior;
+                            // now derives from `value.get_type()` so
+                            // `let v = items` where items is a Vec
+                            // captured local alloca's the inline
+                            // `{ptr, i64, i64}` shape, not an 8-byte
+                            // i64 region that would silently store
+                            // 24 bytes of Vec data and produce a
+                            // stack-smashing miscompile). Store the
+                            // value, then register (slot type, slot
+                            // ptr) into slot_map so subsequent
+                            // statements in the SAME arm load the
+                            // right width when the binding is read.
+                            // Across yields the arm-local binding
+                            // is not preserved without state-struct
+                            // write-back — a follow-on slice for
+                            // the capture-then-yield case.
+                            let Some(value) = self.materialize_body_arg(rhs, &slot_map, ".let_rhs")
+                            else {
+                                continue;
+                            };
+                            let slot_ty = value.get_type();
+                            let slot_name = format!("{name}.slot");
+                            let slot = self
+                                .builder
+                                .build_alloca(slot_ty, &slot_name)
+                                .expect("alloca for arm-local let slot");
+                            self.builder
+                                .build_store(slot, value)
+                                .expect("store let RHS into slot");
+                            slot_map.insert(name.clone(), (slot_ty, slot));
+                        }
+                        BodySplitStmt::Assign { name, value } => {
+                            // Slice 8p + 8q: assignment to an
+                            // existing in-scope binding (captured-
+                            // local OR arm-local let). Look up the
+                            // slot in `slot_map` (DON'T alloca a
+                            // new one), materialise the value via
+                            // the shared helper, and store. Across
+                            // yields: when the target is a captured
+                            // local, slice 8n's writeback before
+                            // the next yield picks up the new value
+                            // and writes it to the state-struct
+                            // field so the post-yield reload sees
+                            // it.
+                            let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() else {
+                                continue;
+                            };
+                            let Some(new_val) =
+                                self.materialize_body_arg(value, &slot_map, ".assign_rhs")
+                            else {
+                                continue;
+                            };
+                            self.builder
+                                .build_store(slot_ptr, new_val)
+                                .expect("store assignment value into slot");
+                            // Silence unused — slot_ty currently
+                            // not consulted; future typed-aware
+                            // lowering will use it to coerce the
+                            // const width.
+                            let _ = slot_ty;
+                        }
+                    }
                 }
             }
-            let poll_name = format!("__kara_poll_{fn_key}");
-            let poll_fn = self.module.add_function(&poll_name, fn_type, None);
-            // `Internal` rather than `Private`: both restrict visibility
-            // to the current module, but `Internal` is the conventional
-            // LLVM choice for codegen-synthesized helpers (the function
-            // appears as `define internal i8 @__kara_poll_<fn_key>`),
-            // while `Private` is reserved for symbols the linker should
-            // strip outright. Caller-side wiring in slice 7+ will load
-            // the FunctionValue through the side-table; the symbol need
-            // not be link-visible.
-            poll_fn.set_linkage(Linkage::Internal);
-
-            // Save outer builder position — slice 6 is invoked before
-            // function-body lowering runs, so there's no insert block
-            // to save, but the save/restore is cheap and future-proofs
-            // against re-ordering.
-            let saved_bb = self.builder.get_insert_block();
-
-            let entry = self.context.append_basic_block(poll_fn, "entry");
-            self.builder.position_at_end(entry);
-
-            // Typed GEP into the state struct's field 0 (the i32 tag).
-            // Keeps the named `%kara.state.<fn_key>` type referenced from
-            // a real instruction so LLVM's `print_to_string` retains the
-            // type-definition line.
-            let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
-            let tag_ptr = self
-                .builder
-                .build_struct_gep(state_struct, state_ptr, 0, "tag_ptr")
-                .expect("state struct field 0 (tag) GEP must succeed");
-            // Load the tag — drives the slice-7 switch dispatch. The
-            // GEP + load are the prologue every subsequent sub-slice
-            // keeps; slice 7 adds the switch arms; slice 8 fills in
-            // per-yield-arm captured-locals reload + user-code resume.
-            let tag = self
-                .builder
-                .build_load(i32_ty, tag_ptr, "tag")
-                .expect("load tag from state struct")
-                .into_int_value();
-
-            // Slice 7: switch the tag against one arm per (initial-call
-            // state + per-yield post-resume state). For N yield points
-            // recorded on the function, emit N+1 arms — state 0 is the
-            // initial call (before any yield); states 1..=N are the
-            // post-yield resume points. The default arm is `unreachable`
-            // since the runtime never invokes the poll-fn with an
-            // out-of-range tag (the state-struct initializer pins tag=0
-            // at allocation time, and tag transitions are codegen-
-            // controlled). Slice 6's stub returned Pending
-            // unconditionally; slice 7 keeps each arm at Pending so the
-            // observable per-arm behavior is unchanged — slice 8 fills
-            // the arms with actual resume logic.
-            let yield_count = program
-                .yield_points
-                .get(fn_key)
-                .map(|v| v.len())
-                .unwrap_or(0);
-            let arm_count = yield_count + 1;
-            let default_block = self.context.append_basic_block(poll_fn, "tag_unreachable");
-            let arm_blocks: Vec<_> = (0..arm_count)
-                .map(|i| {
-                    self.context
-                        .append_basic_block(poll_fn, &format!("state_{i}"))
-                })
-                .collect();
-            let cases: Vec<_> = arm_blocks
-                .iter()
-                .enumerate()
-                .map(|(i, bb)| (i32_ty.const_int(i as u64, false), *bb))
-                .collect();
-            self.builder
-                .build_switch(tag, default_block, &cases)
-                .expect("build switch on state tag");
-
-            // Slice-8a per-arm body: each state arm emits a uniform
-            // reload prologue — for every captured local in the
-            // layout, GEP into the corresponding state-struct field
-            // (`field_idx + 1` to skip the tag at field 0), load the
-            // value, alloca a slot for it, and store the loaded value
-            // into the slot. Slice 8b's body-splitting walks these
-            // allocas via the existing `variables` registry so the
-            // resumed user code references the reloaded values through
-            // the same alloca-load machinery as ordinary stack-bound
-            // locals.
-            //
-            // The reload runs uniformly across all state arms (state_0
-            // through state_N). For state_0 (initial call) some fields
-            // are uninitialized — only the locals live at the entry
-            // point (function parameters) carry meaningful data, the
-            // rest are zero from the caller-side state-struct
-            // allocator. Slice 8b's body-splitting won't reference the
-            // not-yet-bound locals at state_0, so the load-of-zero is
-            // harmless; uniform per-arm shape simplifies the codegen
-            // and matches the over-approximation from slice 4.
-            //
-            // Each arm still terminates with `ret i8 0` (Pending stub).
-            // Slice 8c+ replaces the unconditional return with the
-            // actual per-arm logic (run user code until next yield,
-            // store captured locals back, return Pending; or at the
-            // terminal arm return Ready with the result).
-            for (arm_idx, arm_bb) in arm_blocks.iter().enumerate() {
-                self.builder.position_at_end(*arm_bb);
-                // Slice-8a reload prologue + 8j slot map: walk every
-                // captured local and GEP/load/alloca/store it into a
-                // local slot. Stash each slot's pointer + element type
-                // by field name so slice-8j method-call emission below
-                // can re-load the receiver value (or pass the slot
-                // pointer directly for ref-self methods).
-                let mut slot_map: HashMap<String, (BasicTypeEnum<'ctx>, PointerValue<'ctx>)> =
-                    HashMap::new();
+            // Slice-8b state transition: non-terminal arms (the
+            // first `yield_count` arms — state_0..state_<N-1>) write
+            // the next tag value `arm_idx + 1` into the state
+            // struct's field 0 ahead of returning Pending, so the
+            // next poll-fn invocation dispatches to the correct
+            // resume arm. The terminal arm (state_<N>) returns Ready
+            // (`i8 1`) — the function has completed and the caller
+            // can observe the result. Slice 8c+ replaces the bare
+            // tag-store + Pending sequence with the full yield-site
+            // mechanic (suspend the parent task via the scheduler,
+            // store back any not-yet-saved captured locals); slice
+            // 8d+ replaces the bare Ready return with the actual
+            // function-return-value plumbing through the state
+            // struct (final field carries the result; caller reads
+            // it after observing Ready).
+            if arm_idx < yield_count {
+                // Slice 8n: write-back captured-locals to state-
+                // struct fields before the yield. After slice 8m,
+                // a `let x = ...` inside the arm body can shadow a
+                // captured-local slot pointer in `slot_map` with a
+                // new arm-local alloca; without write-back, the
+                // post-yield reload reads the stale state-struct
+                // field. Iterating `layout.fields` (the slice-4
+                // capture set) and storing the current `slot_map`
+                // value into the corresponding state-struct field
+                // covers both shadowing and any other in-arm
+                // mutation path. For captured locals untouched
+                // inside the arm, the write-back is a value-
+                // equivalent no-op (slice 8a's reload loaded the
+                // field; write-back stores the same value back) —
+                // the LLVM optimizer can elide the redundant store.
                 for (field_idx, field) in layout.fields.iter().enumerate() {
                     let struct_field_idx = (field_idx + 1) as u32;
-                    let field_ty = state_struct
-                        .get_field_type_at_index(struct_field_idx)
-                        .expect("state struct field type at captured-local index");
-                    let field_ptr_name = format!("{}.field_ptr", field.name);
+                    let Some((slot_ty, slot_ptr)) = slot_map.get(&field.name).copied() else {
+                        continue;
+                    };
+                    let val = self
+                        .builder
+                        .build_load(slot_ty, slot_ptr, &format!("{}.writeback", field.name))
+                        .expect("load slot for state-struct writeback");
                     let field_ptr = self
                         .builder
                         .build_struct_gep(
                             state_struct,
                             state_ptr,
                             struct_field_idx,
-                            &field_ptr_name,
+                            &format!("{}.writeback_field_ptr", field.name),
                         )
-                        .expect("GEP captured-local field in state struct");
-                    let reload_name = format!("{}.reload", field.name);
-                    let loaded = self
-                        .builder
-                        .build_load(field_ty, field_ptr, &reload_name)
-                        .expect("load captured-local value from state struct");
-                    let slot_name = format!("{}.slot", field.name);
-                    let slot = self
-                        .builder
-                        .build_alloca(field_ty, &slot_name)
-                        .expect("alloca for reloaded captured-local slot");
+                        .expect("GEP state-struct field for writeback");
                     self.builder
-                        .build_store(slot, loaded)
-                        .expect("store reloaded captured-local into slot");
-                    slot_map.insert(field.name.clone(), (field_ty, slot));
+                        .build_store(field_ptr, val)
+                        .expect("store slot back to state-struct field");
                 }
-                // Slice 8h/8j body-splitting: emit each user-code
-                // statement queued for this arm. Slice 8h handles
-                // `name()` (free-fn, no args, void return); slice 8j
-                // handles `<recv>.method()` (self or captured-receiver,
-                // no args, void return) — looks up the Type.method
-                // symbol declared by the impl-block pass and threads
-                // the reloaded receiver through. Lookups use
-                // `module.get_function` against the user-level `@<sym>`
-                // shape. Non-void returns are skipped at v1 (the call
-                // would need a name binding which adds complexity we'll
-                // thread through a later slice).
-                if let Some(arm_stmts) = per_arm_stmts.get(arm_idx) {
-                    for stmt in arm_stmts {
-                        match stmt {
-                            BodySplitStmt::FreeFnCall { name, args } => {
-                                let Some(callee_fn) = self.module.get_function(name) else {
-                                    continue;
-                                };
-                                if callee_fn.get_type().get_return_type().is_some() {
-                                    continue;
-                                }
-                                // Slice 8k + 8q: compile each recognised
-                                // arg into a BasicMetadataValueEnum via
-                                // the shared `materialize_body_arg`
-                                // helper. Skip the whole call if any arg
-                                // can't be materialised (e.g. a slot
-                                // lookup failed, or a binary operand
-                                // didn't lower to an int value).
-                                let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
-                                    Vec::with_capacity(args.len());
-                                let mut arg_ok = true;
-                                for arg in args {
-                                    let Some(val) =
-                                        self.materialize_body_arg(arg, &slot_map, ".arg")
-                                    else {
-                                        arg_ok = false;
-                                        break;
-                                    };
-                                    compiled.push(val.into());
-                                }
-                                if !arg_ok {
-                                    continue;
-                                }
-                                self.builder
-                                    .build_call(callee_fn, &compiled, "")
-                                    .expect("emit slice-8h/8k void user call");
-                            }
-                            BodySplitStmt::MethodCall {
-                                receiver_field,
-                                callee_key,
-                                args,
-                            } => {
-                                let Some(callee_fn) = self.module.get_function(callee_key) else {
-                                    continue;
-                                };
-                                if callee_fn.get_type().get_return_type().is_some() {
-                                    continue;
-                                }
-                                let Some((slot_ty, slot_ptr)) =
-                                    slot_map.get(receiver_field).copied()
-                                else {
-                                    continue;
-                                };
-                                // Receiver ABI: mirror compile_method_call's
-                                // discipline. If the first param of the
-                                // resolved method is pointer-typed, the
-                                // method takes `ref self` / `mut ref self` —
-                                // pass the slot pointer directly. Otherwise
-                                // the method takes owned self — load the
-                                // slot's stored value and pass by value.
-                                let first_param_is_ptr = callee_fn
-                                    .get_type()
-                                    .get_param_types()
-                                    .first()
-                                    .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
-                                    .unwrap_or(false);
-                                let recv_arg: BasicMetadataValueEnum<'ctx> = if first_param_is_ptr {
-                                    slot_ptr.into()
-                                } else {
-                                    let loaded = self
-                                        .builder
-                                        .build_load(
-                                            slot_ty,
-                                            slot_ptr,
-                                            &format!("{receiver_field}.recv"),
-                                        )
-                                        .expect("load receiver from reloaded slot");
-                                    loaded.into()
-                                };
-                                // Slice 8l + 8q: compile method args via
-                                // the shared `materialize_body_arg`
-                                // helper. The receiver claims arg
-                                // position 0; method args follow at
-                                // 1..=N matching the source order.
-                                let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
-                                    Vec::with_capacity(args.len() + 1);
-                                compiled.push(recv_arg);
-                                let mut arg_ok = true;
-                                for arg in args {
-                                    let Some(val) =
-                                        self.materialize_body_arg(arg, &slot_map, ".marg")
-                                    else {
-                                        arg_ok = false;
-                                        break;
-                                    };
-                                    compiled.push(val.into());
-                                }
-                                if !arg_ok {
-                                    continue;
-                                }
-                                self.builder
-                                    .build_call(callee_fn, &compiled, "")
-                                    .expect("emit slice-8j/8l void method call");
-                            }
-                            BodySplitStmt::Let { name, rhs } => {
-                                // Slice 8m + 8q + 8s: arm-local let
-                                // binding — materialise the RHS via the
-                                // shared helper, alloca a slot whose
-                                // type matches the materialised value
-                                // (slice 8s: was hardcoded i64 prior;
-                                // now derives from `value.get_type()` so
-                                // `let v = items` where items is a Vec
-                                // captured local alloca's the inline
-                                // `{ptr, i64, i64}` shape, not an 8-byte
-                                // i64 region that would silently store
-                                // 24 bytes of Vec data and produce a
-                                // stack-smashing miscompile). Store the
-                                // value, then register (slot type, slot
-                                // ptr) into slot_map so subsequent
-                                // statements in the SAME arm load the
-                                // right width when the binding is read.
-                                // Across yields the arm-local binding
-                                // is not preserved without state-struct
-                                // write-back — a follow-on slice for
-                                // the capture-then-yield case.
-                                let Some(value) =
-                                    self.materialize_body_arg(rhs, &slot_map, ".let_rhs")
-                                else {
-                                    continue;
-                                };
-                                let slot_ty = value.get_type();
-                                let slot_name = format!("{name}.slot");
-                                let slot = self
-                                    .builder
-                                    .build_alloca(slot_ty, &slot_name)
-                                    .expect("alloca for arm-local let slot");
-                                self.builder
-                                    .build_store(slot, value)
-                                    .expect("store let RHS into slot");
-                                slot_map.insert(name.clone(), (slot_ty, slot));
-                            }
-                            BodySplitStmt::Assign { name, value } => {
-                                // Slice 8p + 8q: assignment to an
-                                // existing in-scope binding (captured-
-                                // local OR arm-local let). Look up the
-                                // slot in `slot_map` (DON'T alloca a
-                                // new one), materialise the value via
-                                // the shared helper, and store. Across
-                                // yields: when the target is a captured
-                                // local, slice 8n's writeback before
-                                // the next yield picks up the new value
-                                // and writes it to the state-struct
-                                // field so the post-yield reload sees
-                                // it.
-                                let Some((slot_ty, slot_ptr)) = slot_map.get(name).copied() else {
-                                    continue;
-                                };
-                                let Some(new_val) =
-                                    self.materialize_body_arg(value, &slot_map, ".assign_rhs")
-                                else {
-                                    continue;
-                                };
-                                self.builder
-                                    .build_store(slot_ptr, new_val)
-                                    .expect("store assignment value into slot");
-                                // Silence unused — slot_ty currently
-                                // not consulted; future typed-aware
-                                // lowering will use it to coerce the
-                                // const width.
-                                let _ = slot_ty;
-                            }
-                        }
-                    }
-                }
-                // Slice-8b state transition: non-terminal arms (the
-                // first `yield_count` arms — state_0..state_<N-1>) write
-                // the next tag value `arm_idx + 1` into the state
-                // struct's field 0 ahead of returning Pending, so the
-                // next poll-fn invocation dispatches to the correct
-                // resume arm. The terminal arm (state_<N>) returns Ready
-                // (`i8 1`) — the function has completed and the caller
-                // can observe the result. Slice 8c+ replaces the bare
-                // tag-store + Pending sequence with the full yield-site
-                // mechanic (suspend the parent task via the scheduler,
-                // store back any not-yet-saved captured locals); slice
-                // 8d+ replaces the bare Ready return with the actual
-                // function-return-value plumbing through the state
-                // struct (final field carries the result; caller reads
-                // it after observing Ready).
-                if arm_idx < yield_count {
-                    // Slice 8n: write-back captured-locals to state-
-                    // struct fields before the yield. After slice 8m,
-                    // a `let x = ...` inside the arm body can shadow a
-                    // captured-local slot pointer in `slot_map` with a
-                    // new arm-local alloca; without write-back, the
-                    // post-yield reload reads the stale state-struct
-                    // field. Iterating `layout.fields` (the slice-4
-                    // capture set) and storing the current `slot_map`
-                    // value into the corresponding state-struct field
-                    // covers both shadowing and any other in-arm
-                    // mutation path. For captured locals untouched
-                    // inside the arm, the write-back is a value-
-                    // equivalent no-op (slice 8a's reload loaded the
-                    // field; write-back stores the same value back) —
-                    // the LLVM optimizer can elide the redundant store.
-                    for (field_idx, field) in layout.fields.iter().enumerate() {
-                        let struct_field_idx = (field_idx + 1) as u32;
-                        let Some((slot_ty, slot_ptr)) = slot_map.get(&field.name).copied() else {
-                            continue;
-                        };
-                        let val = self
-                            .builder
-                            .build_load(slot_ty, slot_ptr, &format!("{}.writeback", field.name))
-                            .expect("load slot for state-struct writeback");
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                state_struct,
-                                state_ptr,
-                                struct_field_idx,
-                                &format!("{}.writeback_field_ptr", field.name),
-                            )
-                            .expect("GEP state-struct field for writeback");
-                        self.builder
-                            .build_store(field_ptr, val)
-                            .expect("store slot back to state-struct field");
-                    }
-                    let next_tag_ptr = self
+                let next_tag_ptr = self
+                    .builder
+                    .build_struct_gep(
+                        state_struct,
+                        state_ptr,
+                        0,
+                        &format!("state_{arm_idx}.next_tag_ptr"),
+                    )
+                    .expect("GEP tag field for state transition");
+                let next_tag = i32_ty.const_int((arm_idx + 1) as u64, false);
+                self.builder
+                    .build_store(next_tag_ptr, next_tag)
+                    .expect("store next tag for state transition");
+                self.builder
+                    .build_return(Some(&i8_ty.const_int(0, false)))
+                    .expect("return Pending from non-terminal arm");
+            } else {
+                // Phase 6 line 26 slice 8i: when the network-
+                // boundary function has a non-unit return type
+                // (recorded in `state_machine_return_types`), the
+                // state struct has a terminal field appended after
+                // the captured-local fields. Write a placeholder
+                // value into the terminal field before the Ready
+                // return — body-splitting in a future slice will
+                // replace the placeholder with the user's actual
+                // return-expression value. The terminal field's
+                // index in the state struct is `1 + N` where N is
+                // the captured-local count (tag at 0, captures at
+                // 1..=N, terminal at N+1).
+                if self.state_machine_return_types.contains_key(emit_key) {
+                    let terminal_idx = (layout.fields.len() + 1) as u32;
+                    let terminal_ptr = self
                         .builder
                         .build_struct_gep(
                             state_struct,
                             state_ptr,
-                            0,
-                            &format!("state_{arm_idx}.next_tag_ptr"),
+                            terminal_idx,
+                            "kara.return.field_ptr",
                         )
-                        .expect("GEP tag field for state transition");
-                    let next_tag = i32_ty.const_int((arm_idx + 1) as u64, false);
+                        .expect("GEP terminal return-value field");
+                    // Slice 8o + 8q: when the walker captured the
+                    // user's final-expression value via
+                    // `terminal_return`, materialise it via the
+                    // shared helper (`IntLit` → i64 const, `Slot`
+                    // → load from per-arm slot map, `Binary` →
+                    // recursive int arithmetic). If
+                    // `terminal_return` is `None` (final expr not
+                    // recognised, or no trailing expr) or the
+                    // helper bails (slot lookup miss, non-IntValue
+                    // binary operand), fall back to the slice-8i
+                    // `i64 0` placeholder.
+                    let return_val: inkwell::values::BasicValueEnum<'ctx> = terminal_return
+                        .as_ref()
+                        .and_then(|arg| self.materialize_body_arg(arg, &slot_map, ".return"))
+                        .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
                     self.builder
-                        .build_store(next_tag_ptr, next_tag)
-                        .expect("store next tag for state transition");
-                    self.builder
-                        .build_return(Some(&i8_ty.const_int(0, false)))
-                        .expect("return Pending from non-terminal arm");
-                } else {
-                    // Phase 6 line 26 slice 8i: when the network-
-                    // boundary function has a non-unit return type
-                    // (recorded in `state_machine_return_types`), the
-                    // state struct has a terminal field appended after
-                    // the captured-local fields. Write a placeholder
-                    // value into the terminal field before the Ready
-                    // return — body-splitting in a future slice will
-                    // replace the placeholder with the user's actual
-                    // return-expression value. The terminal field's
-                    // index in the state struct is `1 + N` where N is
-                    // the captured-local count (tag at 0, captures at
-                    // 1..=N, terminal at N+1).
-                    if self.state_machine_return_types.contains_key(fn_key) {
-                        let terminal_idx = (layout.fields.len() + 1) as u32;
-                        let terminal_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                state_struct,
-                                state_ptr,
-                                terminal_idx,
-                                "kara.return.field_ptr",
-                            )
-                            .expect("GEP terminal return-value field");
-                        // Slice 8o + 8q: when the walker captured the
-                        // user's final-expression value via
-                        // `terminal_return`, materialise it via the
-                        // shared helper (`IntLit` → i64 const, `Slot`
-                        // → load from per-arm slot map, `Binary` →
-                        // recursive int arithmetic). If
-                        // `terminal_return` is `None` (final expr not
-                        // recognised, or no trailing expr) or the
-                        // helper bails (slot lookup miss, non-IntValue
-                        // binary operand), fall back to the slice-8i
-                        // `i64 0` placeholder.
-                        let return_val: inkwell::values::BasicValueEnum<'ctx> = terminal_return
-                            .as_ref()
-                            .and_then(|arg| self.materialize_body_arg(arg, &slot_map, ".return"))
-                            .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
-                        self.builder
-                            .build_store(terminal_ptr, return_val)
-                            .expect("store terminal return value");
-                    }
-                    self.builder
-                        .build_return(Some(&i8_ty.const_int(1, false)))
-                        .expect("return Ready from terminal arm");
+                        .build_store(terminal_ptr, return_val)
+                        .expect("store terminal return value");
                 }
+                self.builder
+                    .build_return(Some(&i8_ty.const_int(1, false)))
+                    .expect("return Ready from terminal arm");
             }
-            // Default block — unreachable, since the runtime never
-            // produces out-of-range tags. The `unreachable` instruction
-            // signals to LLVM that this path is impossible, enabling
-            // downstream optimizations to drop the default case.
-            self.builder.position_at_end(default_block);
-            self.builder
-                .build_unreachable()
-                .expect("unreachable tag default");
-
-            // Restore the outer builder state.
-            if let Some(bb) = saved_bb {
-                self.builder.position_at_end(bb);
-            }
-
-            self.state_machine_poll_fns.insert(fn_key.clone(), poll_fn);
         }
+        // Default block — unreachable, since the runtime never
+        // produces out-of-range tags. The `unreachable` instruction
+        // signals to LLVM that this path is impossible, enabling
+        // downstream optimizations to drop the default case.
+        self.builder.position_at_end(default_block);
+        self.builder
+            .build_unreachable()
+            .expect("unreachable tag default");
+
+        // Restore the outer builder state.
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        self.state_machine_poll_fns
+            .insert(emit_key.to_string(), poll_fn);
     }
 
     // ── State-struct constructor helper (line 26 slice 8c) ─────────────
@@ -1192,9 +1238,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// emission of all state-machine helpers grouped, and matches the
     /// alphabetical-by-purpose ordering of slice 6 then 8c.
     pub(super) fn emit_state_machine_state_constructors(&mut self, program: &Program) {
-        let i32_ty = self.context.i32_type();
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let ctor_fn_type = ptr_ty.fn_type(&[], false);
         let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
         keys.sort();
         for fn_key in keys {
@@ -1203,57 +1246,69 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_generic_fn_key(program, fn_key) {
                 continue;
             }
-            let state_struct = match self.state_struct_types.get(fn_key) {
-                Some(st) => *st,
-                None => continue,
-            };
-            let ctor_name = format!("__kara_state_new_{fn_key}");
-            let ctor_fn = self.module.add_function(&ctor_name, ctor_fn_type, None);
-            ctor_fn.set_linkage(Linkage::Internal);
-
-            let saved_bb = self.builder.get_insert_block();
-            let entry = self.context.append_basic_block(ctor_fn, "entry");
-            self.builder.position_at_end(entry);
-
-            // Compute the size of the state struct via inkwell's
-            // `size_of()` helper (which materializes a `ptrtoint` on
-            // a constant GEP — the standard LLVM idiom for `sizeof`).
-            let size = state_struct
-                .size_of()
-                .expect("state struct size_of always succeeds for sized types");
-
-            // Call malloc(size) — returns ptr to the fresh heap allocation.
-            let malloc_call = self
-                .builder
-                .build_call(self.malloc_fn, &[size.into()], "state.alloc")
-                .expect("call malloc for state struct");
-            let state_ptr = malloc_call
-                .try_as_basic_value()
-                .unwrap_basic()
-                .into_pointer_value();
-
-            // Initialize the tag (field 0) to 0 — entry state for the
-            // poll-fn's switch dispatch. The captured-local fields
-            // (1..N) are left uninitialized at this slice.
-            let tag_ptr = self
-                .builder
-                .build_struct_gep(state_struct, state_ptr, 0, "tag_init_ptr")
-                .expect("GEP tag field for init");
-            self.builder
-                .build_store(tag_ptr, i32_ty.const_int(0, false))
-                .expect("store tag = 0 init");
-
-            self.builder
-                .build_return(Some(&state_ptr))
-                .expect("return state pointer from constructor");
-
-            if let Some(bb) = saved_bb {
-                self.builder.position_at_end(bb);
-            }
-
-            self.state_machine_state_constructors
-                .insert(fn_key.clone(), ctor_fn);
+            self.emit_state_machine_state_constructor_for_key(fn_key);
         }
+    }
+
+    /// Slice 8v Phase 2: per-key state-struct constructor emission. The
+    /// base-name pass iterates and calls this; the per-mono path passes
+    /// the mangled key. Constructor body is fully type-agnostic (only
+    /// references the state struct by `state_struct_types[emit_key]`),
+    /// so no `ast_key` parameter is needed.
+    pub(super) fn emit_state_machine_state_constructor_for_key(&mut self, emit_key: &str) {
+        let i32_ty = self.context.i32_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let ctor_fn_type = ptr_ty.fn_type(&[], false);
+        let state_struct = match self.state_struct_types.get(emit_key) {
+            Some(st) => *st,
+            None => return,
+        };
+        let ctor_name = format!("__kara_state_new_{emit_key}");
+        let ctor_fn = self.module.add_function(&ctor_name, ctor_fn_type, None);
+        ctor_fn.set_linkage(Linkage::Internal);
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(ctor_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // Compute the size of the state struct via inkwell's
+        // `size_of()` helper (which materializes a `ptrtoint` on
+        // a constant GEP — the standard LLVM idiom for `sizeof`).
+        let size = state_struct
+            .size_of()
+            .expect("state struct size_of always succeeds for sized types");
+
+        // Call malloc(size) — returns ptr to the fresh heap allocation.
+        let malloc_call = self
+            .builder
+            .build_call(self.malloc_fn, &[size.into()], "state.alloc")
+            .expect("call malloc for state struct");
+        let state_ptr = malloc_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Initialize the tag (field 0) to 0 — entry state for the
+        // poll-fn's switch dispatch. The captured-local fields
+        // (1..N) are left uninitialized at this slice.
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 0, "tag_init_ptr")
+            .expect("GEP tag field for init");
+        self.builder
+            .build_store(tag_ptr, i32_ty.const_int(0, false))
+            .expect("store tag = 0 init");
+
+        self.builder
+            .build_return(Some(&state_ptr))
+            .expect("return state pointer from constructor");
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        self.state_machine_state_constructors
+            .insert(emit_key.to_string(), ctor_fn);
     }
 
     // ── State-struct destructor helper (line 26 slice 8u) ──────────────
@@ -1332,11 +1387,6 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `state_struct_layouts`, `state_struct_types`, `shared_types`,
     /// and the runtime intrinsic `free_fn` / RC helpers.
     pub(super) fn emit_state_machine_state_destructors(&mut self, program: &Program) {
-        let ptr_ty = self.context.ptr_type(AddressSpace::default());
-        let i64_t = self.context.i64_type();
-        let void_ty = self.context.void_type();
-        let vec_ty = self.vec_struct_type();
-        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
         let mut keys: Vec<&String> = program.state_struct_layouts.keys().collect();
         keys.sort();
         for fn_key in keys {
@@ -1347,211 +1397,293 @@ impl<'ctx> super::Codegen<'ctx> {
             if is_generic_fn_key(program, fn_key) {
                 continue;
             }
-            let state_struct = match self.state_struct_types.get(fn_key) {
-                Some(st) => *st,
-                None => continue,
-            };
             let layout = program
                 .state_struct_layouts
                 .get(fn_key)
                 .expect("layout exists for sorted key");
-            // Classify each captured-local field. The classification is
-            // hoisted out of the emission loop so we can decide whether
-            // to emit the destructor at all (skip when every field is
-            // `Skip`) before mutating the module.
-            #[derive(Clone, Copy, PartialEq, Eq)]
-            enum FieldDrop {
-                Skip,
-                VecOrString,
-                Shared,
-            }
-            let kinds: Vec<FieldDrop> = layout
-                .fields
-                .iter()
-                .map(|f| match f.type_name.as_deref() {
-                    Some("Vec") | Some("VecDeque") | Some("String") | Some("str") => {
-                        FieldDrop::VecOrString
-                    }
-                    Some(name) if self.shared_types.contains_key(name) => FieldDrop::Shared,
-                    _ => FieldDrop::Skip,
-                })
-                .collect();
-            if kinds.iter().all(|k| *k == FieldDrop::Skip) {
-                continue;
-            }
+            self.emit_state_machine_state_destructor_for_key(fn_key, layout);
+        }
+    }
 
-            let drop_name = format!("__kara_state_drop_{fn_key}");
-            let drop_fn = self.module.add_function(&drop_name, drop_fn_ty, None);
-            drop_fn.set_linkage(Linkage::Internal);
+    /// Slice 8v Phase 2: per-key state-struct destructor emission. The
+    /// base-name pass iterates and calls this; the per-mono path passes
+    /// the mangled key. Like the constructor, the destructor body is
+    /// driven entirely by the state struct's LLVM type (looked up via
+    /// `state_struct_types[emit_key]`) plus the `layout.fields`
+    /// classification — no `ast_key` needed. Field-type classification
+    /// (`Vec` / `String` / shared / skip) reads `field.type_name`
+    /// directly from the layout; for per-mono callers this is the
+    /// polymorphic name (e.g., `"Vec"` for a `Vec[T]` captured local)
+    /// which classifies correctly regardless of `T`'s concrete value
+    /// because the heap-bearing shape is determined by the container
+    /// type, not the element type.
+    pub(super) fn emit_state_machine_state_destructor_for_key(
+        &mut self,
+        emit_key: &str,
+        layout: &crate::ast::StateStructLayout,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let vec_ty = self.vec_struct_type();
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let state_struct = match self.state_struct_types.get(emit_key) {
+            Some(st) => *st,
+            None => return,
+        };
+        // Classify each captured-local field. The classification is
+        // hoisted out of the emission loop so we can decide whether
+        // to emit the destructor at all (skip when every field is
+        // `Skip`) before mutating the module.
+        #[derive(Clone, Copy, PartialEq, Eq)]
+        enum FieldDrop {
+            Skip,
+            VecOrString,
+            Shared,
+        }
+        let kinds: Vec<FieldDrop> = layout
+            .fields
+            .iter()
+            .map(|f| match f.type_name.as_deref() {
+                Some("Vec") | Some("VecDeque") | Some("String") | Some("str") => {
+                    FieldDrop::VecOrString
+                }
+                Some(name) if self.shared_types.contains_key(name) => FieldDrop::Shared,
+                _ => FieldDrop::Skip,
+            })
+            .collect();
+        if kinds.iter().all(|k| *k == FieldDrop::Skip) {
+            return;
+        }
 
-            // `emit_refcount_dec` and friends create basic blocks
-            // against `self.current_fn.unwrap()`. Swap to the
-            // destructor while emitting; restore at the end so the
-            // outer caller's builder state is untouched. Matches
-            // `emit_struct_drop_synthesis`'s save / restore
+        let drop_name = format!("__kara_state_drop_{emit_key}");
+        let drop_fn = self.module.add_function(&drop_name, drop_fn_ty, None);
+        drop_fn.set_linkage(Linkage::Internal);
+
+        // `emit_refcount_dec` and friends create basic blocks
+        // against `self.current_fn.unwrap()`. Swap to the
+        // destructor while emitting; restore at the end so the
+        // outer caller's builder state is untouched. Matches
+        // `emit_struct_drop_synthesis`'s save / restore
+        // discipline.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(drop_fn);
+
+        let entry = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry);
+        let state_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        for (field_idx, (field, kind)) in layout.fields.iter().zip(kinds.iter()).enumerate() {
+            // State-struct field index is `captured_idx + 1` (tag at
+            // 0). The strict source-order walk keeps the destructor's
+            // field traversal aligned with the layout — useful for
+            // both IR-grep tests and the future user-Drop hook that
+            // wants source-declaration order for reverse-construction
             // discipline.
-            let saved_bb = self.builder.get_insert_block();
-            let saved_fn = self.current_fn;
-            self.current_fn = Some(drop_fn);
-
-            let entry = self.context.append_basic_block(drop_fn, "entry");
-            self.builder.position_at_end(entry);
-            let state_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
-
-            for (field_idx, (field, kind)) in layout.fields.iter().zip(kinds.iter()).enumerate() {
-                // State-struct field index is `captured_idx + 1` (tag at
-                // 0). The strict source-order walk keeps the destructor's
-                // field traversal aligned with the layout — useful for
-                // both IR-grep tests and the future user-Drop hook that
-                // wants source-declaration order for reverse-construction
-                // discipline.
-                let struct_field_idx = (field_idx + 1) as u32;
-                match kind {
-                    FieldDrop::Skip => {}
-                    FieldDrop::VecOrString => {
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                state_struct,
-                                state_ptr,
-                                struct_field_idx,
-                                &format!("{}.drop.field_ptr", field.name),
-                            )
-                            .expect("GEP captured-local field for destructor");
-                        let cap_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                vec_ty,
-                                field_ptr,
-                                2,
-                                &format!("{}.drop.cap_ptr", field.name),
-                            )
-                            .expect("GEP Vec cap field for destructor");
-                        let cap = self
-                            .builder
-                            .build_load(i64_t, cap_ptr, &format!("{}.drop.cap", field.name))
-                            .expect("load Vec cap for destructor")
-                            .into_int_value();
-                        let zero = i64_t.const_int(0, false);
-                        let is_heap = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::UGT,
-                                cap,
-                                zero,
-                                &format!("{}.drop.is_heap", field.name),
-                            )
-                            .expect("compare cap > 0 for destructor");
-                        let free_bb = self
-                            .context
-                            .append_basic_block(drop_fn, &format!("{}.drop.free", field.name));
-                        let skip_bb = self
-                            .context
-                            .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
-                        self.builder
-                            .build_conditional_branch(is_heap, free_bb, skip_bb)
-                            .expect("branch on cap > 0 for destructor");
-                        self.builder.position_at_end(free_bb);
-                        let data_ptr_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                vec_ty,
-                                field_ptr,
-                                0,
-                                &format!("{}.drop.data_ptr_ptr", field.name),
-                            )
-                            .expect("GEP Vec data-ptr field for destructor");
-                        let data = self
-                            .builder
-                            .build_load(ptr_ty, data_ptr_ptr, &format!("{}.drop.data", field.name))
-                            .expect("load Vec data ptr for destructor")
-                            .into_pointer_value();
-                        self.builder
-                            .build_call(self.free_fn, &[data.into()], "")
-                            .expect("call free for captured-local Vec data");
-                        self.builder
-                            .build_unconditional_branch(skip_bb)
-                            .expect("branch to skip after free");
-                        self.builder.position_at_end(skip_bb);
-                    }
-                    FieldDrop::Shared => {
-                        // The shared-struct field stores a heap handle
-                        // (ptr to the rc-headed object). Look up the
-                        // heap_type from `shared_types`; load the ptr;
-                        // null-guard (slice-8a reload may surface
-                        // poison on uninitialized state-struct fields
-                        // before the use sites land) then dispatch
-                        // through `emit_refcount_dec` so the recursive
-                        // drop chain (`rc_drop_fns`) fires on
-                        // transitively-owned shared refs the same way
-                        // ordinary scope-exit cleanup does. The
-                        // shared type name is the field's recorded
-                        // `type_name` (guaranteed `Some` here by the
-                        // `FieldDrop::Shared` classification arm).
-                        let type_name = field
-                            .type_name
-                            .as_deref()
-                            .expect("FieldDrop::Shared implies recorded type_name");
-                        let heap_type = self
-                            .shared_types
-                            .get(type_name)
-                            .expect("FieldDrop::Shared implies shared_types entry")
-                            .heap_type;
-                        let field_ptr = self
-                            .builder
-                            .build_struct_gep(
-                                state_struct,
-                                state_ptr,
-                                struct_field_idx,
-                                &format!("{}.drop.field_ptr", field.name),
-                            )
-                            .expect("GEP shared captured-local field for destructor");
-                        let handle = self
-                            .builder
-                            .build_load(ptr_ty, field_ptr, &format!("{}.drop.handle", field.name))
-                            .expect("load shared captured-local handle for destructor")
-                            .into_pointer_value();
-                        let null = ptr_ty.const_null();
-                        let is_null = self
-                            .builder
-                            .build_int_compare(
-                                inkwell::IntPredicate::EQ,
-                                handle,
-                                null,
-                                &format!("{}.drop.is_null", field.name),
-                            )
-                            .expect("compare shared handle vs null for destructor");
-                        let dec_bb = self
-                            .context
-                            .append_basic_block(drop_fn, &format!("{}.drop.dec", field.name));
-                        let skip_bb = self
-                            .context
-                            .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
-                        self.builder
-                            .build_conditional_branch(is_null, skip_bb, dec_bb)
-                            .expect("branch on shared handle null-check for destructor");
-                        self.builder.position_at_end(dec_bb);
-                        self.emit_refcount_dec(&field.name, heap_type, handle);
-                        self.builder
-                            .build_unconditional_branch(skip_bb)
-                            .expect("branch to skip after rc dec");
-                        self.builder.position_at_end(skip_bb);
-                    }
+            let struct_field_idx = (field_idx + 1) as u32;
+            match kind {
+                FieldDrop::Skip => {}
+                FieldDrop::VecOrString => {
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            struct_field_idx,
+                            &format!("{}.drop.field_ptr", field.name),
+                        )
+                        .expect("GEP captured-local field for destructor");
+                    let cap_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            vec_ty,
+                            field_ptr,
+                            2,
+                            &format!("{}.drop.cap_ptr", field.name),
+                        )
+                        .expect("GEP Vec cap field for destructor");
+                    let cap = self
+                        .builder
+                        .build_load(i64_t, cap_ptr, &format!("{}.drop.cap", field.name))
+                        .expect("load Vec cap for destructor")
+                        .into_int_value();
+                    let zero = i64_t.const_int(0, false);
+                    let is_heap = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::UGT,
+                            cap,
+                            zero,
+                            &format!("{}.drop.is_heap", field.name),
+                        )
+                        .expect("compare cap > 0 for destructor");
+                    let free_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{}.drop.free", field.name));
+                    let skip_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
+                    self.builder
+                        .build_conditional_branch(is_heap, free_bb, skip_bb)
+                        .expect("branch on cap > 0 for destructor");
+                    self.builder.position_at_end(free_bb);
+                    let data_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            vec_ty,
+                            field_ptr,
+                            0,
+                            &format!("{}.drop.data_ptr_ptr", field.name),
+                        )
+                        .expect("GEP Vec data-ptr field for destructor");
+                    let data = self
+                        .builder
+                        .build_load(ptr_ty, data_ptr_ptr, &format!("{}.drop.data", field.name))
+                        .expect("load Vec data ptr for destructor")
+                        .into_pointer_value();
+                    self.builder
+                        .build_call(self.free_fn, &[data.into()], "")
+                        .expect("call free for captured-local Vec data");
+                    self.builder
+                        .build_unconditional_branch(skip_bb)
+                        .expect("branch to skip after free");
+                    self.builder.position_at_end(skip_bb);
+                }
+                FieldDrop::Shared => {
+                    // The shared-struct field stores a heap handle
+                    // (ptr to the rc-headed object). Look up the
+                    // heap_type from `shared_types`; load the ptr;
+                    // null-guard (slice-8a reload may surface
+                    // poison on uninitialized state-struct fields
+                    // before the use sites land) then dispatch
+                    // through `emit_refcount_dec` so the recursive
+                    // drop chain (`rc_drop_fns`) fires on
+                    // transitively-owned shared refs the same way
+                    // ordinary scope-exit cleanup does. The
+                    // shared type name is the field's recorded
+                    // `type_name` (guaranteed `Some` here by the
+                    // `FieldDrop::Shared` classification arm).
+                    let type_name = field
+                        .type_name
+                        .as_deref()
+                        .expect("FieldDrop::Shared implies recorded type_name");
+                    let heap_type = self
+                        .shared_types
+                        .get(type_name)
+                        .expect("FieldDrop::Shared implies shared_types entry")
+                        .heap_type;
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            state_struct,
+                            state_ptr,
+                            struct_field_idx,
+                            &format!("{}.drop.field_ptr", field.name),
+                        )
+                        .expect("GEP shared captured-local field for destructor");
+                    let handle = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, &format!("{}.drop.handle", field.name))
+                        .expect("load shared captured-local handle for destructor")
+                        .into_pointer_value();
+                    let null = ptr_ty.const_null();
+                    let is_null = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::EQ,
+                            handle,
+                            null,
+                            &format!("{}.drop.is_null", field.name),
+                        )
+                        .expect("compare shared handle vs null for destructor");
+                    let dec_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{}.drop.dec", field.name));
+                    let skip_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("{}.drop.skip", field.name));
+                    self.builder
+                        .build_conditional_branch(is_null, skip_bb, dec_bb)
+                        .expect("branch on shared handle null-check for destructor");
+                    self.builder.position_at_end(dec_bb);
+                    self.emit_refcount_dec(&field.name, heap_type, handle);
+                    self.builder
+                        .build_unconditional_branch(skip_bb)
+                        .expect("branch to skip after rc dec");
+                    self.builder.position_at_end(skip_bb);
                 }
             }
-
-            self.builder
-                .build_return(None)
-                .expect("ret void from state-struct destructor");
-
-            self.current_fn = saved_fn;
-            if let Some(bb) = saved_bb {
-                self.builder.position_at_end(bb);
-            }
-
-            self.state_machine_state_destructors
-                .insert(fn_key.clone(), drop_fn);
         }
+
+        self.builder
+            .build_return(None)
+            .expect("ret void from state-struct destructor");
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        self.state_machine_state_destructors
+            .insert(emit_key.to_string(), drop_fn);
+    }
+
+    // ── Slice 8v Phase 2: per-mono state-machine orchestrator ──────────
+
+    /// Emit the four state-machine helpers — state-struct LLVM type,
+    /// constructor, destructor, poll-fn — for a polymorphic yielding
+    /// function's monomorphization. The polymorphic function's
+    /// analysis-side metadata (state-struct layout, yield points, AST
+    /// body) lives in `program.state_struct_layouts[base_key]` /
+    /// `program.yield_points[base_key]` / `find_function_ast(program,
+    /// base_key)`; we access it through the
+    /// `Codegen.program_snapshot: Option<Rc<Program>>` cached at the
+    /// top of `compile_program`. The emit_key is the mangled
+    /// monomorphization name (e.g. `driver$i64`); `compile_generic_call`
+    /// passes both names after `compile_mono_function` ran with the
+    /// active `type_subst` (so `llvm_type_for_name("T")` inside the
+    /// per-key helpers resolves to the concrete LLVM type for this
+    /// mono).
+    ///
+    /// Idempotent: a second call for the same `mono_key` short-
+    /// circuits if `state_machine_poll_fns[mono_key]` already exists.
+    /// Both callers in `compile_generic_call` guard on
+    /// `generated_monos` set membership before invoking this, so
+    /// idempotence is belt-and-suspenders, but the check keeps the
+    /// helper safe to invoke from future paths that may not gate the
+    /// same way.
+    ///
+    /// No-op when `base_key` isn't in `state_struct_layouts` (the
+    /// polymorphic function isn't a network-yield candidate, so no
+    /// state-machine machinery is needed for any of its monos). Also
+    /// no-op when the program snapshot is missing — defensive against
+    /// the helper being invoked outside `compile_program`'s scope.
+    pub(super) fn emit_state_machine_helpers_for_mono(&mut self, base_key: &str, mono_key: &str) {
+        // Idempotence guard: skip if the per-mono poll-fn (the last
+        // helper to be inserted in `emit_state_machine_poll_fn_for_key`)
+        // already exists for this `mono_key`. The four helpers all
+        // emit-and-insert atomically per call, so the poll-fn's
+        // presence implies all four are emitted.
+        if self.state_machine_poll_fns.contains_key(mono_key) {
+            return;
+        }
+        let program = match self.program_snapshot.as_ref() {
+            Some(p) => Rc::clone(p),
+            None => return,
+        };
+        let layout = match program.state_struct_layouts.get(base_key) {
+            Some(l) => l.clone(),
+            None => return,
+        };
+        // Emit the four helpers in declaration-dependency order:
+        // (1) state-struct LLVM type (others reference it via
+        // `state_struct_types[mono_key]`); (2) constructor +
+        // destructor + poll-fn (any order; all read the LLVM type).
+        self.emit_state_struct_type_for_key(&program, base_key, mono_key, &layout);
+        self.emit_state_machine_state_constructor_for_key(mono_key);
+        self.emit_state_machine_state_destructor_for_key(mono_key, &layout);
+        self.emit_state_machine_poll_fn_for_key(&program, base_key, mono_key);
     }
 
     /// Phase 6 line 26 slice 8q: materialize a `BodyArg` into a
@@ -2232,6 +2364,30 @@ pub(super) fn is_i64_return_type(ty: &TypeExpr) -> bool {
 ///
 /// Used by phase 6 line 26 slice 8h's body-splitting walk to find
 /// the user's statements to emit per state arm.
+/// Slice 8v Phase 2: look up the declared `TypeExpr` for a function
+/// parameter by binding name. Returns `None` when `fn_ast` is `None`
+/// or when no parameter binds the requested name (e.g. the name
+/// refers to a body-level let-binding, not a parameter; or to a
+/// destructuring binding whose introducing pattern's surface name
+/// doesn't match `fn_ast.params[i].pattern`). Used by
+/// `emit_state_struct_type_for_key` per-mono path to recover the
+/// generic-typed parameter's `TypeExpr` so `llvm_type_for_type_expr`
+/// can resolve it through the active `type_subst`.
+pub(super) fn lookup_param_type_expr(
+    fn_ast: Option<&Function>,
+    field_name: &str,
+) -> Option<TypeExpr> {
+    let func = fn_ast?;
+    for param in &func.params {
+        for name in param.pattern.binding_names() {
+            if name == field_name {
+                return Some(param.ty.clone());
+            }
+        }
+    }
+    None
+}
+
 /// Phase 6 line 26 slice 8v: does `fn_key` refer to a generic
 /// (un-monomorphized) function or method? The base-name passes
 /// (slice 5 state-struct LLVM type, slice 6 poll-fn, slice 8c

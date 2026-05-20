@@ -17594,6 +17594,12 @@ fn main() {
         // Polymorphic yielding fn produces no `%kara.state.<base>`
         // LLVM struct type — slice 5's iteration over
         // `state_struct_layouts` now filters via `is_generic_fn_key`.
+        // Per-mono emission DOES land under the mangled key (e.g.
+        // `%"kara.state.driver$i64"`) once slice 8v Phase 2's
+        // `compile_generic_call` orchestrator runs; the assertion
+        // matches the full base-name shape `%kara.state.driver = type`
+        // exactly, so per-mono variants (`%"kara.state.driver$..."`)
+        // don't trip the filter.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
@@ -17604,11 +17610,13 @@ fn main() {
             !ir.contains("%kara.state.driver = type"),
             "polymorphic driver must not emit a base-name state struct type:\n{ir}"
         );
-        // Anchor global mirrors the state-struct type — both must
-        // disappear.
+        // Anchor global mirrors the state-struct type — base-name
+        // must not appear. Per-mono anchors (e.g.
+        // `@"__kara_state_type_anchor_driver$i64"`) are expected and
+        // get a separate test in the Phase 2 section below.
         assert!(
-            !ir.contains("__kara_state_type_anchor_driver"),
-            "polymorphic driver must not emit a state-struct anchor global:\n{ir}"
+            !ir.contains("@__kara_state_type_anchor_driver = "),
+            "polymorphic driver must not emit a base-name state-struct anchor global:\n{ir}"
         );
     }
 
@@ -17616,6 +17624,11 @@ fn main() {
     fn test_state_machine_skips_polymorphic_poll_fn() {
         // Polymorphic yielding fn produces no `__kara_poll_<base>`
         // poll-fn — slice 6's iteration now filters generics.
+        // Per-mono emission lands `@"__kara_poll_driver$i64"` (with
+        // `$` triggering LLVM's quoted-symbol convention); the
+        // assertion shape `@__kara_poll_driver(` matches the base
+        // name's call-site shape exactly and doesn't trip on the
+        // mangled variant.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
@@ -17623,7 +17636,7 @@ fn main() {
              fn caller() { driver(42i64); }",
         );
         assert!(
-            !ir.contains("@__kara_poll_driver"),
+            !ir.contains("@__kara_poll_driver("),
             "polymorphic driver must not emit a base-name poll-fn:\n{ir}"
         );
     }
@@ -17632,6 +17645,8 @@ fn main() {
     fn test_state_machine_skips_polymorphic_state_constructor() {
         // Polymorphic yielding fn produces no `__kara_state_new_<base>`
         // constructor — slice 8c's iteration now filters generics.
+        // Per-mono `@"__kara_state_new_driver$i64"()` is expected and
+        // tested separately in Phase 2's section.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
@@ -17639,7 +17654,7 @@ fn main() {
              fn caller() { driver(42i64); }",
         );
         assert!(
-            !ir.contains("@__kara_state_new_driver"),
+            !ir.contains("@__kara_state_new_driver("),
             "polymorphic driver must not emit a base-name state constructor:\n{ir}"
         );
     }
@@ -17661,7 +17676,7 @@ fn main() {
              fn driver[T](items: Vec[T]) { fetch(); }",
         );
         assert!(
-            !ir.contains("@__kara_state_drop_driver"),
+            !ir.contains("@__kara_state_drop_driver("),
             "polymorphic driver must not emit a base-name state destructor:\n{ir}"
         );
     }
@@ -17712,8 +17727,246 @@ fn main() {
             "polymorphic Hub.run must not emit a base-name state struct type:\n{ir}"
         );
         assert!(
-            !ir.contains("@__kara_poll_Hub.run"),
+            !ir.contains("@__kara_poll_Hub.run("),
             "polymorphic Hub.run must not emit a base-name poll-fn:\n{ir}"
+        );
+    }
+
+    // ── Phase 6 line 26 slice 8v Phase 2: per-mono state-machine emission + caller intercept ──
+    //
+    // For each monomorphization of a polymorphic network-yielding fn
+    // (e.g. `fn driver[T](item: T) { fetch(); }` called with `T = i64`,
+    // `T = Vec[i64]`, ...), codegen emits the four state-machine
+    // helpers — state-struct LLVM type, poll-fn, constructor,
+    // destructor — under the mangled key (`driver$i64`, etc.),
+    // with `type_subst` active so `T`-typed captured locals resolve
+    // to the per-mono concrete LLVM type. The caller-side intercept
+    // in `compile_generic_call` routes the call through
+    // `__kara_state_new_<mangled>` + poll loop + `free` instead of
+    // a direct `call @<mangled>(args)`, mirroring the slice 8d
+    // caller intercept for non-generic yielding fns.
+
+    #[test]
+    fn test_per_mono_state_struct_type_emitted_with_concrete_field_type() {
+        // `driver[T](item: T)` instantiated with `T = i64` emits
+        // `%"kara.state.driver$i64" = type { i32, i64 }` — the
+        // `T`-typed `item` field resolves to `i64` via the active
+        // `type_subst` at per-mono emission time, matching the
+        // slot type that `compile_mono_function` allocated for the
+        // parameter binding.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        // LLVM quotes named types containing `$`; the IR contains
+        // `%"kara.state.driver$i64" = type { i32, i64 }`.
+        let line = ir
+            .lines()
+            .find(|l| l.contains("%\"kara.state.driver$i64\" = type"))
+            .unwrap_or_else(|| {
+                panic!("expected per-mono state struct %\"kara.state.driver$i64\":\n{ir}")
+            });
+        assert!(
+            line.contains("{ i32, i64 }"),
+            "per-mono state struct must have {{ i32, i64 }} layout (tag + i64 item): {line}"
+        );
+    }
+
+    #[test]
+    fn test_per_mono_poll_fn_constructor_destructor_emitted_at_mangled_key() {
+        // All three callable helpers (poll-fn + constructor;
+        // destructor only when heap-bearing — this mono has only
+        // `i64`, no destructor) emit at the mangled key.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            ir.contains("@\"__kara_poll_driver$i64\""),
+            "per-mono poll-fn must emit at mangled key:\n{ir}"
+        );
+        assert!(
+            ir.contains("@\"__kara_state_new_driver$i64\""),
+            "per-mono constructor must emit at mangled key:\n{ir}"
+        );
+        // Destructor for i64-only captures: not emitted (skip-when-empty rule).
+        assert!(
+            !ir.contains("@\"__kara_state_drop_driver$i64\""),
+            "per-mono destructor must skip for primitive-only captures:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_per_mono_caller_intercept_routes_through_state_machine() {
+        // When the polymorphic source is network-yielding, the
+        // caller's body must invoke the per-mono helpers instead
+        // of direct-calling the mono fn:
+        //   - constructor call to allocate the state struct
+        //   - poll-loop with `kara.poll_loop` BB
+        //   - cooperative `sched_yield` on Pending
+        //   - terminal `free` on done
+        //   - NO direct `call void @"driver$i64"(args)` in caller body
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        let caller_body = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller_body.contains("call ptr @\"__kara_state_new_driver$i64\"()"),
+            "caller must invoke per-mono state constructor:\n{caller_body}"
+        );
+        assert!(
+            caller_body.contains("kara.poll_loop:"),
+            "caller must emit per-mono poll-loop block:\n{caller_body}"
+        );
+        assert!(
+            caller_body.contains("call i8 @\"__kara_poll_driver$i64\"(ptr %kara.state, ptr null)"),
+            "caller must invoke per-mono poll-fn with state ptr + null cancel:\n{caller_body}"
+        );
+        assert!(
+            caller_body.contains("call void @free(ptr %kara.state)"),
+            "caller must free the per-mono state struct after done block:\n{caller_body}"
+        );
+        // CRITICAL: caller must NOT direct-call the mono fn. Slice
+        // 8v Phase 2's intercept replaces the direct call with the
+        // state-machine invocation. A surviving direct call would
+        // mean the intercept fired without replacing the trailing
+        // emit, or the mono path's gating predicate missed.
+        assert!(
+            !caller_body.contains("call void @\"driver$i64\"("),
+            "caller must NOT direct-call the mono fn (intercept replaces it):\n{caller_body}"
+        );
+    }
+
+    #[test]
+    fn test_per_mono_caller_intercept_stores_arg_into_state_struct_field() {
+        // The caller-side intercept stores the call arg into the
+        // state struct's captured-local field at position 1 (after
+        // the tag at 0). Mirrors slice 8f's discipline keyed on the
+        // mangled state-struct type.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        let caller_body = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller_body.contains("%kara.arg0.field_ptr"),
+            "intercept must GEP state struct field for arg0:\n{caller_body}"
+        );
+        // Arg value 42 stored into the field. With opaque pointers,
+        // the store shape is `store i64 42, ptr %kara.arg0.field_ptr`.
+        assert!(
+            caller_body.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "intercept must store arg value 42 into state struct field:\n{caller_body}"
+        );
+    }
+
+    #[test]
+    fn test_two_distinct_monos_each_get_their_own_state_machine_helpers() {
+        // `driver[T]` instantiated twice with two different types
+        // produces two distinct per-mono state-machine helper sets.
+        // The polymorphic source has no `with` clause mentioning an
+        // effect parameter, so all monos share the same concrete
+        // effect set (trivially-monomorphic v1 scope — see slice 8v's
+        // doc framing). Each mono gets its own state struct, poll-fn,
+        // constructor under its mangled name. Uses two int widths
+        // (`i64` and `i32`) so both monos produce stable layouts
+        // through the unified `llvm_type_to_mangle_str` path without
+        // depending on String / collection lowering through
+        // `compile_generic_call`'s arg materialisation (which has
+        // independent gaps tracked outside slice 8v).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() {
+                 driver(42i64);
+                 driver(7i32);
+             }",
+        );
+        assert!(
+            ir.contains("%\"kara.state.driver$i64\" = type"),
+            "i64 mono state struct must be emitted:\n{ir}"
+        );
+        assert!(
+            ir.contains("%\"kara.state.driver$i32\" = type"),
+            "i32 mono state struct must be emitted:\n{ir}"
+        );
+        // Each layout uses the per-mono concrete field type.
+        let i64_line = ir
+            .lines()
+            .find(|l| l.contains("%\"kara.state.driver$i64\" = type"))
+            .unwrap();
+        assert!(
+            i64_line.contains("{ i32, i64 }"),
+            "i64 mono state struct must be {{ i32, i64 }}: {i64_line}"
+        );
+        let i32_line = ir
+            .lines()
+            .find(|l| l.contains("%\"kara.state.driver$i32\" = type"))
+            .unwrap();
+        assert!(
+            i32_line.contains("{ i32, i32 }"),
+            "i32 mono state struct must be {{ i32, i32 }}: {i32_line}"
+        );
+        // Both poll-fns + constructors emit at their mangled keys.
+        assert!(
+            ir.contains("@\"__kara_poll_driver$i64\""),
+            "i64 mono poll-fn must emit:\n{ir}"
+        );
+        assert!(
+            ir.contains("@\"__kara_poll_driver$i32\""),
+            "i32 mono poll-fn must emit:\n{ir}"
+        );
+        assert!(
+            ir.contains("@\"__kara_state_new_driver$i64\""),
+            "i64 mono constructor must emit:\n{ir}"
+        );
+        assert!(
+            ir.contains("@\"__kara_state_new_driver$i32\""),
+            "i32 mono constructor must emit:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_non_yielding_generic_fn_keeps_direct_call() {
+        // A polymorphic fn that's NOT network-yielding (no `fetch()`
+        // or similar) gets no state-struct entry under its base
+        // name, so the slice 8v Phase 2 orchestrator no-ops for its
+        // monos. The caller-side intercept's gating predicate (
+        // `state_machine_state_constructors.get(&mangled)`) misses,
+        // so the call falls through to the direct-call path. This
+        // is the common case for ordinary user generics.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             fn identity[T](x: T) -> T { x }
+             fn caller() {
+                 let v = identity(42i64);
+             }",
+        );
+        // No per-mono state struct.
+        assert!(
+            !ir.contains("%\"kara.state.identity$i64\""),
+            "non-yielding generic mono must not emit a state struct:\n{ir}"
+        );
+        // No per-mono poll-fn.
+        assert!(
+            !ir.contains("@\"__kara_poll_identity$i64\""),
+            "non-yielding generic mono must not emit a poll-fn:\n{ir}"
+        );
+        // Caller body direct-calls the mono.
+        let caller_body = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller_body.contains("call i64 @\"identity$i64\""),
+            "caller must direct-call the non-yielding mono:\n{caller_body}"
         );
     }
 }
