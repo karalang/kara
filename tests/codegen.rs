@@ -18413,6 +18413,69 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8af: slice 8z verification gaps ────────────
+    //
+    // Slice 8z covered `ref T` (with `T = Vec[i64]`) and `mut Slice[T]`
+    // (with `T = i64`). Slice 8af closes the remaining type-param-typed
+    // slice verification gap: composite element type (e.g.
+    // `mut Slice[T]` with `T = Vec[i64]`).
+    //
+    // The other 8af-tracked gap — `mut ref T` per-mono intercept
+    // verification — was probed 2026-05-20 and surfaced a real
+    // typechecker bug (`driver(mut n)` with `fn driver[T](item: mut
+    // ref T)` fails to unify with "expected 'mut ref T', found
+    // 'i64'", indicating the typechecker doesn't apply the mut-marker
+    // auto-ref-take when the param is a type-parameter-typed
+    // `mut ref T`). Per the slice 8af tracker entry's policy ("if
+    // either test surfaces a real bug, that fix lands as a new
+    // entry"), the bug is carried as a separate tracker entry rather
+    // than blocking 8af; the `mut ref T` per-mono intercept dispatch
+    // path is still structurally covered by `declare_mono_function`'s
+    // `TypeKind::Ref(_) | TypeKind::MutRef(_)` match arm (slice 8z),
+    // so the missing test is verification-only — the codegen path is
+    // correct as soon as the typechecker accepts the call.
+    //
+    // Slice 8af ships verification-only; no codegen change.
+
+    #[test]
+    fn test_slice_8af_mut_slice_t_composite_element_type() {
+        // `fn driver[T](items: mut Slice[T])` with `T = Vec[i64]` —
+        // slice of vecs. The element-type-resolution chain is:
+        // `extract_slice_elem_type(mut Slice[T])` → calls
+        // `llvm_type_for_type_expr(T)` → type_subst[T] = vec_struct.
+        // The state-struct field is the slice struct `{ ptr, i64 }`
+        // regardless of element type (slice's run-time width is
+        // independent of element width — it's always
+        // `{ data_ptr, len }`). The caller-side `coerce_to_slice`
+        // must produce the slice header from the `Vec[Vec[i64]]`
+        // source binding.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](items: mut Slice[T]) { fetch(); }
+             fn caller() {
+                 let mut vv: Vec[Vec[i64]] = Vec.new();
+                 driver(mut vv);
+             }",
+        );
+        // State-struct field is the slice struct shape — independent
+        // of element type.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("{ ptr, i64 }"),
+            "mut Slice[T] field must lower to slice struct {{ ptr, i64 }} regardless of element type:\n{state_line}"
+        );
+        // Caller stores the synthesized slice header.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store { ptr, i64 }") && caller.contains("ptr %kara.arg0.field_ptr"),
+            "intercept must store synthesized slice header for Vec[Vec[i64]] arg:\n{caller}"
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`
