@@ -5,6 +5,7 @@
 # Getting Started
 
 - [Hello, Kāra](./ch01-hello-kara.md)
+- [Two Surfaces: Files and the REPL](./ch01b-two-surfaces.md)
 - [Variables and Types](./ch02-variables-and-types.md)
 - [Functions](./ch03-functions.md)
 - [Control Flow](./ch04-control-flow.md)
