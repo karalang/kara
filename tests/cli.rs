@@ -4464,6 +4464,186 @@ name = "solo"
     );
 }
 
+// ── karac update slice 1 — bare-form (re-resolve + rewrite lockfile) ─
+
+fn update_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-update-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_update_bare_rewrites_lockfile_for_path_dep_project() {
+    let tmp = update_tempdir("bare-path-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "vendor/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("vendor/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("vendor/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("update")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let contents = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac update bare should succeed; stderr={stderr}",
+    );
+    assert!(
+        lockfile_exists,
+        "karac update should produce kara.lock at the project root",
+    );
+    assert!(
+        contents.contains("name = \"child\""),
+        "lockfile should mention the path-dep child; got: {contents}",
+    );
+    assert!(
+        stderr.contains("re-derived kara.lock"),
+        "expected the update summary on stderr; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("(2 locked packages)"),
+        "expected '2 locked packages' in the summary; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_update_bare_runs_resolver_even_with_no_deps() {
+    // Regression pin: cmd_build_project skips the resolver when no deps
+    // are declared; cmd_update must NOT. The user explicitly asked to
+    // refresh the lockfile — honoring that is the whole point.
+    let tmp = update_tempdir("no-deps");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("update")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac update on no-dep project should succeed; stderr={stderr}",
+    );
+    assert!(
+        lockfile_exists,
+        "karac update must produce kara.lock even when manifest declares no deps",
+    );
+}
+
+#[test]
+fn test_update_dep_graph_error_halts_with_diagnostic() {
+    // A path-dep cycle halts cmd_update with the same E_DEPENDENCY_CYCLE
+    // diagnostic that cmd_build_project uses.
+    let tmp = update_tempdir("cycle-halts");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("sub/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root"
+
+[dependencies]
+sub = { path = "sub" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("sub/kara.toml"),
+        r#"[package]
+name = "sub"
+
+[dependencies]
+root = { path = ".." }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("sub/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("update")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "karac update on a cycle should halt; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_DEPENDENCY_CYCLE]"),
+        "expected E_DEPENDENCY_CYCLE; got: {stderr}",
+    );
+    assert!(
+        !lockfile_exists,
+        "kara.lock should not be written when the resolver fails",
+    );
+}
+
+#[test]
+fn test_update_help_works() {
+    let out = karac_bin().args(["update", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("karac update"));
+    assert!(stdout.contains("kara.lock"));
+}
+
+#[test]
+fn test_update_rejects_extra_args() {
+    let out = karac_bin().args(["update", "foo", "bar"]).output().unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("takes at most one"),
+        "expected too-many-args error; got: {stderr}",
+    );
+}
+
 // ── Lockfile slice 4 — kara.lock CLI integration ────────────────────
 
 fn lockfile_tempdir(slug: &str) -> std::path::PathBuf {

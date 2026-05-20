@@ -449,6 +449,25 @@ alongside the dependency-resolution slice. Pair the canonical flag
 shape (`karac vendor` + `karac build --offline`) into your CI scripts
 today; the implementation swap is non-breaking."
         }
+        "update" => {
+            "\
+karac update - Re-resolve dependencies and rewrite kara.lock
+
+USAGE:
+    karac update [<pkg>] [options]
+
+OPTIONS:
+    --output=json     Structured JSON output on stdout
+    --output=jsonl    Streaming JSONL output on stdout
+    -h, --help        Print this message
+
+Bare form refreshes every locked package; surgical form targets one
+package by name (validation lands in a follow-up slice).
+
+v1.1 status: path-deps are manifest-pinned, so bumping isn't meaningful
+today — both forms re-derive the lockfile from the current manifest.
+Real version-bumping ships alongside the registry-proxy fetch surface."
+        }
         _ => {
             print_help();
             return;

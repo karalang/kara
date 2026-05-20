@@ -67,6 +67,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "clean" => parse_clean_command(args),
         "install" => parse_install_command(args),
         "vendor" => parse_vendor_command(args),
+        "update" => parse_update_command(args),
         "explain" => parse_explain_command(args),
         "catalog" => parse_catalog_command(args),
         // Bare file path: treat as `karac run <file>`
@@ -320,6 +321,33 @@ fn parse_vendor_command(args: &[String]) -> Command {
         process::exit(1);
     }
     Command::Vendor
+}
+
+fn parse_update_command(args: &[String]) -> Command {
+    // `karac update [<pkg>] [--output=json|jsonl]` — at most one positional.
+    // Slice 1 of line 843 parses both forms; slice 2 wires the surgical
+    // <pkg> validation against the resolution.
+    let mut package: Option<String> = None;
+    let mut output = OutputMode::Text;
+    for arg in args.iter().skip(2) {
+        if arg == "--output=json" {
+            output = OutputMode::Json;
+        } else if arg == "--output=jsonl" {
+            output = OutputMode::Jsonl;
+        } else if let Some(rest) = arg.strip_prefix("--output=") {
+            eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
+            process::exit(1);
+        } else if arg.starts_with("--") {
+            eprintln!("error: unknown flag '{arg}' for `karac update`");
+            process::exit(1);
+        } else if package.is_some() {
+            eprintln!("error: `karac update` takes at most one <pkg> argument");
+            process::exit(1);
+        } else {
+            package = Some(arg.clone());
+        }
+    }
+    Command::Update { package, output }
 }
 
 /// Try to consume a lint-level CLI flag at `args[*i]`. Returns

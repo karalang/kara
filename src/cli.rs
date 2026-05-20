@@ -208,6 +208,16 @@ pub enum Command {
     /// wiring lands in a follow-up; this arm currently emits a
     /// "not yet wired" diagnostic.
     Vendor,
+    /// Re-run the resolver and rewrite `kara.lock`. Bare form refreshes
+    /// every locked package; surgical form (`karac update <pkg>`) targets
+    /// one package. v1.1 with path-deps only: bumping isn't meaningful
+    /// (path-deps are manifest-pinned), so both forms re-derive the
+    /// lockfile from the current manifest. Real version-bumping lands
+    /// alongside the registry-proxy fetch surface (tracker line 845).
+    Update {
+        package: Option<String>,
+        output: OutputMode,
+    },
     /// Emit the project's public API surface as JSONL on stdout. One record
     /// per exported item (`fn`, `struct`, `enum`, `trait`, `const`,
     /// `type_alias`, `distinct_type`, `effect_resource`, `extern_fn`,
@@ -393,6 +403,7 @@ pub fn execute(cmd: Command) {
         Command::Clean { global } => cmd_clean(global),
         Command::Install { spec } => cmd_install(&spec),
         Command::Vendor => cmd_vendor(),
+        Command::Update { package, output } => cmd_update(package.as_deref(), output),
         Command::Explain { target, format } => explain::render(&target, format),
         Command::Catalog { file } => cmd_catalog(&file),
     }
@@ -6796,6 +6807,129 @@ fn cmd_vendor() {
          Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
     );
     process::exit(2);
+}
+
+// ── karac update ─────────────────────────────────────────────────
+//
+// Re-run the resolver against the current manifest and rewrite
+// `kara.lock`. v1.1 ships path-deps only — bumping versions isn't
+// meaningful for path-deps (they're manifest-pinned), so bare and
+// surgical forms re-derive the lockfile identically today. Slice 2
+// of line 843 wires the surgical form's positional `<pkg>` validation;
+// slice 1 (this code) ships the bare-form behavior.
+//
+// Tracker: docs/implementation_checklist/phase-5-diagnostics.md line 843.
+
+fn cmd_update(package: Option<&str>, output: OutputMode) {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read current directory: {e}");
+            process::exit(1);
+        }
+    };
+
+    let (root, mf) = match manifest::load_from_cwd(&cwd) {
+        Ok(ok) => ok,
+        Err(e) => {
+            emit_manifest_error(&e, output);
+            process::exit(1);
+        }
+    };
+
+    if package.is_some() {
+        // Slice 2 lands the positional <pkg> validation. For slice 1 the
+        // positional is parsed but ignored — surface the deferral so the
+        // user knows the bare-form behavior is what actually ran.
+        eprintln!(
+            "note: `karac update <pkg>` surgical-form validation lands in a follow-up; \
+             running bare-form (re-resolve + rewrite lockfile) for now"
+        );
+    }
+
+    // Unlike cmd_build_project, we *always* run the resolver here even when
+    // the manifest declares no deps. The user explicitly asked to refresh
+    // the lockfile — honoring that is the whole point of the subcommand.
+    let loader = crate::dep_graph::FsLoader;
+    let graph = match crate::dep_graph::build_dep_graph(&root, mf, &loader) {
+        Ok(g) => g,
+        Err(e) => {
+            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+            emit_dep_diagnostic(&diag, output, "error");
+            process::exit(1);
+        }
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    let resolution = match crate::dep_resolver::resolve(&graph, &active) {
+        Ok(r) => r,
+        Err(boxed) => {
+            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+            let code = boxed.code();
+            let severity = match code {
+                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
+                _ => "error",
+            };
+            emit_dep_diagnostic(&diag, output, severity);
+            if severity == "error" {
+                process::exit(1);
+            }
+            // Warning: still produce an empty-but-valid lockfile via a
+            // pseudo-resolution. Practically v1.1 paths trip the
+            // path-dep / MSRV branches first; the registry-warn case
+            // surfaces here as a no-op-on-update-but-don't-crash.
+            crate::dep_resolver::Resolution {
+                packages: std::collections::BTreeMap::new(),
+            }
+        }
+    };
+
+    persist_lockfile(&root, &resolution, output);
+    emit_update_summary(&resolution, output);
+}
+
+fn emit_update_summary(resolution: &crate::dep_resolver::Resolution, output: OutputMode) {
+    let count = resolution.packages.len();
+    match output {
+        OutputMode::Text => {
+            eprintln!(
+                "karac update: re-derived kara.lock ({count} locked package{})",
+                if count == 1 { "" } else { "s" }
+            );
+            for (name, pkg) in &resolution.packages {
+                let source_kind = describe_resolved_source(&pkg.source);
+                eprintln!("  - {name} ({source_kind})");
+            }
+        }
+        OutputMode::Json => {
+            let entries: Vec<String> = resolution
+                .packages
+                .iter()
+                .map(|(name, pkg)| {
+                    format!(
+                        "{{\"name\":{},\"source\":{}}}",
+                        json_string(name),
+                        json_string(describe_resolved_source(&pkg.source)),
+                    )
+                })
+                .collect();
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"update\",\"locked\":[{}]}}",
+                entries.join(",")
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event("update_complete", &format!("\"locked_count\":{count}"));
+        }
+    }
+}
+
+fn describe_resolved_source(src: &crate::dep_resolver::ResolvedSource) -> &'static str {
+    match src {
+        crate::dep_resolver::ResolvedSource::Root => "root",
+        crate::dep_resolver::ResolvedSource::Path(_) => "path",
+        crate::dep_resolver::ResolvedSource::Registry { .. } => "registry",
+        crate::dep_resolver::ResolvedSource::Git { .. } => "git",
+    }
 }
 
 #[cfg(test)]
