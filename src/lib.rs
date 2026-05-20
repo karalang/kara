@@ -61,6 +61,7 @@ pub mod queries;
 pub mod query_attributes;
 pub mod raii_check;
 pub mod rc_predicate;
+pub mod registry_proxy;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod resolver;
