@@ -51,7 +51,7 @@ use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
-use super::state::VarSlot;
+use super::state::{AssertedIndexBound, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Try to lower the top-level statement at `stmt_index` (inside
@@ -425,6 +425,187 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         (runtime, consts)
+    }
+
+    /// Walk the worker body looking for indexing sites whose bounds can
+    /// be hoisted out of the per-iter check via a one-time preflight at
+    /// fn entry. v1 recognizes the pattern:
+    ///
+    /// ```ignore
+    /// let idx = <loop_var> % <positive_int_literal>;  // top-level in body
+    /// ...
+    /// <captured_vec>[idx]  // anywhere in body, possibly nested in calls
+    /// ```
+    ///
+    /// Given:
+    /// - the par-reduce loop var is known >= 0 (see the assume in
+    ///   `emit_reduce_worker_fn` — the runtime always passes start as a
+    ///   usize and the back-edge only adds 1, so SCEV proves the chain),
+    /// - the modulo divisor is a positive literal,
+    ///
+    /// `idx` lives in `[0, divisor)`. If we additionally prove
+    /// `captured_vec.len() >= divisor` once at fn entry (the preflight
+    /// check), every per-iter `captured_vec[idx]` bounds check becomes
+    /// redundant.
+    ///
+    /// Conservative rules for v1 — both keep the analysis local and
+    /// avoid soundness traps without much loss of coverage on the kata
+    /// surface:
+    ///
+    /// - The let-binding for `idx` must be at the body's top level
+    ///   (not nested inside if/match/for/while/etc.). Bench-shape
+    ///   pattern; nested would need scope-aware tracking to be sound.
+    /// - `idx` must be non-mut. A `let mut idx = ...; idx = ...;`
+    ///   could change the bound between iterations.
+    /// - The captured vec must not be mutated anywhere in the body.
+    ///   Conservative: any method call on the vec or any
+    ///   `vec[...] = ...` write disqualifies — `len`/`is_empty` would
+    ///   be sound to allow but the bench doesn't use them on the
+    ///   captured vec, so the conservative rule costs nothing.
+    /// - The vec must be a runtime capture in `self.variables` (so its
+    ///   identity is stable and len is loop-invariant). Const-int
+    ///   captures are scalars, not Vecs, so the filter naturally
+    ///   excludes them.
+    fn find_modulo_hoistable_bounds(
+        &self,
+        body: &Block,
+        loop_var: &str,
+        runtime_captures: &[String],
+        const_int_captures: &[(String, i64, Option<IntSuffix>)],
+    ) -> Vec<HoistableModuloBound> {
+        // Const-int captures: `n` in `let n: i64 = 8i64;` gets materialized
+        // as an LLVM constant inside the worker (see partition_const_int_
+        // captures), but the AST still sees `k % n` as a Binary{Mod, k,
+        // Identifier("n")}. Look up `n` here to recover the literal value
+        // so the BCE recognizer doesn't miss the const-propped shape.
+        let const_int_lookup: HashMap<&str, i64> = const_int_captures
+            .iter()
+            .map(|(name, value, _sfx)| (name.as_str(), *value))
+            .collect();
+
+        // Top-level let-bindings of the form `let idx = loop_var % LIT`
+        // (or `loop_var % const_int_capture` resolved via the lookup).
+        let mut idx_to_upper: HashMap<String, i64> = HashMap::new();
+        for stmt in &body.stmts {
+            let StmtKind::Let {
+                is_mut: false,
+                pattern,
+                value,
+                ..
+            } = &stmt.kind
+            else {
+                continue;
+            };
+            let PatternKind::Binding(idx_name) = &pattern.kind else {
+                continue;
+            };
+            if let Some(upper) = modulo_upper_for_loop_var(value, loop_var, &const_int_lookup) {
+                if upper > 0 {
+                    // First binding wins — a re-let with the same name
+                    // shadows but the first one is what the indexing in
+                    // between observes. For v1 just disable BCE in that
+                    // case rather than reasoning about shadow lifetimes.
+                    idx_to_upper.entry(idx_name.clone()).or_insert(upper);
+                }
+            }
+        }
+        if idx_to_upper.is_empty() {
+            return Vec::new();
+        }
+
+        // Collect names of vecs that are mutated anywhere in the body —
+        // these can't safely hoist their bounds check.
+        let mut mutated: HashSet<String> = HashSet::new();
+        for stmt in &body.stmts {
+            collect_mutated_vec_names_in_stmt(stmt, &mut mutated);
+        }
+        if let Some(e) = &body.final_expr {
+            collect_mutated_vec_names_in_expr(e, &mut mutated);
+        }
+
+        let captured: HashSet<&str> = runtime_captures.iter().map(String::as_str).collect();
+
+        // Walk for `<captured_vec>[<idx_var>]` sites and record one
+        // HoistableModuloBound per unique (vec, idx) pair. Same vec/idx
+        // pair indexed in multiple places only needs one preflight.
+        let mut seen: HashSet<(String, String)> = HashSet::new();
+        let mut out: Vec<HoistableModuloBound> = Vec::new();
+        for stmt in &body.stmts {
+            collect_modulo_index_sites_in_stmt(
+                stmt,
+                &captured,
+                &idx_to_upper,
+                &mutated,
+                &mut seen,
+                &mut out,
+            );
+        }
+        if let Some(e) = &body.final_expr {
+            collect_modulo_index_sites_in_expr(
+                e,
+                &captured,
+                &idx_to_upper,
+                &mutated,
+                &mut seen,
+                &mut out,
+            );
+        }
+
+        // Deterministic order — env-struct etc. already use sorted keys
+        // for IR stability; bounds order doesn't affect correctness but
+        // a stable order keeps IR-text-pinned tests reproducible.
+        out.sort_by(|a, b| {
+            (&a.vec_var, &a.idx_var, a.upper_lit).cmp(&(&b.vec_var, &b.idx_var, b.upper_lit))
+        });
+        out
+    }
+
+    /// Emit a one-time `if vec.len() < UPPER_LIT panic` check for the
+    /// captured Vec named in `bound`, at the current builder position.
+    /// On entry the builder is in some block B; on return the builder
+    /// is positioned in the post-check "ok" block. The fail-path block
+    /// is terminated with `unreachable` after the panic call.
+    fn emit_modulo_bce_preflight(
+        &mut self,
+        bound: &HoistableModuloBound,
+        worker_fn: FunctionValue<'ctx>,
+    ) {
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        // The captured Vec was unpacked into a worker-local alloca; the
+        // alloca is the struct pointer (owned, not ref).
+        let vec_ptr = self
+            .variables
+            .get(&bound.vec_var)
+            .expect("hoistable BCE referenced a missing capture")
+            .ptr;
+        let len_ptr = self
+            .builder
+            .build_struct_gep(vec_ty, vec_ptr, 1, "bce.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "bce.len")
+            .unwrap()
+            .into_int_value();
+        let lit = i64_t.const_int(bound.upper_lit as u64, true);
+        let fail_bb = self
+            .context
+            .append_basic_block(worker_fn, "bce.preflight.fail");
+        let ok_bb = self
+            .context
+            .append_basic_block(worker_fn, "bce.preflight.ok");
+        let cmp = self
+            .builder
+            .build_int_compare(IntPredicate::ULT, len, lit, "bce.preflight.cmp")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cmp, fail_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(fail_bb);
+        self.emit_panic("vec index out of bounds");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
     }
 
     /// Synthesize `void init_slot(*mut u8 slot) { *(IntT*)slot = identity; }`
@@ -840,6 +1021,48 @@ impl<'ctx> super::Codegen<'ctx> {
             },
         );
 
+        // Hoisted bounds-check elision (slice: par-reduce modulo BCE).
+        // For each top-level `let idx = loop_var % POSITIVE_LIT` in the
+        // body, every `<captured_vec>[idx]` use can skip its per-iter
+        // bounds check if we prove ONCE here that `captured_vec.len() >=
+        // POSITIVE_LIT`. Without this, the kata-8 atoi inner loop spent
+        // 2 ARM instructions per iter on `cmp x4, x12 / b.hs panic` even
+        // though `idx ∈ [0, 8)` and `inputs.len() == 8` are both
+        // statically determinable. Emitting the preflight + pushing
+        // `LowerBound { idx } + UpperBound { idx, vec_var }` facts into
+        // `asserted_index_bounds` lets `emit_split_bounds_check` drop the
+        // per-iter check entirely.
+        //
+        // Restricted to `lo_in_worker.is_none()` (mirror of the assume
+        // gate above): the loop-var-non-negative assumption that makes
+        // `idx ∈ [0, LIT)` sound only holds when we don't apply a
+        // non-zero lo shift. Generalizing along the same surface as the
+        // assume.
+        let pushed_bce_facts = if lo_in_worker.is_none() {
+            let hoistable = self.find_modulo_hoistable_bounds(
+                body,
+                loop_var_name,
+                captures,
+                const_int_captures,
+            );
+            let mut facts = Vec::with_capacity(hoistable.len() * 2);
+            for h in &hoistable {
+                self.emit_modulo_bce_preflight(h, worker_fn);
+                facts.push(AssertedIndexBound::LowerBound {
+                    idx_var: h.idx_var.clone(),
+                });
+                facts.push(AssertedIndexBound::UpperBound {
+                    idx_var: h.idx_var.clone(),
+                    vec_var: h.vec_var.clone(),
+                });
+            }
+            let n_pushed = facts.len();
+            self.asserted_index_bounds.extend(facts);
+            n_pushed
+        } else {
+            0
+        };
+
         // Loop scaffolding: cond → body → incr → cond → ... → exit
         let cond_bb = self.context.append_basic_block(worker_fn, "loop.cond");
         let body_bb = self.context.append_basic_block(worker_fn, "loop.body");
@@ -866,6 +1089,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // local allocas, so the body's compile output reads/writes them
         // correctly.
         let body_result = self.compile_block(body);
+        // Pop the BCE facts we pushed before the loop — they're scoped to
+        // this worker's body only. Done before propagating any body error
+        // so the bounds stack is balanced even on the error path.
+        for _ in 0..pushed_bce_facts {
+            self.asserted_index_bounds.pop();
+        }
         body_result?;
 
         // Increment + back-edge. The body's emit may have left the
@@ -1927,6 +2156,446 @@ fn find_top_level_const_int_init(
         }
     }
     found
+}
+
+/// A worker-body indexing site whose bounds check can be hoisted out
+/// of the per-iter path via a single preflight at fn entry. See the
+/// `find_modulo_hoistable_bounds` doc-comment for the recognition
+/// rules and soundness arguments.
+#[derive(Debug, Clone)]
+struct HoistableModuloBound {
+    /// Captured Vec name being indexed (`inputs` in the kata-8 bench).
+    vec_var: String,
+    /// Local let-bound index name (`idx` in the bench).
+    idx_var: String,
+    /// Exclusive upper bound proved for `idx` — the modulo divisor.
+    /// Preflight emits `if vec.len() < upper_lit panic`.
+    upper_lit: i64,
+}
+
+/// If `value` is `<loop_var> % <positive_int>`, return the integer.
+/// Mirrors the operator surface the typechecker lowers `%` into: pre-
+/// lowering it's `BinOp::Mod`, post-lowering it becomes
+/// `Call(Path([T, "rem"]), [lhs, rhs])`. We accept both.
+///
+/// The divisor is either an integer literal *or* an identifier that
+/// names a known const-int capture (the let-init-const-prop fix in
+/// `partition_const_int_captures` swaps the value in but leaves the
+/// AST `Identifier(name)` — the lookup recovers the literal value).
+fn modulo_upper_for_loop_var(
+    value: &Expr,
+    loop_var: &str,
+    const_int_lookup: &HashMap<&str, i64>,
+) -> Option<i64> {
+    match &value.kind {
+        ExprKind::Binary {
+            op: BinOp::Mod,
+            left,
+            right,
+        } => modulo_arms_match(left, right, loop_var, const_int_lookup),
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 || segments[1] != "rem" || args.len() != 2 {
+                return None;
+            }
+            modulo_arms_match(&args[0].value, &args[1].value, loop_var, const_int_lookup)
+        }
+        _ => None,
+    }
+}
+
+fn modulo_arms_match(
+    left: &Expr,
+    right: &Expr,
+    loop_var: &str,
+    const_int_lookup: &HashMap<&str, i64>,
+) -> Option<i64> {
+    let ExprKind::Identifier(name) = &left.kind else {
+        return None;
+    };
+    if name != loop_var {
+        return None;
+    }
+    let divisor = match &right.kind {
+        ExprKind::Integer(n, _) => *n,
+        ExprKind::Identifier(name) => *const_int_lookup.get(name.as_str())?,
+        _ => return None,
+    };
+    if divisor > 0 {
+        Some(divisor)
+    } else {
+        None
+    }
+}
+
+/// Mark any vec-named identifier that's potentially mutated in `stmt`.
+/// Conservative: any `vec.method()` call counts (we'd need a per-method
+/// read-only allowlist to be precise, but the par-reduce body doesn't
+/// typically call methods on captured vecs anyway, so the cost of the
+/// conservative call is near zero on the kata surface).
+fn collect_mutated_vec_names_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } | StmtKind::Expr(value) => {
+            collect_mutated_vec_names_in_expr(value, out);
+        }
+        StmtKind::Assign { target, value } => {
+            mark_assign_target(target, out);
+            collect_mutated_vec_names_in_expr(target, out);
+            collect_mutated_vec_names_in_expr(value, out);
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            mark_assign_target(target, out);
+            collect_mutated_vec_names_in_expr(target, out);
+            collect_mutated_vec_names_in_expr(value, out);
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            for s in &body.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        StmtKind::LetUninit { .. } => {}
+    }
+}
+
+/// Mark the root of an assignment target as mutated:
+/// - `x = ...`           → mark x
+/// - `x[i] = ...`        → mark x (the index-assign mutates x's contents)
+/// - `x.f = ...`         → mark x (field assign — for tracking we treat
+///                          field writes as full-vec mutation; would
+///                          underrate the precision of a `vec.field`
+///                          write but vecs don't have user fields)
+fn mark_assign_target(target: &Expr, out: &mut HashSet<String>) {
+    let mut cur = target;
+    loop {
+        match &cur.kind {
+            ExprKind::Identifier(name) => {
+                out.insert(name.clone());
+                return;
+            }
+            ExprKind::Index { object, .. }
+            | ExprKind::FieldAccess { object, .. }
+            | ExprKind::TupleIndex { object, .. } => {
+                cur = object;
+            }
+            _ => return,
+        }
+    }
+}
+
+fn collect_mutated_vec_names_in_expr(expr: &Expr, out: &mut HashSet<String>) {
+    match &expr.kind {
+        ExprKind::MethodCall { object, args, .. } => {
+            if let ExprKind::Identifier(name) = &object.kind {
+                out.insert(name.clone());
+            }
+            collect_mutated_vec_names_in_expr(object, out);
+            for a in args {
+                collect_mutated_vec_names_in_expr(&a.value, out);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_mutated_vec_names_in_expr(callee, out);
+            for a in args {
+                collect_mutated_vec_names_in_expr(&a.value, out);
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_mutated_vec_names_in_expr(left, out);
+            collect_mutated_vec_names_in_expr(right, out);
+        }
+        ExprKind::Unary { operand, .. } => collect_mutated_vec_names_in_expr(operand, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_mutated_vec_names_in_expr(condition, out);
+            for s in &then_block.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &then_block.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+            if let Some(e) = else_branch {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_mutated_vec_names_in_expr(condition, out);
+            for s in &body.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_mutated_vec_names_in_expr(iterable, out);
+            for s in &body.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::Loop { body, .. } => {
+            for s in &body.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::Block(b) | ExprKind::Seq(b) => {
+            for s in &b.stmts {
+                collect_mutated_vec_names_in_stmt(s, out);
+            }
+            if let Some(e) = &b.final_expr {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_mutated_vec_names_in_expr(scrutinee, out);
+            for arm in arms {
+                collect_mutated_vec_names_in_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => collect_mutated_vec_names_in_expr(inner, out),
+        ExprKind::Index { object, index } => {
+            collect_mutated_vec_names_in_expr(object, out);
+            collect_mutated_vec_names_in_expr(index, out);
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_mutated_vec_names_in_expr(object, out);
+        }
+        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            for e in elems {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_mutated_vec_names_in_expr(s, out);
+            }
+            if let Some(e) = end {
+                collect_mutated_vec_names_in_expr(e, out);
+            }
+        }
+        ExprKind::Return(Some(e)) | ExprKind::Break { value: Some(e), .. } => {
+            collect_mutated_vec_names_in_expr(e, out);
+        }
+        _ => {}
+    }
+}
+
+fn collect_modulo_index_sites_in_stmt(
+    stmt: &Stmt,
+    captured: &HashSet<&str>,
+    idx_to_upper: &HashMap<String, i64>,
+    mutated: &HashSet<String>,
+    seen: &mut HashSet<(String, String)>,
+    out: &mut Vec<HoistableModuloBound>,
+) {
+    match &stmt.kind {
+        StmtKind::Let { value, .. }
+        | StmtKind::LetElse { value, .. }
+        | StmtKind::Expr(value)
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. } => {
+            collect_modulo_index_sites_in_expr(value, captured, idx_to_upper, mutated, seen, out);
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            for s in &body.stmts {
+                collect_modulo_index_sites_in_stmt(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        StmtKind::LetUninit { .. } => {}
+    }
+}
+
+fn collect_modulo_index_sites_in_expr(
+    expr: &Expr,
+    captured: &HashSet<&str>,
+    idx_to_upper: &HashMap<String, i64>,
+    mutated: &HashSet<String>,
+    seen: &mut HashSet<(String, String)>,
+    out: &mut Vec<HoistableModuloBound>,
+) {
+    if let ExprKind::Index { object, index } = &expr.kind {
+        if let (ExprKind::Identifier(vec_name), ExprKind::Identifier(idx_name)) =
+            (&object.kind, &index.kind)
+        {
+            if captured.contains(vec_name.as_str()) && !mutated.contains(vec_name) {
+                if let Some(upper) = idx_to_upper.get(idx_name) {
+                    let key = (vec_name.clone(), idx_name.clone());
+                    if !seen.contains(&key) {
+                        seen.insert(key);
+                        out.push(HoistableModuloBound {
+                            vec_var: vec_name.clone(),
+                            idx_var: idx_name.clone(),
+                            upper_lit: *upper,
+                        });
+                    }
+                }
+            }
+        }
+        collect_modulo_index_sites_in_expr(object, captured, idx_to_upper, mutated, seen, out);
+        collect_modulo_index_sites_in_expr(index, captured, idx_to_upper, mutated, seen, out);
+        return;
+    }
+    match &expr.kind {
+        ExprKind::Binary { left, right, .. } => {
+            collect_modulo_index_sites_in_expr(left, captured, idx_to_upper, mutated, seen, out);
+            collect_modulo_index_sites_in_expr(right, captured, idx_to_upper, mutated, seen, out);
+        }
+        ExprKind::Unary { operand, .. } => {
+            collect_modulo_index_sites_in_expr(operand, captured, idx_to_upper, mutated, seen, out);
+        }
+        ExprKind::Call { callee, args } => {
+            collect_modulo_index_sites_in_expr(callee, captured, idx_to_upper, mutated, seen, out);
+            for a in args {
+                collect_modulo_index_sites_in_expr(
+                    &a.value,
+                    captured,
+                    idx_to_upper,
+                    mutated,
+                    seen,
+                    out,
+                );
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_modulo_index_sites_in_expr(object, captured, idx_to_upper, mutated, seen, out);
+            for a in args {
+                collect_modulo_index_sites_in_expr(
+                    &a.value,
+                    captured,
+                    idx_to_upper,
+                    mutated,
+                    seen,
+                    out,
+                );
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_modulo_index_sites_in_expr(
+                condition,
+                captured,
+                idx_to_upper,
+                mutated,
+                seen,
+                out,
+            );
+            for s in &then_block.stmts {
+                collect_modulo_index_sites_in_stmt(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = &then_block.final_expr {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = else_branch {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_modulo_index_sites_in_expr(
+                condition,
+                captured,
+                idx_to_upper,
+                mutated,
+                seen,
+                out,
+            );
+            for s in &body.stmts {
+                collect_modulo_index_sites_in_stmt(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_modulo_index_sites_in_expr(
+                iterable,
+                captured,
+                idx_to_upper,
+                mutated,
+                seen,
+                out,
+            );
+            for s in &body.stmts {
+                collect_modulo_index_sites_in_stmt(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::Loop { body, .. } | ExprKind::Block(body) | ExprKind::Seq(body) => {
+            for s in &body.stmts {
+                collect_modulo_index_sites_in_stmt(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = &body.final_expr {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_modulo_index_sites_in_expr(
+                scrutinee,
+                captured,
+                idx_to_upper,
+                mutated,
+                seen,
+                out,
+            );
+            for arm in arms {
+                collect_modulo_index_sites_in_expr(
+                    &arm.body,
+                    captured,
+                    idx_to_upper,
+                    mutated,
+                    seen,
+                    out,
+                );
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => {
+            collect_modulo_index_sites_in_expr(inner, captured, idx_to_upper, mutated, seen, out);
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_modulo_index_sites_in_expr(object, captured, idx_to_upper, mutated, seen, out);
+        }
+        ExprKind::Tuple(elems) | ExprKind::ArrayLiteral(elems) => {
+            for e in elems {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_modulo_index_sites_in_expr(s, captured, idx_to_upper, mutated, seen, out);
+            }
+            if let Some(e) = end {
+                collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+            }
+        }
+        ExprKind::Return(Some(e)) | ExprKind::Break { value: Some(e), .. } => {
+            collect_modulo_index_sites_in_expr(e, captured, idx_to_upper, mutated, seen, out);
+        }
+        _ => {}
+    }
 }
 
 /// a `return` / `break` / `continue` reachable from any statement or

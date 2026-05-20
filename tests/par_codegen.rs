@@ -3168,6 +3168,229 @@ fn main() {
         assert_eq!(out.trim(), "350000");
     }
 
+    // ── Bounds-check elision via hoisted modulo preflight ──────────
+    //
+    // For `let idx = k % LIT` (where k is the par-reduce loop var, hence
+    // non-negative per the assume above) and `captured_vec[idx]` in the
+    // worker body, codegen emits a one-time `if vec.len() < LIT panic`
+    // preflight at fn entry. The preflight proves `LIT <= vec.len()`,
+    // which combined with `idx ∈ [0, LIT)` proves `idx < vec.len()`
+    // unconditionally. The per-iter bounds check on `vec[idx]` is then
+    // dropped via the existing `asserted_index_bounds` mechanism.
+    //
+    // Recognizes both an integer-literal divisor (`k % 8i64`) and a
+    // const-int-capture divisor (`k % n` where `let n = 8i64;` was
+    // const-propped). Conservative: skips when the vec is mutated in
+    // the body, when the let is mut, or when the index is computed
+    // in a non-top-level position.
+    #[test]
+    fn test_ir_reduction_modulo_bce_literal_divisor() {
+        // `compute` is a substantial fn call so the body bypasses the
+        // memory-bound gate (which would skip the par_reduce lowering
+        // for an Index-only body with no compute).
+        let src = r#"
+fn compute(x: i64) -> i64 {
+    x * x + 1i64
+}
+
+fn main() {
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % 4i64;
+        sum = sum + compute(inputs[idx]);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        let worker = extract_first_reduce_worker_body(&ir);
+        // Preflight block + length compare against the literal 4.
+        assert!(
+            worker.contains("bce.preflight.fail"),
+            "expected hoisted BCE preflight block; worker:\n{worker}"
+        );
+        assert!(
+            worker.contains("bce.preflight.cmp"),
+            "expected the preflight len-compare; worker:\n{worker}"
+        );
+        // No per-iter bounds-check labels — both halves elided.
+        assert!(
+            !worker.contains("vidx.oob"),
+            "expected the per-iter bounds-check to be elided; worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_ir_reduction_modulo_bce_const_capture_divisor() {
+        // Bench-shape pattern: `let n: i64 = 8i64;` is const-propped
+        // through the par-reduce capture (see test_ir_reduction_
+        // const_int_capture_inlined_in_worker), then `idx = k % n`
+        // resolves `n` through the const-int-capture lookup. BCE
+        // recovers the same upper bound. `compute` bypasses the
+        // memory-bound gate the same way as the literal-divisor test.
+        let src = r#"
+fn compute(x: i64) -> i64 {
+    x * x + 1i64
+}
+
+fn main() {
+    let n: i64 = 4i64;
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % n;
+        sum = sum + compute(inputs[idx]);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        let worker = extract_first_reduce_worker_body(&ir);
+        assert!(
+            worker.contains("bce.preflight.fail"),
+            "const-capture divisor: expected hoisted BCE preflight; worker:\n{worker}"
+        );
+        assert!(
+            !worker.contains("vidx.oob"),
+            "const-capture divisor: per-iter bounds-check should be elided; worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_ir_reduction_modulo_bce_skipped_when_vec_mutated() {
+        // If the body mutates the captured vec (push, index-assign, etc.),
+        // BCE is unsound — len could change between iters. Conservative
+        // rule: skip BCE entirely when any method call appears on the
+        // captured vec name. Here `inputs.push(k)` triggers the skip.
+        let src = r#"
+fn main() {
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % 4i64;
+        sum = sum + inputs[idx];
+        inputs.push(k);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        // Note: this source may fail the recognizer's effect/ownership
+        // checks (mutating a captured vec from a reduction body could be
+        // disallowed). If so, the test still has value as a "doesn't
+        // crash" guard — the compile_to_ir call below uses .ok() to
+        // swallow either a clean compile (assertion-checked below) or
+        // an upstream error (we simply skip the assertions).
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let Ok(ir) = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        ) else {
+            // Codegen rejected upstream — fine; the mutate-while-reducing
+            // shape may be guarded out elsewhere. The point of this test
+            // is "BCE doesn't unsoundly fire", so absence of a worker fn
+            // is also a pass.
+            return;
+        };
+        // If a worker was synthesized, it must NOT have a preflight (since
+        // the vec is mutated; BCE rules say skip).
+        if ir.contains("@__karac_reduce_worker_") {
+            let worker = extract_first_reduce_worker_body(&ir);
+            assert!(
+                !worker.contains("bce.preflight"),
+                "mutated vec: BCE preflight must NOT be emitted; worker:\n{worker}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_reduction_modulo_bce_sink_matches() {
+        // BCE must not change semantics. The sink is the same Σ formula
+        // regardless of whether the per-iter check ran or got elided.
+        // `compute` is the same memory-bound-gate bypass as the IR
+        // tests above.
+        let src = r#"
+fn compute(x: i64) -> i64 {
+    x * x + 1i64
+}
+
+fn main() {
+    let mut inputs: Vec[i64] = Vec.new();
+    inputs.push(10i64);
+    inputs.push(20i64);
+    inputs.push(30i64);
+    inputs.push(40i64);
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        let idx: i64 = k % 4i64;
+        sum = sum + compute(inputs[idx]);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ compute(inputs[k%4]) for k in [0, 100000):
+        // 25000 cycles × (101 + 401 + 901 + 1601) = 25000 × 3004 = 75_100_000
+        assert_eq!(out.trim(), "75100000");
+    }
+
     #[test]
     fn test_e2e_reduction_const_capture_sink_matches() {
         // Const-prop must not change the program's output.
