@@ -126,6 +126,13 @@ pub struct Manifest {
     /// `[dev-dependencies]` excluded-from-non-test-builds entry in the
     /// 5.5 tracker). Empty when the table is absent.
     pub dev_dependencies: BTreeMap<String, DependencySpec>,
+    /// `[workspace.dependencies]` — declared on the workspace-root
+    /// manifest. Members reference these via `name = { workspace = true }`
+    /// entries; the graph-materialization slice (`src/dep_graph.rs`)
+    /// dereferences a member's `Workspace` spec by looking up the
+    /// matching key here. Empty when the manifest carries no
+    /// `[workspace]` table or no nested `dependencies` sub-table.
+    pub workspace_dependencies: BTreeMap<String, DependencySpec>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -509,6 +516,7 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let dependencies = parse_dependencies_table(path, &table, "dependencies", &mut warnings)?;
     let dev_dependencies =
         parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
+    let workspace_dependencies = parse_workspace_dependencies(path, &table, &mut warnings)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -524,8 +532,61 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         kara_version,
         dependencies,
         dev_dependencies,
+        workspace_dependencies,
         warnings,
     })
+}
+
+/// Parse `[workspace.dependencies]` (when present) into a stable-ordered map.
+/// The table sits one level deeper than `[dependencies]` — under the
+/// `[workspace]` namespace — but the value-shape grammar is identical, so the
+/// dependency-spec parser is reused verbatim. Members reference these entries
+/// via `name = { workspace = true }` on their own `[dependencies]`.
+fn parse_workspace_dependencies(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<BTreeMap<String, DependencySpec>, ManifestError> {
+    let Some(workspace) = table.get("workspace") else {
+        return Ok(BTreeMap::new());
+    };
+    let ws_table = workspace
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "workspace".to_string(),
+            expected: "a table (e.g. `[workspace]`)",
+        })?;
+    let Some(deps) = ws_table.get("dependencies") else {
+        return Ok(BTreeMap::new());
+    };
+    let deps_table = deps
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "workspace.dependencies".to_string(),
+            expected: "a table (e.g. `[workspace.dependencies]`)",
+        })?;
+    let mut out = BTreeMap::new();
+    for (name, raw) in deps_table {
+        let spec = parse_dependency_value(path, "workspace.dependencies", name, raw, warnings)?;
+        // Workspace = true is meaningless inside [workspace.dependencies]
+        // (the entry is itself a workspace declaration). Reject so a user
+        // doesn't write a recursive `workspace = true` inside the workspace
+        // root and confuse themselves.
+        if matches!(spec, DependencySpec::Workspace) {
+            return Err(ManifestError::InvalidDependencySpec {
+                path: path.to_path_buf(),
+                table: "workspace.dependencies",
+                name: name.clone(),
+                message: "`workspace = true` inside `[workspace.dependencies]` is meaningless — \
+                          the entry itself is the workspace declaration"
+                    .to_string(),
+            });
+        }
+        out.insert(name.clone(), spec);
+    }
+    Ok(out)
 }
 
 /// Parse `[dependencies]` or `[dev-dependencies]` into a stable-ordered map.
