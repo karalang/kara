@@ -256,20 +256,41 @@ impl<'ctx> super::Codegen<'ctx> {
             // 0); let-bindings introduced inside the body occupy fields
             // K+1..=N and stay uninitialized at construction time —
             // they're populated by the state-machine transform itself
-            // when execution reaches the let-site. For each call arg
-            // at position i, compile the arg expression, GEP into
-            // state struct field `i+1`, and store the value. Method
-            // calls and ref-flagged args fall outside the v1 scope of
-            // this slice (free-function calls only, owned-arg
-            // semantics); ref-passing through the state struct lands
-            // alongside the method-call intercept.
+            // when execution reaches the let-site.
+            //
+            // Slice 8ad: extend slice 8f's owned-arg-only discipline
+            // to `ref T` / `mut ref T` / `mut Slice[T]` params,
+            // mirroring slice 8z's identical fix on the per-mono
+            // intercept in `compile_generic_call`. Without this, ref-
+            // flagged args fell through to "compile, store loaded
+            // value" — which mismatches the ptr- / Slice-struct-
+            // shaped state-struct field LLVM type. Empirical probe
+            // 2026-05-20 confirmed `fn driver(item: ref Vec[i64]) {
+            // fetch(); }` emitted `store { ptr, i64, i64 } %v, ptr
+            // %kara.arg0.field_ptr` against a ptr field — accepted
+            // under opaque pointers but overflowed past the field's
+            // 8-byte footprint. The fix consults `fn_param_ref` /
+            // `fn_param_slice_elem` keyed on the bare fn name (the
+            // non-generic look-up key) and dispatches by mode: ref
+            // params with Identifier args route through
+            // `get_data_ptr`; ref params with rvalue args route
+            // through the shared `materialize_rvalue_for_ref_arg`
+            // helper that slice 8z extracted (now `pub(super)` so
+            // both intercepts share it); slice-elem params route
+            // through `coerce_to_slice` to synthesize the
+            // `{ ptr, i64 }` header at the call site.
             let state_struct = self
                 .state_struct_types
                 .get(&name)
                 .copied()
                 .expect("state struct type co-emitted with constructor");
+            let ref_flags = self.fn_param_ref.get(&name).cloned().unwrap_or_default();
+            let slice_elems = self
+                .fn_param_slice_elem
+                .get(&name)
+                .cloned()
+                .unwrap_or_default();
             for (i, arg) in args.iter().enumerate() {
-                let arg_val = self.compile_expr(&arg.value)?;
                 let field_idx = (i + 1) as u32;
                 let field_ptr = self
                     .builder
@@ -280,8 +301,39 @@ impl<'ctx> super::Codegen<'ctx> {
                         &format!("kara.arg{i}.field_ptr"),
                     )
                     .expect("GEP state struct field for arg");
+
+                let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                let slice_elem = slice_elems.get(i).copied().flatten();
+
+                let to_store: BasicValueEnum<'ctx> = if is_ref {
+                    // Ref param: pass a pointer to the caller-side
+                    // data, not the loaded value.
+                    if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            let val = self.compile_expr(&arg.value)?;
+                            self.materialize_rvalue_for_ref_arg(val, i)
+                        }
+                    } else {
+                        let val = self.compile_expr(&arg.value)?;
+                        self.materialize_rvalue_for_ref_arg(val, i)
+                    }
+                } else if let Some(elem_ty) = slice_elem {
+                    // `mut Slice[T]` param: synthesize the slice
+                    // header from the arg. Falls through to the
+                    // loaded value for shapes the coercion doesn't
+                    // recognize (matches slice 8z's discipline).
+                    match self.coerce_to_slice(&arg.value, elem_ty)? {
+                        Some(slice_val) => slice_val,
+                        None => self.compile_expr(&arg.value)?,
+                    }
+                } else {
+                    self.compile_expr(&arg.value)?
+                };
+
                 self.builder
-                    .build_store(field_ptr, arg_val)
+                    .build_store(field_ptr, to_store)
                     .expect("store arg into state struct field");
             }
             // Branch into the poll loop. Slice 8e routes the Pending

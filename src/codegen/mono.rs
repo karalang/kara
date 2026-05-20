@@ -385,8 +385,10 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `FreeVecBuffer` via `track_vec_var` so the heap buffer's
     /// cleanup runs at the caller's scope boundary; primitives and
     /// pointer-shaped temporaries (string literals, etc.) need no
-    /// such tracking.
-    fn materialize_rvalue_for_ref_arg(
+    /// such tracking. Slice 8ad widened visibility to `pub(super)` so
+    /// the non-generic state-machine intercept in `call_dispatch.rs`
+    /// can call this same helper for its `ref T` rvalue path.
+    pub(super) fn materialize_rvalue_for_ref_arg(
         &mut self,
         val: BasicValueEnum<'ctx>,
         arg_idx: usize,
@@ -395,7 +397,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .get_insert_block()
             .and_then(|bb| bb.get_parent())
-            .expect("compile_generic_call inside a function context");
+            .expect("compile_generic_call or compile_call inside a function context");
         let temp = self.create_entry_alloca(
             cur_fn,
             &format!("kara.arg{arg_idx}.ref_rvalue"),

@@ -18476,6 +18476,125 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ad: non-generic state-machine intercept ref/slice ──
+    //
+    // Slice 8z closed the per-mono intercept (`compile_generic_call`)
+    // arg-storing gap for `ref T` / `mut ref T` / `mut Slice[T]`
+    // params. Slice 8ad closes the identical gap in the parallel non-
+    // generic intercept (`src/codegen/call_dispatch.rs:271-286`).
+    // Empirical probe 2026-05-20 verified that `fn driver(item: ref
+    // Vec[i64]) { fetch(); }` emitted `store { ptr, i64, i64 } %v,
+    // ptr %kara.arg0.field_ptr` — a 24-byte Vec struct stored into an
+    // 8-byte ptr-typed state-struct field. The in-code comment at
+    // `call_dispatch.rs:262-265` acknowledged ref-passing through the
+    // state struct was deferred. The fix mirrors slice 8z exactly:
+    // consult `fn_param_ref` / `fn_param_slice_elem` keyed on the
+    // bare fn name, dispatch by mode. The
+    // `materialize_rvalue_for_ref_arg` helper from slice 8z is now
+    // `pub(super)` and shared between both intercepts.
+
+    #[test]
+    fn test_slice_8ad_non_generic_ref_vec_param_stores_data_ptr() {
+        // `fn driver(item: ref Vec[i64]) { fetch(); }` — the
+        // state-struct field for `item` is `ptr` (TypeKind::Ref
+        // lowers to ptr). The caller-side non-generic intercept must
+        // store the data ptr (via `get_data_ptr("v")`) into the
+        // field, NOT the loaded `{ ptr, i64, i64 }` Vec struct.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(item: ref Vec[i64]) { fetch(); }
+             fn caller() {
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 driver(v);
+             }",
+        );
+        // State-struct field is ptr-shaped.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("{ i32, ptr }"),
+            "ref Vec[i64] field must lower to ptr:\n{state_line}"
+        );
+        // Caller stores a ptr — slice 8d's `get_data_ptr` pattern
+        // now fires inside the non-generic state-machine intercept.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store ptr %v, ptr %kara.arg0.field_ptr"),
+            "intercept must store data ptr (not loaded Vec value) into ref field:\n{caller}"
+        );
+        // Regression guard: no Vec struct stored at the state-struct
+        // field (the pre-fix shape).
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into ref field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8ad_non_generic_mut_slice_param_synthesizes_header() {
+        // `fn driver(items: mut Slice[i64]) { fetch(); }` — the
+        // state-struct field is the slice struct `{ ptr, i64 }`. The
+        // caller-side non-generic intercept must synthesize the
+        // slice header from the Vec source via `coerce_to_slice`
+        // and store it into the field.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: mut Slice[i64]) { fetch(); }
+             fn caller() {
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 driver(mut v);
+             }",
+        );
+        // State-struct field is the slice struct shape.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("{ ptr, i64 }"),
+            "mut Slice[i64] field must lower to slice struct {{ ptr, i64 }}:\n{state_line}"
+        );
+        // Caller stores the synthesized slice header.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store { ptr, i64 }") && caller.contains("ptr %kara.arg0.field_ptr"),
+            "intercept must store synthesized slice header for mut Slice[i64] arg:\n{caller}"
+        );
+        // Regression guard: no Vec struct stored at the field.
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into mut Slice field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8ad_non_generic_owned_param_unchanged() {
+        // Regression guard: the slice 8ad extension is gated on
+        // `fn_param_ref` / `fn_param_slice_elem` tables and must
+        // NOT change the storage shape for owned-value params.
+        // `fn driver(n: i64) { fetch(); }` still stores the loaded
+        // i64 value into the field.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(n: i64) { fetch(); }
+             fn caller() { driver(42); }",
+        );
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "owned i64 param must store the loaded value (regression guard):\n{caller}"
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`
