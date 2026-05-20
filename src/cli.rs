@@ -6837,16 +6837,6 @@ fn cmd_update(package: Option<&str>, output: OutputMode) {
         }
     };
 
-    if package.is_some() {
-        // Slice 2 lands the positional <pkg> validation. For slice 1 the
-        // positional is parsed but ignored — surface the deferral so the
-        // user knows the bare-form behavior is what actually ran.
-        eprintln!(
-            "note: `karac update <pkg>` surgical-form validation lands in a follow-up; \
-             running bare-form (re-resolve + rewrite lockfile) for now"
-        );
-    }
-
     // Unlike cmd_build_project, we *always* run the resolver here even when
     // the manifest declares no deps. The user explicitly asked to refresh
     // the lockfile — honoring that is the whole point of the subcommand.
@@ -6883,8 +6873,109 @@ fn cmd_update(package: Option<&str>, output: OutputMode) {
         }
     };
 
+    if let Some(pkg) = package {
+        if !validate_update_target(pkg, &resolution, output) {
+            process::exit(1);
+        }
+    }
+
     persist_lockfile(&root, &resolution, output);
     emit_update_summary(&resolution, output);
+}
+
+/// Slice 2 of line 843 — surgical `<pkg>` validation. Returns `true` to
+/// proceed with the bare-form rewrite, `false` to halt the command.
+/// Three outcomes:
+/// - `<pkg>` names the root package → hard-error
+///   (`E_UPDATE_ROOT_PACKAGE`); the root can't update itself
+/// - `<pkg>` not in the resolution → hard-error
+///   (`E_UPDATE_UNKNOWN_PACKAGE`); with a fuzzy suggestion when a similar
+///   name exists
+/// - `<pkg>` names a path-dep (the only non-root v1.1 case) →
+///   informational note that path-deps are manifest-pinned, then proceed
+fn validate_update_target(
+    pkg: &str,
+    resolution: &crate::dep_resolver::Resolution,
+    output: OutputMode,
+) -> bool {
+    let Some(resolved) = resolution.packages.get(pkg) else {
+        let suggestion = nearest_package_name(pkg, resolution);
+        emit_update_target_error(
+            output,
+            "E_UPDATE_UNKNOWN_PACKAGE",
+            &format!("unknown package `{pkg}`"),
+            suggestion
+                .as_deref()
+                .map(|s| format!("did you mean `{s}`?"))
+                .as_deref(),
+        );
+        return false;
+    };
+
+    if matches!(resolved.source, crate::dep_resolver::ResolvedSource::Root) {
+        emit_update_target_error(
+            output,
+            "E_UPDATE_ROOT_PACKAGE",
+            &format!("`{pkg}` is the root package and cannot be the target of `karac update`"),
+            Some("omit the positional argument to refresh every locked package"),
+        );
+        return false;
+    }
+
+    if matches!(
+        resolved.source,
+        crate::dep_resolver::ResolvedSource::Path(_)
+    ) {
+        if let OutputMode::Text = output {
+            eprintln!(
+                "note: `{pkg}` is a path-dep; its version is pinned by the on-disk manifest. \
+                 `karac update {pkg}` re-derives the lockfile entry but cannot bump versions \
+                 until the registry-proxy fetch surface (tracker line 845) ships."
+            );
+        }
+    }
+
+    true
+}
+
+fn emit_update_target_error(output: OutputMode, code: &str, message: &str, help: Option<&str>) {
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[{code}]: {message}");
+            if let Some(h) = help {
+                eprintln!("   = help: {h}");
+            }
+        }
+        OutputMode::Json => {
+            let help_field = help
+                .map(|h| format!(",\"help\":{}", json_string(h)))
+                .unwrap_or_default();
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"update\",\"code\":{},\"message\":{}{}}}]}}",
+                json_string(code),
+                json_string(message),
+                help_field,
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "update_error",
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(code),
+                    json_string(message),
+                ),
+            );
+        }
+    }
+}
+
+fn nearest_package_name(
+    target: &str,
+    resolution: &crate::dep_resolver::Resolution,
+) -> Option<String> {
+    let names: Vec<&str> = resolution.packages.keys().map(String::as_str).collect();
+    crate::edit_distance::suggest_similar(target, &names)
 }
 
 fn emit_update_summary(resolution: &crate::dep_resolver::Resolution, output: OutputMode) {

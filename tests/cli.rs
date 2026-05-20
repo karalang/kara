@@ -4644,6 +4644,144 @@ fn test_update_rejects_extra_args() {
     );
 }
 
+// ── karac update slice 2 — surgical <pkg> validation ────────────────
+
+fn make_path_dep_project(slug: &str) -> std::path::PathBuf {
+    let tmp = update_tempdir(slug);
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "vendor/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("vendor/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("vendor/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+    tmp
+}
+
+#[test]
+fn test_update_pkg_matches_path_dep_emits_note_and_rewrites() {
+    let tmp = make_path_dep_project("pkg-path-dep");
+    let out = karac_bin()
+        .args(["update", "child"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac update child should succeed on a path-dep project; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("note: `child` is a path-dep"),
+        "expected the path-dep informational note; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("re-derived kara.lock"),
+        "summary line should still be emitted; got: {stderr}",
+    );
+    assert!(
+        lockfile_exists,
+        "kara.lock should be written after a successful surgical update",
+    );
+}
+
+#[test]
+fn test_update_pkg_unknown_errors_with_suggestion() {
+    let tmp = make_path_dep_project("pkg-unknown");
+    let out = karac_bin()
+        .args(["update", "chld"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "unknown package should halt the command; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_UPDATE_UNKNOWN_PACKAGE]"),
+        "expected E_UPDATE_UNKNOWN_PACKAGE; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("did you mean `child`"),
+        "expected typo suggestion pointing at `child`; got: {stderr}",
+    );
+    assert!(
+        !lockfile_exists,
+        "kara.lock must NOT be written when the surgical target is invalid",
+    );
+}
+
+#[test]
+fn test_update_pkg_root_errors() {
+    let tmp = make_path_dep_project("pkg-root");
+    let out = karac_bin()
+        .args(["update", "root-pkg"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "updating the root package should halt; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_UPDATE_ROOT_PACKAGE]"),
+        "expected E_UPDATE_ROOT_PACKAGE; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("omit the positional"),
+        "expected help line suggesting bare-form; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_update_pkg_unknown_json_output() {
+    let tmp = make_path_dep_project("pkg-unknown-json");
+    let out = karac_bin()
+        .args(["update", "nope", "--output=json"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "unknown package should halt; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("E_UPDATE_UNKNOWN_PACKAGE"),
+        "expected the code in JSON output; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"status\":\"error\""),
+        "expected status:error in JSON output; got: {stdout}",
+    );
+}
+
 // ── Lockfile slice 4 — kara.lock CLI integration ────────────────────
 
 fn lockfile_tempdir(slug: &str) -> std::path::PathBuf {
