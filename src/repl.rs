@@ -618,9 +618,10 @@ impl Session {
     /// (line 761 in the phase-5 tracker); it evaluates the given
     /// expression against the current session state and renders it via
     /// [`render_display`] into a [`DisplayBundle`] that the Jupyter
-    /// kernel broadcasts as `display_data`. `%rc` is deferred to
-    /// post-MVP per the spec (RC fallback's introspection surface
-    /// still settling).
+    /// kernel broadcasts as `display_data`. `%rc` (line 785) lists
+    /// every RC-fallback decision the ownership pass made for the
+    /// current session source with the trigger label, Rc/Arc bit,
+    /// consume + reuse spans, and (when available) type name.
     pub fn dispatch_magic(&mut self, line: &str) -> MagicOutput {
         let trimmed = line.trim();
         let body = trimmed.strip_prefix('%').unwrap_or(trimmed).trim();
@@ -635,6 +636,7 @@ impl Session {
             "set" => self.magic_set(rest),
             "show" => self.magic_show(rest),
             "timeline" => self.magic_timeline(rest),
+            "rc" => self.magic_rc(rest),
             "provide" => match self.add_provider(rest) {
                 Ok(msg) => MagicOutput::ok(msg),
                 Err(msg) => MagicOutput::error(msg),
@@ -643,14 +645,11 @@ impl Session {
                 Ok(msg) => MagicOutput::ok(msg),
                 Err(msg) => MagicOutput::error(msg),
             },
-            "rc" => MagicOutput::error(
-                "magic `%rc` is deferred to post-MVP per the line 689 spec — RC fallback's introspection surface is still settling",
-            ),
             "" => MagicOutput::error(
-                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %provide R = expr, %end-provide R",
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R",
             ),
             other => MagicOutput::error(format!(
-                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %provide R = expr, %end-provide R"
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %rc, %provide R = expr, %end-provide R"
             )),
         }
     }
@@ -944,6 +943,109 @@ impl Session {
         let deps = self.compute_cell_dependencies();
         let plain = render_timeline_text(&self.cell_effect_history, &deps);
         let html = render_timeline_html(&self.cell_effect_history, &deps);
+        let mut bundle = DisplayBundle::new();
+        bundle = bundle.with("text/plain", plain.clone());
+        bundle = bundle.with("text/html", html);
+        MagicOutput::ok_rich(plain, bundle)
+    }
+
+    /// Line 785 `%rc` magic. Lists every RC-fallback decision the
+    /// ownership pass recorded for the current session source — both
+    /// inside the synthesized `main` (from accumulated `let` bindings)
+    /// and inside any user-declared function in `items_source`. Each
+    /// row carries the qualified binding name (`<fn>.<binding>`), the
+    /// trigger label (one of the three `RcTrigger` variants — direct
+    /// re-use, closure capture, container store), the sharing kind
+    /// (`Rc` or `Arc` — the latter set for bindings the Phase-2
+    /// promotion pass lifted because they cross a parallel region),
+    /// the consume + reuse line:column, and (when the ownership pass
+    /// captured it) the type name. Output is two mimes — `text/plain`
+    /// for the universal cell-output pane and `text/html` for kernel
+    /// frontends that render rich content. Empty surface (no RC
+    /// fallbacks) emits a friendly hint on `text/plain` only.
+    /// Read-only against session state — `cell_history`,
+    /// `persistent_lets`, and `let_snapshots` are untouched. Surfaces
+    /// a friendly hint on parse / resolve / typecheck failure rather
+    /// than running the ownership pass against a known-broken AST.
+    fn magic_rc(&self, rest: &str) -> MagicOutput {
+        if !rest.trim().is_empty() {
+            return MagicOutput::error(
+                "usage: %rc (no arguments — lists every RC-fallback decision in the current session)",
+            );
+        }
+        let mut synth = String::new();
+        if !self.items_source.trim().is_empty() {
+            synth.push_str(&strip_main(&self.items_source));
+            if !synth.is_empty() && !synth.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str("}\n");
+
+        let parsed = crate::parse(&synth);
+        if !parsed.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has parse errors — fix them before inspecting RC fallbacks)",
+            );
+        }
+        let resolved = crate::resolve(&parsed.program);
+        if !resolved.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has resolve errors — fix them before inspecting RC fallbacks)",
+            );
+        }
+        let typed = crate::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return MagicOutput::error(
+                "(session source has type errors — fix them before inspecting RC fallbacks)",
+            );
+        }
+        let owned = crate::ownershipcheck(&parsed.program, &typed);
+
+        // Collect rows across every function, sorted by (fn_name,
+        // binding) for stable output. RcEntry's spans are AST
+        // line/column values; Arc promotion is keyed by binding name
+        // inside the same function map. `__cell` / wrapper functions
+        // we didn't synthesize ourselves don't exist on this path —
+        // every entry maps to either `main` or a user-declared fn in
+        // `items_source`.
+        let mut fn_keys: Vec<&String> = owned.rc_values.keys().collect();
+        fn_keys.sort();
+        let mut rows: Vec<RcRow> = Vec::new();
+        for fn_name in fn_keys {
+            let entries = owned.rc_values.get(fn_name).expect("fn key present");
+            let arc_set = owned.arc_values.get(fn_name);
+            let mut binding_keys: Vec<&String> = entries.keys().collect();
+            binding_keys.sort();
+            for binding in binding_keys {
+                let entry = entries.get(binding).expect("binding key present");
+                let is_arc = arc_set.map(|s| s.contains(binding)).unwrap_or(false);
+                rows.push(RcRow {
+                    fn_name: fn_name.clone(),
+                    binding: binding.clone(),
+                    trigger_label: entry.trigger.label(),
+                    kind: if is_arc { RcKind::Arc } else { RcKind::Rc },
+                    consume_line: entry.consume_span.line,
+                    consume_column: entry.consume_span.column,
+                    other_use_line: entry.other_use_span.line,
+                    other_use_column: entry.other_use_span.column,
+                    type_name: entry.type_name.clone(),
+                });
+            }
+        }
+
+        if rows.is_empty() {
+            return MagicOutput::ok("(no RC fallbacks in current session)");
+        }
+        let plain = render_rc_text(&rows);
+        let html = render_rc_html(&rows);
         let mut bundle = DisplayBundle::new();
         bundle = bundle.with("text/plain", plain.clone());
         bundle = bundle.with("text/html", html);

@@ -379,10 +379,114 @@ fn render_snapshot_effects(snapshot: &super::CellEffectSnapshot) -> String {
     parts.join(" ")
 }
 
+/// Row payload for the line 785 `%rc` magic. One entry per RC-fallback
+/// decision recorded by the ownership pass across the synthesized
+/// session source. The renderer formats this into `text/plain` /
+/// `text/html` mime bodies — same as the timeline.
+pub(super) struct RcRow {
+    pub fn_name: String,
+    pub binding: String,
+    pub trigger_label: &'static str,
+    pub kind: RcKind,
+    pub consume_line: usize,
+    pub consume_column: usize,
+    pub other_use_line: usize,
+    pub other_use_column: usize,
+    pub type_name: Option<String>,
+}
+
+/// Sharing-kind for an RC row. `Rc` is the default; `Arc` is recorded
+/// for any binding the Phase-2 promotion pass lifted because it crosses
+/// a parallel region.
+pub(super) enum RcKind {
+    Rc,
+    Arc,
+}
+
+impl RcKind {
+    fn label(&self) -> &'static str {
+        match self {
+            RcKind::Rc => "Rc",
+            RcKind::Arc => "Arc",
+        }
+    }
+}
+
+/// Render the line 785 `%rc` table as `text/plain`. One line per RC
+/// fallback in `<fn>.<binding>: <trigger> [<kind>] (consume L:C,
+/// reuse L:C)[ — <Type>]` shape. Entries are pre-sorted by `(fn_name,
+/// binding)` so the textual order is stable across invocations.
+pub(super) fn render_rc_text(rows: &[RcRow]) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for row in rows {
+        let tail = match &row.type_name {
+            Some(t) => format!(" — {t}"),
+            None => String::new(),
+        };
+        lines.push(format!(
+            "{fn_name}.{binding}: {trigger} [{kind}] (consume {cl}:{cc}, reuse {rl}:{rc}){tail}",
+            fn_name = row.fn_name,
+            binding = row.binding,
+            trigger = row.trigger_label,
+            kind = row.kind.label(),
+            cl = row.consume_line,
+            cc = row.consume_column,
+            rl = row.other_use_line,
+            rc = row.other_use_column,
+            tail = tail,
+        ));
+    }
+    lines.join("\n")
+}
+
+/// Render the line 785 `%rc` table as `text/html`. Five columns —
+/// Binding, Trigger, Kind, Consume, Other use, Type — HTML-escaped so
+/// user-defined type / binding names containing `<` `&` etc. don't
+/// break the table. Empty cells render as `<em>—</em>` so the row
+/// keeps its column alignment.
+pub(super) fn render_rc_html(rows: &[RcRow]) -> String {
+    let mut out = String::new();
+    out.push_str("<table>");
+    out.push_str(
+        "<thead><tr>\
+            <th>Binding</th>\
+            <th>Trigger</th>\
+            <th>Kind</th>\
+            <th>Consume</th>\
+            <th>Other use</th>\
+            <th>Type</th>\
+         </tr></thead>",
+    );
+    out.push_str("<tbody>");
+    for row in rows {
+        out.push_str("<tr><td>");
+        out.push_str(&escape_html_text(&format!(
+            "{}.{}",
+            row.fn_name, row.binding
+        )));
+        out.push_str("</td><td>");
+        out.push_str(&escape_html_text(row.trigger_label));
+        out.push_str("</td><td>");
+        out.push_str(row.kind.label());
+        out.push_str("</td><td>");
+        out.push_str(&format!("{}:{}", row.consume_line, row.consume_column));
+        out.push_str("</td><td>");
+        out.push_str(&format!("{}:{}", row.other_use_line, row.other_use_column));
+        out.push_str("</td><td>");
+        match &row.type_name {
+            Some(t) => out.push_str(&escape_html_text(t)),
+            None => out.push_str("<em>—</em>"),
+        }
+        out.push_str("</td></tr>");
+    }
+    out.push_str("</tbody></table>");
+    out
+}
+
 /// HTML-escape the five characters that can break a `<td>` text node
 /// or HTML-attribute context — same set the `%show` renderer escapes.
-/// Kept private to this module since the timeline is the only
-/// in-util.rs HTML caller; the `%show` path has its own copy keyed to
+/// Kept private to this module since the `%timeline` and `%rc` HTML
+/// callers both live here; the `%show` path has its own copy keyed to
 /// the display crate's allocation strategy.
 fn escape_html_text(s: &str) -> String {
     let mut out = String::with_capacity(s.len());

@@ -314,7 +314,7 @@ pub enum RcTrigger {
 }
 
 impl RcTrigger {
-    fn label(&self) -> &'static str {
+    pub fn label(&self) -> &'static str {
         match self {
             RcTrigger::DirectReuseAfterConsume => "direct re-use after consume",
             RcTrigger::ClosureCaptureWithOuterUse => "closure capture with outer use",

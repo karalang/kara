@@ -1400,21 +1400,6 @@ fn magic_and_meta_provide_share_stack() {
 }
 
 #[test]
-fn magic_rc_is_post_mvp() {
-    // Spec explicitly defers %rc to post-MVP. Surfaces as error with
-    // the deferral reason so the kernel reply can carry the
-    // explanation.
-    let mut s = Session::new();
-    let out = s.dispatch_magic("%rc");
-    assert!(!out.ok);
-    assert!(
-        out.text.contains("post-MVP") || out.text.contains("RC fallback"),
-        "expected %rc to surface a deferral reason; got: {}",
-        out.text,
-    );
-}
-
-#[test]
 fn magic_output_construction_helpers() {
     // Sanity for the consumer-facing MagicOutput shape — the kernel
     // will rely on these for adapting cell outputs.
@@ -2309,5 +2294,289 @@ fn timeline_magic_html_escapes_resource_names() {
     assert!(
         html.contains("Effects &amp; Dependencies"),
         "header must HTML-escape ampersand; got: {html}",
+    );
+}
+
+// ── %rc — RC-fallback inspector (line 785) ────────────────────────────────
+
+#[test]
+fn rc_magic_empty_session_returns_hint() {
+    // Empty session — no items, no lets. The ownership pass runs
+    // against an empty synthesized `fn main()` and records no RC
+    // fallbacks; emit a friendly hint so the cell pane isn't blank.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert!(
+        out.text.contains("no RC fallbacks"),
+        "expected friendly hint; got: {}",
+        out.text,
+    );
+}
+
+/// Submit a sequence of one-liner item definitions, each as its own
+/// pure-items cell. The combined source triggers the RC pattern we
+/// want to inspect from `%rc`. Per-cell submission sidesteps the
+/// `classify_input` heuristic that forces "statements" mode when a
+/// cell contains multi-line function bodies with control flow.
+fn submit_items(s: &mut Session, items: &[&str]) {
+    for item in items {
+        let r = s.evaluate_cell_captured(item);
+        assert!(
+            r.errors.is_empty(),
+            "item must compile: {item:?} got: {:?}",
+            r.errors,
+        );
+    }
+}
+
+#[test]
+fn rc_magic_records_direct_reuse_after_consume() {
+    // Trigger 1: a struct value consumed in a branch and used after
+    // the branch falls back to Rc. The magic must surface a row
+    // naming the binding, the trigger label, and the Rc kind.
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn process(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert!(
+        out.text.contains("process.d"),
+        "row must name the binding; got:\n{}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("direct re-use after consume"),
+        "row must surface trigger label; got:\n{}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("[Rc]"),
+        "row must surface Rc kind; got:\n{}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("— Data"),
+        "row must include type tail; got:\n{}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_records_closure_capture_with_outer_use() {
+    // Trigger 2: closure body consumes the captured binding and the
+    // outer scope re-uses it. The magic must surface the second
+    // trigger label.
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Config { name: i64 }",
+            "fn apply(c: Config) { }",
+            "fn log(c: Config) { }",
+            "fn make_handler(cfg: Config) { let _h = || apply(cfg); log(cfg); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert!(
+        out.text.contains("make_handler.cfg"),
+        "row must name the binding; got:\n{}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("closure capture with outer use"),
+        "row must surface trigger 2 label; got:\n{}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_renders_text_plain_and_html_mimes() {
+    // A successful render emits both mimes so kernel frontends can
+    // pick the richest one they understand.
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn process(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    let bundle = out.rich.expect("rc magic must emit a rich bundle");
+    let plain = bundle.get("text/plain").unwrap_or("").to_string();
+    let html = bundle.get("text/html").unwrap_or("").to_string();
+    assert!(
+        plain.contains("process.d"),
+        "plain mime must list the row; got:\n{plain}",
+    );
+    assert!(
+        html.contains("<table>"),
+        "html mime must wrap rows in a table; got:\n{html}",
+    );
+    assert!(
+        html.contains("<th>Binding</th>"),
+        "html mime must include the Binding header; got:\n{html}",
+    );
+    assert!(
+        html.contains("<th>Trigger</th>"),
+        "html mime must include the Trigger header; got:\n{html}",
+    );
+    assert!(
+        html.contains("<th>Kind</th>"),
+        "html mime must include the Kind header; got:\n{html}",
+    );
+}
+
+#[test]
+fn rc_magic_sorts_rows_by_fn_then_binding() {
+    // Two functions, both triggering RC; the renderer must emit
+    // them in `(fn_name, binding)` order so the textual output is
+    // stable across runs (HashMap iteration is nondeterministic
+    // without sorting).
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn alpha(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+            "fn beta(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok);
+    let alpha_pos = out.text.find("alpha.d").expect("alpha row should appear");
+    let beta_pos = out.text.find("beta.d").expect("beta row should appear");
+    assert!(
+        alpha_pos < beta_pos,
+        "alpha must sort before beta; got:\n{}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_no_fallbacks_when_no_consume() {
+    // Pure code with no consume-then-reuse pattern → no RC entries.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn pure_fn() -> i64 { 42 }");
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok);
+    assert!(
+        out.text.contains("no RC fallbacks"),
+        "expected empty-set hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_rejects_arguments() {
+    // %rc takes no arguments — surface a usage hint rather than
+    // silently ignoring extra input.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%rc verbose");
+    assert!(!out.ok, "expected error; got ok: {}", out.text);
+    assert!(
+        out.text.contains("usage: %rc"),
+        "expected usage hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_listed_in_unknown_magic_help() {
+    // Unknown magics surface a help line listing supported magics;
+    // %rc must appear there so users discover it.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%bogus");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("%rc"),
+        "unknown-magic help must list %rc; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_listed_in_empty_magic_help() {
+    // Empty `%` magic also surfaces the supported-set help line.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("%rc"),
+        "empty-magic help must list %rc; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn rc_magic_html_escapes_qualified_binding_name() {
+    // The qualified binding column passes through `escape_html_text`,
+    // so any `<` or `&` in a future binding/fn name (today the
+    // parser blocks these, but the escape path is what guards
+    // against a future widening) is HTML-encoded. Pin the escape
+    // path by exercising it on a real row and checking the table
+    // wraps the binding in escaped `<td>` content.
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn process(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    let html = out
+        .rich
+        .as_ref()
+        .and_then(|b| b.get("text/html"))
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        html.contains("<td>process.d</td>"),
+        "html row must wrap the qualified binding in <td>; got:\n{html}",
+    );
+}
+
+#[test]
+fn rc_magic_includes_consume_and_reuse_spans() {
+    // Each row records both spans — consume site (where the
+    // binding was moved) and reuse site (the later use that
+    // forced fallback). Format is `(consume L:C, reuse L:C)`.
+    let mut s = Session::new();
+    submit_items(
+        &mut s,
+        &[
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn process(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ],
+    );
+    let out = s.dispatch_magic("%rc");
+    assert!(out.ok);
+    assert!(
+        out.text.contains("consume"),
+        "row must label the consume span; got: {}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("reuse"),
+        "row must label the reuse span; got: {}",
+        out.text,
     );
 }
