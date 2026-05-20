@@ -29,6 +29,16 @@ cargo build -p karac-runtime --release   # produces target/release/libkarac_runt
 
 Without this, the E2E tests (including all `tests/memory_sanitizer.rs` cases) skip with a stderr notice rather than exercise real binaries — they pass vacuously. `tests/memory_sanitizer.rs` additionally requires a `cc` that supports `-fsanitize=address`; if missing (or if `KARAC_SKIP_ASAN_TESTS=1` is set), it skips gracefully.
 
+## Branch management
+
+**Always update `main` via `git merge --ff-only` from the primary worktree.** Cross-worktree `git update-ref refs/heads/main <source-tip>` bypasses git's "checked-out branch can't be ff'd" safety net and has two known failure modes — both have hit this repo:
+
+1. **Stale primary worktree.** The primary worktree's index and working tree don't refresh after the ref moves; subsequent `git status` there renders the just-landed commit as "uncommitted changes" (the inverse diff of what was shipped). Recovery: `git stash push` clears the false diff in one step. Detailed reproduction in the user's memory at `reference_update_ref_stale_primary_worktree`.
+
+2. **Silent main rewind.** If the source branch's history doesn't include the current main tip (e.g. branched off main before another feature merged), `update-ref` overwrites main and the commits between the source's fork point and the previous tip become orphans — still in the reflog (default 90-day retention) but invisible from `git log main`. Recognize by `reset: moving to HEAD` reflog entries with no source SHA in the action column. Recovery: identify the previous tip from `git reflog main`, `git update-ref refs/heads/main <previous-tip>`, `git reset --hard` to sync the worktree, then cherry-pick anything that was on the rewound branch. Save uncommitted state to a patch first if `reset --hard` is involved.
+
+`git merge --ff-only <branch>` from the primary worktree avoids both: it refreshes index+worktree atomically and rejects non-fast-forward updates loudly. If the ff is rejected, the source branch needs `git rebase main` before retrying — never reach for `--no-ff` or `update-ref` as a workaround.
+
 ## Architecture
 
 `karac` is a Rust implementation of the Kāra language compiler. The pipeline flows:
