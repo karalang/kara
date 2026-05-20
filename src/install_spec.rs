@@ -468,10 +468,7 @@ mod tests {
             "E_INSTALL_INVALID_NAME"
         );
         assert_eq!(
-            InstallSpecError::ReservedKeyword {
-                name: "fn".into(),
-            }
-            .code(),
+            InstallSpecError::ReservedKeyword { name: "fn".into() }.code(),
             "E_INSTALL_RESERVED_NAME"
         );
     }

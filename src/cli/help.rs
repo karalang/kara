@@ -432,16 +432,32 @@ karac install - Build and install a binary package into ~/.kara/bin/
 USAGE:
     karac install <bin-spec>
 
-The <bin-spec> accepts the same shapes as a manifest dependency entry:
-    path = \"./local/path\"           — build from a local source directory
-    git  = \"https://github.com/...\" — build from a git repository
-    <name>                             — registry-proxy reference
-    <name>@<version>                   — pinned registry-proxy reference
+The <bin-spec> mirrors the manifest dependency-entry vocabulary in a
+CLI-friendly key=value form:
+    path=<filesystem-path>      Build from a local source directory.
+                                  e.g. `karac install path=./tools/my_tool`
+    git=<url>                   Build from a git repository (default branch).
+                                  e.g. `karac install git=https://example.com/my_tool.git`
+    <name>                      Registry-proxy reference — latest compatible.
+                                  e.g. `karac install my_tool`
+    <name>@<version>            Pinned registry-proxy reference. <version>
+                                  accepts the same comparator syntax as a
+                                  manifest dependency entry (`1.2`, `^1.0`,
+                                  `=1.2.3`, `>=1.0, <1.5`).
+                                  e.g. `karac install my_tool@^1.0`
 
-v1 status: the subcommand parses cleanly; the resolver + build + install
-machinery lands alongside the dependency-resolution slice. Until then,
-this command exits non-zero with a diagnostic that names the spec back.
-See `docs/implementation_checklist/phase-5-diagnostics.md`."
+NAMES:
+    Package names follow the manifest / scaffolder convention:
+    `[a-z][a-z0-9_]*` — lowercase identifiers, no hyphens. Hyphenated or
+    mixed-case input produces an `E_INSTALL_INVALID_NAME` diagnostic with
+    a snake_case suggestion when one applies.
+
+v1 status: spec resolution is implemented (line 871 slice 2); the build +
+~/.kara/bin/ install step depends on the per-dep codegen / cache / linker
+pipeline (line 874). Until that lands, `karac install` parses the spec
+and echoes the resolved source so CI scripts can validate spec shape
+before the pipeline integration goes live. See
+`docs/implementation_checklist/phase-5-diagnostics.md`."
         }
         "explain" => {
             "\

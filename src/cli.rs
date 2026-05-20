@@ -7027,19 +7027,47 @@ fn dirs_kara_cache_path() -> Result<PathBuf, String> {
 //
 // Build a binary package from a `<bin-spec>` and install the resulting
 // executable into `~/.kara/bin/`. The spec accepts the same shapes as
-// the manifest dependency entry: `path = "./local"`, `git = "https://..."`,
-// or a bare registry-proxy reference like `my-tool` or `my-tool@1.2.3`.
+// the manifest dependency entry: `path=<path>`, `git=<url>`, a bare
+// registry reference `<name>`, or a pinned `<name>@<version>`.
 //
-// v1 surface (this slice): the subcommand parses cleanly and emits a
-// "not yet wired" diagnostic that names the spec back. Full resolver +
-// build + symlink machinery lands alongside the dependency-resolution
-// slice (same gating as `--offline`).
+// This slice (slice 2 of line 871) ships the spec-resolution surface —
+// `install_spec::parse_install_spec` turns the CLI string into a typed
+// `InstallSource`. The build + `~/.kara/bin/` install step depends on
+// per-dep codegen + lookup-through-cache + linker integration (the same
+// pipeline gating as `karac build --offline`); until that lands we
+// echo the resolved source back to the operator and exit non-zero so
+// CI scripts notice the gap. The diagnostic names the parsed source
+// shape (not the raw input) so an operator can confirm their spec was
+// interpreted as intended.
 
 fn cmd_install(spec: &str) {
+    use crate::install_spec::{parse_install_spec, InstallSource};
+
+    let source = match parse_install_spec(spec) {
+        Ok(src) => src,
+        Err(e) => {
+            eprintln!("error[{code}]: {e}", code = e.code());
+            eprintln!("       received `<bin-spec>` argument: `{spec}`");
+            process::exit(1);
+        }
+    };
+
+    let kind = match &source {
+        InstallSource::Path { .. } => "path",
+        InstallSource::Git { .. } => "git",
+        InstallSource::Registry { version: None, .. } => "registry (unpinned)",
+        InstallSource::Registry {
+            version: Some(_), ..
+        } => "registry (pinned)",
+    };
+    let rendered = source.render();
+
     eprintln!(
-        "karac install: not yet wired (received spec `{spec}`).\n\
-         Build + ~/.kara/bin/ install machinery lands alongside the\n\
-         dependency-resolution slice. Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
+        "karac install: not yet wired — parsed `<bin-spec>` as a {kind} source.\n\
+         resolved: {rendered}\n\
+         note: spec resolution is implemented (line 871 slice 2); the build + ~/.kara/bin/\n\
+               install step depends on the per-dep codegen / cache / linker pipeline (line\n\
+               874). Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
     );
     process::exit(2);
 }

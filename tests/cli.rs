@@ -3389,6 +3389,115 @@ fn test_install_with_spec_emits_not_yet_wired_notice() {
     );
 }
 
+// Spec-resolution slice (slice 2 of line 871) — the install command now parses
+// `<bin-spec>` against the four-shape grammar (`path=`, `git=`, `<name>`,
+// `<name>@<version>`) and echoes the resolved source kind back. The build /
+// `~/.kara/bin/` install step is still gated on the pipeline-integration
+// slice (line 874); these tests pin the spec-parse surface only.
+
+#[test]
+fn test_install_path_spec_resolves_as_path_source() {
+    let out = karac_bin()
+        .args(["install", "path=./tools/my_tool"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "stub still exits non-zero");
+    assert!(
+        stderr.contains("parsed `<bin-spec>` as a path source"),
+        "diagnostic must announce the resolved kind, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("resolved: path=./tools/my_tool"),
+        "diagnostic must echo the resolved source, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_install_git_spec_resolves_as_git_source() {
+    let out = karac_bin()
+        .args(["install", "git=https://github.com/example/my_tool.git"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("parsed `<bin-spec>` as a git source"),
+        "got: {stderr}"
+    );
+    assert!(
+        stderr.contains("resolved: git=https://github.com/example/my_tool.git"),
+        "got: {stderr}"
+    );
+}
+
+#[test]
+fn test_install_bare_name_resolves_as_registry_unpinned() {
+    let out = karac_bin().args(["install", "my_tool"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("registry (unpinned)"), "got: {stderr}");
+    assert!(stderr.contains("resolved: my_tool"), "got: {stderr}");
+}
+
+#[test]
+fn test_install_name_at_version_resolves_as_registry_pinned() {
+    let out = karac_bin()
+        .args(["install", "my_tool@^1.0"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("registry (pinned)"), "got: {stderr}");
+    // VersionReq's Display is canonical (`^1.0`); the render echoes that
+    // canonical form back so the operator sees what was parsed.
+    assert!(stderr.contains("resolved: my_tool@^1.0"), "got: {stderr}");
+}
+
+#[test]
+fn test_install_path_empty_value_diagnostic() {
+    let out = karac_bin().args(["install", "path="]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("E_INSTALL_MISSING_VALUE"),
+        "must surface symbolic code, got: {stderr}"
+    );
+    assert!(stderr.contains("`path=`"), "got: {stderr}");
+}
+
+#[test]
+fn test_install_garbage_version_diagnostic() {
+    let out = karac_bin()
+        .args(["install", "my_tool@not-a-version"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("E_INSTALL_INVALID_VERSION"),
+        "got: {stderr}"
+    );
+    assert!(stderr.contains("`not-a-version`"), "got: {stderr}");
+}
+
+#[test]
+fn test_install_hyphenated_name_diagnostic_with_suggestion() {
+    let out = karac_bin().args(["install", "my-tool"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("E_INSTALL_INVALID_NAME"), "got: {stderr}");
+    assert!(stderr.contains("`my_tool`"), "got: {stderr}");
+}
+
+#[test]
+fn test_install_trailing_at_diagnostic() {
+    let out = karac_bin().args(["install", "my_tool@"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(stderr.contains("E_INSTALL_EMPTY_VERSION"), "got: {stderr}");
+}
+
 #[test]
 fn test_vendor_rejects_extra_args() {
     let out = karac_bin().args(["vendor", "extra"]).output().unwrap();
