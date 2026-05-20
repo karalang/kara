@@ -489,6 +489,33 @@ pub struct Session {
     /// user re-binds the same name in a later cell (capture clears
     /// stale pruning data); cleared entirely by `reset_persistent_lets`.
     pruned_provider_lets: Vec<PrunedProviderLet>,
+    /// Per-cell structured effect snapshot, aligned 1:1 with
+    /// `cell_history`. Entry `i` is the structured form of cell
+    /// `i+1`'s inferred effects on `main` — the same data
+    /// `compute_cell_effect_footer` renders into the human-readable
+    /// `writes(A) reads(B)` string, exposed in a sorted, machine-
+    /// readable shape so the line 773 effect-conflict timeline can
+    /// compute cross-cell dependencies without re-running the
+    /// effect checker. Pure-item cells contribute an empty
+    /// snapshot (they don't run main). Rolled back in lockstep with
+    /// `cell_history` on diagnostic-side failure.
+    cell_effect_history: Vec<CellEffectSnapshot>,
+}
+
+/// Per-cell structured effect snapshot used by the line 773 cross-cell
+/// effect-conflict timeline. Captures the effect set inferred on each
+/// cell's synthesized `main`, in deterministic order (verb emit order,
+/// then resource lex order). Empty for pure-item cells and for
+/// statement cells with no tracked effects.
+#[derive(Debug, Clone, Default)]
+pub struct CellEffectSnapshot {
+    /// Sorted `(verb, resource)` pairs. Execution verbs (`blocks`,
+    /// `suspends`) carry an empty `resource` string; resource verbs
+    /// (`reads`, `writes`, `sends`, `receives`, `allocates`,
+    /// `panics`) carry the resource name. Within a verb, resources
+    /// are lex-sorted; across verbs, emit order matches
+    /// `render_effect_decls`.
+    pub effects: Vec<(crate::ast::EffectVerbKind, String)>,
 }
 
 impl Default for Session {
@@ -512,6 +539,7 @@ impl Session {
             provider_history: Vec::new(),
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
+            cell_effect_history: Vec::new(),
         }
     }
 
@@ -852,16 +880,16 @@ impl Session {
         }
     }
 
-    /// Compute the per-cell effect footer for a statement-style cell.
-    /// Runs effect inference on the synthetic source (items + replayed
-    /// lets + the just-evaluated cell body) and renders `main`'s
-    /// effect set via the same `render_effect_decls` helper that
-    /// drives `:save`'s declared-effects. Returns `""` for pure cells
-    /// so the kernel can suppress the footer line entirely instead of
-    /// rendering an empty annotation. Defensive on parse failure
-    /// (returns `""` so footer rendering never surfaces a fresh
-    /// parser error after a cell that already evaluated cleanly).
-    fn compute_cell_effect_footer(&self, cell_src: &str) -> String {
+    /// Compute the per-cell effect summary for a statement-style cell:
+    /// the structured snapshot used by the line 773 timeline AND the
+    /// human-readable footer string the kernel renders after every
+    /// cell. Both flow from one effect-checker pass over the synthetic
+    /// source (items + replayed lets + the just-evaluated cell body).
+    /// Returns `(empty_snapshot, "")` on parse failure or when `main`
+    /// has no tracked effects — the kernel suppresses the footer in
+    /// that case so pure cells stay visually quiet, and the timeline
+    /// records the empty snapshot so cell indices stay aligned.
+    fn compute_cell_effect_summary(&self, cell_src: &str) -> (CellEffectSnapshot, String) {
         let mut synth = String::new();
         synth.push_str(&strip_main(&self.items_source));
         if !synth.is_empty() && !synth.ends_with('\n') {
@@ -881,13 +909,15 @@ impl Session {
         synth.push_str("}\n");
         let parsed = crate::parse(&synth);
         if !parsed.errors.is_empty() {
-            return String::new();
+            return (CellEffectSnapshot::default(), String::new());
         }
         let effects = crate::effectcheck(&parsed.program);
         let Some(set) = effects.inferred_effects.get("main") else {
-            return String::new();
+            return (CellEffectSnapshot::default(), String::new());
         };
-        render_effect_decls(set)
+        let snapshot = effect_set_to_snapshot(set);
+        let footer = render_effect_decls(set);
+        (snapshot, footer)
     }
 
     /// Construct a session pre-configured from caller-supplied
@@ -938,6 +968,16 @@ impl Session {
     /// tests; could back a future `:history` meta-command.
     pub fn cell_history(&self) -> &[String] {
         &self.cell_history
+    }
+
+    /// Inspector for the per-cell structured effect snapshot,
+    /// aligned 1:1 with `cell_history`. Entry `i` is cell `i+1`'s
+    /// inferred effects on `main`, in deterministic order. Drives
+    /// the line 773 effect-conflict timeline (`%timeline` magic +
+    /// cross-cell dependency rendering); also used by integration
+    /// tests that pin the per-cell snapshot shape.
+    pub fn cell_effect_history(&self) -> &[CellEffectSnapshot] {
+        &self.cell_effect_history
     }
 
     /// Inspector for the current cell-byte-range map (the synthetic-source
@@ -1055,6 +1095,11 @@ impl Session {
             // immediately rather than waiting for the next statement cell.
             self.append_items(trimmed);
             self.validate_accumulated();
+            // Pure-item cells contribute no main-effects; keep
+            // `cell_effect_history` aligned 1:1 with `cell_history` so
+            // `%timeline` indexes the same cells the rest of the
+            // session sees.
+            self.cell_effect_history.push(CellEffectSnapshot::default());
             return;
         }
 
@@ -1167,6 +1212,8 @@ impl Session {
                     eprintln!("{note}");
                 }
                 self.capture_new_lets(cell_src);
+                let (snapshot, _footer) = self.compute_cell_effect_summary(cell_src);
+                self.cell_effect_history.push(snapshot);
             }
             Err(out) => {
                 for note in &out.notes {
@@ -1175,6 +1222,11 @@ impl Session {
                 for m in &out.errors {
                     eprintln!("{m}");
                 }
+                // Production `evaluate_cell` does not roll back
+                // `cell_history` on diagnostic-side failure; keep
+                // `cell_effect_history` aligned by pushing an empty
+                // snapshot for the failed cell.
+                self.cell_effect_history.push(CellEffectSnapshot::default());
             }
         }
     }
@@ -1625,6 +1677,11 @@ impl Session {
                 if let Some(idx) = self.items_source.rfind(&trimmed_added) {
                     self.items_source.truncate(idx);
                 }
+            } else {
+                // Pure-item cell ran clean — record an empty effect
+                // snapshot so the timeline's cell index stays aligned
+                // with `cell_history`.
+                self.cell_effect_history.push(CellEffectSnapshot::default());
             }
             return EvaluatedCell {
                 stdout: String::new(),
@@ -1638,7 +1695,8 @@ impl Session {
         match self.run_with_wrapper_inner(trimmed, /* capture */ true) {
             Ok(out) => {
                 self.capture_new_lets(trimmed);
-                let effect_footer = self.compute_cell_effect_footer(trimmed);
+                let (snapshot, effect_footer) = self.compute_cell_effect_summary(trimmed);
+                self.cell_effect_history.push(snapshot);
                 EvaluatedCell {
                     stdout: out.stdout.join(""),
                     errors: Vec::new(),

@@ -260,6 +260,42 @@ pub(super) fn render_main_body(stmt_cells: &[&str]) -> String {
 /// verbs first, then execution verbs); within each verb the resources
 /// are sorted lexicographically for deterministic output. Returns `""`
 /// for an empty set so the caller can skip the keyword block.
+/// Lift an `EffectSet` into the structured per-cell snapshot shape the
+/// line 773 effect-conflict timeline consumes. Returns sorted
+/// `(verb, resource)` pairs — verbs in the same emit order as
+/// `render_effect_decls` (resource verbs first, then execution verbs,
+/// then user-defined), resources lex-sorted within a verb. Resource-
+/// less verbs (`blocks`, `suspends`) appear with an empty `String`
+/// resource. Deduped against the same `(verb, resource)` key the
+/// effect checker uses, so multiple sites of the same effect collapse
+/// to one timeline entry.
+pub(super) fn effect_set_to_snapshot(
+    set: &crate::effectchecker::EffectSet,
+) -> super::CellEffectSnapshot {
+    use crate::ast::EffectVerbKind;
+    use std::collections::BTreeSet;
+
+    let mut grouped: std::collections::BTreeMap<usize, (EffectVerbKind, BTreeSet<String>)> =
+        std::collections::BTreeMap::new();
+    for traced in &set.effects {
+        let order = verb_emit_order(&traced.effect.verb);
+        let entry = grouped
+            .entry(order)
+            .or_insert_with(|| (traced.effect.verb.clone(), BTreeSet::new()));
+        // Resource-less verbs (`blocks` / `suspends`) collapse to a
+        // single entry under the empty-string key so they appear once
+        // in the snapshot regardless of how many call sites contributed.
+        entry.1.insert(traced.effect.resource.clone());
+    }
+    let mut effects: Vec<(EffectVerbKind, String)> = Vec::new();
+    for (_, (verb, resources)) in grouped {
+        for r in resources {
+            effects.push((verb.clone(), r));
+        }
+    }
+    super::CellEffectSnapshot { effects }
+}
+
 pub(super) fn render_effect_decls(set: &crate::effectchecker::EffectSet) -> String {
     use crate::ast::EffectVerbKind;
     use std::collections::BTreeMap;

@@ -1991,3 +1991,137 @@ fn show_magic_text_plain_pretty_prints_nested() {
         "should pretty-print multi-line; got: {plain}"
     );
 }
+
+// ── Per-cell structured effect snapshot (line 773 slice 1) ────────────────
+
+#[test]
+fn cell_effect_history_aligned_with_cell_history() {
+    // Every successful cell — pure-item OR statement — appends exactly
+    // one entry to both `cell_history` and `cell_effect_history`. The
+    // line 773 timeline relies on this 1:1 alignment so the snapshot
+    // at index `i` describes cell `i+1`.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn one() -> i64 { 1 }");
+    s.evaluate_cell_captured("env.set(\"X\", \"y\");");
+    s.evaluate_cell_captured("let _z = one() + 2;");
+    assert_eq!(s.cell_history().len(), 3);
+    assert_eq!(s.cell_effect_history().len(), 3);
+}
+
+#[test]
+fn cell_effect_snapshot_records_writes_env() {
+    // A statement cell that triggers `env.set` (declared `writes(Env)`
+    // in the stdlib) lands one snapshot entry with the same verb/
+    // resource pair the footer string renders.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("env.set(\"K\", \"v\");");
+    let history = s.cell_effect_history();
+    assert_eq!(history.len(), 1);
+    let pairs: Vec<(String, String)> = history[0]
+        .effects
+        .iter()
+        .map(|(verb, res)| (format!("{verb:?}"), res.clone()))
+        .collect();
+    assert!(
+        pairs
+            .iter()
+            .any(|(v, r)| v.contains("Writes") && r == "Env"),
+        "expected writes(Env) in snapshot; got: {pairs:?}",
+    );
+}
+
+#[test]
+fn cell_effect_snapshot_empty_for_pure_cell() {
+    // A pure statement cell records an empty snapshot — the timeline
+    // index stays aligned with `cell_history` but the entry carries
+    // no effects so it can't participate in cross-cell dependencies.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("let _x = 1 + 2;");
+    let history = s.cell_effect_history();
+    assert_eq!(history.len(), 1);
+    assert!(
+        history[0].effects.is_empty(),
+        "pure cell snapshot must be empty; got: {:?}",
+        history[0].effects,
+    );
+}
+
+#[test]
+fn cell_effect_snapshot_empty_for_pure_items_cell() {
+    // Item-only cells contribute to `items_source` but don't run a
+    // synthetic main — they record an empty snapshot to keep the
+    // 1:1 alignment with `cell_history`.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("fn add(a: i64, b: i64) -> i64 { a + b }");
+    let history = s.cell_effect_history();
+    assert_eq!(history.len(), 1);
+    assert!(
+        history[0].effects.is_empty(),
+        "pure-items snapshot must be empty; got: {:?}",
+        history[0].effects,
+    );
+}
+
+#[test]
+fn cell_effect_snapshot_skipped_on_statement_error() {
+    // Captured-path statement cells that fail diagnostic-side roll
+    // back `cell_history`; the snapshot history is *not* pushed in
+    // that arm so the alignment invariant survives the rollback.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("undefined_function();");
+    assert!(!r.errors.is_empty());
+    assert_eq!(s.cell_history().len(), 0);
+    assert_eq!(s.cell_effect_history().len(), 0);
+}
+
+#[test]
+fn cell_effect_snapshot_records_distinct_resources() {
+    // A cell that triggers two different writes (`env.set` →
+    // `writes(Env)` and `Vec.push` → `allocates(Heap)`) records
+    // both entries — the snapshot deduplicates by `(verb, resource)`,
+    // so two distinct effects produce two distinct entries.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("env.set(\"A\", \"1\"); let mut v = Vec.new(); v.push(1);");
+    assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
+    let history = s.cell_effect_history();
+    assert_eq!(history.len(), 1);
+    let pairs: Vec<(String, String)> = history[0]
+        .effects
+        .iter()
+        .map(|(verb, res)| (format!("{verb:?}"), res.clone()))
+        .collect();
+    assert!(
+        pairs
+            .iter()
+            .any(|(v, r)| v.contains("Allocates") && r == "Heap"),
+        "expected allocates(Heap); got: {pairs:?}",
+    );
+    assert!(
+        pairs
+            .iter()
+            .any(|(v, r)| v.contains("Writes") && r == "Env"),
+        "expected writes(Env); got: {pairs:?}",
+    );
+}
+
+#[test]
+fn cell_effect_snapshot_dedupes_repeated_effect() {
+    // Multiple call sites of the same writes(Env) effect collapse to
+    // one snapshot entry — the timeline shouldn't double-count when a
+    // cell mutates the same resource through several builtin calls.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("env.set(\"A\", \"1\"); env.set(\"B\", \"2\");");
+    assert!(r.errors.is_empty(), "errors: {:?}", r.errors);
+    let history = s.cell_effect_history();
+    assert_eq!(history.len(), 1);
+    let writes_env_count = history[0]
+        .effects
+        .iter()
+        .filter(|(_, r)| r == "Env")
+        .count();
+    assert_eq!(
+        writes_env_count, 1,
+        "writes(Env) must dedupe across call sites; got: {:?}",
+        history[0].effects,
+    );
+}
