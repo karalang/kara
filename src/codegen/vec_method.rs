@@ -966,6 +966,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(is_empty.into())
             }
+            "bytes" => {
+                // `String.bytes() -> Slice[u8]` (design.md § Character
+                // type). Zero-copy view: String's runtime layout is
+                // `{ptr, len, cap}`, so a `Slice[u8]` is just the first
+                // two fields packed into the `{ptr, i64}` slice header.
+                // No new allocation, no buffer copy — the caller observes
+                // bytes through the same heap (or .rodata) storage the
+                // source String owns. The returned slice is read-only;
+                // mutating through it would alias the source's bytes
+                // (and could produce invalid UTF-8), so the typechecker
+                // hands back `Slice[u8]`, not `mut Slice[u8]`.
+                //
+                // The dispatch reaches here only for String-typed
+                // bindings — `bytes` is not a Vec method. The
+                // `compile_vec_method` entry point is shared because
+                // Vec and String have the same `{ptr, len, cap}` runtime
+                // shape; the typechecker has already gated the receiver.
+                let slice_ty = self.slice_struct_type();
+                let data_pp = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "bytes.data.pp")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_pp, "bytes.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len_p = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "bytes.len.p")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_p, "bytes.len")
+                    .unwrap()
+                    .into_int_value();
+                Ok(self.build_slice_header(slice_ty, data, len))
+            }
             "first" | "last" => {
                 let len_ptr = self
                     .builder

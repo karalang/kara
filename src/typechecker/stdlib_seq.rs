@@ -7,7 +7,7 @@
 use crate::ast::*;
 use crate::token::Span;
 
-use super::types::{type_display, IntSize, Type};
+use super::types::{type_display, IntSize, Type, UIntSize};
 use super::TypeErrorKind;
 
 impl<'a> super::TypeChecker<'a> {
@@ -138,6 +138,28 @@ impl<'a> super::TypeChecker<'a> {
                     args: vec![Type::Char],
                 }
             }
+            "bytes" => {
+                // bytes() -> Slice[u8]. design.md § Character type:
+                // `s[i]` is rejected with a help suggesting
+                // `s.bytes()[i]` for O(1) byte-positional access, vs
+                // `s.char_at(i)` for the O(n) Unicode-aware form.
+                // Zero-copy view over the String's UTF-8 storage —
+                // String's runtime layout is `{ptr, len, cap}`, so a
+                // `Slice[u8]` is just the first two fields. Used by
+                // ASCII-input katas (atoi #8) to drop the O(n)
+                // `Vec[char]` snapshot pattern.
+                if !args.is_empty() {
+                    self.type_error(
+                        "'bytes' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Slice {
+                    element: Box::new(Type::UInt(UIntSize::U8)),
+                    mutable: false,
+                }
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name, silent otherwise (`len`, `contains`, `is_empty`,
             // … are runtime-only and not yet wired through the typechecker).
@@ -147,7 +169,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "String",
                 method,
-                &["chars", "sorted", "sorted_by"],
+                &["bytes", "chars", "sorted", "sorted_by"],
                 args,
                 span,
             ),

@@ -18238,6 +18238,64 @@ fn main() {
         );
     }
 
+    // ── `String.bytes() -> Slice[u8]` (design.md § Character type) ──
+    //
+    // Zero-copy view: the slice header reuses the source String's data
+    // pointer and length without allocating, so `s.bytes()[i]` is O(1)
+    // and the O(n) Vec[char] snapshot pattern the katas worked around
+    // is no longer needed. Element type is fixed at u8 (i8 in LLVM —
+    // signedness lives at the type-checker level, not in IR).
+
+    #[test]
+    fn test_ir_string_bytes_emits_slice_header() {
+        let ir = ir_for(
+            "fn f() -> i64 {\n\
+                 let s = \"hello\";\n\
+                 let bs = s.bytes();\n\
+                 bs.len()\n\
+             }",
+        );
+        // The bytes() lowering reads field 0 (data) and field 1
+        // (len) from the String's `{ptr, i64, i64}` struct. The
+        // existing naming convention is `bytes.data` / `bytes.len`.
+        assert!(
+            ir.contains("bytes.data"),
+            "bytes() should GEP+load the data pointer:\n{ir}"
+        );
+        assert!(
+            ir.contains("bytes.len"),
+            "bytes() should GEP+load the length:\n{ir}"
+        );
+        // The resulting value packs into the 2-field slice header
+        // `{ptr, i64}`; the existing helper labels are `slice.ptr`
+        // and `slice.len` (see `build_slice_header`).
+        assert!(
+            ir.contains("slice.ptr"),
+            "bytes() should pack data into a slice header:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_string_bytes_indexing_reads_i8() {
+        // Element type is u8 (i8 in LLVM IR). Indexing `bs[i]` GEPs
+        // into the slice's data pointer with i8 stride and loads a
+        // single byte. Regression guard for the slice-elem
+        // inference that ties `let bs = s.bytes()` to u8 — without
+        // it, indexing would fall back to i64 stride and read 8
+        // bytes per index.
+        let ir = ir_for(
+            "fn f() -> i64 {\n\
+                 let s = \"hello\";\n\
+                 let bs = s.bytes();\n\
+                 bs[0] as i64\n\
+             }",
+        );
+        assert!(
+            ir.contains("load i8"),
+            "indexing a `Slice[u8]` should load i8, not i64:\n{ir}"
+        );
+    }
+
     #[test]
     fn test_ir_ref_param_scalar_rvalue_skips_cleanup() {
         // Counterpart of the Vec/String case: a scalar (i32) at a

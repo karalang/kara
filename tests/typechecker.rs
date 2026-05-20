@@ -9107,6 +9107,44 @@ fn test_string_chars_rejects_arguments() {
     );
 }
 
+#[test]
+fn test_string_bytes_returns_slice_u8() {
+    // `String.bytes()` returns the `Slice[u8]` view design.md §
+    // Character type points programmers at for O(1) byte-positional
+    // access. The structural assertion is that `bs[i]` (`Slice[u8]`
+    // index) participates in arithmetic against `u8` literals
+    // without a coercion error — if `bytes()` returned anything
+    // else (Iterator[u8], Vec[u8], Slice[i64]), the comparison
+    // would mismatch or auto-promote the literal away from u8.
+    let result = typecheck_ok(
+        r#"fn f() -> i64 {
+            let s = "abc";
+            let bs = s.bytes();
+            let mut n = 0i64;
+            let mut i = 0i64;
+            while i < bs.len() {
+                let b: u8 = bs[i];
+                if b == ('b' as u32 as u8) { n = n + 1; }
+                i = i + 1;
+            }
+            n
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
+fn test_string_bytes_rejects_arguments() {
+    let errors = typecheck_errors(r#"fn f() { let s = "hello"; s.bytes(1); }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "Expected WrongNumberOfArgs for bytes with arg, got: {:?}",
+        errors
+    );
+}
+
 // ── Numeric literal promotion (Q4) ────────────────────────────────────────
 
 #[test]

@@ -71,6 +71,41 @@ impl<'a> super::Interpreter<'a> {
                     ),
                 });
             }
+            "bytes" => {
+                // `String.bytes() -> Slice[u8]`. design.md § Character
+                // type points programmers at `s.bytes()[i]` for O(1)
+                // byte-positional access (vs `s.char_at(i)` for O(n)
+                // Unicode-aware access). The tree-walk interpreter is
+                // type-erased so each byte materializes as
+                // `Value::Int(b as i64)`; codegen views the String's
+                // existing `{ptr, len, cap}` buffer through a `{ptr, i64}`
+                // slice header (zero-copy). Returning a fresh Slice with
+                // its own storage matches the interpreter's existing
+                // pattern for type-erased byte views; mutation through
+                // the slice does not propagate back to the source String
+                // (the return type is read-only `Slice[u8]`).
+                return Some(match &obj {
+                    Value::String(s) => {
+                        let items: Vec<Value> =
+                            s.as_bytes().iter().map(|b| Value::Int(*b as i64)).collect();
+                        let len = items.len();
+                        Value::Slice {
+                            storage: Arc::new(std::sync::RwLock::new(items)),
+                            start: 0,
+                            len,
+                            mutable: false,
+                        }
+                    }
+                    _ => unreachable!(
+                        "bytes() receiver at {}:{} was Value::{} not String; \
+                         either an interpreter codepath produced the wrong receiver variant \
+                         or the typechecker accepted .bytes() on a non-String",
+                        span.line,
+                        span.column,
+                        obj.variant_name()
+                    ),
+                });
+            }
             "as_slice" | "as_slice_mut" => {
                 // Slice 3 — produce a Value::Slice that shares the
                 // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation

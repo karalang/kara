@@ -305,7 +305,9 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Infer the slice element type from a let-binding RHS that produces
     /// a slice value. Recognizes `.as_slice()` / `.as_slice_mut()` on a
-    /// known sequence variable and range-indexing `x[a..b]` on the same.
+    /// known sequence variable, range-indexing `x[a..b]` on the same,
+    /// and `s.bytes()` on a `String` (always `u8`, since `bytes()` is
+    /// String-only at the typechecker layer).
     /// Returns `None` when the RHS is not a slice-producing shape.
     pub(super) fn infer_slice_elem_from_rhs(&self, expr: &Expr) -> Option<BasicTypeEnum<'ctx>> {
         match &expr.kind {
@@ -313,6 +315,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if method == "as_slice" || method == "as_slice_mut" =>
             {
                 self.infer_elem_from_source(object)
+            }
+            ExprKind::MethodCall { method, .. } if method == "bytes" => {
+                // `String.bytes() -> Slice[u8]`. Element type is fixed
+                // — typechecker has gated the receiver to String.
+                Some(self.context.i8_type().into())
             }
             ExprKind::Index { object, index } => {
                 if matches!(&index.kind, ExprKind::Range { .. }) {

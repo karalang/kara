@@ -6172,6 +6172,49 @@ fn test_string_chars_with_map_char_as_key() {
 }
 
 #[test]
+fn test_string_bytes_returns_slice_with_byte_values() {
+    // `String.bytes() -> Slice[u8]` (design.md § Character type).
+    // ASCII input: each byte is the codepoint. Locks down length +
+    // positional access + comparison against `u8` literals via the
+    // `char as u32 as u8` chain. This is the primitive the kata-8
+    // (atoi) rewrite uses to drop the O(n) Vec[char] snapshot.
+    let output = run(r#"fn main() {
+            let s = "hello";
+            let bs = s.bytes();
+            println(bs.len());
+            println(bs[0]);
+            println(bs[4]);
+            let h: u8 = 'h' as u32 as u8;
+            println(bs[0] == h);
+        }"#);
+    assert_eq!(output, "5\n104\n111\ntrue\n");
+}
+
+#[test]
+fn test_string_bytes_empty_string_zero_len() {
+    let output = run(r#"fn main() {
+            let bs = "".bytes();
+            println(bs.len());
+        }"#);
+    assert_eq!(output, "0\n");
+}
+
+#[test]
+fn test_string_bytes_multibyte_utf8_yields_byte_count_not_char_count() {
+    // UTF-8 encodes a single Unicode scalar in 1..=4 bytes; the
+    // distinction matters for the kata's use case (`bytes().len()`
+    // is the byte count, NOT the character count — `chars().count()`
+    // is the character count). Regression guard against accidentally
+    // returning `Slice[char]` or counting characters.
+    // "héllo" = h (1B) + é (2B: 0xC3 0xA9) + l (1B) + l (1B) + o (1B) = 6 bytes.
+    let output = run(r#"fn main() {
+            let bs = "héllo".bytes();
+            println(bs.len());
+        }"#);
+    assert_eq!(output, "6\n");
+}
+
+#[test]
 fn test_string_sorted_by_closure_descending() {
     let output = run(
         r#"fn main() { let s = "dcba"; println(s.sorted_by(|a, b| if a < b { Ordering.Greater } else if a > b { Ordering.Less } else { Ordering.Equal })); }"#,
