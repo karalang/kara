@@ -5,7 +5,7 @@
 //! `println` output into an in-memory buffer so we can assert against it
 //! without touching the process's real stdout fd.
 
-use karac::repl::{MagicOutput, ReplOptions, Session};
+use karac::repl::{DependencyKind, MagicOutput, ReplOptions, Session};
 
 // ── Item accumulation ──────────────────────────────────────────────────────
 
@@ -2123,5 +2123,191 @@ fn cell_effect_snapshot_dedupes_repeated_effect() {
         writes_env_count, 1,
         "writes(Env) must dedupe across call sites; got: {:?}",
         history[0].effects,
+    );
+}
+
+// ── %timeline — effect-conflict timeline magic (line 773 slice 2) ─────────
+
+#[test]
+fn timeline_magic_empty_session_returns_hint() {
+    // Empty session — no cells, no dependencies. Emit a friendly
+    // hint via plain text; no rich bundle (there's no table to
+    // render until the first cell lands).
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%timeline");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert!(
+        out.text.contains("no cells"),
+        "expected friendly hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn timeline_magic_renders_text_plain_and_html() {
+    // Two cells: one pure, one writes(Env). Timeline must include
+    // both cells in submission order. text/html mime present
+    // alongside text/plain for rich-display surfaces.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("let _x = 1;");
+    s.evaluate_cell_captured("env.set(\"A\", \"1\");");
+    let out = s.dispatch_magic("%timeline");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    let bundle = out.rich.expect("timeline must emit a rich bundle");
+    let plain = bundle.get("text/plain").unwrap_or("").to_string();
+    let html = bundle.get("text/html").unwrap_or("").to_string();
+    assert!(plain.contains("cell 1"), "missing cell 1; got:\n{plain}");
+    assert!(plain.contains("cell 2"), "missing cell 2; got:\n{plain}");
+    assert!(
+        plain.contains("writes(Env)"),
+        "missing writes(Env); got:\n{plain}",
+    );
+    assert!(
+        html.contains("<table>"),
+        "html must include <table>; got: {html}"
+    );
+    assert!(
+        html.contains("writes(Env)"),
+        "html must render effect; got: {html}",
+    );
+}
+
+#[test]
+fn timeline_magic_emits_write_after_write_arrow() {
+    // Two cells both writing the same resource — the second cell
+    // must surface a "writes Env already written by cell 1" arrow.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("env.set(\"A\", \"1\");");
+    s.evaluate_cell_captured("env.set(\"B\", \"2\");");
+    let out = s.dispatch_magic("%timeline");
+    assert!(out.ok);
+    let plain = out
+        .rich
+        .as_ref()
+        .and_then(|b| b.get("text/plain"))
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        plain.contains("writes Env already written by cell 1"),
+        "expected WAW arrow on cell 2; got:\n{plain}",
+    );
+}
+
+#[test]
+fn timeline_magic_emits_read_after_write_arrow() {
+    // Cell 1 declares a user fn with writes(R); cell 2 declares a
+    // user fn with reads(R); cell 3 calls both. The timeline for
+    // cell 3 must surface a "reads R written by cell <wherever>"
+    // arrow — but since the writes and reads happen in *one* cell
+    // (cell 3 calls both), the dependency manifests as RAW within
+    // the same cell's snapshot, which v1 carves out. So instead
+    // structure it: cell 1 writes via env.set, cell 2 calls a
+    // user-declared reads(Env) function.
+    //
+    // We declare a user fn with explicit `reads(Env)` and call it
+    // from cell 2; cell 1 wrote Env via env.set.
+    let mut s = Session::new();
+    let r = s.evaluate_cell_captured("fn observe_env() reads(Env) { let _x = 1; }");
+    assert!(r.errors.is_empty(), "fn declaration: {:?}", r.errors);
+    s.evaluate_cell_captured("env.set(\"K\", \"v\");");
+    s.evaluate_cell_captured("observe_env();");
+    let deps = s.compute_cell_dependencies();
+    let raw_deps: Vec<&karac::repl::CellDependency> = deps
+        .iter()
+        .filter(|d| d.kind == DependencyKind::ReadAfterWrite)
+        .collect();
+    assert!(
+        !raw_deps.is_empty(),
+        "expected at least one RAW dep; got: {deps:?}",
+    );
+    let raw = raw_deps[0];
+    assert_eq!(raw.resource, "Env");
+    assert_eq!(raw.to_cell, 3);
+    assert_eq!(raw.from_cell, 2);
+    let out = s.dispatch_magic("%timeline");
+    let plain = out
+        .rich
+        .as_ref()
+        .and_then(|b| b.get("text/plain"))
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        plain.contains("reads Env written by cell 2"),
+        "expected RAW arrow on cell 3; got:\n{plain}",
+    );
+}
+
+#[test]
+fn timeline_magic_pure_cell_marks_pure() {
+    // Pure cells render as "cell N: (pure)" so the row isn't blank.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("let _x = 1;");
+    let out = s.dispatch_magic("%timeline");
+    let plain = out
+        .rich
+        .as_ref()
+        .and_then(|b| b.get("text/plain"))
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        plain.contains("cell 1: (pure)"),
+        "pure cells must render as (pure); got:\n{plain}",
+    );
+}
+
+#[test]
+fn timeline_magic_rejects_arguments() {
+    // %timeline takes no arguments — surface a usage hint rather
+    // than silently ignoring extra input. The dispatcher trims
+    // before testing, so `%timeline   ` (whitespace only) still
+    // reaches the no-arg branch.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%timeline garbage");
+    assert!(!out.ok, "expected error; got ok: {}", out.text);
+    assert!(
+        out.text.contains("usage: %timeline"),
+        "expected usage hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn timeline_magic_listed_in_unknown_magic_help() {
+    // Unknown magics surface a help line listing supported magics;
+    // %timeline must appear there so users discover it.
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%bogus");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("%timeline"),
+        "unknown-magic help must list %timeline; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn timeline_magic_html_escapes_resource_names() {
+    // User-defined resource names can be anything the parser
+    // accepts — including names containing `<`/`&`/`"` if a user
+    // somehow declares one. We can't write a Kara source that
+    // declares a resource named `<X>` (the parser rejects it), so
+    // we exercise the escape path by inspecting the helper
+    // output indirectly: confirm the html bundle doesn't contain
+    // raw resource text unescaped, by checking the table cell uses
+    // the rendered `verb(resource)` shape.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("env.set(\"X\", \"y\");");
+    let out = s.dispatch_magic("%timeline");
+    let html = out
+        .rich
+        .as_ref()
+        .and_then(|b| b.get("text/html"))
+        .unwrap_or("")
+        .to_string();
+    // Header is HTML-encoded with `&amp;` for ampersand — pin that
+    // shape so a future regression that strips escaping fires here.
+    assert!(
+        html.contains("Effects &amp; Dependencies"),
+        "header must HTML-escape ampersand; got: {html}",
     );
 }

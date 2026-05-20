@@ -518,6 +518,43 @@ pub struct CellEffectSnapshot {
     pub effects: Vec<(crate::ast::EffectVerbKind, String)>,
 }
 
+/// A cross-cell effect dependency surfaced by the `%timeline` magic.
+/// Carries the producer cell, the consumer cell, the resource, and
+/// the dependency flavor. v1 detects read-after-write and write-
+/// after-write — both share the producer-side condition `writes(R)
+/// on cell M < N`. Other verbs (sends, receives, allocates, panics,
+/// blocks, suspends) appear in the per-cell footer but don't form
+/// arrows in v1 (carved as v1.1.x follow-ups).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CellDependency {
+    /// 1-based index of the producer cell — the prior `writes(R)`.
+    pub from_cell: usize,
+    /// 1-based index of the consumer cell — the `reads(R)` or
+    /// later `writes(R)` that depends on the producer.
+    pub to_cell: usize,
+    /// Resource name shared by the producer and consumer.
+    pub resource: String,
+    /// Which kind of cross-cell dependency this entry records.
+    pub kind: DependencyKind,
+}
+
+/// Flavor of cross-cell effect dependency. Drives the textual tail
+/// the timeline renderer attaches to a cell's row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencyKind {
+    /// Consumer reads a resource an earlier cell wrote — the classic
+    /// data dependency users mean by "cell N uses what cell M
+    /// produced". Spec example: "cell 3 reads `Files` written by
+    /// cell 2".
+    ReadAfterWrite,
+    /// Consumer writes a resource an earlier cell also wrote —
+    /// ordering matters even though both cells "produce". Surfaced
+    /// because it's the most common reproducibility footgun in
+    /// notebook workflows (re-run cell N out of order, the state
+    /// drifts from what the linear read-through reproduces).
+    WriteAfterWrite,
+}
+
 impl Default for Session {
     fn default() -> Self {
         Self::new()
@@ -571,6 +608,8 @@ impl Session {
     /// - `%end-provide R`         — close the matching provider scope
     /// - `%show <expr>`           — rich-display an expression
     ///   (text/plain always, text/html for `Vec[Struct]`)
+    /// - `%timeline`              — per-cell effect set + cross-cell
+    ///   dependency arrows (text/plain + text/html)
     ///
     /// `%provide` / `%end-provide` forward to the same `add_provider` /
     /// `end_provider` handlers the REPL meta-commands use — `:provide`
@@ -595,6 +634,7 @@ impl Session {
             "explain" => self.magic_explain(rest),
             "set" => self.magic_set(rest),
             "show" => self.magic_show(rest),
+            "timeline" => self.magic_timeline(rest),
             "provide" => match self.add_provider(rest) {
                 Ok(msg) => MagicOutput::ok(msg),
                 Err(msg) => MagicOutput::error(msg),
@@ -607,10 +647,10 @@ impl Session {
                 "magic `%rc` is deferred to post-MVP per the line 689 spec — RC fallback's introspection surface is still settling",
             ),
             "" => MagicOutput::error(
-                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %provide R = expr, %end-provide R",
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %provide R = expr, %end-provide R",
             ),
             other => MagicOutput::error(format!(
-                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %provide R = expr, %end-provide R"
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %timeline, %provide R = expr, %end-provide R"
             )),
         }
     }
@@ -878,6 +918,88 @@ impl Session {
                 Err("expression did not yield a value (did it panic or never bind?)".to_string())
             }
         }
+    }
+
+    /// `%timeline` — render the per-cell effect set with cross-cell
+    /// dependency arrows. Walks `cell_effect_history` in submission
+    /// order; for each cell records the human-readable effect line
+    /// (matching the per-cell footer format) and any cross-cell
+    /// dependency tail: read-after-write ("← reads X written by cell N")
+    /// and write-after-write ("← writes X already written by cell N").
+    /// Emits two mime bundles via [`DisplayBundle`]: `text/plain` for
+    /// the universal cell-output pane, `text/html` for kernel
+    /// frontends that render rich content. Read-only against session
+    /// state. Empty session emits a friendly "(no cells yet)" hint on
+    /// `text/plain` only — there's no table to render until at least
+    /// one cell lands.
+    fn magic_timeline(&self, rest: &str) -> MagicOutput {
+        if !rest.trim().is_empty() {
+            return MagicOutput::error(
+                "usage: %timeline (no arguments — renders the full session timeline)",
+            );
+        }
+        if self.cell_effect_history.is_empty() {
+            return MagicOutput::ok("(no cells yet)");
+        }
+        let deps = self.compute_cell_dependencies();
+        let plain = render_timeline_text(&self.cell_effect_history, &deps);
+        let html = render_timeline_html(&self.cell_effect_history, &deps);
+        let mut bundle = DisplayBundle::new();
+        bundle = bundle.with("text/plain", plain.clone());
+        bundle = bundle.with("text/html", html);
+        MagicOutput::ok_rich(plain, bundle)
+    }
+
+    /// Compute cross-cell effect dependencies from `cell_effect_history`.
+    /// Detects two dependency kinds:
+    ///
+    /// - **Read-after-write** — cell N's `reads(R)` depends on the most
+    ///   recent earlier cell M < N that wrote R. The timeline arrow
+    ///   reads "cell N reads R written by cell M".
+    /// - **Write-after-write** — cell N's `writes(R)` depends on the
+    ///   most recent earlier cell M < N that wrote R. The arrow reads
+    ///   "cell N writes R already written by cell M".
+    ///
+    /// Only the most recent producer is recorded (transitive chains
+    /// stay readable). Other verbs (`sends`, `receives`, `allocates`,
+    /// `panics`, `blocks`, `suspends`) are surfaced in the per-cell
+    /// effect line but don't form cross-cell dependency arrows in v1;
+    /// the v1.1.x follow-ups widen this set (sends→receives channel
+    /// pairing in particular).
+    pub fn compute_cell_dependencies(&self) -> Vec<CellDependency> {
+        use crate::ast::EffectVerbKind;
+        let mut deps: Vec<CellDependency> = Vec::new();
+        for (i, snapshot) in self.cell_effect_history.iter().enumerate() {
+            let to_cell = i + 1;
+            for (verb, resource) in &snapshot.effects {
+                let kind = match verb {
+                    EffectVerbKind::Reads => DependencyKind::ReadAfterWrite,
+                    EffectVerbKind::Writes => DependencyKind::WriteAfterWrite,
+                    _ => continue,
+                };
+                // Look backwards for the most recent earlier cell that
+                // wrote the same resource. Read-after-write and
+                // write-after-write share the same producer-side
+                // condition: `writes(resource)` on some cell M < N.
+                for j in (0..i).rev() {
+                    let producer = &self.cell_effect_history[j];
+                    let produces = producer
+                        .effects
+                        .iter()
+                        .any(|(v, r)| matches!(v, EffectVerbKind::Writes) && r == resource);
+                    if produces {
+                        deps.push(CellDependency {
+                            from_cell: j + 1,
+                            to_cell,
+                            resource: resource.clone(),
+                            kind: kind.clone(),
+                        });
+                        break;
+                    }
+                }
+            }
+        }
+        deps
     }
 
     /// Compute the per-cell effect summary for a statement-style cell:

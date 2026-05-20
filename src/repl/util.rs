@@ -260,6 +260,145 @@ pub(super) fn render_main_body(stmt_cells: &[&str]) -> String {
 /// verbs first, then execution verbs); within each verb the resources
 /// are sorted lexicographically for deterministic output. Returns `""`
 /// for an empty set so the caller can skip the keyword block.
+/// Render the line 773 effect-conflict timeline as plain text. One
+/// row per cell carrying the human-readable effect line (using the
+/// same `verb(resource)` shape `render_effect_decls` produces),
+/// followed by any cross-cell dependency arrows attached as indented
+/// "  ↳ depends on cell N (reads R written by cell M)" lines. Pure
+/// cells render as "cell N: (pure)". Output is one line per row, no
+/// trailing newline so the kernel `display_data` mime body stays
+/// compact.
+pub(super) fn render_timeline_text(
+    history: &[super::CellEffectSnapshot],
+    deps: &[super::CellDependency],
+) -> String {
+    let mut lines: Vec<String> = Vec::new();
+    for (i, snapshot) in history.iter().enumerate() {
+        let cell = i + 1;
+        let effects_line = if snapshot.effects.is_empty() {
+            "(pure)".to_string()
+        } else {
+            render_snapshot_effects(snapshot)
+        };
+        lines.push(format!("cell {cell}: {effects_line}"));
+        for dep in deps.iter().filter(|d| d.to_cell == cell) {
+            let tail = match dep.kind {
+                super::DependencyKind::ReadAfterWrite => format!(
+                    "reads {res} written by cell {from}",
+                    res = dep.resource,
+                    from = dep.from_cell,
+                ),
+                super::DependencyKind::WriteAfterWrite => format!(
+                    "writes {res} already written by cell {from}",
+                    res = dep.resource,
+                    from = dep.from_cell,
+                ),
+            };
+            lines.push(format!("  ↳ {tail}"));
+        }
+    }
+    lines.join("\n")
+}
+
+/// Render the timeline as `text/html` — a two-column table with
+/// "Cell" and "Effects + Dependencies" cells. Dependency arrows are
+/// rendered as `<div>` siblings inside the same cell so the row
+/// stays compact in narrow notebook viewports. HTML-escapes resource
+/// names so untrusted user-defined resource identifiers don't break
+/// the table.
+pub(super) fn render_timeline_html(
+    history: &[super::CellEffectSnapshot],
+    deps: &[super::CellDependency],
+) -> String {
+    let mut out = String::new();
+    out.push_str("<table>");
+    out.push_str("<thead><tr><th>Cell</th><th>Effects &amp; Dependencies</th></tr></thead>");
+    out.push_str("<tbody>");
+    for (i, snapshot) in history.iter().enumerate() {
+        let cell = i + 1;
+        out.push_str("<tr><td>");
+        out.push_str(&cell.to_string());
+        out.push_str("</td><td>");
+        if snapshot.effects.is_empty() {
+            out.push_str("<div><em>(pure)</em></div>");
+        } else {
+            out.push_str("<div>");
+            out.push_str(&escape_html_text(&render_snapshot_effects(snapshot)));
+            out.push_str("</div>");
+        }
+        for dep in deps.iter().filter(|d| d.to_cell == cell) {
+            let arrow = match dep.kind {
+                super::DependencyKind::ReadAfterWrite => format!(
+                    "↳ reads {res} written by cell {from}",
+                    res = escape_html_text(&dep.resource),
+                    from = dep.from_cell,
+                ),
+                super::DependencyKind::WriteAfterWrite => format!(
+                    "↳ writes {res} already written by cell {from}",
+                    res = escape_html_text(&dep.resource),
+                    from = dep.from_cell,
+                ),
+            };
+            out.push_str("<div style=\"padding-left: 1em; opacity: 0.75;\">");
+            out.push_str(&arrow);
+            out.push_str("</div>");
+        }
+        out.push_str("</td></tr>");
+    }
+    out.push_str("</tbody></table>");
+    out
+}
+
+/// Render a single `CellEffectSnapshot` as the same `verb(resource)`
+/// surface `render_effect_decls` produces for the per-cell footer.
+/// Used by the timeline renderer so the cell-row and the existing
+/// `effect_footer` stay format-compatible. Empty snapshot yields an
+/// empty string (callers substitute "(pure)" or similar).
+fn render_snapshot_effects(snapshot: &super::CellEffectSnapshot) -> String {
+    use crate::ast::EffectVerbKind;
+    use std::collections::BTreeMap;
+    let mut grouped: BTreeMap<usize, (EffectVerbKind, Vec<String>)> = BTreeMap::new();
+    for (verb, resource) in &snapshot.effects {
+        let order = verb_emit_order(verb);
+        let entry = grouped
+            .entry(order)
+            .or_insert_with(|| (verb.clone(), Vec::new()));
+        if !resource.is_empty() {
+            entry.1.push(resource.clone());
+        }
+    }
+    let mut parts: Vec<String> = Vec::new();
+    for (_, (verb, resources)) in grouped {
+        let name = verb_keyword(&verb);
+        if resources.is_empty() {
+            parts.push(name);
+        } else {
+            parts.push(format!("{name}({})", resources.join(", ")));
+        }
+    }
+    parts.join(" ")
+}
+
+/// HTML-escape the five characters that can break a `<td>` text node
+/// or HTML-attribute context — same set the `%show` renderer escapes.
+/// Kept private to this module since the timeline is the only
+/// in-util.rs HTML caller; the `%show` path has its own copy keyed to
+/// the display crate's allocation strategy.
+fn escape_html_text(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#39;"),
+            other => out.push(other),
+        }
+    }
+    out
+}
+
 /// Lift an `EffectSet` into the structured per-cell snapshot shape the
 /// line 773 effect-conflict timeline consumes. Returns sorted
 /// `(verb, resource)` pairs — verbs in the same emit order as
