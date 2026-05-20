@@ -354,17 +354,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // parameter declaration in `fn_ast.params` and use its
         // `TypeExpr` through `llvm_type_for_type_expr` — which
         // honors the active `type_subst` (e.g. `T → i32` for the
-        // i32 mono). Non-parameter fields (arm-local let-bindings)
-        // fall through to the existing `None → i64` fallback;
-        // generic-typed let-bindings inside the body aren't
-        // currently surfaced through the param-lookup, so
-        // those stay at the i64 over-approximation pending a
-        // follow-on slice that walks the body AST.
+        // i32 mono).
+        //
+        // Slice 8x extends the `None`-fallback chain with
+        // `lookup_let_type_expr`, which walks `fn_ast.body`
+        // recursively for a body-level `let`-binding whose pattern
+        // binds the requested name. Recovers the let's explicit
+        // type annotation when present, falling back to the RHS
+        // expression's recoverable type when annotation is absent
+        // (v1: bare-identifier RHS resolved through the param /
+        // let chains). Closes the gap where `let copy = item;`
+        // inside a `T`-typed yielding fn body whose binding is
+        // captured across a later yield would have lowered to i64
+        // when `T` is non-i64. Resolution order: params first
+        // (short-circuits before any body walk), then lets, then
+        // the i64 default.
         let fn_ast = find_function_ast(program, ast_key);
         for field in &layout.fields {
             let ty: BasicTypeEnum<'ctx> = match &field.type_name {
                 Some(name) => self.llvm_type_for_name(name),
                 None => lookup_param_type_expr(fn_ast, &field.name)
+                    .or_else(|| lookup_let_type_expr(fn_ast, &field.name))
                     .map(|te| self.llvm_type_for_type_expr(&te))
                     .unwrap_or_else(|| self.context.i64_type().into()),
             };
@@ -1484,13 +1494,49 @@ impl<'ctx> super::Codegen<'ctx> {
                     // identity. Vec-struct shape ({ ptr, i64, i64 })
                     // → VecOrString. Other shapes (incl. ptr-shaped
                     // shared-struct handles) stay Skip in v1.
+                    //
+                    // Slice 8x: extend the same `None`-fallback chain
+                    // with `lookup_let_type_expr` so body-level
+                    // generic-typed let-bindings (e.g. `let copy =
+                    // item;` inside `fn driver[T](item: T)`) classify
+                    // alongside the parameter path — without this the
+                    // destructor would leak the `copy` field's heap
+                    // buffer on cancel/Err unwinding when `T` resolves
+                    // to a Vec-struct-shaped type.
                     lookup_param_type_expr(fn_ast, &f.name)
+                        .or_else(|| lookup_let_type_expr(fn_ast, &f.name))
                         .map(|te| self.llvm_type_for_type_expr(&te))
                         .filter(|ty| self.llvm_ty_is_vec_struct(*ty))
                         .map(|_| FieldDrop::VecOrString)
                         .unwrap_or(FieldDrop::Skip)
                 }
-                _ => FieldDrop::Skip,
+                Some(name) => {
+                    // Slice 8x: an explicit annotation `let copy: T =
+                    // item;` causes the typechecker to record `"T"` in
+                    // `pattern_binding_types` (the let's
+                    // `lower_type_expr(ty_expr, &[])` call passes an
+                    // empty generic scope, so `T` is lowered as
+                    // `Type::Named { name: "T" }` rather than
+                    // `Type::TypeParam`). The shape-bucket arms above
+                    // miss this case and the `shared_types` lookup also
+                    // miss (T isn't a shared struct), so without this
+                    // arm classification would fall through to Skip and
+                    // the annotated-let surface would leak heap on
+                    // cancel/Err unwinding. Resolve the recorded name
+                    // through `llvm_type_for_name` (which already
+                    // honors the active `type_subst`); if it resolves
+                    // to a Vec-struct shape (`{ ptr, i64, i64 }`),
+                    // classify as `VecOrString` — same LLVM-type
+                    // identity check the `None` arm uses for the
+                    // recovered-`TypeExpr` path. Non-Vec-shaped
+                    // resolutions (primitives, pointers, etc.) stay
+                    // `Skip`.
+                    if self.llvm_ty_is_vec_struct(self.llvm_type_for_name(name)) {
+                        FieldDrop::VecOrString
+                    } else {
+                        FieldDrop::Skip
+                    }
+                }
             })
             .collect();
         if kinds.iter().all(|k| *k == FieldDrop::Skip) {
@@ -2427,6 +2473,154 @@ pub(super) fn lookup_param_type_expr(
         }
     }
     None
+}
+
+/// Phase 6 line 26 slice 8x: look up the declared `TypeExpr` for a
+/// body-level `let`-binding by binding name. Walks `fn_ast.body`
+/// recursively (descending into nested `Block`-bearing expressions
+/// — `if` / `while` / `for` / `loop` / `match` arm bodies / bare
+/// blocks — per the body-splitting walker's discipline) for the
+/// first `StmtKind::Let` / `StmtKind::LetElse` / `StmtKind::LetUninit`
+/// whose pattern binds the requested name. Returns the explicit
+/// type annotation when present, falling back to the RHS expression's
+/// recoverable type when annotation is absent — v1 recognises the
+/// `let <name> = <identifier>;` shape and recursively resolves the
+/// referenced identifier through `lookup_param_type_expr` first
+/// (params take priority) then this helper (chained let-bindings).
+/// Other RHS shapes (calls, method calls, literals, expressions)
+/// return `None` and the caller falls through to the i64 default,
+/// matching the conservative `None`-fallback rule the per-key state
+/// struct emission has established.
+///
+/// Slice 8x ships the parameter-only path's sibling for the
+/// generic-typed arm-local let-binding surface — `fn driver[T](item:
+/// T) { fetch(); let copy = item; fetch(); }` with `T = Vec[i64]`
+/// previously fell through to i64 for the `copy` field (the
+/// typechecker's `pattern_binding_types` recorder emits `type_name:
+/// None` for type-parameter-typed bindings whose RHS is itself
+/// a type-parameter-typed identifier). With slice 8x, the per-mono
+/// state struct lowers `copy` to the Vec struct shape `{ ptr, i64,
+/// i64 }` and the per-mono destructor's None-fallback chain (also
+/// extended to consult this helper after `lookup_param_type_expr`)
+/// emits `cap > 0 ? free` for both `item` and `copy` in source
+/// order. The shape-coverage gap remaining after slice 8x — RHS
+/// expressions other than bare-identifier (calls, method calls,
+/// struct literals, etc.) — needs the typechecker's
+/// `expr_types` sibling table threaded through to recover the
+/// recorded expression type; deferred until that infrastructure
+/// lands or a use case forces it.
+pub(super) fn lookup_let_type_expr(
+    fn_ast: Option<&Function>,
+    field_name: &str,
+) -> Option<TypeExpr> {
+    let func = fn_ast?;
+    let (ty, value) = find_let_binding_in_block(&func.body, field_name)?;
+    if let Some(te) = ty {
+        return Some(te.clone());
+    }
+    // Annotation absent — fall back to the RHS's recoverable type.
+    // v1 only recognises bare-identifier RHS (`let copy = item;`):
+    // resolve through `lookup_param_type_expr` first (params take
+    // priority and short-circuit the recursion); fall back to
+    // chained let-binding lookup (`let a = item; let b = a;`).
+    let value = value?;
+    if let ExprKind::Identifier(name) = &value.kind {
+        return lookup_param_type_expr(fn_ast, name).or_else(|| lookup_let_type_expr(fn_ast, name));
+    }
+    None
+}
+
+/// Walk a block (and any nested block-bearing exprs reachable from
+/// its stmts / final-expr) looking for a `let`-style binding whose
+/// pattern binds `field_name`. Returns the explicit type annotation
+/// (if any) paired with the RHS expression (the RHS is `None` for
+/// `LetUninit` whose type is always annotated). First match wins —
+/// matches the body-splitting walker's source-order traversal.
+fn find_let_binding_in_block<'a>(
+    block: &'a Block,
+    field_name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    for stmt in &block.stmts {
+        if let Some(hit) = find_let_binding_in_stmt(stmt, field_name) {
+            return Some(hit);
+        }
+    }
+    if let Some(fe) = &block.final_expr {
+        if let Some(hit) = find_let_binding_in_expr(fe, field_name) {
+            return Some(hit);
+        }
+    }
+    None
+}
+
+fn find_let_binding_in_stmt<'a>(
+    stmt: &'a Stmt,
+    field_name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    match &stmt.kind {
+        StmtKind::Let {
+            pattern, ty, value, ..
+        } => {
+            if pattern.binding_names().iter().any(|n| n == field_name) {
+                Some((ty.as_ref(), Some(value)))
+            } else {
+                None
+            }
+        }
+        StmtKind::LetElse {
+            pattern, ty, value, ..
+        } => {
+            if pattern.binding_names().iter().any(|n| n == field_name) {
+                Some((ty.as_ref(), Some(value)))
+            } else {
+                None
+            }
+        }
+        StmtKind::LetUninit { name, ty, .. } => {
+            if name == field_name {
+                Some((Some(ty), None))
+            } else {
+                None
+            }
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            find_let_binding_in_block(body, field_name)
+        }
+        StmtKind::Expr(e)
+        | StmtKind::Assign { value: e, .. }
+        | StmtKind::CompoundAssign { value: e, .. } => find_let_binding_in_expr(e, field_name),
+    }
+}
+
+fn find_let_binding_in_expr<'a>(
+    expr: &'a Expr,
+    field_name: &str,
+) -> Option<(Option<&'a TypeExpr>, Option<&'a Expr>)> {
+    match &expr.kind {
+        ExprKind::Block(b) => find_let_binding_in_block(b, field_name),
+        ExprKind::If {
+            then_block,
+            else_branch,
+            ..
+        }
+        | ExprKind::IfLet {
+            then_block,
+            else_branch,
+            ..
+        } => find_let_binding_in_block(then_block, field_name).or_else(|| {
+            else_branch
+                .as_ref()
+                .and_then(|e| find_let_binding_in_expr(e, field_name))
+        }),
+        ExprKind::Match { arms, .. } => arms
+            .iter()
+            .find_map(|arm| find_let_binding_in_expr(&arm.body, field_name)),
+        ExprKind::While { body, .. }
+        | ExprKind::WhileLet { body, .. }
+        | ExprKind::For { body, .. }
+        | ExprKind::Loop { body, .. } => find_let_binding_in_block(body, field_name),
+        _ => None,
+    }
 }
 
 /// Phase 6 line 26 slice 8v: does `fn_key` refer to a generic

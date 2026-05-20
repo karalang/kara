@@ -18108,6 +18108,159 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8x: body-walk for generic-typed let-bindings ──
+    //
+    // Slice 8v Phase 2 / 8w resolved type-parameter-typed *parameters*
+    // through `lookup_param_type_expr` against the active `type_subst`,
+    // but a `let copy = item;` introduced inside a `T`-typed yielding
+    // fn body whose binding is captured across a later yield still
+    // fell through to the i64 default — the typechecker's
+    // `pattern_binding_types` recorder emits `type_name: None` for
+    // type-parameter-typed bindings whose RHS is itself a
+    // type-parameter-typed identifier, and the `None`-fallback chain
+    // only consulted the parameter list. Slice 8x widens that chain
+    // with `lookup_let_type_expr`, which walks `fn_ast.body`
+    // recursively for a body-level `let`-binding and returns its
+    // explicit type annotation (if any) or — for bare-identifier
+    // RHS — recursively resolves through `lookup_param_type_expr`
+    // (params take priority) then this helper (chained let-bindings).
+
+    #[test]
+    fn test_slice_8x_per_mono_state_struct_lowers_let_binding_for_vec_t() {
+        // `fn driver[T](item: T) { fetch(); let copy = item; fetch();
+        // }` instantiated with `T = Vec[i64]`. Both `item` (param)
+        // and `copy` (body-level let) are in scope at the second
+        // yield, so the state-struct layout records both with
+        // `type_name: None`. Slice 8w handled `item` via the param
+        // lookup; slice 8x handles `copy` via the new let lookup
+        // (bare-identifier RHS resolves through `item`'s parameter
+        // type, which `type_subst` lowers to the Vec struct shape).
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); let copy = item; fetch(); }
+             fn caller() {
+                 let v: Vec[i64] = Vec.new();
+                 driver(v);
+             }",
+        );
+        // Per-mono state struct line carries two Vec struct shapes
+        // (one for `item`, one for `copy`) alongside the i32 tag.
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%\"kara.state.driver$struct\" = type {"))
+            .unwrap_or_else(|| panic!("no per-mono state struct type def in IR:\n{ir}"));
+        let vec_shape = "{ ptr, i64, i64 }";
+        let occurrences = line.matches(vec_shape).count();
+        assert!(
+            occurrences >= 2,
+            "expected two Vec-struct fields (item + copy) in per-mono state struct line, got {occurrences}:\n{line}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8x_per_mono_destructor_emits_free_for_let_binding() {
+        // Same source as above. The destructor body must walk both
+        // captured-local fields in source-introduction order — `item`
+        // (param) first, `copy` (body let) second — and emit
+        // `cap > 0 ? free` for each. Without slice 8x, the `copy`
+        // field's classification would fall through to `Skip` and
+        // its heap buffer would leak on cancel/Err unwinding.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); let copy = item; fetch(); }
+             fn caller() {
+                 let v: Vec[i64] = Vec.new();
+                 driver(v);
+             }",
+        );
+        assert!(
+            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            "per-mono destructor must emit for Vec-typed T captured + let:\n{ir}"
+        );
+        // Both fields emit the `cap > 0 ? free` shape.
+        for field_name in ["item", "copy"] {
+            assert!(
+                ir.contains(&format!("%{field_name}.drop.cap = load i64")),
+                "destructor must load cap for `{field_name}` field:\n{ir}"
+            );
+            assert!(
+                ir.contains(&format!(
+                    "%{field_name}.drop.is_heap = icmp ugt i64 %{field_name}.drop.cap, 0"
+                )),
+                "destructor must compare cap > 0 for `{field_name}` field:\n{ir}"
+            );
+            assert!(
+                ir.contains(&format!("call void @free(ptr %{field_name}.drop.data)")),
+                "destructor must call free on `{field_name}.drop.data`:\n{ir}"
+            );
+        }
+        // Source order: `item.drop.cap` precedes `copy.drop.cap` in
+        // the IR text — pins the strict source-introduction order
+        // discipline the field walk inherited from slice 8u.
+        let item_pos = ir
+            .find("%item.drop.cap")
+            .expect("item.drop.cap must appear");
+        let copy_pos = ir
+            .find("%copy.drop.cap")
+            .expect("copy.drop.cap must appear");
+        assert!(
+            item_pos < copy_pos,
+            "destructor must walk fields in source order (item before copy):\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8x_explicit_let_annotation_resolves_through_type_subst() {
+        // `let copy: T = item;` with an explicit annotation hits the
+        // primary `lookup_let_type_expr` path (returns the annotation
+        // directly without recursing through the RHS chain). With
+        // `T = String`, the annotation resolves through `type_subst`
+        // to the Vec struct shape and the destructor's `cap > 0 ? free`
+        // shape emits for `copy` alongside `item`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); let copy: T = item; fetch(); }
+             fn caller() {
+                 let s = String.new();
+                 driver(s);
+             }",
+        );
+        assert!(
+            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            "explicit-annotation let must also produce per-mono destructor:\n{ir}"
+        );
+        assert!(
+            ir.contains("%copy.drop.cap = load i64"),
+            "explicit annotation `let copy: T = item;` must classify as VecOrString for T=String:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @free(ptr %copy.drop.data)"),
+            "explicit-annotation let must emit free for copy field:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8x_primitive_t_let_binding_still_no_destructor() {
+        // Regression guard for skip-when-empty: with `T = i64`, both
+        // `item` and `copy` resolve to primitive int — neither field
+        // classifies as `VecOrString` (Vec-struct identity check
+        // fails) — so the destructor stays absent. Mirrors the
+        // slice 8w primitive-only guard for the body-let surface.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); let copy = item; fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            !ir.contains("@\"__kara_state_drop_driver$i64\""),
+            "primitive-T let-binding mono must not emit a destructor:\n{ir}"
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`
