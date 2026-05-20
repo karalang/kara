@@ -161,6 +161,15 @@ pub fn run_with_options(opts: ReplOptions) {
 pub struct MagicOutput {
     pub text: String,
     pub ok: bool,
+    /// Optional rich-display mime bundle. `Some` only for magics that
+    /// produce a value-render (today: `%show`); `None` for text-only
+    /// magics (`%effects`, `%ownership`, `%explain`, `%set`, …). When
+    /// `Some`, the Jupyter kernel broadcasts the bundle through
+    /// `display_data` so the frontend can pick the richest mime it
+    /// understands (e.g. `text/html` table for `Vec[Struct]`). When
+    /// `None`, the kernel falls back to `stream(stdout)` with the
+    /// plain `text` field.
+    pub rich: Option<DisplayBundle>,
 }
 
 impl MagicOutput {
@@ -169,6 +178,7 @@ impl MagicOutput {
         Self {
             text: text.into(),
             ok: true,
+            rich: None,
         }
     }
 
@@ -178,6 +188,22 @@ impl MagicOutput {
         Self {
             text: text.into(),
             ok: false,
+            rich: None,
+        }
+    }
+
+    /// Construct a successful reply that carries a rich-display mime
+    /// bundle alongside the plain text. The `text` argument is what
+    /// non-rich-aware consumers (REPL, terse log lines) read; the
+    /// `bundle` carries the same content plus any extra mime forms
+    /// (`text/html` table for `Vec[Struct]`, etc.) the kernel can
+    /// broadcast through `display_data`. The kernel reads `bundle`
+    /// preferentially when present.
+    pub fn ok_rich(text: impl Into<String>, bundle: DisplayBundle) -> Self {
+        Self {
+            text: text.into(),
+            ok: true,
+            rich: Some(bundle),
         }
     }
 }
@@ -515,12 +541,19 @@ impl Session {
     /// - `%set auto-clone on|off` — toggle the opt-in ownership mode
     /// - `%provide R = expr`      — open a cross-cell `with_provider` scope
     /// - `%end-provide R`         — close the matching provider scope
+    /// - `%show <expr>`           — rich-display an expression
+    ///   (text/plain always, text/html for `Vec[Struct]`)
     ///
     /// `%provide` / `%end-provide` forward to the same `add_provider` /
     /// `end_provider` handlers the REPL meta-commands use — `:provide`
     /// and `%provide` are wire-compatible, returning the same `Ok` /
-    /// `Err` string shapes. `%rc` is deferred to post-MVP per the spec
-    /// (RC fallback's introspection surface still settling).
+    /// `Err` string shapes. `%show` is the rich-display surface
+    /// (line 761 in the phase-5 tracker); it evaluates the given
+    /// expression against the current session state and renders it via
+    /// [`render_display`] into a [`DisplayBundle`] that the Jupyter
+    /// kernel broadcasts as `display_data`. `%rc` is deferred to
+    /// post-MVP per the spec (RC fallback's introspection surface
+    /// still settling).
     pub fn dispatch_magic(&mut self, line: &str) -> MagicOutput {
         let trimmed = line.trim();
         let body = trimmed.strip_prefix('%').unwrap_or(trimmed).trim();
@@ -533,6 +566,7 @@ impl Session {
             "ownership" => self.magic_ownership(),
             "explain" => self.magic_explain(rest),
             "set" => self.magic_set(rest),
+            "show" => self.magic_show(rest),
             "provide" => match self.add_provider(rest) {
                 Ok(msg) => MagicOutput::ok(msg),
                 Err(msg) => MagicOutput::error(msg),
@@ -545,10 +579,10 @@ impl Session {
                 "magic `%rc` is deferred to post-MVP per the line 689 spec — RC fallback's introspection surface is still settling",
             ),
             "" => MagicOutput::error(
-                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %provide R = expr, %end-provide R",
+                "empty magic command. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %provide R = expr, %end-provide R",
             ),
             other => MagicOutput::error(format!(
-                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %provide R = expr, %end-provide R"
+                "unknown magic `%{other}`. Supported: %effects, %ownership, %explain <name>, %set auto-clone on|off, %show <expr>, %provide R = expr, %end-provide R"
             )),
         }
     }
@@ -707,6 +741,113 @@ impl Session {
             "" => MagicOutput::error("usage: %set <key> <value>"),
             other => {
                 MagicOutput::error(format!("unknown setting `{other}`. Supported: auto-clone."))
+            }
+        }
+    }
+
+    /// `%show <expr>` — rich-display the given expression. Evaluates
+    /// the expression against the current session state (items +
+    /// persistent lets, value-snapshot semantics for any binding the
+    /// user has previously assigned), captures the resulting [`Value`],
+    /// and renders it via [`render_display`] into a [`DisplayBundle`].
+    /// The bundle always carries `text/plain` (pretty-printed for
+    /// nested data); `text/html` is additionally present when the
+    /// value is `Vec[Struct]` / `Slice[Struct]`. The kernel broadcasts
+    /// the bundle through `display_data` (slice 3 of line 761).
+    ///
+    /// Side-effect-free: `%show` does NOT mutate `cell_history`,
+    /// `persistent_lets`, or `let_snapshots`. The synthetic main is
+    /// built locally for this call only. RHS expressions that *would*
+    /// be effectful at the language level still run (the interpreter
+    /// has no sandbox), but the binding `__k_show` introduced here
+    /// never leaks out.
+    fn magic_show(&self, rest: &str) -> MagicOutput {
+        if rest.is_empty() {
+            return MagicOutput::error("usage: %show <expression>");
+        }
+        match self.eval_expr_for_display(rest) {
+            Ok(value) => {
+                let bundle = render_display(&value);
+                let text = bundle.get("text/plain").unwrap_or("").to_string();
+                MagicOutput::ok_rich(text, bundle)
+            }
+            Err(msg) => MagicOutput::error(msg),
+        }
+    }
+
+    /// Build a one-off synthetic main that binds `__k_show = <expr>;`,
+    /// run the pipeline, and return the captured runtime [`Value`].
+    /// Persistent-let snapshots replay through `let_value_overrides`
+    /// so side-effecting RHS expressions don't re-fire just because
+    /// the user asked to inspect another expression. None of the
+    /// session's mutable state is touched on success or failure.
+    fn eval_expr_for_display(&self, expr: &str) -> Result<Value, String> {
+        let expr_trimmed = expr.trim();
+        if expr_trimmed.is_empty() {
+            return Err("empty expression".to_string());
+        }
+        let mut src = String::new();
+        src.push_str(&strip_main(&self.items_source));
+        if !src.is_empty() && !src.ends_with('\n') {
+            src.push('\n');
+        }
+        src.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            src.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                src.push('\n');
+            }
+        }
+        src.push_str("let __k_show = ");
+        src.push_str(expr_trimmed);
+        src.push_str(";\n}\n");
+
+        let mut parsed = crate::parse(&src);
+        if !parsed.errors.is_empty() {
+            return Err(format!("parse error: {}", parsed.errors[0].message));
+        }
+        let resolved = crate::resolve(&parsed.program);
+        if !resolved.errors.is_empty() {
+            return Err(format!("resolve error: {}", resolved.errors[0].message));
+        }
+        let typed = crate::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return Err(format!("type error: {}", typed.errors[0].message));
+        }
+        let owned = crate::ownershipcheck(&parsed.program, &typed);
+        if !owned.errors.is_empty() {
+            return Err(format!("ownership error: {}", owned.errors[0].message));
+        }
+        crate::lower(&mut parsed.program, &typed);
+
+        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
+        // Replay value snapshots for every persistent-let binding so
+        // side-effecting RHS expressions short-circuit, exactly as the
+        // statement-cell pipeline does. The synthetic main here was
+        // built from the same `persistent_lets` strings, so the parser
+        // sees the bindings and the interpreter consults the override
+        // map at the matching `let` arm.
+        for prior_let in &self.persistent_lets {
+            for name in parse_let_binding_names(prior_let) {
+                if let Some(v) = self.let_snapshots.get(&name) {
+                    interp.let_value_overrides.insert(name, v.clone());
+                }
+            }
+        }
+        // Watch our synthetic `__k_show` binding so the interpreter
+        // captures its post-eval Value into `captured_let_values`. We
+        // do NOT watch the persistent-let names — we don't intend to
+        // write back into `self.let_snapshots` (the session is
+        // immutable through this path).
+        let mut watch = std::collections::HashSet::new();
+        watch.insert("__k_show".to_string());
+        interp.let_snapshot_watch = watch;
+        interp.run();
+
+        match interp.captured_let_values.remove("__k_show") {
+            Some(v) => Ok(v),
+            None => {
+                Err("expression did not yield a value (did it panic or never bind?)".to_string())
             }
         }
     }

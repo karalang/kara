@@ -1842,3 +1842,152 @@ fn export_handles_nested_provider_scopes() {
         "outer wrap must precede inner; got:\n{exported}"
     );
 }
+
+// ── %show — rich-display magic (line 761 slice 2) ──────────────────────────
+
+#[test]
+fn show_magic_atom_yields_text_plain_only() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%show 1 + 2");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    let bundle = out.rich.expect("%show must populate rich bundle");
+    assert_eq!(bundle.get("text/plain"), Some("3"));
+    assert!(
+        bundle.get("text/html").is_none(),
+        "atoms must not emit text/html"
+    );
+    assert_eq!(out.text, "3", "text field mirrors text/plain");
+}
+
+#[test]
+fn show_magic_vec_struct_emits_html_table() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("struct Row { name: String, count: i64 }");
+    s.evaluate_cell_captured(
+        r#"let rows = [Row { name: "a", count: 1 }, Row { name: "b", count: 2 }];"#,
+    );
+    let out = s.dispatch_magic("%show rows");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    let bundle = out.rich.expect("Vec[Struct] must populate rich bundle");
+    let html = bundle
+        .get("text/html")
+        .expect("Vec[Struct] must emit text/html");
+    // Columns alphabetical: count then name.
+    assert!(
+        html.contains("<th>count</th><th>name</th>"),
+        "headers: {html}"
+    );
+    assert!(html.contains("<td>1</td><td>a</td>"), "row a: {html}");
+    assert!(html.contains("<td>2</td><td>b</td>"), "row b: {html}");
+}
+
+#[test]
+fn show_magic_string_value_renders_inline() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured(r#"let greeting = "hello kara";"#);
+    let out = s.dispatch_magic("%show greeting");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert_eq!(out.text, "hello kara");
+}
+
+#[test]
+fn show_magic_undefined_name_surfaces_error() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%show does_not_exist");
+    assert!(!out.ok, "expected error for undefined name");
+    assert!(out.rich.is_none(), "errors carry no rich bundle");
+    assert!(
+        out.text.contains("does_not_exist") || out.text.to_lowercase().contains("resolve"),
+        "expected resolver message; got: {}",
+        out.text
+    );
+}
+
+#[test]
+fn show_magic_empty_argument_usage_error() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%show");
+    assert!(!out.ok, "empty arg must error");
+    assert!(out.text.contains("usage:"), "usage hint: {}", out.text);
+    assert!(out.rich.is_none());
+}
+
+#[test]
+fn show_magic_does_not_mutate_session_state() {
+    let mut s = Session::new();
+    s.evaluate_cell_captured("let x = 5;");
+    let cells_before = s.cell_history().len();
+    let lets_before = s.persistent_lets().len();
+    let _ = s.dispatch_magic("%show x + 10");
+    assert_eq!(
+        s.cell_history().len(),
+        cells_before,
+        "%show must not append to cell history"
+    );
+    assert_eq!(
+        s.persistent_lets().len(),
+        lets_before,
+        "%show must not append to persistent lets"
+    );
+    // Re-binding the same name in the next cell still works — no
+    // shadow conflict from a stray `__k_show` leak.
+    let r = s.evaluate_cell_captured("let __k_show = 99; println(__k_show);");
+    assert!(r.errors.is_empty(), "rebind clean: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "99");
+}
+
+#[test]
+fn show_magic_listed_in_unknown_magic_help() {
+    let mut s = Session::new();
+    let out = s.dispatch_magic("%not-a-real-magic");
+    assert!(!out.ok);
+    assert!(
+        out.text.contains("%show"),
+        "unknown-magic help must list %show; got: {}",
+        out.text
+    );
+}
+
+#[test]
+fn show_magic_uses_session_items() {
+    // `%show` must see top-level items the session has accumulated —
+    // a struct defined in a prior cell can be constructed inline by
+    // the expression.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("struct Point { x: i64, y: i64 }");
+    let out = s.dispatch_magic("%show Point { x: 7, y: 8 }");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    assert!(out.text.contains("Point"), "text: {}", out.text);
+    assert!(out.text.contains("x: 7"), "text: {}", out.text);
+    assert!(out.text.contains("y: 8"), "text: {}", out.text);
+}
+
+#[test]
+fn show_magic_text_plain_pretty_prints_nested() {
+    // A struct containing an array of structs should pretty-print
+    // multi-line rather than collapsing to a single hard-to-read line.
+    let mut s = Session::new();
+    s.evaluate_cell_captured("struct Row { id: i64 }");
+    s.evaluate_cell_captured("struct Group { rows: Vec[Row] }");
+    s.evaluate_cell_captured("let g = Group { rows: [Row { id: 1 }, Row { id: 2 }] };");
+    let out = s.dispatch_magic("%show g");
+    assert!(out.ok, "expected ok; got: {}", out.text);
+    let plain = out
+        .rich
+        .unwrap()
+        .get("text/plain")
+        .unwrap_or("")
+        .to_string();
+    assert!(
+        plain.starts_with("Group {"),
+        "should start with struct name; got: {plain}"
+    );
+    assert!(
+        plain.contains("rows:"),
+        "should mention field name; got: {plain}"
+    );
+    assert!(
+        plain.lines().count() > 1,
+        "should pretty-print multi-line; got: {plain}"
+    );
+}
