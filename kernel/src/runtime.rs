@@ -34,8 +34,8 @@
 
 use crate::transport::{Channel, Transport, TransportError};
 use crate::wire::{Header, Message, Signer, PROTOCOL_VERSION};
-use karac::repl::{ReplOptions, Session};
-use serde_json::{json, Value as JsonValue};
+use karac::repl::{DisplayBundle, ReplOptions, Session};
+use serde_json::{json, Map as JsonMap, Value as JsonValue};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
@@ -103,6 +103,16 @@ enum CellOutcome {
         /// cells and magic cells; the broadcast logic suppresses the
         /// `stream` message when empty so notebooks stay quiet.
         effect_footer: String,
+        /// Optional rich-display mime bundle from `MagicOutput.rich`
+        /// (today: only the `%show` magic populates this; tracker
+        /// line 761 slice 3). When `Some`, `emit_cell_output`
+        /// broadcasts a `display_data` IOPub message carrying the
+        /// full mime map (so a Jupyter frontend can pick the richest
+        /// representation it understands — `text/html` table for
+        /// `Vec[Struct]`, falling back to `text/plain`) and
+        /// suppresses the `stream(stdout)` form so the cell output
+        /// pane doesn't render the text twice.
+        display_bundle: Option<DisplayBundle>,
     },
     /// Run produced diagnostics or a magic-error reply. `evalue` is
     /// the first error line; `traceback` carries the full list.
@@ -574,13 +584,32 @@ impl<T: Transport + 'static> Kernel<T> {
         let trimmed = code.trim_start();
         if trimmed.starts_with('%') {
             // Magic surface from line 721 — slice 4's load-bearing
-            // forward-wiring of `%effects` / `%ownership` / etc.
+            // forward-wiring of `%effects` / `%ownership` / etc.,
+            // extended by line 761 slice 3 to honor `out.rich` for
+            // rich-display magics (today: `%show`).
             let out = self.session.lock().unwrap().dispatch_magic(trimmed);
             if out.ok {
-                CellOutcome::Ok {
-                    stdout: out.text,
-                    stderr: String::new(),
-                    effect_footer: String::new(),
+                // When the magic carried a rich-display bundle
+                // (`%show <expr>` populates this; other magics leave
+                // `rich = None`), route it through `display_data`
+                // and suppress the `stream(stdout)` mirror so the
+                // cell output pane doesn't render the text/plain
+                // form twice. Plain-text magics fall through to the
+                // existing stdout-stream path unchanged.
+                if let Some(bundle) = out.rich {
+                    CellOutcome::Ok {
+                        stdout: String::new(),
+                        stderr: String::new(),
+                        effect_footer: String::new(),
+                        display_bundle: Some(bundle),
+                    }
+                } else {
+                    CellOutcome::Ok {
+                        stdout: out.text,
+                        stderr: String::new(),
+                        effect_footer: String::new(),
+                        display_bundle: None,
+                    }
                 }
             } else {
                 CellOutcome::Error {
@@ -615,6 +644,7 @@ impl<T: Transport + 'static> Kernel<T> {
                     stdout: evaluated.stdout,
                     stderr,
                     effect_footer: evaluated.effect_footer,
+                    display_bundle: None,
                 }
             } else {
                 let evalue = evaluated.errors.first().cloned().unwrap_or_default();
@@ -630,13 +660,21 @@ impl<T: Transport + 'static> Kernel<T> {
     }
 
     fn emit_cell_output(&self, parent: &Header, outcome: &CellOutcome) {
-        let (stdout, stderr, effect_footer) = match outcome {
+        let (stdout, stderr, effect_footer, display_bundle) = match outcome {
             CellOutcome::Ok {
                 stdout,
                 stderr,
                 effect_footer,
-            } => (stdout.as_str(), stderr.as_str(), effect_footer.as_str()),
-            CellOutcome::Error { stdout, stderr, .. } => (stdout.as_str(), stderr.as_str(), ""),
+                display_bundle,
+            } => (
+                stdout.as_str(),
+                stderr.as_str(),
+                effect_footer.as_str(),
+                display_bundle.as_ref(),
+            ),
+            CellOutcome::Error { stdout, stderr, .. } => {
+                (stdout.as_str(), stderr.as_str(), "", None)
+            }
         };
         if !stdout.is_empty() {
             self.broadcast_iopub(
@@ -650,6 +688,31 @@ impl<T: Transport + 'static> Kernel<T> {
                 "stream",
                 parent,
                 json!({ "name": "stderr", "text": stderr }),
+            );
+        }
+        if let Some(bundle) = display_bundle {
+            // `display_data` is the Jupyter mechanism for rich
+            // multi-mime output produced by the kernel — frontends
+            // pick the richest mime they understand (`text/html`
+            // table > `text/plain` fallback). Per the protocol the
+            // `data` field is a map of mime-type to payload (string
+            // bodies, base64 for binary mimes — `image/png` will
+            // land here when plotting stdlib follows in v1.1.x).
+            // `metadata` is an empty object on the v1 surface;
+            // `transient` is reserved for future stable-id work
+            // (out of scope today).
+            let mut data = JsonMap::new();
+            for (mime, body) in &bundle.mimes {
+                data.insert(mime.clone(), JsonValue::String(body.clone()));
+            }
+            self.broadcast_iopub(
+                "display_data",
+                parent,
+                json!({
+                    "data": JsonValue::Object(data),
+                    "metadata": {},
+                    "transient": {},
+                }),
             );
         }
         if !effect_footer.is_empty() {
@@ -1393,6 +1456,163 @@ mod tests {
         let reply = Message::decode(&shell[0], &signer).unwrap();
         assert_eq!(reply.content["status"], "error");
         assert_eq!(reply.content["ename"], "MagicError");
+    }
+
+    #[test]
+    fn execute_request_show_magic_broadcasts_display_data() {
+        // `%show <expr>` carries a rich mime bundle on
+        // `MagicOutput.rich`; the kernel routes it through
+        // `display_data` on IOPub. For an atom expression the bundle
+        // is text/plain only — no `text/html`, no `stream(stdout)`
+        // mirror, no `execute_result` payload duplication.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%show 1 + 2", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "ok");
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let kinds: Vec<&str> = iopub.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(
+            kinds,
+            ["status", "execute_input", "display_data", "status"],
+            "expected display_data broadcast; got: {kinds:?}"
+        );
+        // The display_data content carries the mime bundle.
+        let display = &iopub[2].1.content;
+        assert_eq!(display["data"]["text/plain"], "3");
+        // Atom values do NOT emit text/html — only Vec[Struct] does.
+        assert!(
+            display["data"].get("text/html").is_none(),
+            "atoms must not emit text/html"
+        );
+        // No stream(stdout) frame — display_data suppresses it.
+        let stream_count = iopub.iter().filter(|(k, _)| k == "stream").count();
+        assert_eq!(stream_count, 0, "stream broadcast must be suppressed");
+    }
+
+    #[test]
+    fn execute_request_show_magic_vec_struct_emits_html_bundle() {
+        // A `%show` over a `Vec[Struct]` value emits both `text/plain`
+        // and `text/html` mimes in one `display_data` broadcast. The
+        // HTML carries a table with one row per struct, columns in
+        // alphabetical order.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        // Cell 1: define the struct.
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({
+                    "code": "struct Row { name: String, count: i64 }",
+                    "silent": true,
+                }),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        // Cell 2: bind a Vec[Row].
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({
+                    "code": "let rows = [Row { name: \"a\", count: 1 }, Row { name: \"b\", count: 2 }];",
+                    "silent": true,
+                }),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let _ = transport.drain_outgoing(Channel::IoPub);
+
+        // Cell 3: %show the Vec[Row] binding.
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%show rows", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "ok");
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let display_frame = iopub
+            .iter()
+            .find(|(k, _)| k == "display_data")
+            .expect("expected display_data broadcast");
+        let data = &display_frame.1.content["data"];
+        let html = data["text/html"]
+            .as_str()
+            .expect("Vec[Struct] must populate text/html");
+        assert!(html.contains("<th>count</th><th>name</th>"), "html: {html}");
+        assert!(html.contains("<td>1</td><td>a</td>"), "row 1: {html}");
+        assert!(html.contains("<td>2</td><td>b</td>"), "row 2: {html}");
+        // text/plain is also present as the universal fallback.
+        assert!(
+            data["text/plain"].as_str().unwrap().contains("Row"),
+            "text/plain: {:?}",
+            data["text/plain"]
+        );
+    }
+
+    #[test]
+    fn execute_request_text_only_magic_uses_stream_not_display_data() {
+        // `%effects` (and the other text-only magics) populate
+        // `MagicOutput.rich = None`; the kernel still routes them
+        // through `stream(stdout)` — no `display_data` broadcast, no
+        // regression from the line 761 wiring.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        // Need at least one item in items_source for %effects to
+        // have something to report; an empty session emits the
+        // "(no items defined yet)" hint, which is still routed
+        // through stream(stdout).
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%effects", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let kinds: Vec<&str> = iopub.iter().map(|(k, _)| k.as_str()).collect();
+        assert!(
+            !kinds.contains(&"display_data"),
+            "text-only magic must not emit display_data; got: {kinds:?}"
+        );
+        assert!(
+            kinds.contains(&"stream"),
+            "text-only magic must emit stream(stdout); got: {kinds:?}"
+        );
     }
 
     #[test]
