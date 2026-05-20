@@ -18107,4 +18107,101 @@ fn main() {
             "non-generic Vec captured local still emits free:\n{body}"
         );
     }
+
+    // ── `ref T` arg from a non-place rvalue ──────────────────────
+    //
+    // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`
+    // shape inside its `is_ref` branch; literals, function returns,
+    // arithmetic results — anything without a binding — fell through
+    // to the raw-value path and emitted `call @f(i32 42)` / `call
+    // @f({ptr,i64,i64} %s)` against a `ptr` parameter. LLVM module
+    // verification rejected the mismatch. Surfaced by kara-katas
+    // leetcode #8 atoi, where each `main` test case had to be bound
+    // to a local (`let c1 = "42"; report(c1)`) to work around the
+    // bug. Fix materializes the rvalue into an entry-block alloca
+    // and passes its pointer so the callee sees the same ABI as the
+    // identifier fast-path. See `compile_call` in
+    // `codegen/call_dispatch.rs`.
+
+    #[test]
+    fn test_ir_ref_param_with_int_literal_rvalue() {
+        let ir = ir_for(
+            "fn take(n: ref i32) -> i32 { *n }\n\
+             fn main() -> i32 { take(42i32) }",
+        );
+        // Callee declares ref i32 → first param is ptr.
+        assert!(
+            ir.contains("@take(ptr "),
+            "callee should take a pointer for `ref i32`:\n{ir}"
+        );
+        // Caller materializes the literal and passes the alloca pointer
+        // rather than the raw `i32 42` value the pre-fix path emitted.
+        assert!(
+            ir.contains("%ref_rvalue_arg0"),
+            "ref-rvalue arg should be materialized to a named entry alloca:\n{ir}"
+        );
+        assert!(
+            ir.contains("store i32 42, ptr %ref_rvalue_arg0"),
+            "literal value should be stored into the temp before the call:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i32 @take(ptr %ref_rvalue_arg0)"),
+            "call should pass the temp's pointer, not the raw integer:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ref_param_with_string_literal_rvalue() {
+        let ir = ir_for(
+            "fn show(s: ref String) {}\n\
+             fn main() { show(\"hello\") }",
+        );
+        // String body is { ptr, i64, i64 } in IR. The temp's element
+        // type should be that struct, and the call should pass `ptr`.
+        assert!(
+            ir.contains("%ref_rvalue_arg0"),
+            "string-literal rvalue should be materialized:\n{ir}"
+        );
+        // The store target is the alloca pointer; we just check the
+        // call passes the temp pointer (string-literal IR text varies
+        // by host string-internalization choices).
+        assert!(
+            ir.contains("call void @show(ptr %ref_rvalue_arg0)"),
+            "call should pass the alloca pointer for ref String rvalue:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ref_param_with_arithmetic_rvalue() {
+        let ir = ir_for(
+            "fn use_it(n: ref i32) -> i32 { *n }\n\
+             fn main() -> i32 { use_it(7i32 + 35i32) }",
+        );
+        // The arithmetic result is the rvalue; the materialization
+        // pattern is the same as for a bare literal.
+        assert!(
+            ir.contains("%ref_rvalue_arg0"),
+            "arithmetic-result rvalue should be materialized:\n{ir}"
+        );
+        assert!(
+            ir.contains("call i32 @use_it(ptr %ref_rvalue_arg0)"),
+            "call should pass the temp pointer:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ref_param_with_identifier_keeps_fast_path() {
+        // The identifier fast-path should still pass `get_data_ptr`
+        // directly without minting a new entry alloca named
+        // `ref_rvalue_argN`. Regression guard for the order of the
+        // two `if is_ref` branches inside `compile_call`.
+        let ir = ir_for(
+            "fn take(n: ref i32) -> i32 { *n }\n\
+             fn main() -> i32 { let x: i32 = 99i32; take(x) }",
+        );
+        assert!(
+            !ir.contains("%ref_rvalue_arg0"),
+            "identifier arg should not be re-materialized:\n{ir}"
+        );
+    }
 }

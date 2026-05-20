@@ -414,6 +414,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     continue;
                 }
             }
+            if is_ref {
+                // Rvalue ref path: the arg is a non-place expression
+                // (string/integer/char/bool literal, function return,
+                // arithmetic, etc.) bound to a `ref T` param. The
+                // typechecker accepts these — design.md § Part 1½
+                // Rule 4 documents that `ref T` accepts any source
+                // unmarked. Codegen must materialize the value into a
+                // stack temp so the callee receives the `ptr` ABI its
+                // signature declares; without this the call IR mints
+                // `call @f({ptr,i64,i64} %lit)` / `call @f(i32 42)` and
+                // module verification rejects the mismatch against the
+                // callee's `ptr` parameter. Mirrors what the let-binding
+                // workaround did implicitly (`let c = "..."; f(c)` —
+                // `let` allocates a slot, then the identifier fast-path
+                // above passes that slot's pointer). Cleanup: string
+                // literals are non-owning (`cap = 0`, buffer in .rodata),
+                // scalars need none. Function-return rvalues with heap
+                // ownership reach here too; the temp doesn't carry a
+                // drop registration yet — a follow-up slice will wire
+                // that through the cleanup stack (tracked alongside the
+                // recurring kata papercut).
+                let val = self.compile_expr(&a.value)?;
+                let cur_fn = self
+                    .builder
+                    .get_insert_block()
+                    .and_then(|bb| bb.get_parent())
+                    .expect("compile_call inside a function context");
+                let temp =
+                    self.create_entry_alloca(cur_fn, &format!("ref_rvalue_arg{i}"), val.get_type());
+                self.builder.build_store(temp, val).unwrap();
+                compiled_args.push(temp.into());
+                continue;
+            }
             let val = self.compile_expr(&a.value)?;
             // `Option[shared T]` ref-share at the call site: when
             // the arg is a tracked Identifier binding whose static
