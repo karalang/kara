@@ -327,16 +327,20 @@ struct ParCall {
     track_frames: bool,
 }
 
-/// One unit of work for the pool. The `Arc<ParCall>` shared state and the
-/// per-task function pointer + ctx address are all `Send` by construction.
+/// One unit of work for the pool. The `Arc<ParCall>` shared state plus a
+/// `Send` closure carrying everything the work needs to execute. The
+/// closure receives the per-call cancel flag by reference so the runtime's
+/// frame-tracking + panic-catch wrapper in `execute_task` stays unaware of
+/// the closure's payload shape — the same Task struct handles `karac_par_run`'s
+/// 2-arg branch-fn invocation and `karac_par_reduce`'s 5-arg worker-fn
+/// invocation (slice 3b.7, 2026-05-20). The boxed closure adds one alloc
+/// per dispatched task; for the workload sizes the runtime targets
+/// (1–18 workers per call), that's negligible vs the thread-scheduling
+/// overhead the pool was built to avoid.
 struct Task {
     call: Arc<ParCall>,
     branch_idx: u32,
-    func: unsafe extern "C" fn(*mut c_void, *const AtomicBool),
-    /// Original `*mut c_void` ctx encoded as `usize` so `Task` is `Send`
-    /// without a manual `unsafe impl`. Round-tripped back to `*mut c_void`
-    /// at execution time.
-    ctx_addr: usize,
+    run: Box<dyn FnOnce(&AtomicBool) + Send>,
 }
 
 struct Pool {
@@ -380,34 +384,32 @@ fn worker_loop(pool: Arc<Pool>) {
 }
 
 /// Execute one task: skip if its call has been cancelled, otherwise run
-/// the branch fn under a `FrameGuard` (when frame-tracking is on) and
-/// `catch_unwind`. Always decrements `remaining` and signals `notify` on
-/// the last task — even on panic, so the caller doesn't hang.
+/// the boxed closure under a `FrameGuard` (when frame-tracking is on)
+/// and `catch_unwind`. Always decrements `remaining` and signals `notify`
+/// on the last task — even on panic, so the caller doesn't hang.
 fn execute_task(task: Task) {
-    let call = &task.call;
+    let Task {
+        call,
+        branch_idx,
+        run,
+    } = task;
     let cancelled = call.cancel.load(Ordering::Relaxed);
 
     if !cancelled {
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe {
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             if call.track_frames {
                 let frame = KaracFrame {
                     parent: call.parent_addr as *const KaracFrame,
                     spawn_site_id: call.spawn_site_id,
-                    worker_index: task.branch_idx,
+                    worker_index: branch_idx,
                     wait_target: KaracWaitTarget::None,
                 };
                 let _guard = FrameGuard::new(&frame);
-                (task.func)(
-                    task.ctx_addr as *mut c_void,
-                    &call.cancel as *const AtomicBool,
-                );
+                run(&call.cancel);
                 // `_guard` drops here, deregistering the frame. On panic
                 // the unwind path still runs Drop.
             } else {
-                (task.func)(
-                    task.ctx_addr as *mut c_void,
-                    &call.cancel as *const AtomicBool,
-                );
+                run(&call.cancel);
             }
         }));
         if result.is_err() {
@@ -503,11 +505,20 @@ pub unsafe extern "C" fn karac_par_run(
         let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
         for i in 0..count {
             let b = &*branches.add(i);
+            // Round-trip the pointers through `usize` so the closure is
+            // `Send` without an unsafe impl on the raw FFI types. Slice
+            // 3b.7 (2026-05-20) refactored `Task` to carry a boxed
+            // closure instead of a fixed (func, ctx_addr) pair — same
+            // ABI, more flexible payload (par_reduce uses the same Task
+            // shape with a 5-arg closure).
+            let func = b.func;
+            let ctx_addr = b.ctx as usize;
             q.push_back(Task {
                 call: Arc::clone(&call),
                 branch_idx: i as u32,
-                func: b.func,
-                ctx_addr: b.ctx as usize,
+                run: Box::new(move |cancel: &AtomicBool| unsafe {
+                    func(ctx_addr as *mut c_void, cancel as *const AtomicBool);
+                }),
             });
         }
     }
@@ -568,15 +579,61 @@ pub unsafe extern "C" fn karac_par_run(
 // folds each worker slot in — so a 0-iter call returns identity, matching
 // the source-level semantics of a 0-iter for-loop over the accumulator.
 //
-// **v1 dispatch path: `thread::scope` per call, not the long-lived pool.**
-// Each invocation spawns N OS threads inside a scope and joins them on
-// return. The pool-sharing follow-up (deferred) would let nested reductions
-// avoid spawn overhead and would close a residual gap with `karac_par_run`'s
-// long-lived-worker behavior. The scope path was chosen for v1 because
-// (a) reductions are typically called once per source loop with a large
-// iter count (~ms+ per worker), so per-call spawn overhead is amortized,
-// and (b) it avoids introducing a second internal task shape in the pool's
-// `Task` struct — the existing pool stays at one task kind (plain ctx).
+// **Dispatch path (slice 3b.7, 2026-05-20): shared `karac_par_run` pool.**
+// Earlier (slice 2) each invocation spawned N OS threads via
+// `thread::scope` and joined them on return. That worked for one-shot
+// reductions but paid per-call thread-creation cost — kata-7 measured
+// ~+0.3 MiB peak RSS on top of Rust's serial baseline from worker stack
+// reservations alone. The pool-sharing refactor pushes reduction tasks
+// onto the same `Pool { queue, cv }` that `karac_par_run` already
+// drains via N long-lived workers. The Task struct was generalized to
+// carry a `Box<dyn FnOnce(&AtomicBool) + Send>` instead of a fixed
+// (func, ctx_addr) pair — the closure captures the (slot, start, end,
+// ctx) tuple per worker. `karac_par_reduce` builds an `Arc<ParCall>`
+// for the per-call cancel / remaining / notify barrier, pushes
+// `n_workers` tasks, then runs the same wait-with-work-help loop as
+// `karac_par_run` so nested-par-reduce-inside-par-block can't deadlock
+// the pool. Per-call cost drops to one `Box` alloc per task (~hundreds
+// of ns total for N=18 workers) vs the prior thread::scope's tens of
+// µs spawn cost; peak RSS returns near parity with Rust.
+
+/// Helper for sharing the pool dispatch + work-helping wait loop between
+/// `karac_par_run` and `karac_par_reduce`. Pushes `tasks` onto the global
+/// pool's queue, notifies workers, then blocks until `call.remaining` hits
+/// zero — opportunistically executing pool tasks while waiting so nested
+/// par-block-inside-par-block calls from inside the pool can't deadlock.
+fn dispatch_and_wait(call: &Arc<ParCall>, tasks: Vec<Task>) {
+    let p = pool();
+    {
+        let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+        for t in tasks {
+            q.push_back(t);
+        }
+    }
+    p.cv.notify_all();
+
+    loop {
+        {
+            let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+            if *r == 0 {
+                return;
+            }
+        }
+        let next_task = {
+            let mut q = p.queue.lock().unwrap_or_else(|e| e.into_inner());
+            q.pop_front()
+        };
+        if let Some(task) = next_task {
+            execute_task(task);
+            continue;
+        }
+        let r = call.remaining.lock().unwrap_or_else(|e| e.into_inner());
+        if *r == 0 {
+            return;
+        }
+        let _r = call.notify.wait(r).unwrap_or_else(|e| e.into_inner());
+    }
+}
 
 /// FFI descriptor for `karac_par_reduce`. Codegen emits an instance per
 /// recognized reduction site; the runtime borrows the descriptor for the
@@ -705,38 +762,52 @@ pub unsafe extern "C" fn karac_par_reduce(
         (desc.init_slot)(slots.add(w * stride));
     }
 
-    // Cancel flag is allocated even though no worker is expected to
-    // consult it today — futureproofs the FFI shape for the panic /
-    // first-Err propagation slice that the par_run side already has.
-    let cancel = AtomicBool::new(false);
+    // Slice 3b.7 (2026-05-20): build per-call coordination state
+    // (cancel, remaining, notify Condvar) — mirrors `karac_par_run`'s
+    // ParCall shape so the shared `dispatch_and_wait` helper handles
+    // both call kinds uniformly. `parent_addr` + `track_frames` stay at
+    // their disabled defaults: reductions don't surface in the slice-5
+    // frame-tracking API today (the worker fn is a synthesized helper,
+    // not a source-level par-branch); they fold in alongside whenever
+    // the debugger contract grows a reduction-frame variant.
     let chunk = desc.iter_total.div_ceil(n_workers);
-
-    // `thread::scope` joins every spawned thread before this returns,
-    // so the slot buffer remains valid for the combine pass below.
-    // The captured `ctx_addr` and `slot_base` round-trip through usize
-    // so the closure is Send without an unsafe impl on the FFI types.
     let ctx_addr = desc.ctx as usize;
     let slot_base = slots as usize;
     let worker_fn = desc.worker_fn;
     let stride_local = stride;
     let iter_total = desc.iter_total;
-    thread::scope(|scope| {
-        let cancel_ref = &cancel;
-        for w in 0..n_workers {
+
+    let call = Arc::new(ParCall {
+        cancel: AtomicBool::new(false),
+        remaining: Mutex::new(n_workers as u32),
+        notify: Condvar::new(),
+        spawn_site_id: _spawn_site_id,
+        parent_addr: 0,
+        track_frames: false,
+    });
+
+    let tasks: Vec<Task> = (0..n_workers)
+        .map(|w| {
             let start = w * chunk;
             let end = ((w + 1) * chunk).min(iter_total);
-            scope.spawn(move || unsafe {
-                let slot = (slot_base as *mut u8).add(w * stride_local);
-                (worker_fn)(
-                    slot,
-                    start,
-                    end,
-                    ctx_addr as *mut c_void,
-                    cancel_ref as *const AtomicBool,
-                );
-            });
-        }
-    });
+            let slot_addr = slot_base + w * stride_local;
+            Task {
+                call: Arc::clone(&call),
+                branch_idx: w as u32,
+                run: Box::new(move |cancel: &AtomicBool| unsafe {
+                    worker_fn(
+                        slot_addr as *mut u8,
+                        start,
+                        end,
+                        ctx_addr as *mut c_void,
+                        cancel as *const AtomicBool,
+                    );
+                }),
+            }
+        })
+        .collect();
+
+    dispatch_and_wait(&call, tasks);
 
     // Serial combine: fold each worker's slot into `out_slot` in worker
     // order. The op is associative + commutative (recognizer's allow-list
