@@ -242,6 +242,26 @@ pub fn render_dep_graph_error(err: &DepGraphError) -> Diagnostic {
                 target.display(),
             )),
         },
+        DepGraphError::OfflineVendorEntryMissing {
+            from_dir,
+            dep_name,
+            expected,
+        } => Diagnostic {
+            code: err.code(),
+            primary: format!(
+                "offline build is missing the vendored copy of dependency `{}`",
+                dep_name
+            ),
+            notes: vec![
+                format!("declared in `{}/kara.toml`", from_dir.display()),
+                format!("expected `kara.toml` at `{}`", expected.display()),
+                "offline mode resolves every transitive path-dep against `./vendor/<name>/`".to_string(),
+            ],
+            help: Some(
+                "run `karac vendor` to populate `./vendor/` from the current resolution, then re-run with `--offline`"
+                    .to_string(),
+            ),
+        },
         DepGraphError::PathDepManifestInvalid {
             from_dir,
             dep_name,

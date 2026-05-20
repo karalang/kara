@@ -66,6 +66,16 @@ pub enum DepGraphError {
         dep_name: String,
         target: PathBuf,
     },
+    /// Offline-mode walk: a dependency's expected `vendor/<name>/` entry
+    /// is missing or has no `kara.toml`. Maps to
+    /// `E_OFFLINE_VENDOR_ENTRY_MISSING`. Distinct from `PathDepNotFound`
+    /// because the operator action is "run `karac vendor`", not "fix the
+    /// manifest path".
+    OfflineVendorEntryMissing {
+        from_dir: PathBuf,
+        dep_name: String,
+        expected: PathBuf,
+    },
     /// Loading or parsing a transitive `kara.toml` failed. The underlying
     /// `ManifestError` is preserved for the diagnostic renderer (slice 5).
     /// Boxed because `ManifestError` carries multiple `PathBuf` fields per
@@ -88,6 +98,7 @@ impl DepGraphError {
             Self::WorkspaceDepOutsideWorkspace { .. } => "E_WORKSPACE_DEP_OUTSIDE_WORKSPACE",
             Self::DependencyCycle { .. } => "E_DEPENDENCY_CYCLE",
             Self::PathDepNotFound { .. } => "E_PATH_DEP_NOT_FOUND",
+            Self::OfflineVendorEntryMissing { .. } => "E_OFFLINE_VENDOR_ENTRY_MISSING",
             Self::PathDepManifestInvalid { .. } => "E_PATH_DEP_MANIFEST_INVALID",
         }
     }
@@ -136,6 +147,17 @@ impl std::fmt::Display for DepGraphError {
                 dep_name,
                 target.display(),
             ),
+            Self::OfflineVendorEntryMissing {
+                from_dir,
+                dep_name,
+                expected,
+            } => write!(
+                f,
+                "`{}/kara.toml`: offline build expected vendored dependency `{}` at `{}` but no `kara.toml` is found there — run `karac vendor` to populate it",
+                from_dir.display(),
+                dep_name,
+                expected.display(),
+            ),
             Self::PathDepManifestInvalid {
                 from_dir,
                 dep_name,
@@ -182,6 +204,24 @@ pub fn build_dep_graph(
     root_manifest: Manifest,
     loader: &dyn ManifestLoader,
 ) -> Result<DepGraph, DepGraphError> {
+    build_dep_graph_with_offline(root_dir, root_manifest, loader, None)
+}
+
+/// Offline-aware variant of [`build_dep_graph`]. When `offline_root` is
+/// `Some(vendor_root)`, every transitive `DependencySpec::Path` is resolved
+/// as `vendor_root.join(dep_name)` instead of the manifest-declared relative
+/// path — so the walk consults only the vendored copies populated by
+/// `karac vendor` (tracker line 876). A missing vendor entry surfaces
+/// `E_OFFLINE_VENDOR_ENTRY_MISSING` instead of the generic
+/// `E_PATH_DEP_NOT_FOUND` so the operator hint points at `karac vendor`,
+/// not "fix the manifest path". The root manifest itself is unaffected by
+/// the redirection; only its transitive path-dep targets are rewritten.
+pub fn build_dep_graph_with_offline(
+    root_dir: &Path,
+    root_manifest: Manifest,
+    loader: &dyn ManifestLoader,
+    offline_root: Option<&Path>,
+) -> Result<DepGraph, DepGraphError> {
     let root_canonical = canonicalize_or_self(root_dir);
     let mut manifests = BTreeMap::new();
     let mut derived_deps = BTreeMap::new();
@@ -201,6 +241,7 @@ pub fn build_dep_graph(
         root_manifest,
         loader,
         &workspace_deps,
+        offline_root,
         &mut manifests,
         &mut derived_deps,
         &mut visiting_stack,
@@ -221,6 +262,7 @@ fn visit(
     manifest_doc: Manifest,
     loader: &dyn ManifestLoader,
     workspace_deps: &BTreeMap<String, DependencySpec>,
+    offline_root: Option<&Path>,
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
     visiting_stack: &mut Vec<PathBuf>,
@@ -246,7 +288,16 @@ fn visit(
         let DependencySpec::Path { path, .. } = spec else {
             continue;
         };
-        let target = resolve_path_dep_dir(dir, path);
+        // Offline mode redirects every transitive path-dep at the flat
+        // `vendor/<dep-name>/` layout produced by `karac vendor`. A missing
+        // vendor entry surfaces the offline-specific diagnostic below; the
+        // resolver later treats the vendored manifest as the source of
+        // truth, so version mismatches between the manifest-declared path
+        // and the vendored copy don't apply.
+        let target = match offline_root {
+            Some(vendor_root) => vendor_root.join(dep_name),
+            None => resolve_path_dep_dir(dir, path),
+        };
         let canonical_target = canonicalize_or_self(&target);
 
         // Cycle detection runs *before* the loader is consulted: a back-edge
@@ -267,10 +318,18 @@ fn visit(
         }
 
         if !loader.manifest_exists(&canonical_target) {
-            return Err(DepGraphError::PathDepNotFound {
-                from_dir: dir.to_path_buf(),
-                dep_name: dep_name.clone(),
-                target: canonical_target,
+            return Err(if offline_root.is_some() {
+                DepGraphError::OfflineVendorEntryMissing {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    expected: canonical_target,
+                }
+            } else {
+                DepGraphError::PathDepNotFound {
+                    from_dir: dir.to_path_buf(),
+                    dep_name: dep_name.clone(),
+                    target: canonical_target,
+                }
             });
         }
         let child_manifest =
@@ -286,6 +345,7 @@ fn visit(
             child_manifest,
             loader,
             workspace_deps,
+            offline_root,
             manifests,
             derived_deps,
             visiting_stack,
@@ -658,5 +718,98 @@ mod tests {
             }),
         };
         assert_eq!(err.code(), "E_PATH_DEP_MANIFEST_INVALID");
+        let err = DepGraphError::OfflineVendorEntryMissing {
+            from_dir: PathBuf::from("/x"),
+            dep_name: "y".into(),
+            expected: PathBuf::from("/x/vendor/y"),
+        };
+        assert_eq!(err.code(), "E_OFFLINE_VENDOR_ENTRY_MISSING");
+    }
+
+    #[test]
+    fn offline_root_redirects_path_dep_walk_to_vendor() {
+        // Root manifest declares `child = { path = "libs/child" }`; offline
+        // mode should look at `/root/vendor/child/` instead of
+        // `/root/libs/child/`.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("child".into(), path_dep("libs/child"));
+        let child = empty_manifest("child");
+        // The MemLoader only knows about the vendor path — proving the
+        // offline walk consulted vendor, not the manifest-declared path.
+        let loader = MemLoader {
+            manifests: BTreeMap::from([(PathBuf::from("/root/vendor/child"), child)]),
+        };
+        let graph = build_dep_graph_with_offline(
+            &PathBuf::from("/root"),
+            root,
+            &loader,
+            Some(&PathBuf::from("/root/vendor")),
+        )
+        .expect("offline build");
+        assert!(graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/vendor/child")));
+        assert!(!graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/libs/child")));
+    }
+
+    #[test]
+    fn offline_root_missing_vendor_entry_surfaces_focused_error() {
+        // Manifest declares a path-dep; vendor/ has no entry for it.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("child".into(), path_dep("libs/child"));
+        let loader = MemLoader {
+            manifests: BTreeMap::new(),
+        };
+        let err = build_dep_graph_with_offline(
+            &PathBuf::from("/root"),
+            root,
+            &loader,
+            Some(&PathBuf::from("/root/vendor")),
+        )
+        .unwrap_err();
+        match err {
+            DepGraphError::OfflineVendorEntryMissing {
+                dep_name, expected, ..
+            } => {
+                assert_eq!(dep_name, "child");
+                assert_eq!(expected, PathBuf::from("/root/vendor/child"));
+            }
+            other => panic!("expected OfflineVendorEntryMissing, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn offline_root_walks_transitive_deps_from_vendor_flat_layout() {
+        // root → child → grandchild — each transitive path-dep should be
+        // re-rooted at vendor/<name>/ regardless of the manifest's declared
+        // path. This is the "flat vendor layout" Cargo also follows.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("child".into(), path_dep("libs/child"));
+        let mut child = empty_manifest("child");
+        child
+            .dependencies
+            .insert("grandchild".into(), path_dep("../grandchild"));
+        let grandchild = empty_manifest("grandchild");
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/root/vendor/child"), child),
+                (PathBuf::from("/root/vendor/grandchild"), grandchild),
+            ]),
+        };
+        let graph = build_dep_graph_with_offline(
+            &PathBuf::from("/root"),
+            root,
+            &loader,
+            Some(&PathBuf::from("/root/vendor")),
+        )
+        .expect("offline transitive walk");
+        assert!(graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/vendor/grandchild")));
     }
 }

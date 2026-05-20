@@ -3483,16 +3483,10 @@ fn cmd_build(
     no_proxy: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
-    if offline {
-        // v1 surface gate: the `--offline` flag parses and routes, but
-        // the resolver wiring that would consult `vendor/` and refuse
-        // network access lands in a follow-up slice. Surface the
-        // discrepancy so CI scripts pinning to the flag don't think
-        // they're already air-gapped.
-        eprintln!(
-            "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
-        );
-    }
+    // Single-file mode runs no dep resolution and reaches no network surface,
+    // so `--offline` is silently accepted for ergonomic CLI consistency with
+    // project mode (operators script both via the same flag set). The flag
+    // becomes load-bearing in `cmd_build_project`.
     let _ = offline;
     emit_no_proxy_note(no_proxy);
     let _ = no_proxy;
@@ -3756,13 +3750,12 @@ fn effect_set_to_display(
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
 fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, no_proxy: bool) {
-    if offline {
-        eprintln!(
-            "note: --offline parsed but not yet wired (vendor/ consultation + network refusal land alongside dep resolution)"
-        );
+    // --offline implies --no-proxy at the contract level (vendor-only walk
+    // can't talk to the proxy). Suppress the redundant no-proxy note when
+    // both are set so the offline operator sees one clean status line.
+    if !offline {
+        emit_no_proxy_note(no_proxy);
     }
-    let _ = offline;
-    emit_no_proxy_note(no_proxy);
     let _ = no_proxy;
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
@@ -3799,15 +3792,31 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, n
         process::exit(1);
     }
 
+    // Offline-mode pre-check: the vendor root must exist before the
+    // resolver consults it. A missing `./vendor/` is a clear operator
+    // mistake — the right action is "run `karac vendor`", not "fix
+    // every transitive dep". Skipped when the manifest declares no deps
+    // and no MSRV constraint — solo projects pay nothing for `--offline`.
+    let has_deps =
+        !mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some();
+    let vendor_root_buf = root.join("vendor");
+    if offline && has_deps && !vendor_root_buf.is_dir() {
+        emit_offline_no_vendor_dir(&vendor_root_buf, output);
+        process::exit(1);
+    }
+    let offline_root: Option<&std::path::Path> = if offline {
+        Some(vendor_root_buf.as_path())
+    } else {
+        None
+    };
+
     // Slice 7 of the PubGrub-resolver entry: validate the dep graph
     // before the walker even runs. Errors halt the build; unsupported-
     // source warnings (registry/git, until fetch ships at line 819)
     // surface as notices and the build continues. Skipped entirely when
     // the manifest declares no deps and no MSRV constraint — the common
     // single-package, no-dep case pays zero overhead.
-    if (!mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some())
-        && !run_dep_resolution(&root, mf.clone(), output)
-    {
+    if has_deps && !run_dep_resolution(&root, mf.clone(), output, offline_root) {
         process::exit(1);
     }
 
@@ -4958,18 +4967,20 @@ fn run_dep_resolution(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,
+    offline_root: Option<&std::path::Path>,
 ) -> bool {
     let loader = crate::dep_graph::FsLoader;
-    let graph = match crate::dep_graph::build_dep_graph(root, mf, &loader) {
-        Ok(g) => g,
-        Err(e) => {
-            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-            emit_dep_diagnostic(&diag, output, "error");
-            return false;
-        }
-    };
+    let graph =
+        match crate::dep_graph::build_dep_graph_with_offline(root, mf, &loader, offline_root) {
+            Ok(g) => g,
+            Err(e) => {
+                let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+                emit_dep_diagnostic(&diag, output, "error");
+                return false;
+            }
+        };
     let active = crate::dep_resolver::active_toolchain_version();
-    match crate::dep_resolver::resolve(&graph, &active) {
+    match crate::dep_resolver::resolve_with_offline(&graph, &active, offline_root) {
         Ok(resolution) => {
             persist_lockfile(root, &resolution, output);
             true
@@ -4977,18 +4988,58 @@ fn run_dep_resolution(
         Err(boxed) => {
             let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
             let code = boxed.code();
-            let severity = match code {
-                // Registry/git fetch is line-819 territory — until it
-                // ships, packages declaring those sources can't be built
-                // but the rest of the dep graph (path-deps) may still
-                // resolve cleanly. Downgrade to a warning so existing
-                // projects with `[dependencies] http = "1.2"` aren't
-                // immediately broken by slice 7's wiring.
-                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
-                _ => "error",
+            // In offline mode, registry/git deps can't be satisfied from
+            // vendor/ today (registry/git vendoring lands alongside line
+            // 845); the unsupported-source diagnostic must halt the build
+            // so the operator doesn't get a silent partial resolution.
+            // Outside offline, the existing warning-and-continue behavior
+            // preserves the pre-fetch v1.1 contract.
+            let severity = if offline_root.is_some() {
+                "error"
+            } else {
+                match code {
+                    "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
+                    _ => "error",
+                }
             };
             emit_dep_diagnostic(&diag, output, severity);
             severity == "warning"
+        }
+    }
+}
+
+/// Pre-check diagnostic for `karac build --offline` when the project root
+/// has no `./vendor/` directory. The resolver would otherwise error per-dep
+/// with `E_OFFLINE_VENDOR_ENTRY_MISSING`; surfacing the missing root once,
+/// up front, is a clearer operator hint.
+fn emit_offline_no_vendor_dir(vendor_dir: &std::path::Path, output: OutputMode) {
+    let code = "E_OFFLINE_NO_VENDOR_DIR";
+    let primary = format!(
+        "offline build requires a vendor directory at `{}` but none was found",
+        vendor_dir.display()
+    );
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[{code}]: {primary}");
+            eprintln!("   = note: --offline resolves every transitive path-dep against `./vendor/<name>/`");
+            eprintln!("   = help: run `karac vendor` to populate the vendor directory, then re-run with `--offline`");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"dep_resolution\",\"code\":{},\"message\":{}}}]}}",
+                json_string(code),
+                json_string(&primary),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "dep_resolution_error",
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(code),
+                    json_string(&primary),
+                ),
+            );
         }
     }
 }

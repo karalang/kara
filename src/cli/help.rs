@@ -172,7 +172,33 @@ OPTIONS:
                             direct-from-source — a v1.1.x carve-out; today
                             the flag is honored at the parse layer and
                             surfaces a confirmation note.
-    -h, --help              Print this message"
+    --offline               Read every transitive path dependency from
+                            `./vendor/<name>/` instead of the manifest-
+                            declared path, and refuse any network access.
+                            Run `karac vendor` first to populate
+                            `./vendor/` from the current resolution.
+                            Implies --no-proxy (the redundant note is
+                            suppressed). See the OFFLINE section below.
+    -h, --help              Print this message
+
+OFFLINE:
+    `--offline` redirects every transitive `path` dependency to
+    `<project>/vendor/<dep-name>/`. The vendored manifest is the source
+    of truth — version mismatches with the declared path don't apply.
+    If `./vendor/` does not exist when `--offline` is set on a project
+    with declared dependencies, the build halts with
+    `error[E_OFFLINE_NO_VENDOR_DIR]` and points the operator at
+    `karac vendor`. A vendor directory present but missing one entry
+    surfaces `error[E_OFFLINE_VENDOR_ENTRY_MISSING]` naming the
+    offending dependency.
+
+    v1 status:
+        Path-source deps are fully wired through `--offline`. Registry
+        and git deps in offline mode still surface
+        `E_REGISTRY_DEP_UNSUPPORTED` / `E_GIT_DEP_UNSUPPORTED`
+        (promoted to a hard error in offline mode rather than the
+        default warning) — registry / git vendoring lands alongside
+        the package-fetch surface (tracker line 845)."
         }
         "query" => {
             "\

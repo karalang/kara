@@ -81,6 +81,10 @@ fn test_subcommand_help_build() {
     assert!(stdout.contains("kara.toml"));
     // Phase-7 line 5 sub-item 1 — flag is listed in build's help.
     assert!(stdout.contains("--enable-hot-swap"));
+    // Tracker line 880 — --offline + OFFLINE section documented.
+    assert!(stdout.contains("--offline"));
+    assert!(stdout.contains("OFFLINE:"));
+    assert!(stdout.contains("E_OFFLINE_NO_VENDOR_DIR"));
 }
 
 #[test]
@@ -5074,6 +5078,279 @@ http = "1.2"
     assert!(
         stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
         "expected the resolver warning to surface; got: {stderr}",
+    );
+}
+
+// ── karac build --offline — vendor-only resolver wiring ─────────────
+
+fn offline_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-offline-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_build_offline_no_deps_project_succeeds_without_vendor() {
+    // Solo project + --offline: no deps, no vendor needed, no error. Pins
+    // that the pre-check is gated on the manifest declaring at least one
+    // dep so single-package operators aren't forced to run `karac vendor`.
+    let tmp = offline_tempdir("no-deps");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "no-dep offline build should succeed; stderr={stderr}"
+    );
+    assert!(
+        !stderr.contains("E_OFFLINE_NO_VENDOR_DIR"),
+        "no-dep project must not trip the missing-vendor pre-check; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_build_offline_missing_vendor_dir_errors() {
+    // Manifest declares a path-dep but no vendor/ has been created. The
+    // pre-check should surface E_OFFLINE_NO_VENDOR_DIR up front rather
+    // than letting per-dep failures cascade.
+    let tmp = offline_tempdir("no-vendor");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "libs/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "offline build with no vendor/ must fail; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_OFFLINE_NO_VENDOR_DIR]"),
+        "expected the missing-vendor-dir diagnostic; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("karac vendor"),
+        "diagnostic help should point at `karac vendor`; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_build_offline_consults_vendor_for_path_dep() {
+    // The manifest declares `child` at `libs/child`, but vendor/ holds a
+    // *different* manifest at vendor/child/. The offline build must pick
+    // up the vendored copy, proving the redirect — we verify by deleting
+    // the manifest-declared source after vendoring.
+    let tmp = offline_tempdir("consults-vendor");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "libs/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    // Vendor + then delete the source — vendor/ is the only available copy.
+    let vendor = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    assert!(
+        vendor.status.success(),
+        "vendor must succeed before the offline test runs; stderr={}",
+        String::from_utf8_lossy(&vendor.stderr)
+    );
+    std::fs::remove_dir_all(tmp.join("libs")).unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lockfile_exists = tmp.join("kara.lock").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "offline build should consult vendor/ even when the declared path is gone; stderr={stderr}",
+    );
+    assert!(
+        lockfile_exists,
+        "successful offline resolution must persist kara.lock; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_build_offline_path_dep_missing_from_vendor_errors() {
+    // Vendor exists but doesn't contain `child` — the per-dep diagnostic
+    // (E_OFFLINE_VENDOR_ENTRY_MISSING) should fire with the dep name.
+    let tmp = offline_tempdir("vendor-entry-missing");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor")).unwrap(); // empty vendor
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "libs/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "missing vendor entry must fail the offline build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_OFFLINE_VENDOR_ENTRY_MISSING]"),
+        "expected the per-dep offline diagnostic; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("child"),
+        "diagnostic should name the missing dep; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_build_offline_registry_dep_is_hard_error() {
+    // Outside offline mode, a registry dep downgrades to a warning so the
+    // build proceeds with the path-dep half resolved. In offline mode the
+    // same diagnostic is fatal — vendor-of-registry-deps lands alongside
+    // line 845, so until then registry deps cannot satisfy offline builds.
+    let tmp = offline_tempdir("registry-fatal");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("vendor")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "proj"
+
+[dependencies]
+http = "1.2"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "registry dep in offline mode must halt the build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "expected registry-unsupported promoted to error in offline mode; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_build_offline_suppresses_redundant_no_proxy_note() {
+    // --offline implies --no-proxy at the contract level. The redundant
+    // no-proxy note must not appear when both flags are set together.
+    let tmp = offline_tempdir("no-proxy-suppress");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--offline", "--no-proxy"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "offline + no-proxy on a solo project should succeed; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("--no-proxy active"),
+        "the no-proxy note should be suppressed under --offline; got: {stderr}",
     );
 }
 

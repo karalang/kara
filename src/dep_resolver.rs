@@ -240,6 +240,20 @@ pub fn resolve(
     graph: &DepGraph,
     active_toolchain: &semver::Version,
 ) -> Result<Resolution, Box<ResolverError>> {
+    resolve_with_offline(graph, active_toolchain, None)
+}
+
+/// Offline-aware variant of [`resolve`]. When `offline_root` is
+/// `Some(vendor_root)`, every transitive path-dep target is rewritten to
+/// `vendor_root.join(dep_name)` — matching the redirect performed by
+/// [`crate::dep_graph::build_dep_graph_with_offline`] so the resolver looks
+/// up the same vendored manifest the graph walk loaded. The root manifest
+/// itself is unaffected; only its children's path targets are rewritten.
+pub fn resolve_with_offline(
+    graph: &DepGraph,
+    active_toolchain: &semver::Version,
+    offline_root: Option<&std::path::Path>,
+) -> Result<Resolution, Box<ResolverError>> {
     // MSRV check runs first — a package whose kara-version excludes the
     // active toolchain can't be built regardless of how the dep graph
     // resolves. Surfacing the toolchain mismatch up front gives a clearer
@@ -298,7 +312,11 @@ pub fn resolve(
         for (dep_name, spec) in derived {
             match spec {
                 DependencySpec::Path { path, version } => {
-                    let target_dir = resolve_path_dep_target(manifest_dir, path);
+                    let target_dir = match offline_root {
+                        Some(vendor_root) => std::fs::canonicalize(vendor_root.join(dep_name))
+                            .unwrap_or_else(|_| vendor_root.join(dep_name)),
+                        None => resolve_path_dep_target(manifest_dir, path),
+                    };
                     let child_manifest = graph.manifests.get(&target_dir).ok_or_else(|| {
                         // This shouldn't happen — slice 3's walk
                         // ensures every path target is present in
