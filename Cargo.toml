@@ -1,5 +1,5 @@
 [workspace]
-members = ["runtime", "playground"]
+members = ["runtime", "playground", "kernel"]
 # Slice E (Parallax bench harness, 2026-05-09) — the `examples/parallax/
 # bench/rust/` subproject is a self-contained reference implementation
 # of the bench server in idiomatic tokio + hyper. Excluded from the

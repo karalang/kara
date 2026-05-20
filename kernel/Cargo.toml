@@ -1,0 +1,56 @@
+[package]
+name = "karac-kernel"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Jupyter kernel for tracker line 719. Built as a separate workspace
+# member (mirrors the `playground/` pattern) so libzmq + HMAC + Jupyter
+# wire-protocol deps don't pollute the karac compiler crate or its
+# wasm32 build surface. The Python shim (`pip install karac-kernel`)
+# locates this binary and registers the kernelspec; the kernel process
+# itself is pure Rust.
+#
+# Sliced delivery (see docs/implementation_checklist/phase-5-diagnostics.md
+# line 719):
+#   - Slice 1: workspace skeleton + connection-file parser (this commit)
+#   - Slice 2: HMAC SHA-256 + Jupyter wire-protocol message envelope
+#   - Slice 3: ZMQ sockets + heartbeat + kernel_info_request
+#   - Slice 4: execute_request → Session integration (iopub broadcast)
+#   - Slice 5: complete_request + is_complete_request + interrupt_request
+#   - Slice 6: Python shim (karac-kernel PyPI launcher + kernelspec installer)
+
+[[bin]]
+name = "karac-kernel"
+path = "src/main.rs"
+
+[features]
+# `real-zmq` enables the `zmq` C-binding and the production
+# `ZmqTransport`. The default build compiles only the
+# `InMemoryTransport` used by unit tests — this keeps the test suite
+# self-contained (no libzmq required for `cargo test -p karac-kernel`)
+# while production kernel builds invoked from the Python shim
+# (slice 6) pass `--features real-zmq` to link against libzmq. Without
+# the feature, the kernel binary prints a build-flag hint and exits
+# rather than pretending to bind sockets.
+default = []
+real-zmq = ["dep:zmq"]
+
+[dependencies]
+karac = { path = ".." }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Slice 2 — Jupyter wire-protocol signing. HMAC SHA-256 over the four
+# JSON envelope frames per the Jupyter Messaging Protocol; the
+# resulting bytes are hex-encoded into a leading ZMQ frame between the
+# `<IDS|MSG>` delimiter and the header. RustCrypto's `hmac` + `sha2` +
+# `hex` are pure-Rust and add no native dependencies.
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+# Slice 3 — optional ZMQ binding for production socket I/O. The
+# `zmq` crate wraps libzmq (C dep, installed via `brew install
+# zeromq` on macOS or the distro equivalent). Behind the `real-zmq`
+# feature so the default build + the entire test suite don't require
+# libzmq on the build host.
+zmq = { version = "0.10", optional = true }
