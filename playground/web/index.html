@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Kāra playground</title>
+    <link rel="stylesheet" href="./playground.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1 class="title">Kāra playground</h1>
+      <div class="actions">
+        <button id="run" class="primary" disabled>Loading…</button>
+        <button id="share" disabled>Share</button>
+      </div>
+    </header>
+    <main class="grid">
+      <section class="pane editor-pane">
+        <h2 class="pane-title">Source</h2>
+        <textarea
+          id="editor"
+          spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
+          autocorrect="off"
+          wrap="off"
+        ></textarea>
+      </section>
+      <section class="pane output-pane">
+        <h2 class="pane-title">Output</h2>
+        <pre id="stdout" class="stdout"></pre>
+        <h2 class="pane-title">Diagnostics</h2>
+        <ul id="diagnostics" class="diagnostics"></ul>
+        <p id="status" class="status"></p>
+      </section>
+    </main>
+    <script type="module" src="./playground.js"></script>
+  </body>
+</html>
