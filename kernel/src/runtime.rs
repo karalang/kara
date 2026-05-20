@@ -1,6 +1,6 @@
 //! Kernel runtime — message pump + per-msg-type dispatch.
 //!
-//! Slice 3 wires:
+//! Slices 3 + 4 wire:
 //!
 //! - **`Kernel::run`** drives a single-threaded shell/control poll
 //!   loop, decoding each multipart payload via
@@ -11,10 +11,15 @@
 //!   "kernel ready" indicator.
 //! - **`shutdown_request`** (control channel) — closes the
 //!   transport so the loop exits cleanly.
+//! - **`execute_request`** (slice 4) — routes the cell source
+//!   through [`karac::repl::Session`] (`dispatch_magic` for `%`-
+//!   prefixed cells, `evaluate_cell_captured` otherwise) and emits
+//!   the canonical broadcast triad on IOPub: busy → execute_input
+//!   → stream(stdout/stderr) → execute_result/error → idle.
 //!
-//! Slices 4+ extend the dispatch table (`execute_request`,
-//! `complete_request`, `is_complete_request`, `interrupt_request`)
-//! by adding match arms; the pump itself stays the same.
+//! Slices 5+ extend the dispatch table (`complete_request`,
+//! `is_complete_request`, `interrupt_request`) by adding match
+//! arms; the pump itself stays the same.
 //!
 //! Heartbeat is a separate dedicated thread (see
 //! `Kernel::spawn_heartbeat`) — bare echo loop, no signing, no
@@ -26,8 +31,10 @@
 
 use crate::transport::{Channel, Transport, TransportError};
 use crate::wire::{Header, Message, Signer, PROTOCOL_VERSION};
+use karac::repl::{ReplOptions, Session};
 use serde_json::{json, Value as JsonValue};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -78,6 +85,33 @@ impl KernelInfo {
     }
 }
 
+/// Internal classification of one cell's run result. Magic and
+/// non-magic cells produce the same shape so the iopub broadcast
+/// logic in `emit_cell_output` doesn't branch on cell flavor.
+#[derive(Debug)]
+enum CellOutcome {
+    /// Run completed without surfacing diagnostics. `stderr` may
+    /// still be non-empty (e.g. auto-clone `perf[…]` notes from a
+    /// successful but rewritten cell).
+    Ok {
+        stdout: String,
+        stderr: String,
+        /// `EvaluatedCell::effect_footer` text. Empty for pure
+        /// cells and magic cells; the broadcast logic suppresses the
+        /// `stream` message when empty so notebooks stay quiet.
+        effect_footer: String,
+    },
+    /// Run produced diagnostics or a magic-error reply. `evalue` is
+    /// the first error line; `traceback` carries the full list.
+    Error {
+        stdout: String,
+        stderr: String,
+        ename: String,
+        evalue: String,
+        traceback: Vec<String>,
+    },
+}
+
 /// One running kernel — owns the transport + the dispatch state.
 /// Construct with [`Kernel::new`], hand to a thread that calls
 /// [`Kernel::run`], drive shutdown by calling `transport.close()`
@@ -95,11 +129,35 @@ pub struct Kernel<T: Transport + 'static> {
     /// `<session>-<counter>` is unique within a session and matches
     /// `jupyter_client`'s fallback when UUID generation is
     /// unavailable.
-    msg_counter: std::sync::Mutex<u64>,
+    msg_counter: Mutex<u64>,
+    /// REPL session driving cell evaluation. Wrapped in a `Mutex`
+    /// because slice 5's `interrupt_request` handler will need to
+    /// read state from a different thread than the pump; `Session`'s
+    /// internal `Value` graph already uses `Arc<RwLock>` so it's
+    /// `Send`, but `evaluate_cell_captured` takes `&mut self` so we
+    /// need exclusive access for the duration of each cell.
+    session: Mutex<Session>,
+    /// 1-indexed per-cell counter, advanced on every non-silent
+    /// `execute_request`. Atomic so future interrupt handlers can
+    /// peek at "which cell is running" without taking the session
+    /// lock.
+    execution_count: AtomicU64,
 }
 
 impl<T: Transport + 'static> Kernel<T> {
     pub fn new(transport: Arc<T>, signer: Signer, info: KernelInfo) -> Self {
+        Self::with_repl_options(transport, signer, info, ReplOptions::default())
+    }
+
+    /// Construct with explicit REPL options. Used by slice 6's Python
+    /// shim to honor `--auto-clone` and other future flags forwarded
+    /// from the kernelspec.
+    pub fn with_repl_options(
+        transport: Arc<T>,
+        signer: Signer,
+        info: KernelInfo,
+        opts: ReplOptions,
+    ) -> Self {
         let session_id = format!(
             "kara-kernel-{}",
             SystemTime::now()
@@ -112,7 +170,9 @@ impl<T: Transport + 'static> Kernel<T> {
             signer,
             info,
             session_id,
-            msg_counter: std::sync::Mutex::new(0),
+            msg_counter: Mutex::new(0),
+            session: Mutex::new(Session::with_options(opts)),
+            execution_count: AtomicU64::new(0),
         }
     }
 
@@ -174,13 +234,15 @@ impl<T: Transport + 'static> Kernel<T> {
         match msg.header.msg_type.as_str() {
             "kernel_info_request" => self.handle_kernel_info_request(channel, msg),
             "shutdown_request" => self.handle_shutdown_request(channel, msg),
+            "execute_request" => self.handle_execute_request(channel, msg),
             other => {
-                // Slices 4+ extend this list. Silent in this slice
-                // would hide bugs; log via stderr so anyone wiring up
-                // a frontend before slice 4 ships sees the gap.
+                // Slices 5+ extend this list (`complete_request`,
+                // `is_complete_request`, `interrupt_request`). Silent
+                // would hide bugs; log to stderr so anyone wiring up
+                // a frontend before those slices ship sees the gap.
                 eprintln!(
                     "karac-kernel: unhandled msg_type {other:?} on {channel:?} \
-                     (slice 3 ships kernel_info / shutdown only)"
+                     (slice 4 ships kernel_info / shutdown / execute only)"
                 );
             }
         }
@@ -230,15 +292,227 @@ impl<T: Transport + 'static> Kernel<T> {
         self.transport.close();
     }
 
-    fn broadcast_status(&self, state: &str, parent: &Header) {
-        let content = json!({ "execution_state": state });
-        let msg = self.build_iopub_broadcast("status", parent, content);
+    /// Route an `execute_request` through the REPL session.
+    ///
+    /// Iopub broadcast order matches Jupyter's expected sequence so a
+    /// frontend cleanly correlates everything to the originating
+    /// cell:
+    ///
+    /// 1. `status: busy`
+    /// 2. `execute_input { code, execution_count }` — unless `silent`
+    /// 3. `stream(stdout)` with captured `println!` output (skipped
+    ///    when empty)
+    /// 4. `stream(stderr)` for diagnostic strings + auto-clone perf
+    ///    notes (skipped when empty)
+    /// 5. `stream(stdout)` with the effect footer (`writes(A) reads(B)`
+    ///    — populated by `Session::compute_cell_effect_footer` only
+    ///    on successful statement-cell runs, kept on stdout so it
+    ///    shows under the cell rather than as a warning)
+    /// 6. `error { ename, evalue, traceback }` — only on diagnostic
+    ///    failure; the same payload rides the `execute_reply` shell
+    ///    response
+    /// 7. `status: idle`
+    ///
+    /// The shell-channel `execute_reply` carries `status` (`ok` /
+    /// `error`) + `execution_count` so the frontend can render the
+    /// `Out[N]` prompt before the next cell submits.
+    fn handle_execute_request(&self, channel: Channel, request: Message) {
+        let code = request
+            .content
+            .get("code")
+            .and_then(JsonValue::as_str)
+            .unwrap_or("")
+            .to_string();
+        let silent = request
+            .content
+            .get("silent")
+            .and_then(JsonValue::as_bool)
+            .unwrap_or(false);
+
+        // Silent requests don't bump the counter (per Jupyter spec —
+        // they exist for `user_expressions`-style probes that the
+        // frontend doesn't want appearing in the cell history).
+        let execution_count = if silent {
+            self.execution_count.load(Ordering::Acquire)
+        } else {
+            self.execution_count.fetch_add(1, Ordering::AcqRel) + 1
+        };
+
+        self.broadcast_status("busy", &request.header);
+
+        if !silent {
+            self.broadcast_iopub(
+                "execute_input",
+                &request.header,
+                json!({
+                    "code": code,
+                    "execution_count": execution_count,
+                }),
+            );
+        }
+
+        let outcome = self.run_cell(&code);
+
+        if !silent {
+            self.emit_cell_output(&request.header, &outcome);
+        }
+
+        let reply_content = match &outcome {
+            CellOutcome::Ok { .. } => json!({
+                "status": "ok",
+                "execution_count": execution_count,
+                "payload": [],
+                "user_expressions": {},
+            }),
+            CellOutcome::Error {
+                ename,
+                evalue,
+                traceback,
+                ..
+            } => {
+                // Iopub broadcast mirrors the shell error so other
+                // frontends connected to the same kernel see the
+                // failure without polling shell replies.
+                if !silent {
+                    self.broadcast_iopub(
+                        "error",
+                        &request.header,
+                        json!({
+                            "ename": ename,
+                            "evalue": evalue,
+                            "traceback": traceback,
+                        }),
+                    );
+                }
+                json!({
+                    "status": "error",
+                    "execution_count": execution_count,
+                    "ename": ename,
+                    "evalue": evalue,
+                    "traceback": traceback,
+                })
+            }
+        };
+
+        let reply = self.build_reply(&request, "execute_reply", reply_content);
+        if let Err(err) = self.transport.send(channel, reply.encode(&self.signer)) {
+            eprintln!("karac-kernel: failed to send execute_reply: {err}");
+        }
+
+        self.broadcast_status("idle", &request.header);
+    }
+
+    /// Run one cell through the session. `%`-prefixed cells route
+    /// through `dispatch_magic`; everything else goes through
+    /// `evaluate_cell_captured`. The two paths produce a uniform
+    /// [`CellOutcome`] so the broadcast logic above doesn't branch on
+    /// cell shape.
+    fn run_cell(&self, code: &str) -> CellOutcome {
+        let trimmed = code.trim_start();
+        if trimmed.starts_with('%') {
+            // Magic surface from line 721 — slice 4's load-bearing
+            // forward-wiring of `%effects` / `%ownership` / etc.
+            let out = self.session.lock().unwrap().dispatch_magic(trimmed);
+            if out.ok {
+                CellOutcome::Ok {
+                    stdout: out.text,
+                    stderr: String::new(),
+                    effect_footer: String::new(),
+                }
+            } else {
+                CellOutcome::Error {
+                    stdout: String::new(),
+                    stderr: out.text.clone(),
+                    ename: "MagicError".to_string(),
+                    evalue: out.text.lines().next().unwrap_or("").to_string(),
+                    traceback: out.text.lines().map(|l| l.to_string()).collect(),
+                }
+            }
+        } else {
+            let evaluated = self.session.lock().unwrap().evaluate_cell_captured(code);
+            // `notes` carries `perf[auto-clone-in-repl]` lines —
+            // never silent per the design spec, mirrored to stderr
+            // alongside any diagnostic strings.
+            let stderr = if evaluated.notes.is_empty() && evaluated.errors.is_empty() {
+                String::new()
+            } else {
+                let mut buf = String::new();
+                for e in &evaluated.errors {
+                    buf.push_str(e);
+                    buf.push('\n');
+                }
+                for n in &evaluated.notes {
+                    buf.push_str(n);
+                    buf.push('\n');
+                }
+                buf
+            };
+            if evaluated.errors.is_empty() {
+                CellOutcome::Ok {
+                    stdout: evaluated.stdout,
+                    stderr,
+                    effect_footer: evaluated.effect_footer,
+                }
+            } else {
+                let evalue = evaluated.errors.first().cloned().unwrap_or_default();
+                CellOutcome::Error {
+                    stdout: evaluated.stdout,
+                    stderr,
+                    ename: "CompileError".to_string(),
+                    evalue,
+                    traceback: evaluated.errors,
+                }
+            }
+        }
+    }
+
+    fn emit_cell_output(&self, parent: &Header, outcome: &CellOutcome) {
+        let (stdout, stderr, effect_footer) = match outcome {
+            CellOutcome::Ok {
+                stdout,
+                stderr,
+                effect_footer,
+            } => (stdout.as_str(), stderr.as_str(), effect_footer.as_str()),
+            CellOutcome::Error { stdout, stderr, .. } => (stdout.as_str(), stderr.as_str(), ""),
+        };
+        if !stdout.is_empty() {
+            self.broadcast_iopub(
+                "stream",
+                parent,
+                json!({ "name": "stdout", "text": stdout }),
+            );
+        }
+        if !stderr.is_empty() {
+            self.broadcast_iopub(
+                "stream",
+                parent,
+                json!({ "name": "stderr", "text": stderr }),
+            );
+        }
+        if !effect_footer.is_empty() {
+            // Trailing newline so the footer ends a line cleanly in
+            // the cell-output pane — the same convention the REPL's
+            // `:effects` meta-command applies on stdout.
+            let mut text = effect_footer.to_string();
+            if !text.ends_with('\n') {
+                text.push('\n');
+            }
+            self.broadcast_iopub("stream", parent, json!({ "name": "stdout", "text": text }));
+        }
+    }
+
+    fn broadcast_iopub(&self, msg_type: &str, parent: &Header, content: JsonValue) {
+        let msg = self.build_iopub_broadcast(msg_type, parent, content);
         if let Err(err) = self
             .transport
             .send(Channel::IoPub, msg.encode(&self.signer))
         {
-            eprintln!("karac-kernel: failed to broadcast {state} status: {err}");
+            eprintln!("karac-kernel: failed to broadcast {msg_type}: {err}");
         }
+    }
+
+    fn broadcast_status(&self, state: &str, parent: &Header) {
+        self.broadcast_iopub("status", parent, json!({ "execution_state": state }));
     }
 
     /// Construct a reply message carrying the original
@@ -496,15 +770,327 @@ mod tests {
         assert_eq!(reply.content["restart"], true);
     }
 
+    /// Drain `IoPub` from an `InMemoryTransport` and return
+    /// `(msg_type, decoded_message)` pairs in broadcast order so
+    /// tests can assert both the sequence and per-message content
+    /// without re-decoding inline.
+    fn drain_iopub_in_memory(
+        transport: &InMemoryTransport,
+        signer: &Signer,
+    ) -> Vec<(String, Message)> {
+        transport
+            .drain_outgoing(Channel::IoPub)
+            .into_iter()
+            .map(|frames| {
+                let m = Message::decode(&frames, signer).unwrap();
+                (m.header.msg_type.clone(), m)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn execute_request_simple_println_round_trip() {
+        // Pure-expression / statement cells go through
+        // `Session::evaluate_cell_captured`; captured stdout lands on
+        // iopub as `stream(stdout)`, and the shell reply is `ok`.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        let request = build_request(
+            &signer,
+            "execute_request",
+            json!({
+                "code": "println(\"hello kara\");",
+                "silent": false,
+                "store_history": true,
+                "user_expressions": {},
+                "allow_stdin": false,
+                "stop_on_error": false,
+            }),
+            vec![b"client-1".to_vec()],
+        );
+        transport.push_incoming(Channel::Shell, request);
+        run_one_pass(&kernel);
+
+        // Shell: one execute_reply with status=ok, execution_count=1.
+        let shell = transport.drain_outgoing(Channel::Shell);
+        assert_eq!(shell.len(), 1);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.header.msg_type, "execute_reply");
+        assert_eq!(reply.content["status"], "ok", "shell reply: {reply:?}");
+        assert_eq!(reply.content["execution_count"], 1);
+        assert_eq!(reply.identities, vec![b"client-1".to_vec()]);
+
+        // IOPub: busy → execute_input → stream(stdout) → idle. The
+        // effect footer for a `println` cell may also fire as a
+        // second `stream(stdout)`, so accept either 4 or 5 frames as
+        // long as the broadcast shape is right.
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let kinds: Vec<&str> = iopub.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(kinds[0], "status");
+        assert_eq!(kinds[1], "execute_input");
+        assert_eq!(kinds[2], "stream");
+        assert_eq!(*kinds.last().unwrap(), "status");
+
+        // busy
+        assert_eq!(iopub[0].1.content["execution_state"], "busy");
+        // execute_input echoes the code + count
+        assert_eq!(iopub[1].1.content["code"], "println(\"hello kara\");");
+        assert_eq!(iopub[1].1.content["execution_count"], 1);
+        // First `stream` carries the captured output on stdout.
+        assert_eq!(iopub[2].1.content["name"], "stdout");
+        let text = iopub[2].1.content["text"].as_str().unwrap();
+        assert!(text.contains("hello kara"), "stdout was {text:?}");
+        // idle
+        assert_eq!(iopub.last().unwrap().1.content["execution_state"], "idle");
+    }
+
+    #[test]
+    fn execute_request_increments_execution_count_across_cells() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        for n in 1..=3 {
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(
+                    &signer,
+                    "execute_request",
+                    json!({"code": format!("let _x{n} = {n};"), "silent": false}),
+                    vec![],
+                ),
+            );
+            run_one_pass(&kernel);
+            let shell = transport.drain_outgoing(Channel::Shell);
+            let reply = Message::decode(&shell[0], &signer).unwrap();
+            assert_eq!(reply.content["execution_count"], n);
+            // drop the iopub broadcasts between cells
+            let _ = transport.drain_outgoing(Channel::IoPub);
+        }
+    }
+
+    #[test]
+    fn execute_request_silent_skips_execute_input_and_iopub_output() {
+        // Per the Jupyter spec, `silent: true` requests don't bump
+        // the counter and don't broadcast `execute_input` /
+        // `stream` / `error`. Only the busy/idle status pair fires
+        // (so frontends still see kernel activity).
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "println!(\"shh\")", "silent": true}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["execution_count"], 0);
+
+        let kinds: Vec<String> = drain_iopub_in_memory(&transport, &signer)
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert_eq!(kinds, ["status", "status"], "only busy/idle on silent");
+    }
+
+    #[test]
+    fn execute_request_compile_error_routes_through_error_channels() {
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                // Syntactically broken — guaranteed parse error.
+                json!({"code": "let x = ;", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "error");
+        assert_eq!(reply.content["ename"], "CompileError");
+        assert!(reply.content["evalue"].is_string());
+        assert!(reply.content["traceback"].is_array());
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let kinds: Vec<&str> = iopub.iter().map(|(k, _)| k.as_str()).collect();
+        // status busy → execute_input → stream(stderr) → error → status idle
+        assert_eq!(
+            kinds,
+            ["status", "execute_input", "stream", "error", "status"],
+            "iopub broadcast sequence on error"
+        );
+        // stream is stderr, not stdout, for diagnostics.
+        assert_eq!(iopub[2].1.content["name"], "stderr");
+        // The iopub `error` broadcast mirrors the shell reply.
+        assert_eq!(iopub[3].1.content["ename"], "CompileError");
+    }
+
+    #[test]
+    fn execute_request_successful_cell_streams_only_stdout() {
+        // Successful cells route captured `println` output (and any
+        // non-empty effect footer) through `stream(stdout)` — never
+        // `stream(stderr)`. The stderr stream is reserved for
+        // diagnostics + `perf[…]` notes.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "println(\"side effect\");", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let stream_frames: Vec<&Message> = iopub
+            .iter()
+            .filter(|(k, _)| k == "stream")
+            .map(|(_, m)| m)
+            .collect();
+        assert!(
+            !stream_frames.is_empty(),
+            "expected at least one stream frame for a println cell"
+        );
+        for frame in &stream_frames {
+            assert_eq!(
+                frame.content["name"], "stdout",
+                "successful cell must not route output through stderr"
+            );
+        }
+    }
+
+    #[test]
+    fn execute_request_magic_cell_routes_through_dispatch_magic() {
+        // `%`-prefixed cells go through `Session::dispatch_magic`;
+        // an unknown magic should return an error MagicOutput which
+        // the handler routes to `status=error` on shell + stream
+        // (stderr) + error on iopub.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%totally-not-a-real-magic", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "error");
+        assert_eq!(reply.content["ename"], "MagicError");
+    }
+
+    #[test]
+    fn execute_request_session_state_persists_across_cells() {
+        // Two cells: the first declares a binding, the second uses
+        // it. The shared `Session` in the Kernel keeps the binding
+        // live — the second cell sees `x = 7`.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "let x = 7;", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let _ = transport.drain_outgoing(Channel::IoPub);
+
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "println(x);", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(
+            reply.content["status"], "ok",
+            "second cell failed: {reply:?}"
+        );
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let stdout_text = iopub
+            .iter()
+            .find(|(k, m)| k == "stream" && m.content["name"] == "stdout")
+            .map(|(_, m)| m.content["text"].as_str().unwrap_or("").to_string())
+            .unwrap_or_default();
+        assert!(stdout_text.contains("7"), "expected '7' in {stdout_text:?}");
+    }
+
+    #[test]
+    fn execute_request_empty_code_is_clean_noop() {
+        // An empty cell is legal and should return cleanly without
+        // an `execute_result` or `error`. Frontends submit empty
+        // cells during shutdown sometimes.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "ok");
+
+        // IOPub: busy → execute_input → idle (no stream lines).
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let kinds: Vec<&str> = iopub.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(kinds, ["status", "execute_input", "status"]);
+    }
+
     #[test]
     fn unhandled_msg_type_does_not_crash() {
-        // Slice 3 only ships kernel_info + shutdown handlers;
-        // unknown messages are logged and skipped. Verify the pump
+        // Slice 4 handles kernel_info / shutdown / execute. Anything
+        // else (slice 5's complete_request, is_complete_request,
+        // interrupt_request) is logged and skipped. Verify the pump
         // returns cleanly and produces no shell output.
         let transport = Arc::new(InMemoryTransport::new());
         let signer = Signer::new("k");
         let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
-        let request = build_request(&signer, "execute_request", json!({}), vec![]);
+        let request = build_request(&signer, "complete_request", json!({}), vec![]);
         transport.push_incoming(Channel::Shell, request);
         run_one_pass(&kernel);
         assert!(transport.drain_outgoing(Channel::Shell).is_empty());
