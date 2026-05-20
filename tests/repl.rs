@@ -1620,6 +1620,153 @@ fn run_time_wraps_cell_body_when_provider_active() {
     assert_eq!(r.stdout.trim(), "42");
 }
 
+// ── Cross-cell providers — slice 4: notebook-aware closed-scope diagnostic ──
+
+#[test]
+fn reference_after_end_provide_surfaces_notebook_aware_tail() {
+    // Design.md § Cross-Cell Providers's headline diagnostic shape:
+    // a binding declared inside `:provide R` is invisible after
+    // `:end-provide R` fires, and the resolver "undefined name 'X'"
+    // error grows a tail naming the provider scope that closed and
+    // the cell where the binding was declared.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let r = s.evaluate_cell_captured("let now = Clock.now();");
+    assert!(
+        r.errors.is_empty(),
+        "let inside scope failed: {:?}",
+        r.errors
+    );
+    s.dispatch_meta(":end-provide Clock");
+    let r = s.evaluate_cell_captured("println(now);");
+    assert!(!r.errors.is_empty(), "expected unresolved-name error");
+    let joined = r.errors.join("\n");
+    assert!(
+        joined.contains("undefined name 'now'"),
+        "missing base error; got:\n{joined}"
+    );
+    assert!(
+        joined.contains("declared inside `:provide Clock`"),
+        "missing notebook-aware tail; got:\n{joined}"
+    );
+    assert!(
+        joined.contains("`:end-provide Clock`"),
+        "tail missing close marker; got:\n{joined}"
+    );
+}
+
+#[test]
+fn binding_outside_provider_scope_survives_end_provide() {
+    // A let declared BEFORE :provide opens is in an outer block and
+    // must remain visible after :end-provide. Only bindings whose
+    // capture-time scope equals the just-closed-scope's pre-pop stack
+    // are pruned.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    let r = s.evaluate_cell_captured("let outer = 7;");
+    assert!(r.errors.is_empty());
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let _ = s.evaluate_cell_captured("let _ = Clock.now();");
+    s.dispatch_meta(":end-provide Clock");
+    let r = s.evaluate_cell_captured("println(outer);");
+    assert!(
+        r.errors.is_empty(),
+        "outer-scope binding must survive close; got {:?}",
+        r.errors
+    );
+    assert_eq!(r.stdout.trim(), "7");
+}
+
+#[test]
+fn rebinding_pruned_name_clears_diagnostic_entry() {
+    // After :end-provide prunes a binding, re-binding the same name
+    // in a subsequent cell should nullify the prune diagnostic — a
+    // later "undefined name 'X'" would be unrelated to the closed
+    // scope. Test by re-binding then deliberately referencing a
+    // DIFFERENT undefined name and confirming no spurious provider
+    // tail attaches.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let _ = s.evaluate_cell_captured("let now = Clock.now();");
+    s.dispatch_meta(":end-provide Clock");
+    // Re-bind `now` so the prune diagnostic falls away.
+    let r = s.evaluate_cell_captured("let now = 99;");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    // Reference a different missing name; the resolver error must NOT
+    // carry a `:provide Clock` tail (the only pruned entry was `now`,
+    // and it was cleared by the re-bind).
+    let r = s.evaluate_cell_captured("println(other);");
+    assert!(!r.errors.is_empty());
+    let joined = r.errors.join("\n");
+    assert!(joined.contains("undefined name 'other'"));
+    assert!(
+        !joined.contains(":provide Clock"),
+        "spurious provider tail attached to unrelated error; got:\n{joined}"
+    );
+}
+
+#[test]
+fn reset_clears_pruned_provider_lets() {
+    // :reset is a clean slate for the persistent-let machinery — the
+    // pruned-bindings record should clear too so future "undefined
+    // name 'X'" errors don't carry stale provider-scope tails.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let _ = s.evaluate_cell_captured("let now = Clock.now();");
+    s.dispatch_meta(":end-provide Clock");
+    s.reset_persistent_lets();
+    let r = s.evaluate_cell_captured("println(now);");
+    assert!(!r.errors.is_empty());
+    let joined = r.errors.join("\n");
+    assert!(
+        !joined.contains(":provide Clock"),
+        ":reset must clear pruned bindings; got:\n{joined}"
+    );
+}
+
+#[test]
+fn nested_close_prunes_only_inner_scope_bindings() {
+    // Nested :provide A; :provide B; let x inside B; :end-provide B
+    // must prune `x` (declared under [A, B]) but leave any binding
+    // declared under just [A] visible. Exercises the equality check
+    // on capture-time scope vs. pre-pop active stack.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    let _ = s.evaluate_cell_captured("struct FakeRng {}");
+    let _ = s.evaluate_cell_captured("impl FakeRng { fn next(ref self) -> i64 { 0 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let r = s.evaluate_cell_captured("let clock_val = Clock.now();");
+    assert!(r.errors.is_empty(), "outer let: {:?}", r.errors);
+    s.dispatch_meta(":provide RandomSource = FakeRng {}");
+    let r = s.evaluate_cell_captured("let rng_val = RandomSource.next();");
+    assert!(r.errors.is_empty(), "inner let: {:?}", r.errors);
+    s.dispatch_meta(":end-provide RandomSource");
+    // `rng_val` is pruned (declared under [Clock, RandomSource]);
+    // `clock_val` survives (declared under just [Clock]).
+    let r = s.evaluate_cell_captured("let _ = clock_val;");
+    assert!(
+        r.errors.is_empty(),
+        "outer binding must survive inner close; got {:?}",
+        r.errors
+    );
+    let r = s.evaluate_cell_captured("println(rng_val);");
+    assert!(!r.errors.is_empty(), "expected pruned binding error");
+    let joined = r.errors.join("\n");
+    assert!(joined.contains("undefined name 'rng_val'"));
+    assert!(
+        joined.contains(":provide RandomSource"),
+        "missing inner-scope tail; got:\n{joined}"
+    );
+}
+
 #[test]
 fn export_handles_nested_provider_scopes() {
     // Nested `:provide A; :provide B; cell; :end-provide B; :end-provide A`

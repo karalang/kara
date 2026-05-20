@@ -126,6 +126,20 @@ pub(super) fn toml_escape_string(s: &str) -> String {
     out
 }
 
+/// Extract the binding name from a resolver `undefined name 'X'`
+/// message. The resolver builds these via `format!("undefined name
+/// '{}'", name)` (`src/resolver.rs::error_undefined_name`), so the
+/// pattern is fixed: single quotes, no escaping. Returns `None` for
+/// any other shape so the caller falls through to the unenriched
+/// render path.
+pub(super) fn extract_undefined_name(msg: &str) -> Option<&str> {
+    let prefix = "undefined name '";
+    let start = msg.find(prefix)? + prefix.len();
+    let rest = msg.get(start..)?;
+    let end = rest.find('\'')?;
+    Some(&rest[..end])
+}
+
 /// Parse the right-hand side of `:provide <Resource> = <expr>` into the
 /// resource identifier and the expression source. The split is at the
 /// first `=` so expression operators like `==` survive untouched —

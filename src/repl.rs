@@ -257,6 +257,20 @@ fn render_export_nodes(nodes: &[ExportNode], indent: usize) -> String {
     s
 }
 
+/// Record of a persistent `let` binding that was pruned from the
+/// session because its originating `:provide` scope closed. Drives the
+/// notebook-aware tail on subsequent `undefined name '...'` resolver
+/// errors so the user sees *why* the binding vanished, not just that
+/// it's gone (design.md § Cross-Cell Providers diagnostic shape).
+#[derive(Debug, Clone)]
+struct PrunedProviderLet {
+    binding_name: String,
+    declared_in_cell: usize,
+    pruned_by_resource: String,
+    scope_opened_cell: usize,
+    pruned_at_cell: usize,
+}
+
 /// Event log entry recording one `:provide` / `:end-provide` meta-command
 /// in submission order. `cells_seen` is `cell_history.len()` at the moment
 /// the meta-command ran — meta-commands themselves don't enter
@@ -426,6 +440,27 @@ pub struct Session {
     /// sessions that never opened a scope, in which case the export
     /// path falls back to the flat `render_main_body` form unchanged.
     provider_history: Vec<ProviderHistoryEntry>,
+    /// For each entry in `persistent_lets`, the resource names of the
+    /// active provider stack at the moment the binding was captured
+    /// (outermost first). Empty `Vec` for bindings captured outside
+    /// any `:provide` scope. Length is invariant-equal to
+    /// `persistent_lets.len()`. Consumed by `end_provider` to detect
+    /// which replayed `let`s were declared inside the now-closing
+    /// scope so they prune in lockstep with the meta-command;
+    /// matches design.md § Cross-Cell Providers's "bindings declared
+    /// inside `:provide R` are visible only within that scope" rule.
+    persistent_let_provider_scope: Vec<Vec<String>>,
+    /// Bindings that were dropped from `persistent_lets` when their
+    /// originating `:provide` scope closed. The REPL's
+    /// `render_resolve_errors_repl` layer consults this table on
+    /// "undefined name 'X'" resolver errors and, if the missing name
+    /// matches a pruned entry, appends a notebook-aware tail naming
+    /// the closed provider scope and the cell where the binding was
+    /// declared (mirrors the use-after-move enrichment shape from
+    /// `render_ownership_errors_repl`). Entries are removed when the
+    /// user re-binds the same name in a later cell (capture clears
+    /// stale pruning data); cleared entirely by `reset_persistent_lets`.
+    pruned_provider_lets: Vec<PrunedProviderLet>,
 }
 
 impl Default for Session {
@@ -447,6 +482,8 @@ impl Session {
             pending_deps: BTreeMap::new(),
             provider_stack: Vec::new(),
             provider_history: Vec::new(),
+            persistent_let_provider_scope: Vec::new(),
+            pruned_provider_lets: Vec::new(),
         }
     }
 
@@ -1039,11 +1076,7 @@ impl Session {
             let resolved = crate::resolve(&parsed.program);
             if !resolved.errors.is_empty() {
                 return Err(WrapperOutcome::errors(
-                    resolved
-                        .errors
-                        .iter()
-                        .map(|e| format!("resolve error: {}", e.message))
-                        .collect(),
+                    self.render_resolve_errors_repl(&resolved.errors),
                     notes,
                 ));
             }
@@ -1322,6 +1355,47 @@ impl Session {
         None
     }
 
+    /// Render resolver errors with REPL-aware enrichment for the
+    /// "binding declared inside a now-closed `:provide` scope" case.
+    /// When the resolver reports `undefined name 'X'` and `X` matches
+    /// an entry in `pruned_provider_lets`, append a notebook-aware
+    /// tail naming the provider scope that closed and the cell where
+    /// `X` was originally declared (design.md § Cross-Cell Providers
+    /// diagnostic shape). Other resolver errors use the existing
+    /// `resolve error: <message>` rendering verbatim — strictness is
+    /// identical to `.kara` files; only presentation differs.
+    fn render_resolve_errors_repl(&self, errors: &[crate::resolver::ResolveError]) -> Vec<String> {
+        let mut rendered: Vec<String> = Vec::with_capacity(errors.len());
+        for err in errors {
+            let mut line = format!("resolve error: {}", err.message);
+            if let Some(name) = extract_undefined_name(&err.message) {
+                if let Some(pruned) = self
+                    .pruned_provider_lets
+                    .iter()
+                    .find(|p| p.binding_name == name)
+                {
+                    line.push_str(&format!(
+                        "\n  note: `{}` was declared inside `:provide {}` (cell {}) and went out of scope when `:end-provide {}` ran in cell {}",
+                        pruned.binding_name,
+                        pruned.pruned_by_resource,
+                        pruned.declared_in_cell,
+                        pruned.pruned_by_resource,
+                        pruned.pruned_at_cell,
+                    ));
+                    line.push_str(&format!(
+                        "\n  hint: extract `{}` to a cell BEFORE `:provide {}` (cell {}), or delay `:end-provide {}` until you no longer need the binding in later cells",
+                        pruned.binding_name,
+                        pruned.pruned_by_resource,
+                        pruned.scope_opened_cell,
+                        pruned.pruned_by_resource,
+                    ));
+                }
+            }
+            rendered.push(line);
+        }
+        rendered
+    }
+
     /// Render ownership errors with REPL-aware enrichment for
     /// `UseAfterMove` diagnostics. When the consume site and the use site
     /// resolve to different cells (via `cell_for_span` over the just-built
@@ -1522,9 +1596,25 @@ impl Session {
         // Cell index = `cell_history.len()` because the caller pushed the
         // current cell's source before invoking the wrapper pipeline.
         let cell_idx = self.cell_history.len();
+        // Snapshot the active provider scope (resource names) so a future
+        // `:end-provide R` knows whether each binding was declared inside
+        // its scope. Empty Vec for bindings captured outside any scope.
+        let active_scope: Vec<String> = self
+            .provider_stack
+            .iter()
+            .map(|f| f.resource.clone())
+            .collect();
         for entry in scan_top_level_lets(cell_src) {
+            // A new binding with the same name as a previously-pruned one
+            // nullifies the prune diagnostic — the user re-bound it, so
+            // future "undefined name" errors for it would be unrelated.
+            for n in &entry.names {
+                self.pruned_provider_lets.retain(|p| &p.binding_name != n);
+            }
             self.persistent_lets.push(entry.slice);
             self.persistent_let_origin.push(cell_idx);
+            self.persistent_let_provider_scope
+                .push(active_scope.clone());
         }
     }
 
@@ -1558,19 +1648,29 @@ impl Session {
         for name in &new_names {
             self.let_snapshots.remove(name);
         }
-        // Walk persistent_lets and persistent_let_origin in lockstep so
-        // the parallel cell-origin tags stay aligned with the slices.
+        // Walk persistent_lets, persistent_let_origin, and
+        // persistent_let_provider_scope in lockstep so the parallel
+        // metadata stays aligned with the slices.
         let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
         let mut kept_origin: Vec<usize> = Vec::with_capacity(self.persistent_let_origin.len());
+        let mut kept_scope: Vec<Vec<String>> =
+            Vec::with_capacity(self.persistent_let_provider_scope.len());
         for (i, prior) in self.persistent_lets.iter().enumerate() {
             let prior_names = parse_let_binding_names(prior);
             if !prior_names.iter().any(|n| new_names.contains(n)) {
                 kept_lets.push(prior.clone());
                 kept_origin.push(*self.persistent_let_origin.get(i).unwrap_or(&0));
+                kept_scope.push(
+                    self.persistent_let_provider_scope
+                        .get(i)
+                        .cloned()
+                        .unwrap_or_default(),
+                );
             }
         }
         self.persistent_lets = kept_lets;
         self.persistent_let_origin = kept_origin;
+        self.persistent_let_provider_scope = kept_scope;
     }
 
     /// Drop every persistent `let` binding accumulated so far. Items
@@ -1582,7 +1682,9 @@ impl Session {
     pub fn reset_persistent_lets(&mut self) {
         self.persistent_lets.clear();
         self.persistent_let_origin.clear();
+        self.persistent_let_provider_scope.clear();
         self.let_snapshots.clear();
+        self.pruned_provider_lets.clear();
     }
 
     /// Type a single expression by wrapping it as `let __t = <expr>;` inside
@@ -2033,6 +2135,19 @@ impl Session {
             );
             return;
         }
+        // Snapshot the active provider stack BEFORE popping the
+        // closing frame — every persistent-let captured with this exact
+        // stack snapshot was declared inside the now-closing scope and
+        // must drop from the replay buffer (design.md § Cross-Cell
+        // Providers's "bindings declared inside `:provide R` are
+        // visible only within that scope" rule). Lets captured under a
+        // strict prefix of this stack (i.e. before the closing scope
+        // opened) stay — they belong to an outer block.
+        let active_at_close: Vec<String> = self
+            .provider_stack
+            .iter()
+            .map(|f| f.resource.clone())
+            .collect();
         let frame = self
             .provider_stack
             .pop()
@@ -2043,6 +2158,41 @@ impl Session {
                 resource: frame.resource.clone(),
             },
         });
+
+        // Prune persistent_lets whose capture-time scope equals the
+        // just-closed-scope's pre-pop stack. Each pruned binding seeds
+        // a `pruned_provider_lets` entry so the diagnostic-rendering
+        // layer can attach the notebook-aware tail on a future
+        // "undefined name 'X'" error.
+        let pruned_at_cell = self.cell_history.len() + 1;
+        let mut kept_lets: Vec<String> = Vec::with_capacity(self.persistent_lets.len());
+        let mut kept_origin: Vec<usize> = Vec::with_capacity(self.persistent_let_origin.len());
+        let mut kept_scope: Vec<Vec<String>> =
+            Vec::with_capacity(self.persistent_let_provider_scope.len());
+        for (i, scope) in self.persistent_let_provider_scope.iter().enumerate() {
+            if scope == &active_at_close {
+                let let_src = &self.persistent_lets[i];
+                let declared_in_cell = *self.persistent_let_origin.get(i).unwrap_or(&0);
+                for binding in parse_let_binding_names(let_src) {
+                    self.let_snapshots.remove(&binding);
+                    self.pruned_provider_lets.push(PrunedProviderLet {
+                        binding_name: binding,
+                        declared_in_cell,
+                        pruned_by_resource: frame.resource.clone(),
+                        scope_opened_cell: frame.opened_cell,
+                        pruned_at_cell,
+                    });
+                }
+            } else {
+                kept_lets.push(self.persistent_lets[i].clone());
+                kept_origin.push(*self.persistent_let_origin.get(i).unwrap_or(&0));
+                kept_scope.push(scope.clone());
+            }
+        }
+        self.persistent_lets = kept_lets;
+        self.persistent_let_origin = kept_origin;
+        self.persistent_let_provider_scope = kept_scope;
+
         println!(
             "(provider scope `:provide {}` from cell {} closed)",
             frame.resource, frame.opened_cell
