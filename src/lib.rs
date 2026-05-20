@@ -448,3 +448,220 @@ pub fn run_program_full(
         (output, errors, trace, truncated)
     })
 }
+
+// ── Browser playground entry point ──────────────────────────────────
+//
+// Tracker line 703 — `play.kara-lang.org`. Single source string in,
+// structured envelope out: captured stdout + compile / runtime
+// diagnostics + an overall `ok` flag. The wasm-bindgen wrapper in the
+// `playground/` workspace member serializes this verbatim to JS-side
+// JSON. Native unit tests pin the contract independent of any wasm
+// machinery so the entrypoint stays observable in plain `cargo test`.
+
+/// Single normalized diagnostic emitted by any compiler phase or by the
+/// interpreter. `phase` is one of `"parse"`, `"resolve"`, `"typecheck"`,
+/// `"effect"`, `"ownership"`, `"runtime"` — the playground UI keys severity /
+/// color off this field. Span fields are 1-indexed line/column matching the
+/// rest of `karac`'s diagnostic surface plus the raw byte offset/length so
+/// the editor can move the cursor with no recomputation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaygroundDiagnostic {
+    pub phase: &'static str,
+    pub message: String,
+    pub line: usize,
+    pub column: usize,
+    pub offset: usize,
+    pub length: usize,
+}
+
+/// Structured result of one playground run.
+///
+/// - `stdout`: captured `println` / `print` output lines (no trailing `\n`).
+/// - `diagnostics`: every error / warning produced across the pipeline,
+///   plus any runtime errors recorded by the interpreter. Empty on a fully
+///   clean run.
+/// - `ok`: true iff every phase ran cleanly AND the interpreter recorded
+///   no runtime errors. A type / effect / ownership warning marks `ok = false`
+///   even though the interpreter still ran — the UI uses this to switch
+///   the run-button indicator from green to amber.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlaygroundResult {
+    pub stdout: Vec<String>,
+    pub diagnostics: Vec<PlaygroundDiagnostic>,
+    pub ok: bool,
+}
+
+fn push_diag(
+    out: &mut Vec<PlaygroundDiagnostic>,
+    phase: &'static str,
+    message: String,
+    span: &crate::token::Span,
+) {
+    out.push(PlaygroundDiagnostic {
+        phase,
+        message,
+        line: span.line,
+        column: span.column,
+        offset: span.offset,
+        length: span.length,
+    });
+}
+
+/// Run `source` through the full check pipeline and (when possible) the
+/// interpreter, returning a [`PlaygroundResult`] envelope suitable for
+/// rendering in a browser playground.
+///
+/// Posture mirrors `run_program_full` for the post-resolve phases (typecheck
+/// / effect / ownership errors are collected but the interpreter still runs —
+/// the tree-walk interpreter is dynamically typed and does not enforce
+/// effects or ownership). Parse and resolve errors are hard stops: the
+/// downstream phases would surface noise rooted in unresolved names, so we
+/// return early with just the parse / resolve diagnostics.
+pub fn run_playground(source: &str) -> PlaygroundResult {
+    let mut diagnostics = Vec::new();
+
+    let mut parsed = parse(source);
+    if !parsed.errors.is_empty() {
+        for e in &parsed.errors {
+            push_diag(&mut diagnostics, "parse", e.message.clone(), &e.span);
+        }
+        return PlaygroundResult {
+            stdout: Vec::new(),
+            diagnostics,
+            ok: false,
+        };
+    }
+
+    desugar_program(&mut parsed.program);
+
+    let resolved = resolve(&parsed.program);
+    if !resolved.errors.is_empty() {
+        for e in &resolved.errors {
+            push_diag(&mut diagnostics, "resolve", e.message.clone(), &e.span);
+        }
+        return PlaygroundResult {
+            stdout: Vec::new(),
+            diagnostics,
+            ok: false,
+        };
+    }
+
+    let typed = typecheck(&parsed.program, &resolved);
+    for e in &typed.errors {
+        push_diag(&mut diagnostics, "typecheck", e.message.clone(), &e.span);
+    }
+
+    lower(&mut parsed.program, &typed);
+
+    let effects = effectcheck(&parsed.program);
+    for e in &effects.errors {
+        push_diag(&mut diagnostics, "effect", e.message.clone(), &e.span);
+    }
+
+    let ownership = ownershipcheck(&parsed.program, &typed);
+    for e in &ownership.errors {
+        push_diag(&mut diagnostics, "ownership", e.message.clone(), &e.span);
+    }
+
+    let pre_interp_diag_count = diagnostics.len();
+    let (stdout, runtime_errors) = run_on_interp_thread(|| {
+        let mut interp = interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.captured_output = Some(Vec::new());
+        interp.run();
+        let errors = std::mem::take(&mut interp.runtime_errors);
+        let output = interp.captured_output.take().unwrap_or_default();
+        (output, errors)
+    });
+    for e in &runtime_errors {
+        push_diag(&mut diagnostics, "runtime", e.message.clone(), &e.span);
+    }
+
+    let ok = pre_interp_diag_count == 0 && runtime_errors.is_empty();
+    PlaygroundResult {
+        stdout,
+        diagnostics,
+        ok,
+    }
+}
+
+#[cfg(test)]
+mod playground_tests {
+    use super::*;
+
+    #[test]
+    fn run_playground_pure_expression_succeeds_with_no_output() {
+        let result = run_playground("fn main() { let x = 1 + 2; }");
+        assert!(result.ok, "diagnostics: {:?}", result.diagnostics);
+        assert!(result.stdout.is_empty());
+        assert!(result.diagnostics.is_empty());
+    }
+
+    #[test]
+    fn run_playground_captures_println_output() {
+        let result = run_playground("fn main() { println(\"hello\"); println(\"world\"); }");
+        assert!(result.ok, "diagnostics: {:?}", result.diagnostics);
+        // captured_output preserves trailing `\n`s; the browser UI joins this
+        // verbatim into a <pre>. See the existing run_program tests in
+        // tests/interpreter.rs for the same convention.
+        assert_eq!(
+            result.stdout,
+            vec!["hello\n".to_string(), "world\n".to_string()]
+        );
+    }
+
+    #[test]
+    fn run_playground_reports_parse_error_without_running() {
+        let result = run_playground("fn main() { let = ; }");
+        assert!(!result.ok);
+        assert!(!result.diagnostics.is_empty());
+        assert!(result.diagnostics.iter().all(|d| d.phase == "parse"));
+        assert!(result.stdout.is_empty());
+    }
+
+    #[test]
+    fn run_playground_reports_resolve_error_without_running() {
+        let result = run_playground("fn main() { let _ = undefined_name(); }");
+        assert!(!result.ok);
+        assert!(result.diagnostics.iter().any(|d| d.phase == "resolve"));
+        assert!(result.stdout.is_empty());
+    }
+
+    #[test]
+    fn run_playground_runs_through_typecheck_warning_and_captures_output() {
+        // A program with stdout that runs cleanly proves the post-warning
+        // run path works; type errors specifically don't block execution
+        // (tree-walk interpreter is dynamically typed).
+        let result = run_playground("fn main() { println(\"executed\"); }");
+        assert!(result.ok);
+        assert_eq!(result.stdout, vec!["executed\n".to_string()]);
+    }
+
+    #[test]
+    fn run_playground_records_runtime_error_as_diagnostic() {
+        // Unwrap-of-None is the canonical user-triggerable runtime error
+        // that records into `interp.runtime_errors` without panicking the
+        // host process. The `panics` effect on main is required since the
+        // unwrap path tracks the `panics` effect.
+        let result =
+            run_playground("fn main() panics { let x: Option[i32] = None; let _ = x.unwrap(); }");
+        assert!(!result.ok);
+        assert!(
+            result.diagnostics.iter().any(|d| d.phase == "runtime"),
+            "expected a runtime diagnostic, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn run_playground_diagnostic_span_carries_line_column_offset() {
+        let result = run_playground("fn main() { let _ = undefined_name(); }");
+        let first = result
+            .diagnostics
+            .first()
+            .expect("expected at least one diagnostic");
+        assert_eq!(first.phase, "resolve");
+        assert!(first.line >= 1);
+        assert!(first.column >= 1);
+        assert!(first.length > 0);
+    }
+}
