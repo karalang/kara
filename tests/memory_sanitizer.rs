@@ -2456,4 +2456,119 @@ fn main() {
             "ref_arg_repeated_calls_no_compound_leak",
         );
     }
+
+    // ── kara-katas leetcode #8 (atoi) end-to-end ─────────────────
+    //
+    // The kata that surfaced the interpreter Cast no-op (commit
+    // 6a79ae2) and motivated `String.bytes()` (commit 517aa1d).
+    // Locks in: the shipped kata source compiles, runs, prints the
+    // 20 expected integers, and exits ASAN-clean. Source kept
+    // in-sync with `kara-katas/.../atoi.kara` (~80 lines verbatim);
+    // if the kara-katas file drifts, this test stays a fixed
+    // regression target. Output matches what `python3 atoi.py`
+    // emits — see kara-katas/leetcode/1-100/8-string-to-integer-atoi.
+
+    #[test]
+    fn asan_kata_8_atoi_bytes_one_pass() {
+        assert_clean_asan_run(
+            r#"
+fn my_atoi(s: ref String) -> i32 {
+    let bytes = s.bytes();
+    let n = bytes.len();
+
+    let space: u8 = ' ' as u32 as u8;
+    let plus:  u8 = '+' as u32 as u8;
+    let minus: u8 = '-' as u32 as u8;
+    let zero:  u8 = '0' as u32 as u8;
+    let nine:  u8 = '9' as u32 as u8;
+
+    let mut i = 0i64;
+    while i < n and bytes[i] == space {
+        i = i + 1;
+    }
+
+    let mut sign: i32 = 1i32;
+    if i < n and bytes[i] == plus {
+        i = i + 1;
+    } else if i < n and bytes[i] == minus {
+        sign = -1i32;
+        i = i + 1;
+    }
+
+    let int_max: i32 = 2147483647i32;
+    let int_min: i32 = -2147483648i32;
+    let max_div: i32 = int_max / 10i32;
+
+    let mut result: i32 = 0i32;
+    while i < n {
+        let b = bytes[i];
+        if b < zero or b > nine {
+            break;
+        }
+        let digit: i32 = (b as i32) - (zero as i32);
+        if result > max_div or (result == max_div and digit > 7i32) {
+            if sign == 1i32 {
+                return int_max;
+            }
+            return int_min;
+        }
+        result = result * 10i32 + digit;
+        i = i + 1;
+    }
+
+    sign * result
+}
+
+fn report(s: ref String) {
+    println(my_atoi(s));
+}
+
+fn main() {
+    report("42");
+    report("   -42");
+    report("4193 with words");
+    report("words and 987");
+    report("-91283472332");
+    report("91283472332");
+    report("+1");
+    report("");
+    report("   ");
+    report("+-12");
+    report("-+12");
+    report("  0000000000012345678");
+    report("2147483647");
+    report("-2147483648");
+    report("2147483648");
+    report("-2147483649");
+    report("  +0 123");
+    report("00000-42a1234");
+    report("  -0012a42");
+    report("+");
+}
+"#,
+            &[
+                "42",
+                "-42",
+                "4193",
+                "0",
+                "-2147483648",
+                "2147483647",
+                "1",
+                "0",
+                "0",
+                "0",
+                "0",
+                "12345678",
+                "2147483647",
+                "-2147483648",
+                "2147483647",
+                "-2147483648",
+                "0",
+                "0",
+                "-12",
+                "0",
+            ],
+            "kata_8_atoi_bytes_one_pass",
+        );
+    }
 }
