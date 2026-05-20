@@ -1425,3 +1425,226 @@ fn cell_effect_footer_empty_for_pure_items_cell() {
         r.effect_footer,
     );
 }
+
+// ── Cross-cell providers — slice 2: parser + provider_stack + LIFO close ──
+
+#[test]
+fn provide_meta_rejects_missing_equals() {
+    // `:provide DB` (no `= expr`) must surface a usage hint and leave
+    // the stack untouched. The dispatcher prints to stderr; we assert
+    // via state inspection.
+    let mut s = Session::new();
+    s.dispatch_meta(":provide DB");
+    assert!(s.provider_stack().is_empty());
+}
+
+#[test]
+fn provide_meta_rejects_invalid_resource_ident() {
+    // The resource ident must be a Kāra identifier — leading digit
+    // rejected, no frame pushed.
+    let mut s = Session::new();
+    s.dispatch_meta(":provide 123 = 42");
+    assert!(s.provider_stack().is_empty());
+}
+
+#[test]
+fn provide_meta_rejects_empty_expression() {
+    // `:provide DB =` (trailing `=` with empty RHS) must surface a
+    // usage hint and leave the stack untouched.
+    let mut s = Session::new();
+    s.dispatch_meta(":provide DB =");
+    assert!(s.provider_stack().is_empty());
+}
+
+#[test]
+fn provide_meta_pushes_frame_after_valid_construction() {
+    // Slice 2 validates construction by running the expression through
+    // the standard pipeline. A plain integer literal types cleanly and
+    // runs to completion, so the frame pushes. The resource-level
+    // typecheck against the wrapping `with_provider` form lands in
+    // slice 3; slice 2 just establishes the dispatching surface.
+    let mut s = Session::new();
+    s.dispatch_meta(":provide MyR = 42");
+    let stack = s.provider_stack();
+    assert_eq!(stack.len(), 1, "expected one frame; got {stack:?}");
+    assert_eq!(stack[0].resource, "MyR");
+    assert_eq!(stack[0].expr_src, "42");
+    assert_eq!(stack[0].opened_cell, 1);
+}
+
+#[test]
+fn provide_meta_does_not_open_scope_on_type_error() {
+    // Construction expression that fails to resolve / typecheck
+    // surfaces the error and leaves the frame un-pushed. Matches the
+    // design.md guarantee: "if construction panics, the scope is not
+    // opened". Type-time failures are a strict superset of runtime
+    // panics (caught earlier in the pipeline).
+    let mut s = Session::new();
+    s.dispatch_meta(":provide DB = no_such_function_anywhere()");
+    assert!(
+        s.provider_stack().is_empty(),
+        "type-error construction must not open the scope"
+    );
+}
+
+#[test]
+fn end_provide_pops_innermost_frame() {
+    let mut s = Session::new();
+    s.dispatch_meta(":provide A = 1");
+    assert_eq!(s.provider_stack().len(), 1);
+    s.dispatch_meta(":end-provide A");
+    assert!(s.provider_stack().is_empty());
+}
+
+#[test]
+fn end_provide_with_no_active_scope_errors() {
+    let mut s = Session::new();
+    s.dispatch_meta(":end-provide DB");
+    assert!(s.provider_stack().is_empty());
+}
+
+#[test]
+fn end_provide_wrong_name_errors_with_single_frame() {
+    // `:end-provide B` while only `:provide A` is active — the top of
+    // stack is `A`, not `B`, so the dispatcher surfaces a mismatch
+    // error and leaves the stack untouched. Exercises the same LIFO
+    // close-check branch nested provides hit, without needing real
+    // resource definitions (nested-`:provide` validation eagerly wraps
+    // in the active outer providers and that wrap requires a real
+    // `effect resource` declaration to typecheck — slice 5 adds the
+    // full end-to-end nested test with proper resource stubs).
+    let mut s = Session::new();
+    s.dispatch_meta(":provide A = 1");
+    assert_eq!(s.provider_stack().len(), 1);
+    s.dispatch_meta(":end-provide B");
+    let stack = s.provider_stack();
+    assert_eq!(stack.len(), 1, "mismatch must not pop; got {stack:?}");
+    assert_eq!(stack[0].resource, "A");
+}
+
+#[test]
+fn end_provide_validates_resource_ident() {
+    let mut s = Session::new();
+    s.dispatch_meta(":provide A = 1");
+    s.dispatch_meta(":end-provide 123");
+    // Stack untouched on invalid ident.
+    assert_eq!(s.provider_stack().len(), 1);
+    assert_eq!(s.provider_stack()[0].resource, "A");
+}
+
+// ── Cross-cell providers — slice 3: run-time wrap + export wrap ──
+
+#[test]
+fn export_falls_back_to_flat_form_when_provider_history_empty() {
+    // Sessions that never touch :provide / :end-provide must continue
+    // to emit the flat `render_main_body` shape unchanged — the
+    // timeline-aware path only kicks in when provider_history is
+    // non-empty, so existing 679-style export tests stay valid.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("println(\"hi\");");
+    let exported = s.render_exported_session();
+    assert!(
+        !exported.contains("with_provider"),
+        "no providers used, export must not contain with_provider; got:\n{exported}"
+    );
+    assert!(exported.contains("println(\"hi\");"));
+}
+
+#[test]
+fn export_omits_empty_provider_scopes() {
+    // `:provide A` immediately followed by `:end-provide A` with no
+    // cells between is an empty scope — the export should drop it
+    // entirely so the saved file stays minimal.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("println(\"before\");");
+    s.dispatch_meta(":provide A = 1");
+    s.dispatch_meta(":end-provide A");
+    let _ = s.evaluate_cell_captured("println(\"after\");");
+    let exported = s.render_exported_session();
+    assert!(
+        !exported.contains("with_provider"),
+        "empty scope must collapse; got:\n{exported}"
+    );
+    assert!(exported.contains("println(\"before\");"));
+    assert!(exported.contains("println(\"after\");"));
+}
+
+#[test]
+fn export_wraps_cells_in_active_scope() {
+    // Cells that ran between `:provide Clock` and `:end-provide Clock`
+    // land inside `with_provider[Clock](expr, || { … })` in the
+    // exported source. FakeClock matches the `Clock` resource's
+    // Provider shape (see tests/snapshots/cost_summary_provider.kara
+    // for the same construction in file form). Cells outside the
+    // scope land at the top level of the body.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    let _ = s.evaluate_cell_captured("println(\"before scope\");");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let r = s.evaluate_cell_captured("println(Clock.now());");
+    assert!(
+        r.errors.is_empty(),
+        "cell inside provider scope must run cleanly; errors: {:?}",
+        r.errors
+    );
+    s.dispatch_meta(":end-provide Clock");
+    let _ = s.evaluate_cell_captured("println(\"after scope\");");
+    let exported = s.render_exported_session();
+    assert!(
+        exported.contains("with_provider[Clock](FakeClock {}, || {"),
+        "missing scope wrap; got:\n{exported}"
+    );
+    assert!(
+        exported.contains("println(Clock.now());"),
+        "scope body missing; got:\n{exported}"
+    );
+    // Both outside-scope cells appear at top level, not wrapped.
+    assert!(exported.contains("println(\"before scope\");"));
+    assert!(exported.contains("println(\"after scope\");"));
+}
+
+#[test]
+fn run_time_wraps_cell_body_when_provider_active() {
+    // Confirms the run-time path: a cell whose body resolves a
+    // resource call WOULD fail without an active provider, but with
+    // `:provide Clock = FakeClock {}` open the wrap supplies it and
+    // the cell runs. The stdout assertion proves the wrap actually
+    // executed (not just that the typechecker accepted it).
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 42 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    let r = s.evaluate_cell_captured("println(Clock.now());");
+    assert!(r.errors.is_empty(), "cell errors: {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "42");
+}
+
+#[test]
+fn export_handles_nested_provider_scopes() {
+    // Nested `:provide A; :provide B; cell; :end-provide B; :end-provide A`
+    // renders as nested with_provider blocks (outer A wraps inner B
+    // wraps the cell). Uses two distinct resources — RandomSource is
+    // the other program-rooted resource with a default Provider
+    // shape that an empty user struct can satisfy.
+    let mut s = Session::new();
+    let _ = s.evaluate_cell_captured("struct FakeClock {}");
+    let _ = s.evaluate_cell_captured("impl FakeClock { fn now(ref self) -> i64 { 0 } }");
+    let _ = s.evaluate_cell_captured("struct FakeRng {}");
+    let _ = s.evaluate_cell_captured("impl FakeRng { fn next(ref self) -> i64 { 7 } }");
+    s.dispatch_meta(":provide Clock = FakeClock {}");
+    s.dispatch_meta(":provide RandomSource = FakeRng {}");
+    let r = s.evaluate_cell_captured("println(Clock.now() + RandomSource.next());");
+    assert!(r.errors.is_empty(), "{:?}", r.errors);
+    s.dispatch_meta(":end-provide RandomSource");
+    s.dispatch_meta(":end-provide Clock");
+    let exported = s.render_exported_session();
+    let outer = exported.find("with_provider[Clock]");
+    let inner = exported.find("with_provider[RandomSource]");
+    assert!(outer.is_some(), "missing outer wrap; got:\n{exported}");
+    assert!(inner.is_some(), "missing inner wrap; got:\n{exported}");
+    assert!(
+        outer.unwrap() < inner.unwrap(),
+        "outer wrap must precede inner; got:\n{exported}"
+    );
+}

@@ -180,6 +180,102 @@ impl MagicOutput {
     }
 }
 
+/// Active cross-cell `:provide R = expr` scope. One frame per nested
+/// `:provide` call on the session's provider stack; LIFO close order
+/// (innermost-first) is enforced at `:end-provide` time. The expression
+/// source is stored verbatim so slice 3's wrapping mechanism can splice
+/// it into a `with_provider[R](expr, || { … })` block around each
+/// subsequent statement-cell body, and so `:save` export can emit the
+/// same `with_provider` shape in the rendered `.kara` file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProviderFrame {
+    /// Resource identifier from `:provide R = …` (validated to be a
+    /// Kāra-shaped identifier at parse time).
+    pub resource: String,
+    /// Verbatim RHS of the `:provide` form. Re-evaluated each subsequent
+    /// cell run by the wrapping mechanism; design.md positions this as
+    /// the same provider-stack mechanism the runtime uses elsewhere.
+    pub expr_src: String,
+    /// 1-based cell index at which the `:provide` was issued. Powers the
+    /// notebook-aware "declared inside `:provide R` (cell N)" tail on
+    /// slice 4's "cannot find value declared inside closed scope"
+    /// diagnostic. Set to `cell_history.len() + 1` at push time so it
+    /// names the cell the user will see next (meta-commands themselves
+    /// don't enter `cell_history`).
+    pub opened_cell: usize,
+}
+
+/// Internal node type for the saved-session export tree. Built by
+/// `render_exported_main_body_with_providers` from the interleaved
+/// `cell_history` + `provider_history` timeline; rendered recursively
+/// with one level of indentation per nesting depth.
+enum ExportNode {
+    Statement(String),
+    Block {
+        resource: String,
+        expr_src: String,
+        children: Vec<ExportNode>,
+    },
+}
+
+fn render_export_nodes(nodes: &[ExportNode], indent: usize) -> String {
+    let pad = "    ".repeat(indent);
+    let mut s = String::new();
+    for (i, node) in nodes.iter().enumerate() {
+        if i > 0 {
+            s.push('\n');
+        }
+        match node {
+            ExportNode::Statement(src) => {
+                for line in src.lines() {
+                    if line.trim().is_empty() {
+                        s.push('\n');
+                    } else {
+                        s.push_str(&pad);
+                        s.push_str(line);
+                        s.push('\n');
+                    }
+                }
+            }
+            ExportNode::Block {
+                resource,
+                expr_src,
+                children,
+            } => {
+                s.push_str(&pad);
+                s.push_str("with_provider[");
+                s.push_str(resource);
+                s.push_str("](");
+                s.push_str(expr_src);
+                s.push_str(", || {\n");
+                s.push_str(&render_export_nodes(children, indent + 1));
+                s.push_str(&pad);
+                s.push_str("});\n");
+            }
+        }
+    }
+    s
+}
+
+/// Event log entry recording one `:provide` / `:end-provide` meta-command
+/// in submission order. `cells_seen` is `cell_history.len()` at the moment
+/// the meta-command ran — meta-commands themselves don't enter
+/// `cell_history`, so this number names the position the next user cell
+/// will land at. The export-rendering path interleaves these events with
+/// `cell_history` to rebuild the nested `with_provider` shape from the
+/// saved-session form.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ProviderHistoryEntry {
+    pub cells_seen: usize,
+    pub kind: ProviderHistoryKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ProviderHistoryKind {
+    Open { resource: String, expr_src: String },
+    Close { resource: String },
+}
+
 /// Result of `Session::evaluate_cell_captured` — captured stdout plus any
 /// parse / resolve / type errors. Used by integration tests; the
 /// production `evaluate_cell` writes directly to the process's stdout/
@@ -307,6 +403,29 @@ pub struct Session {
     /// point: when the package manager arrives, it consumes this map at
     /// the head of each subsequent cell to register surface symbols.
     pending_deps: BTreeMap<String, String>,
+    /// Active cross-cell `:provide R = expr` scopes, in nesting order
+    /// (outermost first). `:provide` pushes after eagerly validating the
+    /// construction expression in the current cell — if construction
+    /// fails or panics, the frame is NOT pushed (matching design.md §
+    /// Cross-Cell Providers's "panic doesn't open the scope" guarantee).
+    /// `:end-provide R` pops the innermost frame; LIFO mismatch
+    /// surfaces a structured error and leaves the stack untouched.
+    /// Slice 3 reads this stack at cell-run time to wrap subsequent
+    /// statement-cell bodies in nested `with_provider[R](expr, || { … })`
+    /// blocks, and slice 4 uses the `opened_cell` field for the
+    /// notebook-aware "declared inside closed provider scope"
+    /// diagnostic.
+    provider_stack: Vec<ProviderFrame>,
+    /// Submission-ordered log of every `:provide` / `:end-provide`
+    /// meta-command. Drives the saved-session export's nested
+    /// `with_provider` shape — each open/close pair compiles to one
+    /// `with_provider[R](expr, || { /* cells in scope */ })` block in
+    /// the rendered `.kara` file, with the cells that ran between the
+    /// pair living inside the closure body (design.md § Cross-Cell
+    /// Providers: "cell boundaries do not survive export"). Empty for
+    /// sessions that never opened a scope, in which case the export
+    /// path falls back to the flat `render_main_body` form unchanged.
+    provider_history: Vec<ProviderHistoryEntry>,
 }
 
 impl Default for Session {
@@ -326,6 +445,8 @@ impl Session {
             auto_clone: false,
             let_snapshots: HashMap::new(),
             pending_deps: BTreeMap::new(),
+            provider_stack: Vec::new(),
+            provider_history: Vec::new(),
         }
     }
 
@@ -618,6 +739,15 @@ impl Session {
         &self.pending_deps
     }
 
+    /// Inspector for the active cross-cell provider stack. Returns the
+    /// frames in nesting order (outermost first). Used by integration
+    /// tests to assert push/pop semantics without driving the REPL
+    /// through a TTY; the wrapping mechanism in slice 3 and the
+    /// notebook-aware diagnostic in slice 4 also consume this.
+    pub fn provider_stack(&self) -> &[ProviderFrame] {
+        &self.provider_stack
+    }
+
     /// Inspector for accumulated items source. Used by integration tests
     /// and could surface inside a `:show items` meta-command later.
     pub fn items_source(&self) -> &str {
@@ -701,6 +831,20 @@ impl Session {
                     );
                 } else {
                     self.add_dep(rest);
+                }
+            }
+            ":provide" => {
+                if rest.is_empty() {
+                    eprintln!("usage: :provide <Resource> = <expr>");
+                } else {
+                    self.add_provider(rest);
+                }
+            }
+            ":end-provide" => {
+                if rest.is_empty() {
+                    eprintln!("usage: :end-provide <Resource>");
+                } else {
+                    self.end_provider(rest);
                 }
             }
             other => {
@@ -1334,10 +1478,24 @@ impl Session {
         // slice of the wrapper body. Its 1-based index is one past the
         // current `cell_history` length (the entry has already been pushed
         // by the caller before `build_synthetic_cell` runs).
+        //
+        // When the provider stack is non-empty, the cell body is wrapped
+        // in one `with_provider[R](expr, || { … })` block per active
+        // frame (innermost-first nesting so outermost ends up on the
+        // outside). The wrap rides into the same byte-range the cell
+        // would occupy unwrapped, so UAM spans landing anywhere inside
+        // the wrap still map back to the current cell via
+        // `cell_for_span`. Persistent-let replay continues to sit OUTSIDE
+        // every wrap — bindings declared while a scope was open keep
+        // replaying after `:end-provide` until slice 4's pruning lands;
+        // for those bindings the `let_snapshots` cache short-circuits
+        // RHS re-evaluation so the replay doesn't actually re-touch the
+        // closed-scope resource at runtime.
         let cell_idx = self.cell_history.len();
         let body_start = s.len();
-        s.push_str(cell_src);
-        if !cell_src.ends_with('\n') {
+        let wrapped_body = self.wrap_in_active_providers(cell_src);
+        s.push_str(&wrapped_body);
+        if !wrapped_body.ends_with('\n') {
             s.push('\n');
         }
         let body_end = s.len();
@@ -1538,14 +1696,22 @@ impl Session {
     /// without an intermediate file write.
     pub fn render_exported_session(&self) -> String {
         let items_section = self.items_source.trim_end().to_string();
-        let stmt_cells: Vec<&str> = self
-            .cell_history
-            .iter()
-            .filter(|c| classify_input(c) != CellShape::PureItems)
-            .map(String::as_str)
-            .collect();
 
-        let body = render_main_body(&stmt_cells);
+        // When the session never opened a provider scope, the simpler
+        // flat path matches the existing behavior byte-for-byte. The
+        // timeline-aware path only kicks in for sessions that touched
+        // `:provide` / `:end-provide`.
+        let body = if self.provider_history.is_empty() {
+            let stmt_cells: Vec<&str> = self
+                .cell_history
+                .iter()
+                .filter(|c| classify_input(c) != CellShape::PureItems)
+                .map(String::as_str)
+                .collect();
+            render_main_body(&stmt_cells)
+        } else {
+            self.render_exported_main_body_with_providers()
+        };
         let effects = self.compute_main_effect_decls(&items_section, &body);
 
         let mut out = String::new();
@@ -1570,6 +1736,118 @@ impl Session {
         out.push_str(&body);
         out.push_str("}\n");
         out
+    }
+
+    /// Render the synthetic `fn main()` body with one nested
+    /// `with_provider[R](expr, || { … })` block per `:provide` /
+    /// `:end-provide` pair from `provider_history`. Cells that ran
+    /// between a pair land inside that pair's closure body; cells
+    /// outside any pair land at the top level of the rendered body.
+    /// Empty provider blocks (a `:provide` immediately followed by
+    /// `:end-provide` with no cells between) collapse to nothing so the
+    /// export stays minimal.
+    ///
+    /// Walks `cell_history` and `provider_history` in lockstep — an
+    /// event with `cells_seen == N` fires BEFORE the cell at index N
+    /// (0-based) runs, matching what the recording sites in
+    /// `add_provider` / `end_provider` record. Pure-items cells are
+    /// skipped (they're already at file scope via `items_source`).
+    /// Unbalanced opens at session end (`:provide A` without a matching
+    /// `:end-provide`) close implicitly so the rendered file is
+    /// well-formed.
+    fn render_exported_main_body_with_providers(&self) -> String {
+        // Interleave cell events with provider events into a single
+        // linear stream, then fold the stream into a tree.
+        enum Item<'a> {
+            Cell(&'a str),
+            Open {
+                resource: &'a str,
+                expr_src: &'a str,
+            },
+            Close,
+        }
+
+        let events = &self.provider_history;
+        let mut merged: Vec<Item<'_>> = Vec::new();
+        let mut event_idx = 0usize;
+        for (cell_idx, cell_src) in self.cell_history.iter().enumerate() {
+            while event_idx < events.len() && events[event_idx].cells_seen <= cell_idx {
+                match &events[event_idx].kind {
+                    ProviderHistoryKind::Open { resource, expr_src } => merged.push(Item::Open {
+                        resource: resource.as_str(),
+                        expr_src: expr_src.as_str(),
+                    }),
+                    ProviderHistoryKind::Close { .. } => merged.push(Item::Close),
+                }
+                event_idx += 1;
+            }
+            if classify_input(cell_src) != CellShape::PureItems {
+                merged.push(Item::Cell(cell_src.as_str()));
+            }
+        }
+        while event_idx < events.len() {
+            match &events[event_idx].kind {
+                ProviderHistoryKind::Open { resource, expr_src } => merged.push(Item::Open {
+                    resource: resource.as_str(),
+                    expr_src: expr_src.as_str(),
+                }),
+                ProviderHistoryKind::Close { .. } => merged.push(Item::Close),
+            }
+            event_idx += 1;
+        }
+
+        let mut children_stack: Vec<Vec<ExportNode>> = vec![Vec::new()];
+        let mut meta_stack: Vec<(String, String)> = Vec::new();
+        for item in &merged {
+            match item {
+                Item::Cell(src) => {
+                    children_stack
+                        .last_mut()
+                        .expect("root frame always present")
+                        .push(ExportNode::Statement((*src).to_string()));
+                }
+                Item::Open { resource, expr_src } => {
+                    meta_stack.push(((*resource).to_string(), (*expr_src).to_string()));
+                    children_stack.push(Vec::new());
+                }
+                Item::Close => {
+                    let children = children_stack.pop().expect("close without open frame");
+                    let (resource, expr_src) =
+                        meta_stack.pop().expect("close without matching meta");
+                    if !children.is_empty() {
+                        children_stack
+                            .last_mut()
+                            .expect("parent frame")
+                            .push(ExportNode::Block {
+                                resource,
+                                expr_src,
+                                children,
+                            });
+                    }
+                }
+            }
+        }
+        // Implicitly close any unbalanced opens so the export is well-formed.
+        while !meta_stack.is_empty() {
+            let children = children_stack.pop().expect("unbalanced opens leave frames");
+            let (resource, expr_src) = meta_stack.pop().expect("unbalanced opens leave meta");
+            if !children.is_empty() {
+                children_stack
+                    .last_mut()
+                    .expect("parent frame")
+                    .push(ExportNode::Block {
+                        resource,
+                        expr_src,
+                        children,
+                    });
+            }
+        }
+
+        let root = children_stack
+            .into_iter()
+            .next()
+            .expect("root frame always present");
+        render_export_nodes(&root, 1)
     }
 
     /// Build a synthetic single-file program and look up `main`'s
@@ -1673,5 +1951,197 @@ impl Session {
         println!(
             "  note: package resolution / download lands in v1.1 — the entry is recorded but `{name}`'s symbols are not yet in scope."
         );
+    }
+
+    /// Open a new cross-cell `:provide R = expr` scope. The construction
+    /// expression is eagerly evaluated inside the current cell — if any
+    /// pipeline stage (parse / resolve / type / ownership) errors or
+    /// the interpreter records a runtime panic, the frame is NOT pushed
+    /// and the failure surfaces in the cell output (design.md §
+    /// Cross-Cell Providers: "if construction panics, the scope is not
+    /// opened and the panic surfaces in the cell output").
+    ///
+    /// Construction runs inside the active outer providers' wraps so
+    /// nested forms (e.g. `:provide B = use_A()` while `A` is already
+    /// provided) see the outer provider stack the same way subsequent
+    /// cells will.
+    fn add_provider(&mut self, rest: &str) {
+        let (resource, expr_src) = match parse_provide_form(rest) {
+            Ok(p) => p,
+            Err(msg) => {
+                eprintln!("{msg}");
+                return;
+            }
+        };
+        // Nested same-resource :provides are legal (mirroring nested
+        // `with_provider[R]` in file code) but easy to misuse. Surface a
+        // hint without rejecting — :end-provide will close the innermost
+        // frame, which is what the user almost certainly wants.
+        if let Some(existing) = self.provider_stack.iter().find(|f| f.resource == resource) {
+            eprintln!(
+                "(note: `:provide {resource}` shadows an outer `:provide {resource}` opened in cell {}; the innermost scope is what :end-provide will close.)",
+                existing.opened_cell
+            );
+        }
+        match self.try_construct_provider(&resource, &expr_src) {
+            Ok(()) => {
+                let opened_cell = self.cell_history.len() + 1;
+                self.provider_history.push(ProviderHistoryEntry {
+                    cells_seen: self.cell_history.len(),
+                    kind: ProviderHistoryKind::Open {
+                        resource: resource.clone(),
+                        expr_src: expr_src.clone(),
+                    },
+                });
+                self.provider_stack.push(ProviderFrame {
+                    resource: resource.clone(),
+                    expr_src,
+                    opened_cell,
+                });
+                println!("(provider scope `:provide {resource}` opened)");
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
+                eprintln!("       (`:provide {resource}` was not opened.)");
+            }
+        }
+    }
+
+    /// Close the innermost cross-cell `:provide` scope. LIFO order is
+    /// enforced: closing `:provide A` while `:provide B` is the
+    /// innermost frame surfaces a structured error naming the frame
+    /// that would have to close first (design.md § Cross-Cell
+    /// Providers).
+    fn end_provider(&mut self, rest: &str) {
+        let resource = rest.trim();
+        if resource.is_empty() {
+            eprintln!("usage: :end-provide <Resource>");
+            return;
+        }
+        if !is_valid_resource_ident(resource) {
+            eprintln!("error: `:end-provide {resource}` — resource name must be a Kāra identifier");
+            return;
+        }
+        let Some(top) = self.provider_stack.last() else {
+            eprintln!("error: `:end-provide {resource}` with no active provider scope");
+            return;
+        };
+        if top.resource != resource {
+            eprintln!(
+                "error: `:end-provide {resource}` attempts to close an outer scope while `:provide {}` is still active; close {} first",
+                top.resource, top.resource
+            );
+            return;
+        }
+        let frame = self
+            .provider_stack
+            .pop()
+            .expect("just inspected the top frame above");
+        self.provider_history.push(ProviderHistoryEntry {
+            cells_seen: self.cell_history.len(),
+            kind: ProviderHistoryKind::Close {
+                resource: frame.resource.clone(),
+            },
+        });
+        println!(
+            "(provider scope `:provide {}` from cell {} closed)",
+            frame.resource, frame.opened_cell
+        );
+    }
+
+    /// Eagerly evaluate the construction expression for `:provide R =
+    /// expr` so a panicking constructor leaves the scope un-opened.
+    /// Runs the full parse → resolve → typecheck → ownership →
+    /// interpreter pipeline against a synthetic program built from the
+    /// current session view, with the expression wrapped in any
+    /// already-active provider scopes (so nested `:provide` forms that
+    /// depend on outer providers validate correctly). Returns
+    /// `Err(message)` on any pipeline failure or interpreter-recorded
+    /// runtime error; `Ok(())` indicates a clean construction. This
+    /// method intentionally does NOT mutate session state — no
+    /// `persistent_lets` capture, no `cell_byte_ranges` update — so
+    /// the construction check is a pure validation step.
+    fn try_construct_provider(&self, resource: &str, expr_src: &str) -> Result<(), String> {
+        let inner = format!("let __karac_provide_{resource}__ = {expr_src};\n");
+        let body = self.wrap_in_active_providers(&inner);
+
+        let mut synth = String::new();
+        if !self.items_source.trim().is_empty() {
+            synth.push_str(&strip_main(&self.items_source));
+            if !synth.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str("fn main() {\n");
+        for prior_let in &self.persistent_lets {
+            synth.push_str(prior_let);
+            if !prior_let.ends_with('\n') {
+                synth.push('\n');
+            }
+        }
+        synth.push_str(&body);
+        if !body.ends_with('\n') {
+            synth.push('\n');
+        }
+        synth.push_str("}\n");
+
+        let mut parsed = crate::parse(&synth);
+        if !parsed.errors.is_empty() {
+            return Err(format!(
+                "error: parse error in `:provide {resource}` construction: {}",
+                parsed.errors[0].message
+            ));
+        }
+        let resolved = crate::resolve(&parsed.program);
+        if !resolved.errors.is_empty() {
+            return Err(format!(
+                "error: resolve error in `:provide {resource}` construction: {}",
+                resolved.errors[0].message
+            ));
+        }
+        let typed = crate::typecheck(&parsed.program, &resolved);
+        if !typed.errors.is_empty() {
+            return Err(format!(
+                "error: type error in `:provide {resource}` construction: {}",
+                typed.errors[0].message
+            ));
+        }
+        let owned = crate::ownershipcheck(&parsed.program, &typed);
+        if !owned.errors.is_empty() {
+            return Err(format!(
+                "error: ownership error in `:provide {resource}` construction: {}",
+                owned.errors[0].message
+            ));
+        }
+        crate::lower(&mut parsed.program, &typed);
+        let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
+        interp.run();
+        if let Some(err) = interp.runtime_errors.first() {
+            return Err(format!(
+                "error: panic in `:provide {resource}` construction: {}",
+                err.message
+            ));
+        }
+        Ok(())
+    }
+
+    /// Wrap a cell-body source fragment in the active provider scopes,
+    /// innermost-first so the rendered nesting matches stack push order
+    /// (outermost on the outside). Returns the input unchanged when
+    /// `provider_stack` is empty. Slice 3 uses this for every
+    /// subsequent statement-cell run; slice 2 uses it in
+    /// `try_construct_provider` to validate the nested-`:provide` case.
+    pub(crate) fn wrap_in_active_providers(&self, body: &str) -> String {
+        if self.provider_stack.is_empty() {
+            return body.to_string();
+        }
+        let mut wrapped = body.to_string();
+        for frame in self.provider_stack.iter().rev() {
+            wrapped = format!(
+                "with_provider[{}]({}, || {{\n{}\n}});",
+                frame.resource, frame.expr_src, wrapped
+            );
+        }
+        wrapped
     }
 }

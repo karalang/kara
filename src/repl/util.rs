@@ -126,6 +126,52 @@ pub(super) fn toml_escape_string(s: &str) -> String {
     out
 }
 
+/// Parse the right-hand side of `:provide <Resource> = <expr>` into the
+/// resource identifier and the expression source. The split is at the
+/// first `=` so expression operators like `==` survive untouched —
+/// `:provide DB = make() == real()` parses as resource `DB` with expr
+/// ` make() == real()`. Surfaces a usage hint on malformed input,
+/// matching the established style for the other meta-command parsers.
+pub(super) fn parse_provide_form(rest: &str) -> Result<(String, String), String> {
+    let trimmed = rest.trim();
+    let Some(eq) = trimmed.find('=') else {
+        return Err("usage: :provide <Resource> = <expr>".to_string());
+    };
+    let resource = trimmed[..eq].trim().to_string();
+    let expr_src = trimmed[eq + 1..].trim().to_string();
+    if resource.is_empty() {
+        return Err("error: `:provide` resource name cannot be empty".to_string());
+    }
+    if !is_valid_resource_ident(&resource) {
+        return Err(format!(
+            "error: `:provide {resource}` — resource name must be a Kāra identifier"
+        ));
+    }
+    if expr_src.is_empty() {
+        return Err(format!(
+            "error: `:provide {resource}` — expression after `=` cannot be empty"
+        ));
+    }
+    Ok((resource, expr_src))
+}
+
+/// Check that `s` is a syntactically valid Kāra identifier (the
+/// resource ident on `:provide` / `:end-provide`). Allows ASCII letters,
+/// digits, and underscores; first byte must be a letter or underscore.
+/// Matches the lexer's identifier rule closely enough for the surface
+/// check — the full pipeline catches any deeper issue at construction
+/// time.
+pub(super) fn is_valid_resource_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
 pub(super) fn print_help() {
     println!(
         "Kāra REPL meta-commands:
@@ -135,6 +181,12 @@ pub(super) fn print_help() {
   :effects           print effects accumulated by session items
   :save <file.kara>  write the cell history to <file.kara>
   :reset             clear persistent `let` bindings (items + history kept)
+  :provide R = expr  open a cross-cell `with_provider[R]` scope; expr is
+                     constructed eagerly in this cell — if it panics or
+                     fails to typecheck, the scope is NOT opened.
+  :end-provide R     close the innermost matching `:provide` scope (LIFO);
+                     closing an outer scope while an inner one is still
+                     active is a structured error naming the inner frame.
   :dep <name> = ...  register a dependency for the current session
                      (RHS is the same shape as `[dependencies]` in
                      `kara.toml`: a quoted version string or an inline
