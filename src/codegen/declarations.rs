@@ -1401,24 +1401,51 @@ impl<'ctx> super::Codegen<'ctx> {
                 .state_struct_layouts
                 .get(fn_key)
                 .expect("layout exists for sorted key");
-            self.emit_state_machine_state_destructor_for_key(fn_key, layout);
+            self.emit_state_machine_state_destructor_for_key(program, fn_key, fn_key, layout);
         }
     }
 
-    /// Slice 8v Phase 2: per-key state-struct destructor emission. The
-    /// base-name pass iterates and calls this; the per-mono path passes
-    /// the mangled key. Like the constructor, the destructor body is
-    /// driven entirely by the state struct's LLVM type (looked up via
-    /// `state_struct_types[emit_key]`) plus the `layout.fields`
-    /// classification — no `ast_key` needed. Field-type classification
-    /// (`Vec` / `String` / shared / skip) reads `field.type_name`
-    /// directly from the layout; for per-mono callers this is the
-    /// polymorphic name (e.g., `"Vec"` for a `Vec[T]` captured local)
-    /// which classifies correctly regardless of `T`'s concrete value
-    /// because the heap-bearing shape is determined by the container
-    /// type, not the element type.
+    /// Slice 8v Phase 2 + slice 8w: per-key state-struct destructor
+    /// emission. The base-name pass iterates and calls this with
+    /// `ast_key == emit_key`; the per-mono path passes the polymorphic
+    /// base name as `ast_key` (so the parameter-AST lookup recovers
+    /// the polymorphic `TypeExpr` for type-parameter-typed fields)
+    /// and the mangled name as `emit_key` (for the LLVM symbol name +
+    /// `state_machine_state_destructors` map insertion).
+    ///
+    /// Field-type classification dispatches on `field.type_name`:
+    /// - `Some("Vec" | "VecDeque" | "String" | "str")` →
+    ///   `FieldDrop::VecOrString` — emit the `cap > 0 ? free(data)`
+    ///   pattern. This is the v1 fast path for fields whose container
+    ///   type is recorded directly in `pattern_binding_types` (e.g.
+    ///   `let s: String = …;` records `Some("String")`).
+    /// - `Some(name)` where `shared_types.contains_key(name)` →
+    ///   `FieldDrop::Shared` — emit handle null-guard +
+    ///   `emit_refcount_dec` against the shared type's `heap_type`.
+    /// - `None` → slice 8w param-type resolution: look up the
+    ///   parameter's declared `TypeExpr` via `lookup_param_type_expr`
+    ///   (recovered from the polymorphic `fn_ast.params` by binding
+    ///   name) and resolve it through `llvm_type_for_type_expr`
+    ///   (which honors the active `self.type_subst` so a `T`-typed
+    ///   parameter resolves to the concrete LLVM type for the
+    ///   current monomorphization). If the resolved LLVM type is the
+    ///   Vec struct shape (`{ ptr, i64, i64 }` — same lowering used
+    ///   by `String` / `Vec[U]` / `VecDeque[U]`), classify as
+    ///   `FieldDrop::VecOrString`; otherwise fall through to
+    ///   `FieldDrop::Skip`. The Vec-struct check uses
+    ///   `llvm_ty_is_vec_struct` which does a context-uniqued struct
+    ///   identity comparison. **Shared-`T` (where `T` resolves to a
+    ///   `shared struct N`'s pointer handle) stays as `Skip` in slice
+    ///   8w** — `infer_type_args` loses the surface name when it
+    ///   binds `T → ptr_type`, so the reverse-lookup needed to recover
+    ///   the `shared_types[N].heap_type` for `emit_refcount_dec` would
+    ///   need a parallel name-tracking table; deferred as a follow-on
+    ///   slice once that infrastructure lands.
+    /// - Otherwise → `FieldDrop::Skip` (primitives, ptr, unknown).
     pub(super) fn emit_state_machine_state_destructor_for_key(
         &mut self,
+        program: &Program,
+        ast_key: &str,
         emit_key: &str,
         layout: &crate::ast::StateStructLayout,
     ) {
@@ -1441,6 +1468,7 @@ impl<'ctx> super::Codegen<'ctx> {
             VecOrString,
             Shared,
         }
+        let fn_ast = find_function_ast(program, ast_key);
         let kinds: Vec<FieldDrop> = layout
             .fields
             .iter()
@@ -1449,6 +1477,19 @@ impl<'ctx> super::Codegen<'ctx> {
                     FieldDrop::VecOrString
                 }
                 Some(name) if self.shared_types.contains_key(name) => FieldDrop::Shared,
+                None => {
+                    // Slice 8w: type-parameter-typed param recovery.
+                    // Resolve the parameter's `TypeExpr` against the
+                    // active `type_subst` and classify by LLVM type
+                    // identity. Vec-struct shape ({ ptr, i64, i64 })
+                    // → VecOrString. Other shapes (incl. ptr-shaped
+                    // shared-struct handles) stay Skip in v1.
+                    lookup_param_type_expr(fn_ast, &f.name)
+                        .map(|te| self.llvm_type_for_type_expr(&te))
+                        .filter(|ty| self.llvm_ty_is_vec_struct(*ty))
+                        .map(|_| FieldDrop::VecOrString)
+                        .unwrap_or(FieldDrop::Skip)
+                }
                 _ => FieldDrop::Skip,
             })
             .collect();
@@ -1682,7 +1723,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // destructor + poll-fn (any order; all read the LLVM type).
         self.emit_state_struct_type_for_key(&program, base_key, mono_key, &layout);
         self.emit_state_machine_state_constructor_for_key(mono_key);
-        self.emit_state_machine_state_destructor_for_key(mono_key, &layout);
+        self.emit_state_machine_state_destructor_for_key(&program, base_key, mono_key, &layout);
         self.emit_state_machine_poll_fn_for_key(&program, base_key, mono_key);
     }
 

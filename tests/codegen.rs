@@ -17969,4 +17969,142 @@ fn main() {
             "caller must direct-call the non-yielding mono:\n{caller_body}"
         );
     }
+
+    // ── Phase 6 line 26 slice 8w: destructor classification via `type_subst` ──
+    //
+    // Slice 8v Phase 2 lands per-mono state-machine emission, but the
+    // destructor classifier only inspects `field.type_name` directly.
+    // For type-parameter-typed parameters (e.g. `fn driver[T](item: T)`)
+    // the typechecker records `type_name: None`, so the destructor
+    // fell back to `FieldDrop::Skip` for every mono — leaking heap-
+    // bearing monos like `T = String` under runtime cancel/Err
+    // unwinding. Slice 8w closes the Vec-shape gap: when
+    // `field.type_name == None`, look up the parameter's declared
+    // `TypeExpr` via `lookup_param_type_expr` (shared with the
+    // state-struct shape path) and resolve through
+    // `llvm_type_for_type_expr` against the active `type_subst`. If
+    // the resolved LLVM type is the Vec struct shape (`{ ptr, i64,
+    // i64 }`, used by `String` / `Vec[U]` / `VecDeque[U]`),
+    // classify as `FieldDrop::VecOrString`. Shared-`T` stays as
+    // `Skip` in 8w because `infer_type_args` loses the surface name
+    // when it binds `T → ptr_type` — recovering the
+    // `shared_types[N].heap_type` for `emit_refcount_dec` needs a
+    // parallel name-tracking table, deferred as a follow-on slice.
+
+    #[test]
+    fn test_slice_8w_per_mono_destructor_emitted_for_string_type_arg() {
+        // `fn driver[T](item: T)` instantiated with `T = String` —
+        // the polymorphic field's `type_name` is `None`, but
+        // `lookup_param_type_expr` recovers `TypeExpr::Path(["T"])`
+        // and `llvm_type_for_type_expr` resolves it through
+        // `type_subst[T]` (set by `infer_type_args` to the LLVM
+        // type of the `String` arg — the vec_struct_type shape).
+        // The 8w classification recognises this as
+        // `FieldDrop::VecOrString` and emits the per-mono destructor
+        // with the `cap > 0 ? free(data)` IR pattern.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() {
+                 let s = String.new();
+                 driver(s);
+             }",
+        );
+        // The per-mono destructor's mangled key picks up
+        // `llvm_type_to_mangle_str`'s `struct` shorthand for the
+        // vec-struct-shaped String arg.
+        let drop_fn_marker = "@\"__kara_state_drop_driver$struct\"";
+        assert!(
+            ir.contains(drop_fn_marker),
+            "per-mono destructor must emit for String-typed T captured local:\n{ir}"
+        );
+        // Verify the `cap > 0 ? free` shape inside the destructor
+        // body. LLVM quotes the destructor name (`@"..."`) due to
+        // the `$` mangling marker, so we grep the whole IR rather
+        // than extract by exact name (extract_fn_ir's needle would
+        // miss the quoted form).
+        assert!(
+            ir.contains("%item.drop.cap = load i64"),
+            "destructor must load Vec cap for the T-typed item field:\n{ir}"
+        );
+        assert!(
+            ir.contains("%item.drop.is_heap = icmp ugt i64 %item.drop.cap, 0"),
+            "destructor must compare cap > 0:\n{ir}"
+        );
+        assert!(
+            ir.contains("call void @free(ptr %item.drop.data)"),
+            "destructor must call free on the captured String's data ptr:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8w_per_mono_destructor_still_skipped_for_primitive_type_arg() {
+        // Regression guard: the slice 8w None-fallback must NOT
+        // emit a destructor when the resolved LLVM type is a plain
+        // integer (or any non-Vec-struct shape). Primitive-only
+        // monos (`T = i64`) still skip-when-empty.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        assert!(
+            !ir.contains("@\"__kara_state_drop_driver$i64\""),
+            "per-mono destructor must skip for i64 T:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8w_two_monos_only_heap_bearing_one_gets_destructor() {
+        // `driver[T]` instantiated with both i64 (primitive — skip)
+        // and String (Vec-struct shape — emit). The per-mono
+        // destructors emit independently under each mangled key,
+        // and the i64 mono's destructor stays absent (skip-when-
+        // empty per slice 8u). Pins the asymmetric heap-bearingness
+        // across monos at the classification level.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() {
+                 driver(42i64);
+                 let s = String.new();
+                 driver(s);
+             }",
+        );
+        assert!(
+            !ir.contains("@\"__kara_state_drop_driver$i64\""),
+            "i64 mono must not emit a destructor:\n{ir}"
+        );
+        assert!(
+            ir.contains("@\"__kara_state_drop_driver$struct\""),
+            "String mono must emit a destructor:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8w_non_generic_with_recorded_typename_unchanged() {
+        // Regression guard for the slice 8w None-fallback: a
+        // non-generic yielding fn whose captured local has a
+        // recorded `type_name` (e.g. `items: Vec[i64]` records
+        // `Some("Vec")`) still classifies via the existing direct
+        // `Some(name)` arm — the None-fallback path doesn't fire
+        // here. The destructor emits as it did pre-8w.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(items: Vec[i64]) { fetch(); }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_state_drop_driver");
+        assert!(
+            body.contains("%items.drop.is_heap = icmp ugt i64 %items.drop.cap, 0"),
+            "non-generic Vec captured local still emits cap > 0 check:\n{body}"
+        );
+        assert!(
+            body.contains("call void @free(ptr %items.drop.data)"),
+            "non-generic Vec captured local still emits free:\n{body}"
+        );
+    }
 }
