@@ -53,6 +53,12 @@ use inkwell::IntPredicate;
 
 use super::state::{AssertedIndexBound, VarSlot};
 
+/// `(runtime_captures, const_int_captures)` returned by
+/// `partition_const_int_captures`. The `const_int_captures` tuple
+/// carries `(binding_name, literal_value, integer_suffix)` so the
+/// caller can materialize each entry as a typed LLVM constant.
+type ConstIntCapturePartition = (Vec<String>, Vec<(String, i64, Option<IntSuffix>)>);
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Try to lower the top-level statement at `stmt_index` (inside
     /// `parent_body`) as a recognized reduction. Returns `Ok(Some(()))`
@@ -404,16 +410,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// downstream `k % CONST_POW2` into an `and`-mask, etc.) instead of
     /// flowing through the par-reduce env-struct load.
     ///
-    /// Only handles top-level `let` statements in `parent_body` for v1 —
-    /// captures defined in nested blocks above the loop, or via `let mut`
-    /// + later assignment, stay on the runtime path. This is the common
-    /// case for bench-shape constants like `let n: i64 = 8i64;`.
+    /// Only handles top-level `let` statements in `parent_body` for v1.
+    /// Captures defined in nested blocks above the loop, or via
+    /// `let mut` plus a later assignment, stay on the runtime path.
+    /// This is the common case for bench-shape constants like
+    /// `let n: i64 = 8i64;`.
     fn partition_const_int_captures(
         &self,
         captures: &[String],
         parent_body: &Block,
         stmt_index: usize,
-    ) -> (Vec<String>, Vec<(String, i64, Option<IntSuffix>)>) {
+    ) -> ConstIntCapturePartition {
         let mut runtime = Vec::with_capacity(captures.len());
         let mut consts = Vec::new();
         for name in captures {
@@ -2142,15 +2149,11 @@ fn find_top_level_const_int_init(
                     }
                 }
             }
-            StmtKind::LetUninit { name: let_name, .. } => {
-                if let_name == name {
-                    return None;
-                }
-            }
-            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
-                if is_named_identifier(target, name) {
-                    return None;
-                }
+            StmtKind::LetUninit { name: let_name, .. } if let_name == name => return None,
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. }
+                if is_named_identifier(target, name) =>
+            {
+                return None
             }
             _ => {}
         }
