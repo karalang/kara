@@ -115,8 +115,75 @@ pub struct Manifest {
     /// structural — accepted, surfaced through manifest output, but
     /// not validated against the running compiler.
     pub kara_version: Option<String>,
+    /// `[dependencies]` table — structured capture of every entry. v1
+    /// parses but does not resolve; the resolver (PubGrub) attaches as
+    /// a future slice and consumes this map. `BTreeMap` keeps iteration
+    /// stable for deterministic diagnostic output. Empty when the table
+    /// is absent or empty.
+    pub dependencies: BTreeMap<String, DependencySpec>,
+    /// `[dev-dependencies]` — same shape as `dependencies`. Resolver
+    /// will include these only when building test artifacts (see the
+    /// `[dev-dependencies]` excluded-from-non-test-builds entry in the
+    /// 5.5 tracker). Empty when the table is absent.
+    pub dev_dependencies: BTreeMap<String, DependencySpec>,
     pub warnings: Vec<ManifestWarning>,
 }
+
+/// One `[dependencies]` (or `[dev-dependencies]`) entry. Three shapes are
+/// recognized today; `[target.X.dependencies]` and `[workspace.dependencies]`
+/// have their own future slices (see line 836 / line 1129 in
+/// `docs/implementation_checklist/phase-5-diagnostics.md`).
+///
+/// - `Registry { version }`: the bare-string shorthand `name = "1.2"` or
+///   `name = { version = "1.2" }`. The version string is stored verbatim;
+///   semver-constraint parsing lives in the resolver.
+/// - `Path { path, version }`: `name = { path = "../foo" }`, optionally with
+///   a `version` for publication compatibility.
+/// - `Git { url, reference, version }`: `name = { git = "https://…" }` with
+///   at most one of `branch` / `tag` / `rev`, optionally with `version`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DependencySpec {
+    Registry {
+        version: String,
+    },
+    Path {
+        path: PathBuf,
+        version: Option<String>,
+    },
+    Git {
+        url: String,
+        reference: Option<GitRef>,
+        version: Option<String>,
+    },
+    /// `name = { workspace = true }` — the entry's source is the
+    /// workspace root's `[workspace.dependencies]` table. v1's slice 1
+    /// captures the intent; the workspace-resolver slice will dereference
+    /// it against the workspace root before the resolver runs.
+    Workspace,
+}
+
+/// Git-dep ref selector — at most one is honored per entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRef {
+    Branch(String),
+    Tag(String),
+    Rev(String),
+}
+
+/// Recognized keys inside an inline-table dependency entry. Anything outside
+/// this set produces a soft warning so typos surface without rejecting the
+/// build. `workspace` is reserved for the future workspace-dependencies slice;
+/// today it produces the same soft warning as any other unknown key (with a
+/// hint pointing at the future-slice entry).
+const KNOWN_DEPENDENCY_KEYS: &[&str] = &[
+    "version",
+    "path",
+    "git",
+    "branch",
+    "tag",
+    "rev",
+    "workspace",
+];
 
 /// A soft, non-fatal manifest observation — e.g. an unknown `[package]` key.
 /// Carries a line number when available so `karac` can point at it.
@@ -164,6 +231,14 @@ pub enum ManifestError {
         path: PathBuf,
         key: String,
         expected: &'static str,
+    },
+    /// `[dependencies]` or `[dev-dependencies]` table value is the wrong
+    /// shape (e.g. an integer in place of a string-or-inline-table).
+    InvalidDependencySpec {
+        path: PathBuf,
+        table: &'static str,
+        name: String,
+        message: String,
     },
 }
 
@@ -240,6 +315,19 @@ impl std::fmt::Display for ManifestError {
                 path.display(),
                 key,
                 expected,
+            ),
+            ManifestError::InvalidDependencySpec {
+                path,
+                table,
+                name,
+                message,
+            } => write!(
+                f,
+                "`{}`: `[{}].{}`: {}",
+                path.display(),
+                table,
+                name,
+                message,
             ),
         }
     }
@@ -389,7 +477,6 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
             });
         }
     }
-    warnings.sort_by(|a, b| a.message.cmp(&b.message));
 
     // `[package].kara-version` — optional MSRV constraint. Wrong
     // type is a hard error (typos shouldn't silently disable the
@@ -418,6 +505,15 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     };
 
     let test_resources = parse_test_resources(path, &table)?;
+    let dependencies = parse_dependencies_table(path, &table, "dependencies", &mut warnings)?;
+    let dev_dependencies =
+        parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
+
+    // Stable order across package-key + dependency warnings — same sort key
+    // (message string) used as before, but now applied after the full
+    // accumulation so diagnostic output is deterministic regardless of which
+    // table contributed a given warning.
+    warnings.sort_by(|a, b| a.message.cmp(&b.message));
 
     Ok(Manifest {
         name,
@@ -425,8 +521,188 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         profile,
         test_resources,
         kara_version,
+        dependencies,
+        dev_dependencies,
         warnings,
     })
+}
+
+/// Parse `[dependencies]` or `[dev-dependencies]` into a stable-ordered map.
+/// The `table_name` parameter selects which TOML table to look at and feeds
+/// into diagnostic messages. Unknown-key soft warnings inside a dep entry
+/// append to `warnings` so the CLI surfaces them alongside `[package]` notices.
+fn parse_dependencies_table(
+    path: &Path,
+    table: &toml::Table,
+    table_name: &'static str,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<BTreeMap<String, DependencySpec>, ManifestError> {
+    let Some(value) = table.get(table_name) else {
+        return Ok(BTreeMap::new());
+    };
+    let deps_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: table_name.to_string(),
+            expected: "a table (e.g. `[dependencies]`)",
+        })?;
+    let mut out = BTreeMap::new();
+    for (name, raw) in deps_table {
+        let spec = parse_dependency_value(path, table_name, name, raw, warnings)?;
+        out.insert(name.clone(), spec);
+    }
+    Ok(out)
+}
+
+fn parse_dependency_value(
+    path: &Path,
+    table: &'static str,
+    name: &str,
+    value: &toml::Value,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<DependencySpec, ManifestError> {
+    let invalid = |message: String| ManifestError::InvalidDependencySpec {
+        path: path.to_path_buf(),
+        table,
+        name: name.to_string(),
+        message,
+    };
+
+    match value {
+        toml::Value::String(version) => {
+            let trimmed = version.trim();
+            if trimmed.is_empty() {
+                return Err(invalid(
+                    "version constraint is empty — use a non-empty semver string (e.g. \"1.0\")"
+                        .to_string(),
+                ));
+            }
+            Ok(DependencySpec::Registry {
+                version: version.clone(),
+            })
+        }
+        toml::Value::Table(entry) => {
+            parse_dependency_inline_table(path, table, name, entry, warnings, &invalid)
+        }
+        _ => Err(invalid(
+            "expected a version string or an inline table (e.g. `{ version = \"1.0\" }` or \
+             `{ path = \"../foo\" }`)"
+                .to_string(),
+        )),
+    }
+}
+
+fn parse_dependency_inline_table(
+    _path: &Path,
+    table: &'static str,
+    name: &str,
+    entry: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+    invalid: &dyn Fn(String) -> ManifestError,
+) -> Result<DependencySpec, ManifestError> {
+    // Soft-warn on unknown keys so typos surface without blocking the build.
+    for key in entry.keys() {
+        if KNOWN_DEPENDENCY_KEYS.contains(&key.as_str()) {
+            continue;
+        }
+        warnings.push(ManifestWarning {
+            line: None,
+            message: format!("unknown key `[{table}].{name}.{key}` — ignored in v1"),
+        });
+    }
+
+    // `workspace = true` is the workspace-inheritance form. Only `true` is
+    // legal (per design.md § Package System > Workspaces) and it cannot be
+    // combined with another source key — the workspace root is the source.
+    if let Some(ws) = entry.get("workspace") {
+        let toml::Value::Boolean(true) = ws else {
+            return Err(invalid(
+                "`workspace` must be the literal value `true`".to_string(),
+            ));
+        };
+        for forbidden in ["version", "path", "git", "branch", "tag", "rev"] {
+            if entry.contains_key(forbidden) {
+                return Err(invalid(format!(
+                    "`workspace = true` cannot be combined with `{forbidden}` — the workspace root is the source"
+                )));
+            }
+        }
+        return Ok(DependencySpec::Workspace);
+    }
+
+    let get_string = |key: &'static str| -> Result<Option<String>, ManifestError> {
+        match entry.get(key) {
+            None => Ok(None),
+            Some(toml::Value::String(s)) => {
+                if s.trim().is_empty() {
+                    Err(invalid(format!(
+                        "`{key}` is empty — provide a non-empty string"
+                    )))
+                } else {
+                    Ok(Some(s.clone()))
+                }
+            }
+            Some(_) => Err(invalid(format!("`{key}` must be a string"))),
+        }
+    };
+
+    let version = get_string("version")?;
+    let path_field = get_string("path")?;
+    let git = get_string("git")?;
+    let branch = get_string("branch")?;
+    let tag = get_string("tag")?;
+    let rev = get_string("rev")?;
+
+    // Mutual-exclusion: path vs git.
+    if path_field.is_some() && git.is_some() {
+        return Err(invalid(
+            "`path` and `git` are mutually exclusive — pick one source".to_string(),
+        ));
+    }
+
+    // Refs (branch/tag/rev) only apply to git deps and at most one is allowed.
+    let ref_count = [&branch, &tag, &rev].iter().filter(|r| r.is_some()).count();
+    if ref_count > 1 {
+        return Err(invalid(
+            "at most one of `branch`, `tag`, `rev` may be set".to_string(),
+        ));
+    }
+    if ref_count > 0 && git.is_none() {
+        return Err(invalid(
+            "`branch` / `tag` / `rev` are only valid on a git dependency".to_string(),
+        ));
+    }
+
+    if let Some(url) = git {
+        let reference = if let Some(b) = branch {
+            Some(GitRef::Branch(b))
+        } else if let Some(t) = tag {
+            Some(GitRef::Tag(t))
+        } else {
+            rev.map(GitRef::Rev)
+        };
+        return Ok(DependencySpec::Git {
+            url,
+            reference,
+            version,
+        });
+    }
+
+    if let Some(p) = path_field {
+        return Ok(DependencySpec::Path {
+            path: PathBuf::from(p),
+            version,
+        });
+    }
+
+    // Neither path nor git — must be a registry entry, which requires `version`.
+    match version {
+        Some(v) => Ok(DependencySpec::Registry { version: v }),
+        None => Err(invalid(
+            "missing required field — provide `version`, `path`, or `git`".to_string(),
+        )),
+    }
 }
 
 /// Parse the optional `[test.resources]` sub-table — `karac test` uses these
@@ -525,8 +801,9 @@ target = "x86_64-linux"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
         assert_eq!(m.name, "hello");
-        // No warnings — unknown *sections* are silent, only unknown keys inside
-        // [package] warn.
+        // `[dependencies]` and `[dev-dependencies]` are now structurally
+        // captured (slice 1 of the PubGrub resolver) — well-formed entries
+        // emit no warnings. Unknown sections like `[build]` remain silent.
         assert!(m.warnings.is_empty());
     }
 
@@ -763,6 +1040,496 @@ kara-version = "   "
             }
             other => panic!("expected InvalidFieldType, got {other:?}"),
         }
+    }
+
+    // ── PubGrub resolver slice 1: dependency parsing ──────────────
+
+    #[test]
+    fn dependencies_absent_yields_empty_map() {
+        let src = r#"[package]
+name = "hello"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.dependencies.is_empty());
+        assert!(m.dev_dependencies.is_empty());
+    }
+
+    #[test]
+    fn dependency_bare_string_is_registry_shorthand() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "1.2"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: "1.2".to_string()
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_inline_table_version_only_is_registry() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { version = "1.2" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: "1.2".to_string()
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_path_form_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+logging = { path = "../logging" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("logging"),
+            Some(&DependencySpec::Path {
+                path: PathBuf::from("../logging"),
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_path_with_version_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+logging = { path = "../logging", version = "0.2" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("logging"),
+            Some(&DependencySpec::Path {
+                path: PathBuf::from("../logging"),
+                version: Some("0.2".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_git_no_ref_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+json = { git = "https://example.com/json-kara" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("json"),
+            Some(&DependencySpec::Git {
+                url: "https://example.com/json-kara".to_string(),
+                reference: None,
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_git_branch_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+json = { git = "https://example.com/json-kara", branch = "main" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("json"),
+            Some(&DependencySpec::Git {
+                url: "https://example.com/json-kara".to_string(),
+                reference: Some(GitRef::Branch("main".to_string())),
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_git_tag_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+json = { git = "https://example.com/json-kara", tag = "v1.0" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("json"),
+            Some(&DependencySpec::Git {
+                url: "https://example.com/json-kara".to_string(),
+                reference: Some(GitRef::Tag("v1.0".to_string())),
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_git_rev_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+json = { git = "https://example.com/json-kara", rev = "abc123" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("json"),
+            Some(&DependencySpec::Git {
+                url: "https://example.com/json-kara".to_string(),
+                reference: Some(GitRef::Rev("abc123".to_string())),
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn dependency_git_with_version_parses() {
+        // The spec's example: registry version constraint + git as the
+        // override fetch source. Captured as Git with a populated `version`.
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+json = { version = "0.8", git = "https://example.com/json-kara" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("json"),
+            Some(&DependencySpec::Git {
+                url: "https://example.com/json-kara".to_string(),
+                reference: None,
+                version: Some("0.8".to_string()),
+            }),
+        );
+    }
+
+    #[test]
+    fn dev_dependencies_parse_with_same_shape() {
+        let src = r#"[package]
+name = "hello"
+
+[dev-dependencies]
+proptest = "0.4"
+mocktest = { path = "../mocktest" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.dependencies.is_empty());
+        assert_eq!(m.dev_dependencies.len(), 2);
+        assert_eq!(
+            m.dev_dependencies.get("proptest"),
+            Some(&DependencySpec::Registry {
+                version: "0.4".to_string()
+            }),
+        );
+        assert_eq!(
+            m.dev_dependencies.get("mocktest"),
+            Some(&DependencySpec::Path {
+                path: PathBuf::from("../mocktest"),
+                version: None,
+            }),
+        );
+    }
+
+    #[test]
+    fn multiple_dependencies_preserve_sorted_order() {
+        // BTreeMap iteration is alphabetic — useful regression pin for the
+        // resolver's diagnostic output, which surfaces constraint chains in
+        // a deterministic order.
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+zebra = "1.0"
+alpha = "0.1"
+mango = { path = "../mango" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        let names: Vec<&String> = m.dependencies.keys().collect();
+        assert_eq!(names, vec!["alpha", "mango", "zebra"]);
+    }
+
+    #[test]
+    fn dependency_path_and_git_mutually_exclusive() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = { path = "../broken", git = "https://example.com/broken" }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("mutually exclusive"),
+                    "expected mutual-exclusion message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_branch_and_tag_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = { git = "https://example.com/broken", branch = "main", tag = "v1.0" }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("at most one of"),
+                    "expected ref-arity message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_branch_without_git_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = { version = "1.0", branch = "main" }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("only valid on a git dependency"),
+                    "expected git-only message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_missing_source_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = { }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("missing required field"),
+                    "expected missing-source message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_empty_version_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = ""
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("empty"),
+                    "expected empty-version message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_wrong_value_type_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = 42
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("version string or an inline table"),
+                    "expected wrong-shape message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_version_field_wrong_type_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+broken = { version = 42 }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "broken");
+                assert!(
+                    message.contains("`version` must be a string"),
+                    "expected version-type message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_table_wrong_shape_rejected() {
+        // Top-level `dependencies = "..."` must precede the `[package]`
+        // header so TOML treats it as a top-level scalar (otherwise it would
+        // land inside the `[package]` table per TOML's continuation rule).
+        let src = r#"dependencies = "not-a-table"
+
+[package]
+name = "hello"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "dependencies"),
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_unknown_key_soft_warns() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { version = "1.0", features = ["derive"] }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: "1.0".to_string()
+            }),
+        );
+        assert_eq!(m.warnings.len(), 1);
+        assert!(
+            m.warnings[0].message.contains("features"),
+            "expected unknown-key warning to mention `features`; got `{}`",
+            m.warnings[0].message,
+        );
+    }
+
+    #[test]
+    fn dependency_workspace_form_parses() {
+        // `workspace = true` (design.md § Workspaces) is captured as a
+        // dedicated variant — the workspace-resolver slice dereferences it
+        // against `[workspace.dependencies]` at the workspace root before
+        // the resolver runs. Slice 1 only captures the intent.
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { workspace = true }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.dependencies.get("http"), Some(&DependencySpec::Workspace));
+        assert!(m.warnings.is_empty(), "got warnings: {:?}", m.warnings);
+    }
+
+    #[test]
+    fn dependency_workspace_false_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { workspace = false }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "http");
+                assert!(
+                    message.contains("must be the literal value `true`"),
+                    "expected workspace-true-only message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn dependency_workspace_with_version_rejected() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { workspace = true, version = "1.0" }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "http");
+                assert!(
+                    message.contains("cannot be combined"),
+                    "expected combination-rejection message; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warnings_remain_sorted_across_package_and_dependency_sources() {
+        // Regression pin: warnings from `[package]` + `[dependencies]` should
+        // merge into a single sorted list so diagnostic output is
+        // deterministic regardless of insertion order.
+        let src = r#"[package]
+name = "hello"
+zzhomepage = "https://example.com"
+
+[dependencies]
+http = { version = "1.0", aaunknown = "x" }
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.warnings.len(), 2);
+        let messages: Vec<&str> = m.warnings.iter().map(|w| w.message.as_str()).collect();
+        let mut sorted = messages.clone();
+        sorted.sort();
+        assert_eq!(messages, sorted);
     }
 
     #[test]
