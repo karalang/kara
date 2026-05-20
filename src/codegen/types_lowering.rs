@@ -751,6 +751,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // so calls that reach `llvm_type_for_name` directly without
             // generic args would otherwise fall to the i64 default.
             "String" | "str" | "VecDeque" | "Vec" => self.vec_struct_type().into(),
+            // Slice 8z: `pattern_binding_types` records the canonical
+            // `"Slice"` surface name for `Type::Slice` parameters /
+            // bindings (typechecker `record_pattern_inner_type` arm). The
+            // matching name-level lookup must return the slice struct
+            // shape (`{ptr, i64}`) so state-struct layout emission sizes
+            // the field correctly; without this arm, the field landed at
+            // the i64 default (8 bytes) while the actual store wrote a
+            // 16-byte slice header, producing a size mismatch the LLVM
+            // verifier accepted under opaque pointers but that semantics-
+            // wise overflowed the field. Mirrors `llvm_type_for_type_expr`
+            // line 67-69's identical `TypeKind::Path("Slice")` arm.
+            "Slice" => self.slice_struct_type().into(),
             name => {
                 // Shared types are heap-allocated pointers.
                 if self.shared_types.contains_key(name) {

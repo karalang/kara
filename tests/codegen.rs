@@ -18261,6 +18261,158 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8z: ref / slice-elem params via per-mono intercept ──
+    //
+    // Slice 8v Phase 2's per-mono caller-side intercept (in
+    // `compile_generic_call`, `src/codegen/mono.rs`) stored compiled
+    // `arg_vals[i]` values directly into state-struct captured-local
+    // fields. For owned-value params that's correct; for `ref T` /
+    // `mut ref T` / `mut Slice[T]` params the loaded value (Vec
+    // struct, i64, etc.) is the wrong shape — the state-struct
+    // field's type is `ptr` (for ref) or `{ ptr, i64 }` (for slice),
+    // and the size mismatch produced ill-typed IR that the LLVM
+    // verifier accepted under opaque pointers but that wrote past
+    // the field's intended footprint into adjacent state-struct
+    // bytes. Slice 8z closes the gap by mirroring the slice 8d
+    // non-generic intercept's arg-handling discipline:
+    //
+    // - `declare_mono_function` populates `fn_param_ref` /
+    //   `fn_param_slice_elem` under the mangled key (mirrors
+    //   `declare_one_function` for non-generic fns).
+    // - The per-mono intercept's arg-store loop now consults those
+    //   tables: ref-flagged params consume the caller-side data ptr
+    //   via `get_data_ptr` (Identifier args) or materialize into a
+    //   stack temp (rvalue args, with `track_vec_var` registration
+    //   for Vec-struct-shaped rvalues so heap cleanup queues
+    //   correctly); slice-elem params route through `coerce_to_slice`
+    //   to synthesize the `{ptr, i64}` slice header at the call site.
+    //
+    // The same change also surfaced a latent gap in
+    // `llvm_type_for_name`: the canonical `"Slice"` surface name
+    // (recorded by the typechecker in `pattern_binding_types` for
+    // `Type::Slice` bindings) fell through to the i64 default
+    // because the match arms didn't include "Slice" — so even with
+    // the intercept storing the right value, the state-struct
+    // field's layout was 8 bytes for a 16-byte slice header. The
+    // arm now mirrors `llvm_type_for_type_expr`'s identical Slice
+    // recognition.
+
+    #[test]
+    fn test_slice_8z_ref_t_identifier_arg_stores_data_ptr() {
+        // `fn driver[T](item: ref T)` with `T = Vec[i64]`. The
+        // state-struct field for `item` is `ptr` (ref T lowers
+        // through `TypeKind::Ref` regardless of T's resolution).
+        // The caller-side intercept must store the data ptr
+        // (via `get_data_ptr("v")`) into the field, NOT the loaded
+        // Vec value. Pre-slice-8z, the loaded `{ ptr, i64, i64 }`
+        // got stored into the ptr-sized field — size mismatch.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: ref T) { fetch(); }
+             fn caller() {
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 driver(v);
+             }",
+        );
+        // State-struct field is ptr-shaped.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("{ i32, ptr }"),
+            "ref T field must lower to ptr:\n{state_line}"
+        );
+        // Caller stores a ptr — slice 8d's `get_data_ptr` pattern.
+        // The exact identifier name (`%v`) survives inkwell's
+        // mangling because there's only one local binding, but be
+        // defensive and just check the value type is ptr.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store ptr %v, ptr %kara.arg0.field_ptr"),
+            "intercept must store data ptr (not loaded Vec value) into ref-T field:\n{caller}"
+        );
+        // Regression guard: the wrong-shape store (loaded Vec
+        // struct into the state-struct ref-T field) must not
+        // appear. Narrowly check stores TO `kara.arg0.field_ptr`
+        // — broader Vec stores from `v.push` etc. are fine.
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into ref-T field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8z_mut_slice_t_arg_synthesizes_slice_header() {
+        // `fn driver[T](items: mut Slice[T])` — the state-struct
+        // field's LLVM type is `{ ptr, i64 }` (slice struct). The
+        // caller's `driver(v)` where `v: Vec[i64]` must synthesize
+        // the slice header at the call site (slice 8d's
+        // `coerce_to_slice` pattern) and store the resulting `{ ptr,
+        // i64 }` into the field. Pre-slice-8z, the field was sized
+        // i64 (the "Slice" surface name fell through
+        // `llvm_type_for_name`'s default arm) while the store wrote
+        // 16 bytes — a corrupt store overflowing into adjacent
+        // state-struct fields.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](items: mut Slice[T]) { fetch(); }
+             fn caller() {
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 driver(mut v);
+             }",
+        );
+        // State-struct field is the slice struct shape.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("{ ptr, i64 }"),
+            "mut Slice[T] field must lower to slice struct {{ ptr, i64 }}:\n{state_line}"
+        );
+        // Caller stores the slice header (synthesized from Vec).
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store { ptr, i64 }") && caller.contains("ptr %kara.arg0.field_ptr"),
+            "intercept must store synthesized slice header into mut Slice[T] field:\n{caller}"
+        );
+        // Regression guard: the wrong-shape store (loaded Vec
+        // struct into the state-struct slice field) must not
+        // appear. Narrowly check stores TO `kara.arg0.field_ptr`.
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into mut Slice[T] field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8z_owned_t_param_still_stores_loaded_value() {
+        // Regression guard: the slice 8z extension is gated on
+        // `fn_param_ref` / `fn_param_slice_elem` tables and must
+        // NOT change the storage shape for owned-value T params.
+        // `fn driver[T](item: T)` with `T = i64` still stores the
+        // loaded `i64` value into the field; no ptr or slice-header
+        // synthesis fires.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "owned-T param must store the loaded value:\n{caller}"
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`

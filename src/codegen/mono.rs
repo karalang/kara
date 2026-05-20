@@ -194,7 +194,34 @@ impl<'ctx> super::Codegen<'ctx> {
             // layout positions parameters first (1..=K after the tag
             // at 0), so arg `i` goes into field `i + 1`. Per-mono
             // emission used the active `type_subst` so the field
-            // types match `arg_vals[i].get_type()`.
+            // types match `arg_vals[i].get_type()` for owned-value
+            // params.
+            //
+            // Slice 8z: extend the store discipline to `ref T` /
+            // `mut ref T` / `mut Slice[T]` param shapes — without
+            // this, the intercept stored a loaded value (Vec struct,
+            // i64, etc.) into a ptr- or Slice-struct-shaped state-
+            // struct field and produced ill-typed IR that the LLVM
+            // verifier rejects. Mirrors slice 8d's non-generic
+            // intercept: ref param → `get_data_ptr(var_name)` for
+            // Identifier args; ref param → materialize into stack
+            // temp for rvalue args (`val` from `arg_vals[i]` is the
+            // already-compiled value, alloca + store + optional
+            // `track_vec_var` for Vec-struct-shaped rvalues so the
+            // heap buffer's scope-exit cleanup queues correctly);
+            // `mut Slice[T]` param → `coerce_to_slice(arg, elem_ty)`
+            // synthesizes the `{ptr, i64}` slice header at the call
+            // site. The tables `fn_param_ref` and
+            // `fn_param_slice_elem` are populated by
+            // `declare_mono_function` against the mangled key (slice
+            // 8z extension) so the lookups resolve to per-mono
+            // results that honor the active `type_subst`.
+            let ref_flags = self.fn_param_ref.get(&mangled).cloned().unwrap_or_default();
+            let slice_elems = self
+                .fn_param_slice_elem
+                .get(&mangled)
+                .cloned()
+                .unwrap_or_default();
             for (i, val) in arg_vals.iter().enumerate() {
                 let field_idx = (i + 1) as u32;
                 let field_ptr = self
@@ -206,8 +233,42 @@ impl<'ctx> super::Codegen<'ctx> {
                         &format!("kara.arg{i}.field_ptr"),
                     )
                     .expect("GEP per-mono state struct field for arg");
+
+                let is_ref = ref_flags.get(i).copied().unwrap_or(false);
+                let slice_elem = slice_elems.get(i).copied().flatten();
+
+                let to_store: BasicValueEnum<'ctx> = if is_ref {
+                    // Ref param: pass a pointer to the caller-side
+                    // data, not the loaded value. Identifier args
+                    // resolve through `get_data_ptr`; rvalue args
+                    // (literals, function returns, arithmetic) get
+                    // materialized into an entry-block alloca whose
+                    // pointer is stored into the field.
+                    if let ExprKind::Identifier(var_name) = &args[i].value.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            self.materialize_rvalue_for_ref_arg(*val, i)
+                        }
+                    } else {
+                        self.materialize_rvalue_for_ref_arg(*val, i)
+                    }
+                } else if let Some(elem_ty) = slice_elem {
+                    // `mut Slice[T]` param: synthesize the slice
+                    // header (`{ptr, i64}`) from the arg. Falls
+                    // through to the loaded value for shapes the
+                    // coercion doesn't recognize (matches the
+                    // non-generic intercept's discipline).
+                    match self.coerce_to_slice(&args[i].value, elem_ty)? {
+                        Some(slice_val) => slice_val,
+                        None => *val,
+                    }
+                } else {
+                    *val
+                };
+
                 self.builder
-                    .build_store(field_ptr, *val)
+                    .build_store(field_ptr, to_store)
                     .expect("store arg into per-mono state struct field");
             }
 
@@ -314,6 +375,41 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Declare the LLVM function for a monomorphized specialization.
     /// `type_subst` must already be populated before calling this.
+    /// Slice 8z: materialize a non-place rvalue arg into an entry-block
+    /// alloca so the `ref T` per-mono caller-side intercept can store
+    /// the resulting `ptr` into the state struct's field. Mirrors
+    /// slice 8d's identical mechanic in `compile_call` — a literal /
+    /// arithmetic / function-return arg bound to a `ref T` param has
+    /// no addressable storage, so codegen mints one. Vec-struct-shaped
+    /// values (Vec / VecDeque / String) get queued for scope-exit
+    /// `FreeVecBuffer` via `track_vec_var` so the heap buffer's
+    /// cleanup runs at the caller's scope boundary; primitives and
+    /// pointer-shaped temporaries (string literals, etc.) need no
+    /// such tracking.
+    fn materialize_rvalue_for_ref_arg(
+        &mut self,
+        val: BasicValueEnum<'ctx>,
+        arg_idx: usize,
+    ) -> BasicValueEnum<'ctx> {
+        let cur_fn = self
+            .builder
+            .get_insert_block()
+            .and_then(|bb| bb.get_parent())
+            .expect("compile_generic_call inside a function context");
+        let temp = self.create_entry_alloca(
+            cur_fn,
+            &format!("kara.arg{arg_idx}.ref_rvalue"),
+            val.get_type(),
+        );
+        self.builder
+            .build_store(temp, val)
+            .expect("store rvalue value into ref-arg materialization slot");
+        if self.llvm_ty_is_vec_struct(val.get_type()) {
+            self.track_vec_var(temp, None);
+        }
+        temp.into()
+    }
+
     pub(super) fn declare_mono_function(
         &mut self,
         func: &Function,
@@ -336,6 +432,33 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.context.void_type().fn_type(&param_types, false)
             }
         };
+
+        // Slice 8z: mirror the non-generic `declare_one_function` ref /
+        // slice-elem table population for the mangled per-mono key.
+        // Without this, slice 8d's caller-side arg-passing rules (ref →
+        // pass pointer, mut Slice → coerce to slice header) are
+        // unreachable from `compile_generic_call`'s per-mono state-
+        // machine intercept — the intercept's arg-store loop falls
+        // through to "store loaded value" for ref / slice params and
+        // mints stores of the wrong LLVM type into the ptr / Slice-
+        // struct-shaped state-struct field. Type-parameter-typed ref
+        // (`ref T`) keeps `ref_flag: true` regardless of T's
+        // resolution; `mut Slice[T]`'s element type resolves through
+        // `extract_slice_elem_type` → `llvm_type_for_type_expr`, which
+        // honors the active `type_subst`.
+        let ref_flags: Vec<bool> = func
+            .params
+            .iter()
+            .map(|p| matches!(&p.ty.kind, TypeKind::Ref(_) | TypeKind::MutRef(_)))
+            .collect();
+        self.fn_param_ref.insert(mangled.to_string(), ref_flags);
+        let slice_elems: Vec<Option<BasicTypeEnum<'ctx>>> = func
+            .params
+            .iter()
+            .map(|p| self.extract_slice_elem_type(&p.ty))
+            .collect();
+        self.fn_param_slice_elem
+            .insert(mangled.to_string(), slice_elems);
 
         Ok(self.module.add_function(mangled, fn_type, None))
     }
