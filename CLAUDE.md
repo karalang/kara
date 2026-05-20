@@ -39,6 +39,8 @@ Without this, the E2E tests (including all `tests/memory_sanitizer.rs` cases) sk
 
 `git merge --ff-only <branch>` from the primary worktree avoids both: it refreshes index+worktree atomically and rejects non-fast-forward updates loudly. If the ff is rejected, the source branch needs `git rebase main` before retrying — never reach for `--no-ff` or `update-ref` as a workaround.
 
+**Prefer rebase + ff over cherry-pick when integrating a side branch.** `git rebase main` from inside the side branch's worktree, then `git merge --ff-only <branch>` from the primary, preserves the side branch's identity — its tip ends up on main's history with the same SHA, so a subsequent `git branch -d <branch>` (the *safe* form that refuses to delete unmerged work) succeeds cleanly. Cherry-pick produces a content-equivalent commit with a fresh SHA; main then has the patch but the side branch's tip is orphaned, forcing `git branch -D` (force-delete) and leaving the original SHA reachable only via the reflog. Reserve cherry-pick for cases where no live branch ref exists — recovering a single commit from a deleted branch or from an orphan SHA in the reflog. The 2026-05-20 recovery used cherry-pick for one such reconstruction; for any future rewind recovery, prefer `git rebase <restored-main> <orphan-branch>` followed by ff if the source branch is still around.
+
 ## Architecture
 
 `karac` is a Rust implementation of the Kāra language compiler. The pipeline flows:
