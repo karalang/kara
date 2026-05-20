@@ -6800,13 +6800,129 @@ fn cmd_install(spec: &str) {
 // can be scaffolded against the final surface today.
 
 fn cmd_vendor() {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read current directory: {e}");
+            process::exit(1);
+        }
+    };
+
+    let (root, mf) = match manifest::load_from_cwd(&cwd) {
+        Ok(ok) => ok,
+        Err(e) => {
+            emit_manifest_error(&e, OutputMode::Text);
+            process::exit(1);
+        }
+    };
+
+    let loader = crate::dep_graph::FsLoader;
+    let graph = match crate::dep_graph::build_dep_graph(&root, mf, &loader) {
+        Ok(g) => g,
+        Err(e) => {
+            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+            emit_dep_diagnostic(&diag, OutputMode::Text, "error");
+            process::exit(1);
+        }
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    let resolution = match crate::dep_resolver::resolve(&graph, &active) {
+        Ok(r) => r,
+        Err(boxed) => {
+            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+            let code = boxed.code();
+            let severity = match code {
+                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
+                _ => "error",
+            };
+            emit_dep_diagnostic(&diag, OutputMode::Text, severity);
+            if severity == "error" {
+                process::exit(1);
+            }
+            // Warnings (registry/git unsupported until line 845 ships)
+            // leave an empty resolution — the vendor copy walks zero
+            // path-deps and exits cleanly with the warning above.
+            crate::dep_resolver::Resolution {
+                packages: std::collections::BTreeMap::new(),
+            }
+        }
+    };
+
+    let vendor_dir = root.join("vendor");
+    let mut copied = 0usize;
+    let mut skipped_non_path = 0usize;
+    for (name, pkg) in &resolution.packages {
+        match &pkg.source {
+            crate::dep_resolver::ResolvedSource::Path(src_dir) => {
+                let dest = vendor_dir.join(name);
+                if let Err(e) = copy_dir_recursive(src_dir, &dest) {
+                    eprintln!(
+                        "error[E_VENDOR_COPY_FAILED]: failed to copy `{name}` into `vendor/`: {e}"
+                    );
+                    process::exit(1);
+                }
+                copied += 1;
+            }
+            crate::dep_resolver::ResolvedSource::Root => {
+                // Root is the host project — nothing to vendor.
+            }
+            crate::dep_resolver::ResolvedSource::Registry { .. }
+            | crate::dep_resolver::ResolvedSource::Git { .. } => {
+                // Forward-compat: the fetched copy lands in vendor/ once
+                // line 845 / git fetch ships. For now we observe and report.
+                skipped_non_path += 1;
+            }
+        }
+    }
+
+    if skipped_non_path > 0 {
+        eprintln!(
+            "note: {skipped_non_path} non-path dependency entr{} skipped — registry/git \
+             vendoring lands alongside the fetch surface (tracker line 845).",
+            if skipped_non_path == 1 { "y" } else { "ies" }
+        );
+    }
     eprintln!(
-        "karac vendor: not yet wired.\n\
-         Dependency copy into ./vendor/ lands alongside the\n\
-         dependency-resolution slice. Pairs with `karac build --offline`.\n\
-         Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
+        "karac vendor: copied {copied} package{} into {}",
+        if copied == 1 { "" } else { "s" },
+        vendor_dir.display()
     );
-    process::exit(2);
+}
+
+/// Recursive directory copy used by `karac vendor`. Creates `dest` if
+/// missing; replaces any existing contents at `dest` to keep vendoring
+/// idempotent across reruns (a manifest change at the source surfaces
+/// in the next vendor invocation). Errors propagate the offending path.
+fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> std::io::Result<()> {
+    if dest.exists() {
+        std::fs::remove_dir_all(dest)?;
+    }
+    std::fs::create_dir_all(dest)?;
+    for entry in std::fs::read_dir(src)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let from = entry.path();
+        let to = dest.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&from, &to)?;
+        } else if file_type.is_symlink() {
+            // Resolve symlinks so the vendored copy stands alone.
+            let target = std::fs::read_link(&from)?;
+            let resolved = if target.is_relative() {
+                from.parent().unwrap_or(src).join(target)
+            } else {
+                target
+            };
+            if resolved.is_dir() {
+                copy_dir_recursive(&resolved, &to)?;
+            } else {
+                std::fs::copy(&resolved, &to)?;
+            }
+        } else {
+            std::fs::copy(&from, &to)?;
+        }
+    }
+    Ok(())
 }
 
 // ── karac update ─────────────────────────────────────────────────

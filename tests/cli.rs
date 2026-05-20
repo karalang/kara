@@ -3390,15 +3390,6 @@ fn test_install_with_spec_emits_not_yet_wired_notice() {
 }
 
 #[test]
-fn test_vendor_emits_not_yet_wired_notice() {
-    let out = karac_bin().arg("vendor").output().unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "v1 placeholder should exit non-zero");
-    assert!(stderr.contains("not yet wired"));
-    assert!(stderr.contains("./vendor/"));
-}
-
-#[test]
 fn test_vendor_rejects_extra_args() {
     let out = karac_bin().args(["vendor", "extra"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -4641,6 +4632,214 @@ fn test_update_rejects_extra_args() {
     assert!(
         stderr.contains("takes at most one"),
         "expected too-many-args error; got: {stderr}",
+    );
+}
+
+// ── karac vendor — real implementation (copies path-deps) ───────────
+
+fn vendor_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-vendor-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_vendor_copies_path_dep_into_vendor_dir() {
+    let tmp = vendor_tempdir("path-dep");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "libs/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let vendored_manifest = tmp.join("vendor/child/kara.toml");
+    let vendored_src = tmp.join("vendor/child/src/lib.kara");
+    let vendored_manifest_contents =
+        std::fs::read_to_string(&vendored_manifest).unwrap_or_default();
+    let vendored_src_contents = std::fs::read_to_string(&vendored_src).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "karac vendor should succeed; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("copied 1 package"),
+        "expected vendor summary; got: {stderr}",
+    );
+    assert!(
+        vendored_manifest_contents.contains("name = \"child\""),
+        "vendored manifest should match the source; got: {vendored_manifest_contents}",
+    );
+    assert!(
+        vendored_src_contents.contains("fn dummy"),
+        "vendored source file should match the source; got: {vendored_src_contents}",
+    );
+}
+
+#[test]
+fn test_vendor_is_idempotent_across_reruns() {
+    let tmp = vendor_tempdir("idempotent");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/child/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[dependencies]
+child = { path = "libs/child" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/child/kara.toml"),
+        r#"[package]
+name = "child"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/child/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let _ = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let first = std::fs::read_to_string(tmp.join("vendor/child/kara.toml")).unwrap();
+
+    // Edit the source manifest, then re-run vendor — the vendored copy
+    // must pick up the new content.
+    std::fs::write(
+        tmp.join("libs/child/kara.toml"),
+        r#"[package]
+name = "child"
+# Trailing comment differentiates the second run.
+"#,
+    )
+    .unwrap();
+    let out = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let second = std::fs::read_to_string(tmp.join("vendor/child/kara.toml")).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "second vendor should succeed; stderr={stderr}"
+    );
+    assert_ne!(
+        first, second,
+        "the second vendor run must refresh the vendored content",
+    );
+    assert!(
+        second.contains("Trailing comment"),
+        "the second vendor must capture the new content; got: {second}",
+    );
+}
+
+#[test]
+fn test_vendor_no_deps_project_succeeds() {
+    let tmp = vendor_tempdir("no-deps");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let vendor_exists = tmp.join("vendor").exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "no-dep vendor should succeed; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("copied 0 packages"),
+        "expected zero-copy summary; got: {stderr}",
+    );
+    assert!(
+        !vendor_exists,
+        "vendor/ should not be created when there are no path-deps to copy",
+    );
+}
+
+#[test]
+fn test_vendor_registry_dep_skipped_with_note() {
+    let tmp = vendor_tempdir("reg-skip");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "proj"
+
+[dependencies]
+http = "1.2"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .arg("vendor")
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // Registry deps downgrade to a resolver warning; vendor honors that
+    // and walks the (empty) remaining resolution.
+    assert!(
+        out.status.success(),
+        "registry-only vendor should not halt; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "expected the resolver warning to surface; got: {stderr}",
     );
 }
 
