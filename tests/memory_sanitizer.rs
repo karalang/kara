@@ -2216,4 +2216,139 @@ fn main() {
             "auto_par_shared_struct_option_return_slot",
         );
     }
+
+    // ── `ref T` arg from a non-place rvalue ──────────────────────
+    //
+    // C-followup (534c5b6 landed the materialization itself): when the
+    // rvalue at a `ref T` arg position carries heap ownership — a
+    // function returning an owned String/Vec, a `String + String`
+    // concatenation, etc. — the materialized temp inside `compile_call`
+    // owns that heap buffer. Without a cleanup registration, the
+    // buffer is unreachable after the call returns (LeakSanitizer
+    // would catch it on Linux; macOS ASAN can't surface leaks but can
+    // still catch the inverse — a double-free if the registration
+    // overshoots). Fix: temps whose value-type matches the
+    // `{ptr,len,cap}` Vec/String layout are routed through
+    // `track_vec_var`, picking up the same `FreeVecBuffer` cleanup
+    // that `let`-bindings use. The walker's `cap > 0` guard makes
+    // the registration safe for non-owning rvalues (string literals
+    // are stored with `cap = 0` and short-circuit to no-op).
+
+    // Observation: `println(s)` where `s: ref String` over a heap-
+    // backed buffer trips an unrelated pre-existing
+    // heap-buffer-overflow on macOS ASAN (puts reads 1 byte past
+    // the buffer expecting a NUL; karac's heap-allocated Strings
+    // don't NUL-terminate). The bug is shared by the let-binding
+    // workaround too, so it's not part of this slice. The tests
+    // below intentionally avoid `println(ref String)` of a heap
+    // String — they observe via `.len()` instead so the ASAN check
+    // focuses on whether the temp's FreeVecBuffer registration
+    // handles the call-site materialization cleanly.
+
+    #[test]
+    fn asan_ref_arg_string_literal_no_double_free() {
+        // Literal rvalue: cap=0, the FreeVecBuffer walker's `cap > 0`
+        // guard must skip the free. A miss here would surface as a
+        // double-free against the static buffer at scope exit.
+        // `println(s.len())` avoids the println(ref String)
+        // heap-buffer-overflow noted above.
+        assert_clean_asan_run(
+            r#"
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    show_len("from literal rvalue");
+}
+"#,
+            &["19"],
+            "ref_arg_string_literal_no_double_free",
+        );
+    }
+
+    #[test]
+    fn asan_ref_arg_heap_string_concat_freed() {
+        // Heap-owning rvalue from concatenation. The materialized
+        // temp owns the joined buffer; cleanup must free it once at
+        // scope exit (LeakSanitizer arm on Linux; UAF / double-free
+        // on macOS). A double-free would fire if both the concat
+        // helper and the temp's FreeVecBuffer registration ran.
+        assert_clean_asan_run(
+            r#"
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    let a = "left ";
+    let b = "right";
+    show_len(a + b);
+}
+"#,
+            &["10"],
+            "ref_arg_heap_string_concat_freed",
+        );
+    }
+
+    #[test]
+    fn asan_ref_arg_function_return_string_freed() {
+        // Function-return rvalue. Without this slice's track_vec_var
+        // call on the materialized temp, the heap allocated inside
+        // `make` would have no owner after the call returns. The
+        // canonical case the commit message calls out.
+        assert_clean_asan_run(
+            r#"
+fn make() -> String {
+    let a = "made ";
+    let b = "string";
+    return a + b;
+}
+
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    show_len(make());
+}
+"#,
+            &["11"],
+            "ref_arg_function_return_string_freed",
+        );
+    }
+
+    #[test]
+    fn asan_ref_arg_repeated_calls_no_compound_leak() {
+        // Calling `show_len(make())` in a loop. Each iteration's
+        // materialized temp is in the same call-arg scope; without
+        // proper cleanup, allocations would either pile up (leak
+        // arm) or be freed against the wrong cap (double-free arm).
+        // 8 iterations is small but enough that any per-iteration
+        // imbalance would surface as a deterministic crash under
+        // ASAN's quarantine.
+        assert_clean_asan_run(
+            r#"
+fn make() -> String {
+    let a = "hi ";
+    let b = "there";
+    return a + b;
+}
+
+fn show_len(s: ref String) {
+    println(s.len());
+}
+
+fn main() {
+    let mut i = 0;
+    while i < 8 {
+        show_len(make());
+        i = i + 1;
+    }
+}
+"#,
+            &["8", "8", "8", "8", "8", "8", "8", "8"],
+            "ref_arg_repeated_calls_no_compound_leak",
+        );
+    }
 }

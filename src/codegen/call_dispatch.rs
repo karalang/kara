@@ -428,13 +428,20 @@ impl<'ctx> super::Codegen<'ctx> {
                 // callee's `ptr` parameter. Mirrors what the let-binding
                 // workaround did implicitly (`let c = "..."; f(c)` —
                 // `let` allocates a slot, then the identifier fast-path
-                // above passes that slot's pointer). Cleanup: string
-                // literals are non-owning (`cap = 0`, buffer in .rodata),
-                // scalars need none. Function-return rvalues with heap
-                // ownership reach here too; the temp doesn't carry a
-                // drop registration yet — a follow-up slice will wire
-                // that through the cleanup stack (tracked alongside the
-                // recurring kata papercut).
+                // above passes that slot's pointer).
+                //
+                // Cleanup: scalars and the no-op `cap = 0` non-owning
+                // case (string literals, .rodata-backed) need none. When
+                // the materialized value has the Vec/String layout
+                // (`{ptr, len, cap}`), register the temp through the
+                // same scope-exit cleanup the `let`-binding workaround
+                // walks (`track_vec_var` → `FreeVecBuffer`); without
+                // this, a function-return rvalue like
+                // `report(make_heap())` would leave its heap buffer
+                // unreachable after the call returns. The
+                // `cap > 0` guard inside `FreeVecBuffer` keeps the
+                // registration safe to apply unconditionally for any
+                // Vec/String-shaped value.
                 let val = self.compile_expr(&a.value)?;
                 let cur_fn = self
                     .builder
@@ -444,6 +451,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let temp =
                     self.create_entry_alloca(cur_fn, &format!("ref_rvalue_arg{i}"), val.get_type());
                 self.builder.build_store(temp, val).unwrap();
+                if self.llvm_ty_is_vec_struct(val.get_type()) {
+                    self.track_vec_var(temp, None);
+                }
                 compiled_args.push(temp.into());
                 continue;
             }

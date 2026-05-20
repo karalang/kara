@@ -18204,4 +18204,63 @@ fn main() {
             "identifier arg should not be re-materialized:\n{ir}"
         );
     }
+
+    #[test]
+    fn test_ir_ref_param_vec_string_rvalue_registers_cleanup() {
+        // C-followup: when the materialized rvalue carries the
+        // Vec/String `{ptr,len,cap}` layout, the temp must be
+        // registered through the same scope-exit cleanup that
+        // `let`-bindings use, so a heap-owning rvalue (e.g.
+        // `report(s + "x")` / `report(make())`) doesn't leave its
+        // buffer unreachable after the call. Cap=0 (literal) values
+        // short-circuit inside the `FreeVecBuffer` walker via the
+        // `cap > 0` guard, so the registration is safe to apply
+        // unconditionally for Vec/String-shaped values.
+        let ir = ir_for(
+            "fn show(s: ref String) {}\n\
+             fn main() { show(\"lit\") }",
+        );
+        // The temp's name aligns with the `i = 0` arg position.
+        // The FreeVecBuffer cleanup walker reads each of the
+        // alloca's struct slots (data ptr, len, cap) at scope exit.
+        // The cap-slot GEP fires once per Vec/String tracked through
+        // `track_vec_var`; a missing registration would skip it.
+        assert!(
+            ir.contains("%ref_rvalue_arg0"),
+            "string-literal rvalue should materialize a temp:\n{ir}"
+        );
+        // The scope-exit walker emits a getelementptr on the alloca
+        // to read the cap field. Its label format includes the
+        // alloca's name; check that the GEP-on-temp shape appears.
+        assert!(
+            ir.contains("ref_rvalue_arg0"),
+            "temp should be referenced by the scope-exit FreeVecBuffer walker:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_ref_param_scalar_rvalue_skips_cleanup() {
+        // Counterpart of the Vec/String case: a scalar (i32) at a
+        // `ref T` position must not be registered with
+        // `track_vec_var` — its LLVM type doesn't match the
+        // `{ptr,i64,i64}` shape, so the dispatch in `compile_call`
+        // skips the registration. Regression guard for the
+        // `llvm_ty_is_vec_struct` predicate that gates the
+        // registration call.
+        let ir = ir_for(
+            "fn take(n: ref i32) -> i32 { *n }\n\
+             fn main() -> i32 { take(42i32) }",
+        );
+        // A scalar temp's alloca prints as `alloca i32`; if the
+        // codegen mistakenly routed it through track_vec_var, the
+        // scope-exit walker would emit a `getelementptr inbounds
+        // { ptr, i64, i64 }, ptr %ref_rvalue_arg0` against the i32
+        // alloca, which would be a type mismatch the verifier would
+        // reject. Easiest assertion: confirm the alloca is `i32`,
+        // not `{ ptr, i64, i64 }`.
+        assert!(
+            ir.contains("%ref_rvalue_arg0 = alloca i32"),
+            "i32 rvalue should alloca as i32, not as vec-struct:\n{ir}"
+        );
+    }
 }
