@@ -29,6 +29,11 @@ regex = "1"
 # so the resolver can intersect them. `Version` is what each candidate
 # package's catalog entry exposes.
 semver = "1"
+# Slice 2 of the lockfile entry (phase-5 line 831): BLAKE3 hashing of
+# manifest TOML content for path-deps. Single hash per locked package so
+# `kara.lock` records what the resolver consumed. Default features only
+# (no rayon/SIMD-dispatch entanglement); pure-data hash use, no streams.
+blake3 = { version = "1", default-features = false }
 pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
 # Slice F (`std.json`): backs the interpreter's `Json.parse` /
 # `Json.stringify` dispatch directly (the runtime crate exposes the
