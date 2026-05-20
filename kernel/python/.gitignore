@@ -1,0 +1,10 @@
+# Python bytecode + dist artifacts produced by `python -m unittest`
+# and `pip install`. Machine + Python-version specific; never
+# tracked.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+.pytest_cache/
