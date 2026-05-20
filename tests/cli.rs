@@ -4294,3 +4294,201 @@ fn test_subcommand_help_query_advertises_affected_by() {
     assert!(stdout.contains("--tests-only"), "got: {stdout}");
     assert!(stdout.contains("--direction"), "got: {stdout}");
 }
+
+// ── PubGrub resolver slice 7 — CLI wiring ─────────────────────────
+
+/// Helper: build a unique tempdir for a slice-7 fixture.
+fn slice7_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-slice7-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_slice7_registry_dep_warns_but_does_not_fail() {
+    // A `[dependencies]` table containing only registry deps should NOT
+    // break the build — slice 7 downgrades E_REGISTRY_DEP_UNSUPPORTED
+    // to a warning so existing projects with registry-style manifests
+    // continue to compile until line 819's fetch surface ships.
+    let tmp = slice7_tempdir("registry-warn");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "proj"
+
+[dependencies]
+http = "1.2"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        stderr.contains("warning[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "expected warning for registry dep; stderr={stderr}",
+    );
+    // Build doesn't have to succeed (LLVM gating may skip codegen) but
+    // the resolver should not have halted it. The error-line invariant
+    // is that no `error[E_*]` from the resolver appears.
+    assert!(
+        !stderr.contains("error[E_REGISTRY_DEP_UNSUPPORTED]"),
+        "registry dep should warn, not error; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_slice7_msrv_too_old_fails_build() {
+    // A `[package].kara-version` constraint that excludes the active
+    // toolchain version is a hard error — the user can't proceed without
+    // upgrading or relaxing the constraint.
+    let tmp = slice7_tempdir("msrv-fail");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "proj"
+kara-version = ">=999.0.0"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "MSRV-too-old should halt the build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_TOO_OLD]"),
+        "expected E_TOOLCHAIN_TOO_OLD; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("999.0.0"),
+        "diagnostic should name the declared constraint; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_slice7_path_dep_cycle_fails_build() {
+    // Two path-deps mutually referencing each other — slice 3's cycle
+    // detection fires through the FsLoader (the real fs walk, not the
+    // in-memory MemLoader the dep_graph unit tests use).
+    let tmp = slice7_tempdir("cycle");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("sub/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root"
+
+[dependencies]
+sub = { path = "sub" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    // sub points back at the root via `..`
+    std::fs::write(
+        tmp.join("sub/kara.toml"),
+        r#"[package]
+name = "sub"
+
+[dependencies]
+root = { path = ".." }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("sub/src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !out.status.success(),
+        "dependency cycle should halt the build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_DEPENDENCY_CYCLE]"),
+        "expected E_DEPENDENCY_CYCLE; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains(" → "),
+        "chain should render with arrow separators; stderr={stderr}"
+    );
+}
+
+#[test]
+fn test_slice7_no_deps_no_msrv_skips_resolver() {
+    // Regression pin: a project with neither `[dependencies]` nor
+    // `kara-version` should not pay for resolver invocation. We verify
+    // by asserting no resolver-emit warnings or errors appear in
+    // stderr — only the existing build phases produce output.
+    let tmp = slice7_tempdir("no-deps");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        !stderr.contains("E_REGISTRY_DEP_UNSUPPORTED"),
+        "no-dep project should not surface any resolver diagnostics; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_TOOLCHAIN_TOO_OLD"),
+        "no-MSRV project should not surface MSRV diagnostics; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_slice7_workspace_dep_outside_workspace_fails() {
+    // `workspace = true` on a dep where the manifest has no
+    // [workspace.dependencies] table — fail loudly with the right code.
+    let tmp = slice7_tempdir("ws-outside");
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "proj"
+
+[dependencies]
+shared = { workspace = true }
+"#,
+    )
+    .unwrap();
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin().arg("build").current_dir(&tmp).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(!out.status.success(), "should halt; stderr={stderr}");
+    assert!(
+        stderr.contains("error[E_WORKSPACE_DEP_OUTSIDE_WORKSPACE]"),
+        "expected E_WORKSPACE_DEP_OUTSIDE_WORKSPACE; stderr={stderr}",
+    );
+}

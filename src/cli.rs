@@ -3716,6 +3716,18 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool) {
         process::exit(1);
     }
 
+    // Slice 7 of the PubGrub-resolver entry: validate the dep graph
+    // before the walker even runs. Errors halt the build; unsupported-
+    // source warnings (registry/git, until fetch ships at line 819)
+    // surface as notices and the build continues. Skipped entirely when
+    // the manifest declares no deps and no MSRV constraint — the common
+    // single-package, no-dep case pays zero overhead.
+    if (!mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some())
+        && !run_dep_resolution(&root, mf.clone(), output)
+    {
+        process::exit(1);
+    }
+
     let walk_opts = WalkerOpts::default();
     let walked = match walker::walk_project(&root, walk_opts) {
         Ok(w) => w,
@@ -4847,6 +4859,105 @@ fn emit_manifest_error(e: &manifest::ManifestError, output: OutputMode) {
                     "\"code\":{},\"message\":{}",
                     json_string(code),
                     json_string(&e.to_string()),
+                ),
+            );
+        }
+    }
+}
+
+/// Build the dep graph and resolve it against the active toolchain. Returns
+/// `true` to continue with the build, `false` to halt. Registry/git
+/// unsupported errors downgrade to warnings — the rest are fatal. Slice 7
+/// of the PubGrub-resolver entry (`docs/implementation_checklist/phase-5-
+/// diagnostics.md` line 813). Wiring point: `cmd_build_project` right
+/// after the manifest loads.
+fn run_dep_resolution(
+    root: &std::path::Path,
+    mf: crate::manifest::Manifest,
+    output: OutputMode,
+) -> bool {
+    let loader = crate::dep_graph::FsLoader;
+    let graph = match crate::dep_graph::build_dep_graph(root, mf, &loader) {
+        Ok(g) => g,
+        Err(e) => {
+            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+            emit_dep_diagnostic(&diag, output, "error");
+            return false;
+        }
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    match crate::dep_resolver::resolve(&graph, &active) {
+        Ok(_) => true,
+        Err(boxed) => {
+            let diag = crate::dep_diagnostic::render_resolver_error(&boxed);
+            let code = boxed.code();
+            let severity = match code {
+                // Registry/git fetch is line-819 territory — until it
+                // ships, packages declaring those sources can't be built
+                // but the rest of the dep graph (path-deps) may still
+                // resolve cleanly. Downgrade to a warning so existing
+                // projects with `[dependencies] http = "1.2"` aren't
+                // immediately broken by slice 7's wiring.
+                "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED" => "warning",
+                _ => "error",
+            };
+            emit_dep_diagnostic(&diag, output, severity);
+            severity == "warning"
+        }
+    }
+}
+
+fn emit_dep_diagnostic(
+    diag: &crate::dep_diagnostic::Diagnostic,
+    output: OutputMode,
+    severity: &str,
+) {
+    match output {
+        OutputMode::Text => {
+            eprintln!(
+                "{}[{}]: {}",
+                if severity == "warning" {
+                    "warning"
+                } else {
+                    "error"
+                },
+                diag.code,
+                diag.primary,
+            );
+            for note in &diag.notes {
+                eprintln!("   = note: {note}");
+            }
+            if let Some(help) = &diag.help {
+                eprintln!("   = help: {help}");
+            }
+        }
+        OutputMode::Json => {
+            let notes_json = diag
+                .notes
+                .iter()
+                .map(|n| json_string(n))
+                .collect::<Vec<_>>()
+                .join(",");
+            println!(
+                "{{\"status\":\"{}\",\"diagnostics\":[{{\"severity\":\"{}\",\"phase\":\"dep_resolution\",\"code\":{},\"message\":{},\"notes\":[{}]{}}}]}}",
+                if severity == "warning" { "ok" } else { "error" },
+                severity,
+                json_string(diag.code),
+                json_string(&diag.primary),
+                notes_json,
+                diag.help
+                    .as_ref()
+                    .map(|h| format!(",\"help\":{}", json_string(h)))
+                    .unwrap_or_default(),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                &format!("dep_resolution_{severity}"),
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(diag.code),
+                    json_string(&diag.primary),
                 ),
             );
         }
