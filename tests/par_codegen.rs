@@ -1334,4 +1334,95 @@ fn main() {
             "IR should declare karac_par_reduce as an extern (slice 3a wiring); got:\n{ir}"
         );
     }
+
+    /// Slice 3b — pipeline-IR test: a `for k in 0..N { acc = acc + k }`
+    /// reduction lowers to a `call void @karac_par_reduce` site with a
+    /// synthesized worker fn. Uses the lowered pipeline (resolve +
+    /// typecheck + lower + effectcheck + concurrency) so the analyzer's
+    /// `LoopReduction` tag is threaded through to codegen.
+    #[test]
+    fn test_ir_reduction_emits_par_reduce_call_slice3b() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..1000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "expected a karac_par_reduce call site; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_worker_"),
+            "expected a synthesized reduce worker fn; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_init_add_i64"),
+            "expected the Add+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_add_i64"),
+            "expected the Add+i64 combine helper; got:\n{ir}"
+        );
+    }
+
+    /// Slice 3b end-to-end: compile + link + run a program with a
+    /// recognized reduction loop and verify the output matches the
+    /// serial Σ-formula. Pinning correctness against the parallel
+    /// dispatch — the recognizer surfaced the loop, codegen lowered it
+    /// to `karac_par_reduce`, the runtime fanned it out across workers,
+    /// the slot-combine produced the right answer.
+    #[test]
+    fn test_e2e_reduction_for_range_add_i64_matches_serial_slice3b() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..1000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [0, 1000) = 999 * 1000 / 2 = 499500
+        assert_eq!(out.trim(), "499500");
+    }
+
+    /// Slice 3b end-to-end: a larger N to exercise the multi-worker
+    /// dispatch path (smaller-N tests hit the single-worker fast path
+    /// inside `karac_par_reduce`). 100K iters land well above any pool
+    /// size, so chunks land on every available worker thread.
+    #[test]
+    fn test_e2e_reduction_for_range_add_i64_multi_worker_slice3b() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [0, 100000) = (100000 * 99999) / 2 = 4999950000
+        assert_eq!(out.trim(), "4999950000");
+    }
 }

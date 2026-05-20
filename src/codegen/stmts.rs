@@ -94,23 +94,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_block(body);
         };
 
-        // Auto-par reduction diagnostic (slice 3a, 2026-05-19). When the
-        // env var `KARAC_REDUCE_DEBUG=1` is set, print every recognized
-        // loop reduction discovered for the current function. This is the
-        // smoke test that the slice-1 analyzer's tags flow through to
-        // codegen unchanged; the actual `karac_par_reduce` lowering that
-        // consumes these tags lands in slice 3b. The diagnostic is gated
-        // (not always-on) because the recognizer fires for any matching
-        // shape — including reductions that won't be parallelized at
-        // codegen time (cost-model gate, type not in allow-list, etc.) —
-        // and routing those into a stable build-time stream would force
-        // every consumer to filter. Pretty-printer is one line per
-        // reduction so a tail of build output stays skimmable.
+        // Auto-par reduction diagnostic (slice 3a / 3b, 2026-05-19). When
+        // the env var `KARAC_REDUCE_DEBUG=1` is set, print every
+        // recognized loop reduction discovered for the current function.
+        // The diagnostic prints whether the recognized loop *was actually
+        // lowered* — slice 3b v1's allow-list is narrow (`+` op, i64
+        // accumulator, `for k in 0..hi` shape with no early exits), so
+        // recognized reductions outside that set silently fall back to
+        // sequential codegen. The diagnostic surfaces that gap so
+        // perf-driven follow-ups know which (op, type, shape) to teach
+        // next. Pretty-printer is one line per reduction so a tail of
+        // build output stays skimmable.
         if std::env::var("KARAC_REDUCE_DEBUG").as_deref() == Ok("1") {
             for r in &decision.loop_reductions {
                 eprintln!(
-                    "karac-reduce-debug: fn={} stmt_index={} line={} op={} accumulator={} \
-                     (slice 3b lowering not yet wired — sequential codegen runs)",
+                    "karac-reduce-debug: fn={} stmt_index={} line={} op={} accumulator={}",
                     self.current_fn_name,
                     r.stmt_index,
                     r.loop_line,
@@ -321,7 +319,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // group-start dispatch.
                 i += 1;
             } else {
-                self.compile_stmt(&body.stmts[i])?;
+                // Auto-par reduction lowering (slice 3b, 2026-05-19).
+                // When the slice-1 analyzer tagged this top-level stmt
+                // as a reduction and the loop matches the v1 narrow
+                // shape (for k in 0..hi { acc = acc + ... } with i64
+                // accumulator and `+` op), lower it to a
+                // `karac_par_reduce` call instead of the sequential
+                // for-loop codegen. `Some(())` means lowered; `None`
+                // means the analyzer tagged it but the codegen v1
+                // doesn't yet handle that op/type/shape — fall through
+                // to sequential. Other recognized reductions land here
+                // unchanged when the lowering's allow-list grows.
+                let lowered = self.try_emit_reduction_lowering(i, &body.stmts[i])?;
+                if lowered.is_none() {
+                    self.compile_stmt(&body.stmts[i])?;
+                }
                 i += 1;
             }
             if self

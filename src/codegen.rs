@@ -47,6 +47,7 @@ mod mono;
 mod par_blocks;
 mod pattern_binding;
 mod provider;
+mod reduce;
 mod runtime;
 mod state;
 mod stmts;
@@ -718,11 +719,9 @@ pub(super) struct Codegen<'ctx> {
     /// Runtime entry point `void karac_par_run(const KaracBranch*, usize)`.
     pub(crate) karac_par_run_fn: FunctionValue<'ctx>,
     /// Runtime entry point `void karac_par_reduce(*const KaracReduceDescriptor,
-    /// *mut u8 out_slot, u32 spawn_site_id)` — declared in slice 3a (wiring
-    /// only); call sites land in slice 3b alongside the actual lowering of
-    /// recognized reduction loops. See the field's declaration site below
-    /// and `runtime/src/lib.rs`'s `karac_par_reduce` for the ABI.
-    #[allow(dead_code)] // consumed by slice 3b's reduction-lowering call sites
+    /// *mut u8 out_slot, u32 spawn_site_id)`. Declared in slice 3a, called
+    /// from slice 3b's `src/codegen/reduce.rs::emit_reduce_call`. See
+    /// `runtime/src/lib.rs`'s `karac_par_reduce` for the ABI.
     pub(crate) karac_par_reduce_fn: FunctionValue<'ctx>,
     // ── Debugger contract: SpawnSiteId metadata (slice 3) ─────────
     /// One entry per `par {}` block (explicit or inferred). Populated by
@@ -1778,7 +1777,6 @@ impl<'ctx> Codegen<'ctx> {
     /// index of a recognized loop. The analyzer (slice 1, `src/concurrency.
     /// rs`) only emits reductions for top-level loop statements, so this
     /// lookup is by stmt index in `func.body.stmts`.
-    #[allow(dead_code)] // consumed by slice 3b's reduction-lowering call sites
     pub(crate) fn loop_reduction_for_stmt(
         &self,
         stmt_index: usize,
