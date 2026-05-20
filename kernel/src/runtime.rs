@@ -134,11 +134,12 @@ pub struct Kernel<T: Transport + 'static> {
     /// unavailable.
     msg_counter: Mutex<u64>,
     /// REPL session driving cell evaluation. Wrapped in a `Mutex`
-    /// because slice 5's `interrupt_request` handler will need to
-    /// read state from a different thread than the pump; `Session`'s
-    /// internal `Value` graph already uses `Arc<RwLock>` so it's
-    /// `Send`, but `evaluate_cell_captured` takes `&mut self` so we
-    /// need exclusive access for the duration of each cell.
+    /// because the interpreter-side cooperative interrupt follow-up
+    /// (v1.1.x) will read session state from a thread different
+    /// than the pump; `Session`'s internal `Value` graph already
+    /// uses `Arc<RwLock>` so it's `Send`, but `evaluate_cell_captured`
+    /// takes `&mut self` so we need exclusive access for the
+    /// duration of each cell.
     session: Mutex<Session>,
     /// 1-indexed per-cell counter, advanced on every non-silent
     /// `execute_request`. Atomic so future interrupt handlers can

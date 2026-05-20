@@ -1,0 +1,20 @@
+{
+  "argv": [
+    "python",
+    "-m",
+    "karac_kernel",
+    "--connection-file={connection_file}"
+  ],
+  "display_name": "Kāra",
+  "language": "kara",
+  "interrupt_mode": "message",
+  "metadata": {
+    "kernel": "karac-kernel",
+    "language_info": {
+      "name": "kara",
+      "file_extension": ".kara",
+      "mimetype": "text/x-kara",
+      "pygments_lexer": "rust"
+    }
+  }
+}

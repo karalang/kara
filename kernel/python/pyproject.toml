@@ -1,0 +1,66 @@
+# Python distribution for the Kāra Jupyter kernel (slice 6 of the
+# `karac-kernel` MVP, phase-5 tracker line 719).
+#
+# This package is a thin launcher + kernelspec installer. The actual
+# kernel process is the Rust `karac-kernel` binary built from the
+# sibling Cargo crate; this PyPI package only:
+#
+#   - locates the binary (env override, PATH lookup, common install
+#     dirs)
+#   - runs `jupyter kernelspec install` against a bundled
+#     `kernel.json` so JupyterLab / `jupyter console` show "Kāra"
+#     in the kernel picker
+#   - forwards Jupyter's `--connection-file=<path>` to the binary
+#     when invoked as the kernel
+#
+# A future v1.1.x follow-up rewrites this installer in Kāra itself
+# (`install-kernel.kara`, gated on `std.fs` / `std.env` /
+# `std.process` shipping in the stable stdlib release) — the Python
+# shim is the v1.1-launch surface, not the long-term home.
+
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "karac-kernel"
+version = "0.1.0"
+description = "Jupyter kernel for the Kāra programming language"
+readme = "README.md"
+license = { text = "MIT OR Apache-2.0" }
+requires-python = ">=3.9"
+authors = [{ name = "Kāra contributors" }]
+keywords = ["jupyter", "kernel", "kara", "language", "ipykernel"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Jupyter",
+    "Framework :: Jupyter :: JupyterLab",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Compilers",
+    "Topic :: Software Development :: Interpreters",
+]
+# No runtime deps beyond the standard library. `jupyter_client` would
+# pull in pyzmq + tornado just to read its data-dir path; we shell
+# out to `jupyter --data-dir` instead so the install side is
+# dependency-free.
+dependencies = []
+
+[project.scripts]
+karac-kernel-install = "karac_kernel.install:main"
+
+[tool.setuptools]
+packages = ["karac_kernel"]
+include-package-data = true
+
+[tool.setuptools.package-data]
+karac_kernel = ["kernel.json"]

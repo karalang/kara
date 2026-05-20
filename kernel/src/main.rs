@@ -1,14 +1,18 @@
 //! `karac-kernel` — Jupyter kernel binary for Kāra.
 //!
 //! Tracker entry: `docs/implementation_checklist/phase-5-diagnostics.md`
-//! § "Jupyter kernel MVP" (line 719).
+//! § "Jupyter kernel MVP" (shipped 2026-05-19, all six slices).
 //!
-//! The binary is registered as a kernel by the Python shim (slice 6);
-//! Jupyter launches it with `--connection-file=<path>` pointing at a
-//! JSON file describing the five ZMQ ports + HMAC signing key. This
-//! slice (1 of 6) wires the argument parser and connection-file
-//! loader; opening sockets and speaking the wire protocol arrives in
-//! later slices.
+//! The binary is registered as a kernel by the Python shim in
+//! `kernel/python/` (slice 6); Jupyter launches it with
+//! `--connection-file=<path>` pointing at a JSON file describing the
+//! five ZMQ ports + HMAC signing key. `main` parses the argument,
+//! loads the connection file, and (under `feature = "real-zmq"`)
+//! hands control to [`runtime::Kernel::run`] which drives the
+//! shell/control message pump until shutdown. The default build
+//! prints a "rebuild with `--features real-zmq`" hint and exits
+//! non-zero so the binary is still a useful kernelspec-wiring smoke
+//! target without libzmq.
 
 use std::process::ExitCode;
 

@@ -150,12 +150,11 @@ pub fn run_with_options(opts: ReplOptions) {
 /// Result of `Session::dispatch_magic` — the rendered display text
 /// plus a flag indicating whether the kernel should treat this as an
 /// error reply. The Jupyter kernel (phase-5 tracker § "Jupyter kernel
-/// MVP", currently `[~]` with slice 1 landed) will route `ok` true
-/// results into `display_data` / `execute_result` and `ok` false
-/// results into `error` replies with the carried text as the
-/// traceback body. The text is line-oriented and pre-trimmed so a
-/// kernel can splice it into its output channel without
-/// re-formatting.
+/// MVP", `[x]` shipped 2026-05-19) routes `ok` true results into
+/// `display_data` / `execute_result` and `ok` false results into
+/// `error` replies with the carried text as the traceback body. The
+/// text is line-oriented and pre-trimmed so a kernel can splice it
+/// into its output channel without re-formatting.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MagicOutput {
     pub text: String,
@@ -497,14 +496,14 @@ impl Session {
     }
 
     /// Dispatch a Jupyter-style `%magic` line. The kernel binary
-    /// (phase-5 tracker § "Jupyter kernel MVP", `[~]` with slice 1
-    /// landed) routes every cell whose first token starts with `%`
-    /// through this entry point; the returned `MagicOutput` carries
-    /// the rendered text, the channel the kernel should display on
-    /// (`stdout` vs `display_data` for rich shapes), and an `ok` flag
-    /// the kernel maps to its protocol error semantics. The same
-    /// dispatcher is exercised by the test suite so the surface is
-    /// observable without a kernel binary.
+    /// (phase-5 tracker § "Jupyter kernel MVP", `[x]` shipped
+    /// 2026-05-19) routes every cell whose first token starts with
+    /// `%` through this entry point; the returned `MagicOutput`
+    /// carries the rendered text, the channel the kernel should
+    /// display on (`stdout` vs `display_data` for rich shapes), and
+    /// an `ok` flag the kernel maps to its protocol error semantics.
+    /// The same dispatcher is exercised by the test suite so the
+    /// surface is observable without a kernel binary.
     ///
     /// Supported magics (line 689 spec):
     ///
