@@ -35,8 +35,12 @@ impl<'a> super::Interpreter<'a> {
                     Value::Set(s) => Value::Int(s.len() as i64),
                     // Note: Map also handled via Map.len() match above
                     _ => unreachable!(
-                        "len() on unsupported type at {}:{}; should be caught by typechecker",
-                        span.line, span.column
+                        "len() receiver at {}:{} was Value::{}; \
+                         either an interpreter codepath produced the wrong receiver variant \
+                         or the typechecker accepted .len() on a type without one",
+                        span.line,
+                        span.column,
+                        obj.variant_name()
                     ),
                 });
             }
@@ -58,8 +62,12 @@ impl<'a> super::Interpreter<'a> {
                         }
                     }
                     _ => unreachable!(
-                        "chars() on unsupported type at {}:{}; should be caught by typechecker",
-                        span.line, span.column
+                        "chars() receiver at {}:{} was Value::{} not String; \
+                         either an interpreter codepath produced the wrong receiver variant \
+                         or the typechecker accepted .chars() on a non-String",
+                        span.line,
+                        span.column,
+                        obj.variant_name()
                     ),
                 });
             }
@@ -93,8 +101,14 @@ impl<'a> super::Interpreter<'a> {
                         mutable,
                     },
                     _ => unreachable!(
-                        "{}() on unsupported type at {}:{}; should be caught by typechecker",
-                        method, span.line, span.column
+                        "{}() receiver at {}:{} was Value::{}; \
+                         either an interpreter codepath produced the wrong receiver variant \
+                         or the typechecker accepted .{}() on a non-sliceable type",
+                        method,
+                        span.line,
+                        span.column,
+                        obj.variant_name(),
+                        method
                     ),
                 });
             }

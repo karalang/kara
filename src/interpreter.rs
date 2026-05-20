@@ -770,6 +770,10 @@ impl<'a> Interpreter<'a> {
 
     fn call_function(&mut self, name: &str, args: &[Value]) -> Value {
         let func = self.env.get(name);
+        let func_variant = func
+            .as_ref()
+            .map(|v| v.variant_name())
+            .unwrap_or("<unbound>");
         match func {
             Some(Value::Function {
                 param_patterns,
@@ -811,8 +815,9 @@ impl<'a> Interpreter<'a> {
                 }
             }
             _ => unreachable!(
-                "'{}' is not a function; should be caught by typechecker",
-                name
+                "internal call_function('{}') found Value::{} not Function; \
+                 the interpreter bound the wrong variant in env or the entry was overwritten",
+                name, func_variant
             ),
         }
     }
@@ -881,8 +886,10 @@ impl<'a> Interpreter<'a> {
         match val {
             Value::Bool(b) => *b,
             _ => unreachable!(
-                "non-bool condition at runtime ({:?}); should be caught by typechecker",
-                val
+                "condition was Value::{} not Bool; \
+                 either an interpreter codepath produced the wrong variant \
+                 or the typechecker accepted a non-Bool condition",
+                val.variant_name()
             ),
         }
     }
@@ -937,11 +944,14 @@ impl<'a> Interpreter<'a> {
     /// Read a field from a struct value. Out of line from `eval_expr_inner`
     /// to keep the recursive evaluator's stack frame small.
     fn read_field(&mut self, obj: Value, field: &str, span: &Span) -> Value {
+        let obj_variant = obj.variant_name();
         match obj {
-            Value::Struct { fields, .. } => fields.get(field).cloned().unwrap_or_else(|| {
+            Value::Struct { fields, name } => fields.get(field).cloned().unwrap_or_else(|| {
                 unreachable!(
-                    "field '{}' not found at {}:{}; should be caught by typechecker",
-                    field, span.line, span.column
+                    "field '{}' not found on struct '{}' at {}:{}; \
+                     either an interpreter codepath constructed the struct without this field \
+                     or the typechecker accepted access to a missing field",
+                    field, name, span.line, span.column
                 )
             }),
             Value::SharedStruct(inner) => {
@@ -987,13 +997,17 @@ impl<'a> Interpreter<'a> {
                     }
                 }
                 unreachable!(
-                    "field '{}' not found on shared struct '{}' at {}:{}; should be caught by typechecker",
+                    "field '{}' not found on shared struct '{}' at {}:{}; \
+                     either an interpreter codepath constructed the SharedStruct without this field \
+                     or the typechecker accepted access to a missing field",
                     field, inner.name, span.line, span.column
                 )
             }
             _ => unreachable!(
-                "field access on non-struct at {}:{}; should be caught by typechecker",
-                span.line, span.column
+                "field access at {}:{}: receiver was Value::{} not Struct/SharedStruct; \
+                 either an interpreter codepath produced the wrong variant \
+                 or the typechecker accepted field access on a non-struct",
+                span.line, span.column, obj_variant
             ),
         }
     }
@@ -1215,7 +1229,9 @@ impl<'a> Interpreter<'a> {
                         }
                     } else {
                         unreachable!(
-                            "shared struct field '{}.{}' not found at {}:{}; should be caught by typechecker",
+                            "shared struct field '{}.{}' not found at {}:{}; \
+                             either an interpreter codepath constructed the SharedStruct without this field \
+                             or the typechecker accepted assignment to a missing field",
                             inner.name, field, object.span.line, object.span.column
                         );
                     }

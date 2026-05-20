@@ -317,7 +317,9 @@ impl<'a> super::Interpreter<'a> {
         }
 
         unreachable!(
-            "method '{}' not found on type '{}' at {}:{}; should be caught by typechecker",
+            "method '{}' not found on type '{}' at {}:{}; \
+             either an interpreter dispatch arm is missing for this method \
+             or the typechecker accepted a call to an unresolved method",
             method, type_name, span.line, span.column
         )
     }

@@ -53,8 +53,14 @@ impl<'a> super::Interpreter<'a> {
                         .map(|(k, v)| Value::Tuple(vec![k.clone(), v.clone()]))
                         .collect(),
                     _ => unreachable!(
-                        "{}() on unsupported type at {}:{}; should be caught by typechecker",
-                        method, span.line, span.column,
+                        "{}() receiver at {}:{} was Value::{}; \
+                         either an interpreter codepath produced the wrong receiver variant \
+                         or the typechecker accepted .{}() on a non-iterable type",
+                        method,
+                        span.line,
+                        span.column,
+                        obj.variant_name(),
+                        method
                     ),
                 };
                 return Some(Value::Iterator {

@@ -10082,3 +10082,52 @@ fn main() {
     );
     assert_eq!(output, "3\n8\n9\n10\n");
 }
+
+// `c as i32` used to be a no-op in the interpreter (codegen lowered it
+// correctly via LLVM `int_cast`). The downstream subtraction then panicked
+// in `eval_ops` with "type mismatch in binary operation Sub". The fix
+// mirrors `check_cast_pair`'s accepted shapes (char → wide-int).
+// Surfaced while writing kata #8 (string-to-integer atoi).
+#[test]
+fn test_interp_char_as_i32_digit_subtraction() {
+    let output = run(r#"
+fn main() {
+    let s = "0123";
+    for c in s.chars() {
+        let n: i32 = c as i32;
+        let d: i32 = n - 48i32;
+        println(d);
+    }
+}
+"#);
+    assert_eq!(output, "0\n1\n2\n3\n");
+}
+
+#[test]
+fn test_interp_int_widening_narrowing_casts() {
+    let output = run(r#"
+fn main() {
+    let a: i32 = 1000i32;
+    let b: i64 = a as i64;
+    println(b);
+    let c: i8 = a as i8;
+    let d: i32 = c as i32;
+    println(d);
+}
+"#);
+    // 1000 widens to i64 unchanged; truncating to i8 keeps the low 8 bits
+    // (1000 & 0xff = 0xe8 = -24 as signed i8), then widens back as -24.
+    assert_eq!(output, "1000\n-24\n");
+}
+
+#[test]
+fn test_interp_int_to_float_cast() {
+    let output = run(r#"
+fn main() {
+    let n: i64 = 7;
+    let f: f64 = n as f64;
+    println(f);
+}
+"#);
+    assert_eq!(output.trim(), "7");
+}

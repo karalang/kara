@@ -550,6 +550,7 @@ impl<'a> super::Interpreter<'a> {
 
         // Evaluate callee
         let callee_val = self.eval_expr_inner(callee);
+        let callee_variant = callee_val.variant_name();
 
         match callee_val {
             Value::Function {
@@ -630,8 +631,10 @@ impl<'a> super::Interpreter<'a> {
                     };
                 }
                 unreachable!(
-                    "call target is not callable at {}:{}; should be caught by typechecker",
-                    span.line, span.column
+                    "call target at {}:{} was Value::{} (not Function, not an enum-variant \
+                     constructor); either an interpreter codepath produced the wrong variant \
+                     or the typechecker accepted a non-callable callee",
+                    span.line, span.column, callee_variant
                 )
             }
         }
@@ -752,6 +755,7 @@ impl<'a> super::Interpreter<'a> {
     /// fixtures (`providers { }`, multi-attribute test wrapping) can reuse the
     /// invocation path without duplicating frame-management boilerplate.
     fn invoke_zero_arg_closure(&mut self, callee_val: Value, span: &Span) -> Value {
+        let callee_variant = callee_val.variant_name();
         match callee_val {
             Value::Function {
                 body, closure_env, ..
@@ -771,9 +775,10 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
             _ => unreachable!(
-                "with_provider closure at {}:{} is not a Value::Function; \
-                 should be caught by typechecker",
-                span.line, span.column
+                "with_provider closure at {}:{} was Value::{} not Function; \
+                 either an interpreter codepath produced the wrong variant \
+                 or the typechecker accepted a non-closure body argument",
+                span.line, span.column, callee_variant
             ),
         }
     }

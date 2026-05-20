@@ -19,6 +19,7 @@ impl<'a> super::Interpreter<'a> {
     // ── Operators ───────────────────────────────────────────────
 
     pub(crate) fn eval_unary(&mut self, op: &UnaryOp, operand: Value, span: &Span) -> Value {
+        let operand_variant = operand.variant_name();
         match (op, operand) {
             (UnaryOp::Neg, Value::Int(i)) => Value::Int(match i.checked_neg() {
                 Some(v) => v,
@@ -31,8 +32,10 @@ impl<'a> super::Interpreter<'a> {
             // a semantic no-op that returns the underlying value unchanged.
             (UnaryOp::Deref, v) => v,
             _ => unreachable!(
-                "type mismatch in unary operation at {}:{}; should be caught by typechecker",
-                span.line, span.column
+                "unexpected operand for unary {:?} at {}:{}: got Value::{}; \
+                 either an interpreter codepath produced the wrong variant \
+                 (e.g. a no-op cast) or the typechecker accepted an illegal shape",
+                op, span.line, span.column, operand_variant
             ),
         }
     }
@@ -48,11 +51,15 @@ impl<'a> super::Interpreter<'a> {
         right: &Expr,
         span: &Span,
     ) -> Value {
-        let lhs = match self.eval_expr_inner(left) {
+        let lhs_value = self.eval_expr_inner(left);
+        let lhs_variant = lhs_value.variant_name();
+        let lhs = match lhs_value {
             Value::Bool(b) => b,
             _ => unreachable!(
-                "type mismatch in `{:?}` LHS at {}:{}; should be caught by typechecker",
-                op, span.line, span.column
+                "short-circuit `{:?}` LHS at {}:{} was Value::{} not Bool; \
+                 either an interpreter codepath produced the wrong variant or \
+                 the typechecker accepted a non-Bool operand",
+                op, span.line, span.column, lhs_variant
             ),
         };
         match (op, lhs) {
@@ -70,6 +77,8 @@ impl<'a> super::Interpreter<'a> {
         right: Value,
         span: &Span,
     ) -> Value {
+        let left_variant = left.variant_name();
+        let right_variant = right.variant_name();
         match (op, left, right) {
             // Arithmetic (Int)
             (BinOp::Add, Value::Int(a), Value::Int(b)) => Value::Int(match a.checked_add(b) {
@@ -192,8 +201,11 @@ impl<'a> super::Interpreter<'a> {
             (BinOp::Shr, Value::Int(a), Value::Int(b)) => Value::Int(a >> b),
 
             _ => unreachable!(
-                "type mismatch in binary operation {:?} at {}:{}; should be caught by typechecker",
-                op, span.line, span.column
+                "binary {:?} at {}:{} on lhs=Value::{}, rhs=Value::{}; \
+                 either an interpreter codepath produced the wrong variant \
+                 (e.g. a no-op cast left a Char where the typechecker blessed an i32) \
+                 or the typechecker accepted an illegal operand combination",
+                op, span.line, span.column, left_variant, right_variant
             ),
         }
     }

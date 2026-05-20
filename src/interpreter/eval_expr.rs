@@ -177,16 +177,21 @@ impl<'a> super::Interpreter<'a> {
             // Tuple index
             ExprKind::TupleIndex { object, index } => {
                 let obj = self.eval_expr_inner(object);
+                let obj_variant = obj.variant_name();
                 match obj {
                     Value::Tuple(vals) => vals.get(*index as usize).cloned().unwrap_or_else(|| {
                         unreachable!(
-                            "tuple index out of bounds at {}:{}; should be caught by typechecker",
-                            expr.span.line, expr.span.column
+                            "tuple index {} out of bounds (len {}) at {}:{}; \
+                             either the typechecker missed an out-of-range index \
+                             or an interpreter codepath produced a shorter tuple than the static type",
+                            *index, vals.len(), expr.span.line, expr.span.column
                         )
                     }),
                     _ => unreachable!(
-                        "tuple index on non-tuple at {}:{}; should be caught by typechecker",
-                        expr.span.line, expr.span.column
+                        "tuple index on Value::{} at {}:{}; \
+                         either an interpreter codepath produced a non-Tuple where one was expected \
+                         or the typechecker accepted tuple indexing on a non-tuple",
+                        obj_variant, expr.span.line, expr.span.column
                     ),
                 }
             }
@@ -209,7 +214,9 @@ impl<'a> super::Interpreter<'a> {
                     // Evaluate optional bounds; absent start defaults to 0,
                     // absent end is resolved after we know the array length.
                     let start_i = if let Some(s) = start {
-                        match self.eval_expr_inner(s) {
+                        let v = self.eval_expr_inner(s);
+                        let v_variant = v.variant_name();
+                        match v {
                             Value::Int(n) if n >= 0 => n as usize,
                             Value::Int(n) => {
                                 return self.record_runtime_error(
@@ -218,13 +225,16 @@ impl<'a> super::Interpreter<'a> {
                                 );
                             }
                             _ => unreachable!(
-                                "non-int range start at {}:{}; should be caught by typechecker",
-                                expr.span.line, expr.span.column
+                                "range start at {}:{} was Value::{} not Int; \
+                                 either an interpreter codepath produced the wrong variant \
+                                 or the typechecker accepted a non-integer range start",
+                                expr.span.line, expr.span.column, v_variant
                             ),
                         }
                     } else {
                         0
                     };
+                    let obj_variant = obj.variant_name();
                     let (storage, source_len) = match &obj {
                         Value::Array(rc) => (rc.clone(), rc.read().unwrap().len()),
                         Value::Slice {
@@ -236,7 +246,9 @@ impl<'a> super::Interpreter<'a> {
                             // Re-slicing — produce a window into the same
                             // storage with offset adjustment.
                             let raw_end = if let Some(e) = end {
-                                match self.eval_expr_inner(e) {
+                                let v = self.eval_expr_inner(e);
+                                let v_variant = v.variant_name();
+                                match v {
                                     Value::Int(n) if n >= 0 => n as usize,
                                     Value::Int(n) => {
                                         return self.record_runtime_error(
@@ -245,8 +257,10 @@ impl<'a> super::Interpreter<'a> {
                                         );
                                     }
                                     _ => unreachable!(
-                                        "non-int range end at {}:{}; should be caught by typechecker",
-                                        expr.span.line, expr.span.column
+                                        "range end at {}:{} was Value::{} not Int; \
+                                         either an interpreter codepath produced the wrong variant \
+                                         or the typechecker accepted a non-integer range end",
+                                        expr.span.line, expr.span.column, v_variant
                                     ),
                                 }
                             } else {
@@ -270,12 +284,16 @@ impl<'a> super::Interpreter<'a> {
                             };
                         }
                         _ => unreachable!(
-                            "range-indexing on non-array at {}:{}; should be caught by typechecker",
-                            expr.span.line, expr.span.column
+                            "range-indexing on Value::{} at {}:{}; \
+                             either an interpreter codepath produced a non-array/non-slice value \
+                             or the typechecker accepted range-indexing on an unindexable type",
+                            obj_variant, expr.span.line, expr.span.column
                         ),
                     };
                     let raw_end = if let Some(e) = end {
-                        match self.eval_expr_inner(e) {
+                        let v = self.eval_expr_inner(e);
+                        let v_variant = v.variant_name();
+                        match v {
                             Value::Int(n) if n >= 0 => n as usize,
                             Value::Int(n) => {
                                 return self.record_runtime_error(
@@ -284,8 +302,10 @@ impl<'a> super::Interpreter<'a> {
                                 );
                             }
                             _ => unreachable!(
-                                "non-int range end at {}:{}; should be caught by typechecker",
-                                expr.span.line, expr.span.column
+                                "range end at {}:{} was Value::{} not Int; \
+                                 either an interpreter codepath produced the wrong variant \
+                                 or the typechecker accepted a non-integer range end",
+                                expr.span.line, expr.span.column, v_variant
                             ),
                         }
                     } else {
@@ -342,8 +362,14 @@ impl<'a> super::Interpreter<'a> {
                         vals[start + i].clone()
                     }
                     _ => unreachable!(
-                        "non-array/non-int index at {}:{}; should be caught by typechecker",
-                        expr.span.line, expr.span.column
+                        "index expression at {}:{}: obj=Value::{}, index=Value::{}; \
+                         either an interpreter codepath produced wrong variants \
+                         (e.g. a no-op cast left a non-Int where the typechecker blessed an Int) \
+                         or the typechecker accepted an unindexable operand pair",
+                        expr.span.line,
+                        expr.span.column,
+                        obj.variant_name(),
+                        idx.variant_name()
                     ),
                 }
             }
@@ -631,10 +657,19 @@ impl<'a> super::Interpreter<'a> {
                 }
             }
 
-            // Cast
-            ExprKind::Cast { expr: inner, .. } => {
-                // Simplified: just evaluate the inner expression
-                self.eval_expr_inner(inner)
+            // Cast — runtime conversion driven by the surface target type.
+            // Numeric ↔ numeric, bool → int, and char → wide-int are the
+            // shapes the typechecker accepts (see `check_cast_pair`); the
+            // interpreter mirrors them here so `c as i32` produces the
+            // codepoint as an integer rather than leaving a `Value::Char`
+            // that downstream arithmetic would mis-type.
+            ExprKind::Cast { expr: inner, ty } => {
+                let val = self.eval_expr_inner(inner);
+                let target_name = match &ty.kind {
+                    crate::ast::TypeKind::Path(p) => p.segments.last().cloned().unwrap_or_default(),
+                    _ => String::new(),
+                };
+                cast_value(val, &target_name)
             }
 
             // Range — evaluates to a `Value::Iterator` for bounded ranges
@@ -651,6 +686,8 @@ impl<'a> super::Interpreter<'a> {
             } => {
                 let s = start.as_deref().map(|e| self.eval_expr_inner(e));
                 let e = end.as_deref().map(|e| self.eval_expr_inner(e));
+                let s_variant = s.as_ref().map(|v| v.variant_name()).unwrap_or("None");
+                let e_variant = e.as_ref().map(|v| v.variant_name()).unwrap_or("None");
                 match (s, e) {
                     (Some(Value::Int(a)), Some(Value::Int(b))) => {
                         let items: Vec<Value> = if *inclusive {
@@ -678,8 +715,10 @@ impl<'a> super::Interpreter<'a> {
                         )
                     }
                     _ => unreachable!(
-                        "non-integer range bounds at {}:{}; should be caught by typechecker",
-                        expr.span.line, expr.span.column
+                        "range bounds at {}:{}: start=Value::{}, end=Value::{}; \
+                         either an interpreter codepath produced wrong variants \
+                         or the typechecker accepted non-integer range bounds",
+                        expr.span.line, expr.span.column, s_variant, e_variant
                     ),
                 }
             }
@@ -881,5 +920,54 @@ impl<'a> super::Interpreter<'a> {
                 std::mem::discriminant(&expr.kind)
             ),
         }
+    }
+}
+
+/// Apply the surface-level `as`-cast at runtime. Mirrors the cast pairs the
+/// typechecker accepts in `check_cast_pair`: numeric↔numeric (int / float),
+/// bool→int, and char→wide-int (i32/i64/u32/u64). Narrow integer targets
+/// are masked (e.g. `1000i64 as i8` keeps the low 8 bits, matching the
+/// LLVM `trunc` codegen). Unknown / unsupported target names pass the
+/// value through — the typechecker has already rejected genuine
+/// mis-casts; this guard just prevents an interpreter panic when the
+/// AST shape carries something the runtime doesn't recognize.
+fn cast_value(val: Value, target: &str) -> Value {
+    let int_from = |i: i64| -> Value {
+        match target {
+            "i8" => Value::Int(i as i8 as i64),
+            "i16" => Value::Int(i as i16 as i64),
+            "i32" => Value::Int(i as i32 as i64),
+            "i64" | "isize" | "int" => Value::Int(i),
+            "u8" => Value::Int((i as u8) as i64),
+            "u16" => Value::Int((i as u16) as i64),
+            "u32" => Value::Int((i as u32) as i64),
+            "u64" | "usize" | "uint" => Value::Int(i),
+            "f32" => Value::Float(i as f32 as f64),
+            "f64" | "float" => Value::Float(i as f64),
+            "bool" => Value::Bool(i != 0),
+            _ => Value::Int(i),
+        }
+    };
+    let float_from = |f: f64| -> Value {
+        match target {
+            "f32" => Value::Float(f as f32 as f64),
+            "f64" | "float" => Value::Float(f),
+            "i8" => Value::Int(f as i8 as i64),
+            "i16" => Value::Int(f as i16 as i64),
+            "i32" => Value::Int(f as i32 as i64),
+            "i64" | "isize" | "int" => Value::Int(f as i64),
+            "u8" => Value::Int((f as u8) as i64),
+            "u16" => Value::Int((f as u16) as i64),
+            "u32" => Value::Int((f as u32) as i64),
+            "u64" | "usize" | "uint" => Value::Int(f as u64 as i64),
+            _ => Value::Float(f),
+        }
+    };
+    match val {
+        Value::Int(i) => int_from(i),
+        Value::Float(f) => float_from(f),
+        Value::Bool(b) => int_from(b as i64),
+        Value::Char(c) => int_from(c as u32 as i64),
+        other => other,
     }
 }

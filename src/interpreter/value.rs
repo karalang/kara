@@ -858,6 +858,41 @@ impl Value {
         }
     }
 
+    /// Static name of this Value's enum discriminant. Used by interpreter
+    /// invariant-violation panics so the message names the actual variant
+    /// received instead of a vague "type mismatch", letting a debugger
+    /// start at the right layer — an interpreter codepath that produced
+    /// the wrong variant (e.g. a `Cast` arm that no-ops) or, less often,
+    /// a real typechecker miss.
+    pub fn variant_name(&self) -> &'static str {
+        match self {
+            Value::Int(_) => "Int",
+            Value::Float(_) => "Float",
+            Value::Bool(_) => "Bool",
+            Value::Char(_) => "Char",
+            Value::String(_) => "String",
+            Value::Unit => "Unit",
+            Value::Tuple(_) => "Tuple",
+            Value::Array(_) => "Array",
+            Value::Slice { .. } => "Slice",
+            Value::Map(_) => "Map",
+            Value::Struct { .. } => "Struct",
+            Value::SharedStruct(_) => "SharedStruct",
+            Value::EnumVariant { .. } => "EnumVariant",
+            Value::Function { .. } => "Function",
+            Value::TotalFloat32(_) => "TotalFloat32",
+            Value::TotalFloat64(_) => "TotalFloat64",
+            Value::Atomic(_) => "Atomic",
+            Value::SortedSet(_) => "SortedSet",
+            Value::Set(_) => "Set",
+            Value::Iterator { .. } => "Iterator",
+            Value::Sender(_) => "Sender",
+            Value::Receiver(_) => "Receiver",
+            Value::SharedCell(_) => "SharedCell",
+            Value::Entry { .. } => "Entry",
+        }
+    }
+
     /// Format for programmer-facing debug output.
     /// Strings are quoted, chars are single-quoted; compound values recurse.
     pub fn debug_fmt(&self) -> String {
