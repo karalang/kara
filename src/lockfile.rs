@@ -34,8 +34,11 @@
 //! - `"registry+<url>"` — forward-compat placeholder for the registry-proxy fetch
 //! - `"git+<url>"` / `"git+<url>?branch=…"` / `…?tag=…` / `…?rev=…` — forward-compat placeholder
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+#[cfg(not(target_arch = "wasm32"))]
+use crate::dep_resolver::{Resolution, ResolvedSource};
 use crate::manifest::GitRef;
 
 /// Current lockfile schema version. Bumped when the on-disk format changes
@@ -188,6 +191,64 @@ impl Lockfile {
             version: LOCKFILE_SCHEMA_VERSION,
             packages: Vec::new(),
         }
+    }
+
+    /// Materialize a `Lockfile` from the resolver's output. The `root_dir` is
+    /// the project root; path-dep sources are relativized against it so the
+    /// lockfile survives a project move. The `hash_path` closure converts a
+    /// manifest path into its content-hash string — production callers pass
+    /// `compute_path_dep_hash`; tests pass a stub.
+    ///
+    /// `Registry` / `Git` sources receive `PENDING_FETCH_HASH` as a
+    /// placeholder until the corresponding fetch surfaces ship
+    /// (v1.1.x carve-out (c)).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn from_resolution<F>(
+        resolution: &Resolution,
+        root_dir: &Path,
+        mut hash_path: F,
+    ) -> Result<Self, LockfileError>
+    where
+        F: FnMut(&Path) -> Result<String, LockfileError>,
+    {
+        let mut deps_of: std::collections::BTreeMap<String, BTreeSet<String>> =
+            std::collections::BTreeMap::new();
+        for (child_name, pkg) in &resolution.packages {
+            for edge in &pkg.declared_by {
+                deps_of
+                    .entry(edge.parent.clone())
+                    .or_default()
+                    .insert(child_name.clone());
+            }
+        }
+
+        let mut packages = Vec::with_capacity(resolution.packages.len());
+        for (name, pkg) in &resolution.packages {
+            let source = convert_source(&pkg.source, root_dir);
+            let content_hash = match &pkg.source {
+                ResolvedSource::Root => hash_path(&root_dir.join("kara.toml"))?,
+                ResolvedSource::Path(p) => hash_path(&p.join("kara.toml"))?,
+                ResolvedSource::Registry { .. } | ResolvedSource::Git { .. } => {
+                    PENDING_FETCH_HASH.to_string()
+                }
+            };
+            let dependencies: Vec<String> = deps_of
+                .get(name)
+                .map(|set| set.iter().cloned().collect())
+                .unwrap_or_default();
+            packages.push(LockedPackage {
+                name: name.clone(),
+                version: pkg.version.to_string(),
+                source,
+                content_hash,
+                dependencies,
+            });
+        }
+
+        Ok(Self {
+            version: LOCKFILE_SCHEMA_VERSION,
+            packages,
+        })
     }
 
     /// Parse a lockfile TOML source string. The `path` argument is used only
@@ -363,6 +424,29 @@ fn expect_string_field(
             field: field.to_string(),
             message: "missing required field".to_string(),
         }),
+    }
+}
+
+/// Map a resolved source into a lockfile source, relativizing path-dep
+/// targets against `root_dir` when possible. Paths outside `root_dir` keep
+/// their absolute form — full `..` traversal is a v1.1.x carve-out.
+#[cfg(not(target_arch = "wasm32"))]
+fn convert_source(src: &ResolvedSource, root_dir: &Path) -> LockSource {
+    match src {
+        ResolvedSource::Root => LockSource::Root,
+        ResolvedSource::Path(abs) => match abs.strip_prefix(root_dir) {
+            Ok(rel) => {
+                let mut buf = PathBuf::from(".");
+                buf.push(rel);
+                LockSource::Path(buf)
+            }
+            Err(_) => LockSource::Path(abs.clone()),
+        },
+        ResolvedSource::Registry { url } => LockSource::Registry { url: url.clone() },
+        ResolvedSource::Git { url, reference } => LockSource::Git {
+            url: url.clone(),
+            reference: reference.clone(),
+        },
     }
 }
 
@@ -888,5 +972,291 @@ content_hash = "blake3:x"
         let err = compute_path_dep_hash(&missing).unwrap_err();
         assert!(matches!(err, LockfileError::Io { .. }));
         assert_eq!(err.code(), "E_LOCKFILE_IO");
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    mod resolution_tests {
+        use super::*;
+        use crate::dep_resolver::{DeclarationEdge, ResolvedPackage, ResolvedSource};
+        use std::collections::BTreeMap;
+
+        fn stub_hasher(p: &Path) -> Result<String, LockfileError> {
+            Ok(format!("blake3:stub-{}", p.display()))
+        }
+
+        fn fail_hasher(_: &Path) -> Result<String, LockfileError> {
+            Err(LockfileError::Io {
+                path: PathBuf::new(),
+                error: "stub failure".to_string(),
+            })
+        }
+
+        fn ver(s: &str) -> semver::Version {
+            semver::Version::parse(s).unwrap()
+        }
+
+        #[test]
+        fn solo_manifest_resolves_to_root_only() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "solo".to_string(),
+                ResolvedPackage {
+                    name: "solo".to_string(),
+                    version: ver("0.1.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            assert_eq!(lf.packages.len(), 1);
+            assert_eq!(lf.packages[0].name, "solo");
+            assert_eq!(lf.packages[0].version, "0.1.0");
+            assert_eq!(lf.packages[0].source, LockSource::Root);
+            assert!(lf.packages[0].dependencies.is_empty());
+            assert_eq!(lf.packages[0].content_hash, "blake3:stub-/proj/kara.toml");
+        }
+
+        #[test]
+        fn path_dep_relativizes_against_root() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "root-pkg".to_string(),
+                ResolvedPackage {
+                    name: "root-pkg".to_string(),
+                    version: ver("0.1.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            packages.insert(
+                "child".to_string(),
+                ResolvedPackage {
+                    name: "child".to_string(),
+                    version: ver("0.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/proj/vendor/child")),
+                    declared_by: vec![DeclarationEdge {
+                        parent: "root-pkg".to_string(),
+                        req: None,
+                    }],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            // BTreeMap iteration is alphabetic — child first, root-pkg second
+            assert_eq!(lf.packages.len(), 2);
+            assert_eq!(lf.packages[0].name, "child");
+            assert_eq!(
+                lf.packages[0].source,
+                LockSource::Path(PathBuf::from("./vendor/child"))
+            );
+            // root-pkg pulled in child, so root-pkg's dependencies list contains "child"
+            assert_eq!(lf.packages[1].name, "root-pkg");
+            assert_eq!(lf.packages[1].dependencies, vec!["child".to_string()]);
+            // child has no deps (no one was pulled in *by* child)
+            assert!(lf.packages[0].dependencies.is_empty());
+        }
+
+        #[test]
+        fn path_dep_outside_root_stays_absolute() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "root-pkg".to_string(),
+                ResolvedPackage {
+                    name: "root-pkg".to_string(),
+                    version: ver("0.1.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            packages.insert(
+                "sibling".to_string(),
+                ResolvedPackage {
+                    name: "sibling".to_string(),
+                    version: ver("0.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/other-root/sibling")),
+                    declared_by: vec![DeclarationEdge {
+                        parent: "root-pkg".to_string(),
+                        req: None,
+                    }],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            // sibling's path is outside /proj, so it keeps its absolute form
+            assert_eq!(
+                lf.packages[1].source,
+                LockSource::Path(PathBuf::from("/other-root/sibling"))
+            );
+        }
+
+        #[test]
+        fn diamond_dep_dedupes_with_two_declared_by_edges() {
+            // A pulls B and C; B and C both pull D. Result: D appears once with
+            // declared_by from B and C; dependencies-of-D is empty; A's deps =
+            // [B, C]; B and C each have D as a dep.
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "A".to_string(),
+                ResolvedPackage {
+                    name: "A".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            packages.insert(
+                "B".to_string(),
+                ResolvedPackage {
+                    name: "B".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/proj/b")),
+                    declared_by: vec![DeclarationEdge {
+                        parent: "A".to_string(),
+                        req: None,
+                    }],
+                },
+            );
+            packages.insert(
+                "C".to_string(),
+                ResolvedPackage {
+                    name: "C".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/proj/c")),
+                    declared_by: vec![DeclarationEdge {
+                        parent: "A".to_string(),
+                        req: None,
+                    }],
+                },
+            );
+            packages.insert(
+                "D".to_string(),
+                ResolvedPackage {
+                    name: "D".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/proj/d")),
+                    declared_by: vec![
+                        DeclarationEdge {
+                            parent: "B".to_string(),
+                            req: None,
+                        },
+                        DeclarationEdge {
+                            parent: "C".to_string(),
+                            req: None,
+                        },
+                    ],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            assert_eq!(lf.packages.len(), 4);
+            let by_name: BTreeMap<_, _> =
+                lf.packages.iter().map(|p| (p.name.as_str(), p)).collect();
+            assert_eq!(
+                by_name["A"].dependencies,
+                vec!["B".to_string(), "C".to_string()]
+            );
+            assert_eq!(by_name["B"].dependencies, vec!["D".to_string()]);
+            assert_eq!(by_name["C"].dependencies, vec!["D".to_string()]);
+            assert!(by_name["D"].dependencies.is_empty());
+        }
+
+        #[test]
+        fn registry_and_git_sources_get_placeholder_hash() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "reg".to_string(),
+                ResolvedPackage {
+                    name: "reg".to_string(),
+                    version: ver("1.2.3"),
+                    source: ResolvedSource::Registry {
+                        url: "https://crates.io".to_string(),
+                    },
+                    declared_by: vec![],
+                },
+            );
+            packages.insert(
+                "g".to_string(),
+                ResolvedPackage {
+                    name: "g".to_string(),
+                    version: ver("2.0.0"),
+                    source: ResolvedSource::Git {
+                        url: "https://github.com/foo/bar".to_string(),
+                        reference: Some(GitRef::Branch("main".to_string())),
+                    },
+                    declared_by: vec![],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), fail_hasher).unwrap();
+            // fail_hasher would panic if called — neither registry nor git
+            // sources should invoke it; they hit the PENDING_FETCH_HASH branch.
+            for pkg in &lf.packages {
+                assert_eq!(pkg.content_hash, PENDING_FETCH_HASH);
+            }
+        }
+
+        #[test]
+        fn deterministic_conversion_across_runs() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "z".to_string(),
+                ResolvedPackage {
+                    name: "z".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            packages.insert(
+                "a".to_string(),
+                ResolvedPackage {
+                    name: "a".to_string(),
+                    version: ver("1.0.0"),
+                    source: ResolvedSource::Path(PathBuf::from("/proj/a")),
+                    declared_by: vec![DeclarationEdge {
+                        parent: "z".to_string(),
+                        req: None,
+                    }],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let lf1 =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            let lf2 =
+                Lockfile::from_resolution(&resolution, Path::new("/proj"), stub_hasher).unwrap();
+            assert_eq!(lf1, lf2);
+            assert_eq!(lf1.to_toml(), lf2.to_toml());
+        }
+
+        #[test]
+        fn hash_failure_propagates() {
+            let mut packages = BTreeMap::new();
+            packages.insert(
+                "root".to_string(),
+                ResolvedPackage {
+                    name: "root".to_string(),
+                    version: ver("0.1.0"),
+                    source: ResolvedSource::Root,
+                    declared_by: vec![],
+                },
+            );
+            let resolution = Resolution { packages };
+
+            let err = Lockfile::from_resolution(&resolution, Path::new("/proj"), fail_hasher)
+                .unwrap_err();
+            assert!(matches!(err, LockfileError::Io { .. }));
+        }
     }
 }
