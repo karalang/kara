@@ -2266,12 +2266,11 @@ fn collect_mutated_vec_names_in_stmt(stmt: &Stmt, out: &mut HashSet<String>) {
 }
 
 /// Mark the root of an assignment target as mutated:
-/// - `x = ...`           → mark x
-/// - `x[i] = ...`        → mark x (the index-assign mutates x's contents)
-/// - `x.f = ...`         → mark x (field assign — for tracking we treat
-///                          field writes as full-vec mutation; would
-///                          underrate the precision of a `vec.field`
-///                          write but vecs don't have user fields)
+/// - `x = ...` → mark x
+/// - `x[i] = ...` → mark x (the index-assign mutates x's contents)
+/// - `x.f = ...` → mark x (field assign — for tracking we treat field
+///   writes as full-vec mutation; would underrate the precision of a
+///   `vec.field` write but vecs don't have user fields)
 fn mark_assign_target(target: &Expr, out: &mut HashSet<String>) {
     let mut cur = target;
     loop {
