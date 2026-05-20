@@ -111,19 +111,28 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         }
 
+        // Estimate per-iter body cost once — used for both the codegen-
+        // time gate (literal-K loops) below and the runtime-time gate
+        // (slice 3b.8) via the descriptor's `per_iter_cost_units` field.
+        // The body walker bottoms at 1, never 0, so a sentinel-0 in the
+        // emitted descriptor only happens if codegen-side estimation is
+        // intentionally skipped (it isn't here).
+        let per_iter_cost = estimate_body_cost_units(&shape.body);
+
         // Cost-model gate (slice 3b.5, 2026-05-20). When the iteration
         // count is statically known and the per-iter cost estimate puts
         // total work below `REDUCE_DISPATCH_THRESHOLD_UNITS`, the
         // par_reduce dispatch overhead (Box alloc + queue push + Condvar
         // wake/wait + N-way combine) would dominate the actual loop
         // work — sequential codegen wins by ~µs to ~ms. Variable-K
-        // loops (including variable-lo loops) bypass the gate (in
-        // practice they're typically large, like the kata-7 bench's
-        // `k_iters = 50_000_000`); a runtime-side dynamic gate is a
-        // follow-up.
+        // loops (including variable-lo loops) bypass this compile-time
+        // gate (in practice they're typically large, like the kata-7
+        // bench's `k_iters = 50_000_000`); the runtime-side gate
+        // (slice 3b.8) catches the rare small variable-K case at run
+        // time using the same `per_iter_cost` threaded into the
+        // descriptor below.
         if let Some(k) = const_eval_iter_count(&shape.end_expr, shape.lo_expr.as_ref()) {
-            let per_iter = estimate_body_cost_units(&shape.body);
-            let total = k.saturating_mul(per_iter);
+            let total = k.saturating_mul(per_iter_cost);
             if total < REDUCE_DISPATCH_THRESHOLD_UNITS {
                 return Ok(None);
             }
@@ -203,6 +212,7 @@ impl<'ctx> super::Codegen<'ctx> {
             &reduction,
             &captures,
             lo_val,
+            per_iter_cost,
         )?;
 
         Ok(Some(()))
@@ -732,6 +742,7 @@ impl<'ctx> super::Codegen<'ctx> {
         _reduction: &LoopReduction,
         captures: &[String],
         lo_val: Option<IntValue<'ctx>>,
+        per_iter_cost_units: u64,
     ) -> Result<(), String> {
         let parent_fn = self
             .current_fn
@@ -789,7 +800,8 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Build the descriptor struct.  Layout matches `runtime/src/lib.rs`'s
         // `#[repr(C)] KaracReduceDescriptor`: i64 iter_total + i64 slot_size +
-        // i64 slot_align + ptr init + ptr worker + ptr combine + ptr ctx.
+        // i64 slot_align + ptr init + ptr worker + ptr combine + ptr ctx +
+        // i64 per_iter_cost_units (slice 3b.8).
         let desc_ty = self.context.struct_type(
             &[
                 i64_t.into(),  // iter_total
@@ -799,6 +811,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 ptr_ty.into(), // worker_fn
                 ptr_ty.into(), // combine_fn
                 ptr_ty.into(), // ctx
+                i64_t.into(),  // per_iter_cost_units
             ],
             false,
         );
@@ -866,6 +879,18 @@ impl<'ctx> super::Codegen<'ctx> {
         desc_agg = self
             .builder
             .build_insert_value(desc_agg, env_ctx_ptr, 6, "d.ctx")
+            .unwrap()
+            .into_struct_value();
+        // Slice 3b.8: per-iter cost estimate, in "1 unit ≈ 1 ns" — the
+        // runtime uses iter_total × per_iter_cost to decide whether to
+        // dispatch to the pool or fall back to single-worker on the
+        // caller's thread. `0` is the sentinel "no estimate, always
+        // dispatch"; codegen always emits a real estimate (the body-cost
+        // walker bottoms at 1).
+        let per_iter_const = i64_t.const_int(per_iter_cost_units, false);
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, per_iter_const, 7, "d.per_iter_cost")
             .unwrap()
             .into_struct_value();
         self.builder.build_store(desc_alloca, desc_agg).unwrap();

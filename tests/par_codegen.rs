@@ -2177,4 +2177,73 @@ fn main() {
         let Some(out) = run_program(src) else { return };
         assert_eq!(out.trim(), "181440");
     }
+
+    // ── Slice 3b.8: runtime-side dynamic cost gate ───────────────────
+    //
+    // Codegen-time gate (slice 3b.5) only catches loops whose iteration
+    // count is a literal at compile time. Variable-K loops bypass and
+    // always emit a `karac_par_reduce` call. Slice 3b.8 plumbs a per-
+    // iter cost estimate through the descriptor so the runtime can
+    // short-circuit to a sequential single-worker invocation when the
+    // estimated total work falls below the dispatch threshold. The IR
+    // test here pins the descriptor's new field (`d.per_iter_cost`
+    // insertvalue at index 7); runtime gate behavior is exercised by
+    // the AtomicUsize-counter tests in `runtime/src/lib.rs`.
+
+    #[test]
+    fn test_ir_reduction_descriptor_emits_per_iter_cost_units_slice3b8() {
+        // K = 100_000 keeps the codegen-time gate happy (literal K, real
+        // body cost above threshold) so the descriptor is actually
+        // emitted. The IR check below pins the descriptor struct shape
+        // (8 fields, with `i64` last for `per_iter_cost_units`); LLVM
+        // folds the insertvalue chain into a constant aggregate when
+        // every field is a constant, so the named `d.per_iter_cost`
+        // instruction doesn't survive to the printed IR — the struct
+        // type signature is the stable IR-level pin.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        // Pin the descriptor's 8-field shape — slice 3b emitted 7 (i64
+        // iter_total + i64 slot_size + i64 slot_align + ptr init + ptr
+        // worker + ptr combine + ptr ctx); slice 3b.8 appends i64
+        // per_iter_cost_units so the type signature gains one trailing
+        // i64.
+        assert!(
+            ir.contains("{ i64, i64, i64, ptr, ptr, ptr, ptr, i64 }"),
+            "expected 8-field reduce descriptor type with trailing i64 per_iter_cost_units; \
+             got:\n{ir}"
+        );
+        // Body cost for `sum = sum + k` walks to 2 units (Assign = 1
+        // base + Binary{Add} = 1; identifier loads are 0). The doc
+        // bumps that to 11 — let's just assert the trailing constant is
+        // a small positive number rather than 0 (so a future cost-
+        // estimator tweak doesn't break the test) by spot-checking that
+        // the trailing field of the constant aggregate isn't `i64 0`.
+        assert!(
+            !ir.contains("ptr null, i64 0 }"),
+            "expected non-zero per_iter_cost_units in the const aggregate (0 is the runtime \
+             sentinel = 'always dispatch'); got:\n{ir}"
+        );
+    }
 }

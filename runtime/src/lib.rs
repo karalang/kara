@@ -675,6 +675,15 @@ pub struct KaracReduceDescriptor {
     /// Source-level closure context. Passed verbatim to every `worker_fn`
     /// invocation. May be null if the source loop body captures nothing.
     pub ctx: *mut c_void,
+    /// Per-iter body-cost estimate in "1 unit ≈ 1 ns" — same convention
+    /// as `src/codegen/reduce.rs::estimate_body_cost_units`. The runtime
+    /// uses `iter_total * per_iter_cost_units` to decide whether to
+    /// dispatch to the pool or run the worker once in the caller's
+    /// thread (slice 3b.8). A value of `0` is a sentinel meaning "no
+    /// estimate available — always dispatch"; codegen-emitted
+    /// descriptors always set a real estimate (the source-level body's
+    /// cost-units walk bottoms at 1, never 0).
+    pub per_iter_cost_units: usize,
 }
 
 // SAFETY: The descriptor's pointer fields are exclusively borrowed by the
@@ -682,6 +691,15 @@ pub struct KaracReduceDescriptor {
 // validity at call time; runtime joins all workers before returning).
 unsafe impl Send for KaracReduceDescriptor {}
 unsafe impl Sync for KaracReduceDescriptor {}
+
+/// Per-call dispatch overhead estimate (slice 3b.8), in "1 unit ≈ 1 ns."
+/// Mirrors the constant in `src/codegen/reduce.rs` so the codegen-time
+/// gate (literal-K loops) and this runtime-time gate (variable-K loops
+/// and any literal-K loops the codegen-side gate didn't catch) use the
+/// same calibration. Threshold = `pool_workers * this`; when the loop's
+/// estimated total work falls below, the runtime skips dispatch and runs
+/// the worker once in the caller's thread.
+const DISPATCH_OVERHEAD_PER_CALL_UNITS_RT: u64 = 10_000;
 
 /// Split a loop's iteration space across N workers; each accumulates a
 /// partial into a private slot; the runtime combines the partials into
@@ -735,11 +753,25 @@ pub unsafe extern "C" fn karac_par_reduce(
         .max(2);
     let n_workers = pool_workers.min(desc.iter_total).max(1);
 
+    // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
+    // codegen-time gate let the call through (e.g. variable-K loops
+    // bypass `const_eval_iter_count`), the actual K may be too small to
+    // beat the per-call dispatch overhead. Compute the estimated total
+    // work and run the worker once in the caller's thread when it falls
+    // below `pool_workers * DISPATCH_OVERHEAD_PER_CALL_UNITS_RT`. The
+    // `per_iter_cost_units == 0` sentinel (caller didn't estimate)
+    // bypasses the gate so behaviour stays at "always dispatch."
+    let total_cost = (desc.iter_total as u64).saturating_mul(desc.per_iter_cost_units as u64);
+    let cost_threshold = (pool_workers as u64).saturating_mul(DISPATCH_OVERHEAD_PER_CALL_UNITS_RT);
+    let gate_skip = desc.per_iter_cost_units != 0 && total_cost < cost_threshold;
+
     // Single-worker fast path: bypass the slot buffer + spawn machinery
     // and run the worker directly into `out_slot`. The serial combine
     // would be a no-op anyway (one slot folded into itself) so skipping
-    // it preserves observable behavior.
-    if n_workers == 1 {
+    // it preserves observable behavior. Also taken when the runtime
+    // cost gate fires (slice 3b.8) — same shape (init_slot is already
+    // seeded above; one worker_fn call covers the full range).
+    if n_workers == 1 || gate_skip {
         let dummy = AtomicBool::new(false);
         (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
         return;
@@ -3647,6 +3679,12 @@ mod tests {
             worker_fn: worker,
             combine_fn: combine,
             ctx: std::ptr::null_mut(),
+            // 0 sentinel: "no estimate" — bypasses the slice 3b.8 gate
+            // so these dispatch-correctness tests cover the multi-worker
+            // path regardless of N's nominal cost. The gate-behavior
+            // tests below construct their own descriptors with real
+            // per_iter values.
+            per_iter_cost_units: 0,
         };
         let mut out: i64 = 0xDEAD_BEEF; // arbitrary sentinel — init must overwrite
         unsafe {
@@ -3747,6 +3785,7 @@ mod tests {
             worker_fn: worker_sum_range,
             combine_fn: combine_i64_add,
             ctx: std::ptr::null_mut(),
+            per_iter_cost_units: 0,
         };
         // out_slot must be 16-byte aligned to match the descriptor;
         // allocate a 16-byte-aligned scratch slot via a wrapper struct.
@@ -3773,5 +3812,115 @@ mod tests {
         let total = run_reduce(n, init_i64_zero, worker_sum_range, combine_i64_add);
         let expected: i64 = (0..n as i64).sum();
         assert_eq!(total, expected);
+    }
+
+    // ── karac_par_reduce slice 3b.8: runtime-side cost gate ───────────
+    //
+    // The codegen-time gate (slice 3b.5) catches small-K loops when both
+    // bounds are literals. Variable-K loops bypass that gate; the runtime-
+    // side gate here catches them at call time using the per_iter cost
+    // estimate threaded through the descriptor. These tests use an
+    // AtomicUsize-counter worker to verify the gate path: 1 invocation
+    // (sequential, init_slot + one worker_fn call) when gated, N
+    // invocations (one per worker) when dispatched.
+
+    use std::sync::atomic::AtomicUsize;
+
+    /// Worker that increments the test-supplied AtomicUsize counter
+    /// (passed via the descriptor's `ctx` pointer) and folds k as in
+    /// `worker_sum_range`. Per-test counter ownership keeps the
+    /// invocation count free of cargo-parallel-test interference.
+    unsafe extern "C" fn worker_sum_range_counting(
+        slot: *mut u8,
+        start: usize,
+        end: usize,
+        ctx: *mut c_void,
+        _cancel: *const AtomicBool,
+    ) {
+        let counter = &*(ctx as *const AtomicUsize);
+        counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let mut acc: i64 = *(slot as *const i64);
+        for k in start..end {
+            acc += k as i64;
+        }
+        *(slot as *mut i64) = acc;
+    }
+
+    /// Build a descriptor with an explicit per_iter cost. Mirrors
+    /// `run_reduce` but plumbs the new field and supplies a per-test
+    /// counter via `ctx` so the gate path can be inspected by call-
+    /// count without static state racing across parallel tests.
+    fn run_reduce_with_per_iter(iter_total: usize, per_iter_cost_units: usize) -> (i64, usize) {
+        let counter = AtomicUsize::new(0);
+        let desc = KaracReduceDescriptor {
+            iter_total,
+            slot_size: std::mem::size_of::<i64>(),
+            slot_align: std::mem::align_of::<i64>(),
+            init_slot: init_i64_zero,
+            worker_fn: worker_sum_range_counting,
+            combine_fn: combine_i64_add,
+            ctx: &counter as *const AtomicUsize as *mut c_void,
+            per_iter_cost_units,
+        };
+        let mut out: i64 = 0xDEAD_BEEF;
+        unsafe {
+            karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
+        }
+        let calls = counter.load(std::sync::atomic::Ordering::SeqCst);
+        (out, calls)
+    }
+
+    /// Gate fires: a small loop with a real per_iter estimate that
+    /// puts total work below the runtime threshold runs the worker once
+    /// on the caller's thread (sequential), not the multi-worker pool.
+    /// K=100, per_iter=1 → 100 unit-iters << pool_workers × 10_000.
+    #[test]
+    fn test_par_reduce_runtime_gate_skips_dispatch_for_small_loop() {
+        let (sink, calls) = run_reduce_with_per_iter(100, 1);
+        assert_eq!(sink, (0..100i64).sum::<i64>());
+        assert_eq!(
+            calls, 1,
+            "expected sequential single worker_fn call when total work < threshold; got {calls}"
+        );
+    }
+
+    /// Gate skipped: same K but a fat per_iter cost (1_000_000 units —
+    /// equivalent to a very expensive body) pushes total work above the
+    /// threshold so the runtime dispatches normally. Calls = n_workers
+    /// (capped at K, but K=100 > pool size on every dev machine).
+    #[test]
+    fn test_par_reduce_runtime_gate_dispatches_when_above_threshold() {
+        let (sink, calls) = run_reduce_with_per_iter(100, 1_000_000);
+        assert_eq!(sink, (0..100i64).sum::<i64>());
+        let pool_workers = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .max(2);
+        let expected_calls = pool_workers.min(100);
+        assert_eq!(
+            calls, expected_calls,
+            "expected dispatch across pool workers when total work >= threshold; got {calls}, \
+             expected {expected_calls}"
+        );
+    }
+
+    /// Sentinel `per_iter_cost_units == 0` means "no estimate" — the
+    /// runtime treats this as "always dispatch" so legacy / hand-built
+    /// descriptors keep the current behavior. K=100, sentinel=0 →
+    /// dispatched (calls > 1) even though the implied cost is zero.
+    #[test]
+    fn test_par_reduce_runtime_gate_sentinel_zero_bypasses_gate() {
+        let (sink, calls) = run_reduce_with_per_iter(100, 0);
+        assert_eq!(sink, (0..100i64).sum::<i64>());
+        let pool_workers = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .max(2);
+        let expected_calls = pool_workers.min(100);
+        assert_eq!(
+            calls, expected_calls,
+            "per_iter=0 sentinel should bypass the gate; got {calls} calls, expected dispatch \
+             across {expected_calls} workers"
+        );
     }
 }
