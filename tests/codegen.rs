@@ -691,6 +691,104 @@ fn main() {
         }
     }
 
+    // ── println signedness round-trips ───────────────────────────
+    //
+    // Pre-fix `println(x: i32)` passed the raw i32 to printf "%lld";
+    // LLVM zero-padded the slot to 64 bits and `%lld` read the high
+    // bits as 0, producing the *unsigned* representation on negatives
+    // (e.g. `-123` printed as `4_294_967_173`). Fix routes narrow ints
+    // through `sext + %lld` (signed) or `zext + %llu` (unsigned) based
+    // on the source-level type, mirroring `synth_display`. These
+    // regression tests pin the signed and unsigned arms at i8 / i16 /
+    // i32 / i64 / u8 / u16 / u32 / u64 plus a u64 value > 2^32 to
+    // exercise the wide-unsigned arm that pre-fix also misprinted.
+
+    #[test]
+    fn test_e2e_print_i32_negative_prints_signed() {
+        let out = run_program("fn main() { let x: i32 = -123i32; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-123");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_i16_negative_prints_signed() {
+        let out = run_program("fn main() { let x: i16 = -7i16; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_i8_negative_prints_signed() {
+        let out = run_program("fn main() { let x: i8 = -7i8; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-7");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_i64_negative_prints_signed() {
+        let out = run_program("fn main() { let x: i64 = -123i64; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-123");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_u8_prints_unsigned() {
+        let out = run_program("fn main() { let x: u8 = 200u8; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "200");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_u16_prints_unsigned() {
+        let out = run_program("fn main() { let x: u16 = 60000u16; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "60000");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_u32_above_i32_max_prints_unsigned() {
+        // 4_000_000_000 > 2^31 - 1; pre-fix accidentally printed
+        // correctly via zero-padding, but the path now uses %llu and
+        // this pins it.
+        let out = run_program("fn main() { let x: u32 = 4000000000u32; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4000000000");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_u64_prints_unsigned() {
+        let out = run_program("fn main() { let x: u64 = 5000000000u64; println(x); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "5000000000");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_i32_suffixed_literal_directly() {
+        // `println(-123i32)` directly — exercises the literal-suffix
+        // arm of `expr_is_unsigned_int` (the Unary(Neg, Integer)
+        // shape falls through to the default-signed path).
+        let out = run_program("fn main() { println(-123i32); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-123");
+        }
+    }
+
+    #[test]
+    fn test_e2e_print_u32_suffixed_literal_directly() {
+        let out = run_program("fn main() { println(4000000000u32); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4000000000");
+        }
+    }
+
     // ── Layout introspection intrinsics ──────────────────────────
     //
     // `size_of[T]()` lowers to inkwell's `BasicTypeEnum::size_of()`

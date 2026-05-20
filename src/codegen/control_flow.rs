@@ -256,16 +256,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     )
                     .unwrap();
             } else {
+                // Widen narrower ints to i64 before printf's varargs slot —
+                // sign-extend for signed types so a negative `i32` prints as
+                // a signed decimal, zero-extend for unsigned types so a
+                // large `u32` doesn't get sign-mistreated. Pre-fix this arm
+                // passed the raw `i32` to `%lld`, which LLVM zero-padded
+                // before the call and printf then read as a 64-bit signed
+                // value — giving the unsigned-representation print on
+                // negative narrow ints (e.g. `i32 -123` → `4294967173`).
+                // Mirrors the per-type display dispatch in
+                // [`synth_display::emit_primitive_display`].
+                let int_val = val.into_int_value();
+                let bits = int_val.get_type().get_bit_width();
+                let i64_t = self.context.i64_type();
+                let is_unsigned = self.expr_is_unsigned_int(&args[0].value);
+                let widened = if bits < 64 {
+                    if is_unsigned {
+                        self.builder
+                            .build_int_z_extend(int_val, i64_t, "print.zext")
+                            .unwrap()
+                    } else {
+                        self.builder
+                            .build_int_s_extend(int_val, i64_t, "print.sext")
+                            .unwrap()
+                    }
+                } else {
+                    int_val
+                };
+                let spec = if is_unsigned { "%llu" } else { "%lld" };
                 let fmt = self
                     .builder
-                    .build_global_string_ptr(&format!("%lld{nl}"), "fi")
+                    .build_global_string_ptr(&format!("{spec}{nl}"), "fi")
                     .unwrap();
                 self.builder
                     .build_call(
                         self.printf_fn,
                         &[
                             BasicMetadataValueEnum::from(fmt.as_pointer_value()),
-                            BasicMetadataValueEnum::from(val.into_int_value()),
+                            BasicMetadataValueEnum::from(widened),
                         ],
                         "printf",
                     )

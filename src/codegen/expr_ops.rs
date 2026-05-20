@@ -929,6 +929,55 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// True when `expr` is known to have an unsigned integer source type
+    /// (`u8` / `u16` / `u32` / `u64` / `u128` / `usize`). Drives the
+    /// print path's choice between `sext + %lld` (signed) and
+    /// `zext + %llu` (unsigned); the default (`false`) is signed, which
+    /// is the right call for unknown-typed expressions because `i64` is
+    /// the language's default integer width and unsigned printing of a
+    /// signed value with the high bit set already worked by accident
+    /// pre-fix (zero-pad happens to match the unsigned value), whereas
+    /// signed printing of a negative narrow signed int via raw `%lld`
+    /// produces the unsigned representation in the high bits. Mirror
+    /// of [`Self::expr_is_char`] for the int signedness signal.
+    pub(super) fn expr_is_unsigned_int(&self, expr: &Expr) -> bool {
+        fn is_uint_name(s: &str) -> bool {
+            matches!(s, "u8" | "u16" | "u32" | "u64" | "u128" | "usize")
+        }
+        match &expr.kind {
+            // Suffixed literal — the suffix is authoritative.
+            ExprKind::Integer(_, Some(suf)) => matches!(
+                suf,
+                crate::token::IntSuffix::U8
+                    | crate::token::IntSuffix::U16
+                    | crate::token::IntSuffix::U32
+                    | crate::token::IntSuffix::U64
+                    | crate::token::IntSuffix::U128
+            ),
+            ExprKind::Identifier(n) => self
+                .var_type_names
+                .get(n.as_str())
+                .map(|s| is_uint_name(s.as_str()))
+                .unwrap_or(false),
+            // `vec_of_u32s[i]` / `array_of_u32s[i]` — check element TypeExpr.
+            ExprKind::Index { object, .. } => {
+                if let ExprKind::Identifier(n) = &object.kind {
+                    if let Some(te) = self.var_elem_type_exprs.get(n.as_str()) {
+                        if let TypeKind::Path(p) = &te.kind {
+                            return p
+                                .segments
+                                .last()
+                                .map(|s| is_uint_name(s.as_str()))
+                                .unwrap_or(false);
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
     // ── Cast ──────────────────────────────────────────────────────
 
     pub(super) fn compile_cast(
