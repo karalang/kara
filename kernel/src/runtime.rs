@@ -1688,6 +1688,88 @@ mod tests {
     }
 
     #[test]
+    fn execute_request_rc_magic_broadcasts_display_data() {
+        // `%rc` (line 785) returns `MagicOutput::ok_rich` with a two-mime
+        // bundle (text/plain + text/html). The kernel must route the
+        // bundle through `display_data` on IOPub — same path as
+        // `%show` / `%timeline`, no `stream(stdout)` mirror, both mimes
+        // present in the data envelope. We submit one item per cell so
+        // the classifier accepts pure-items cells, then trigger 1's
+        // four-item pattern (struct + consume helper + use helper +
+        // fn-with-branch-divergent-consume).
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        let items = [
+            "struct Data { value: i64 }",
+            "fn consume(d: Data) { }",
+            "fn use_d(d: Data) { }",
+            "fn process(cond: bool, d: Data) { if cond { consume(d); } use_d(d); }",
+        ];
+        for code in items {
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(
+                    &signer,
+                    "execute_request",
+                    json!({"code": code, "silent": true}),
+                    vec![],
+                ),
+            );
+            run_one_pass(&kernel);
+        }
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let _ = transport.drain_outgoing(Channel::IoPub);
+
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%rc", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "ok");
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let display_frame = iopub
+            .iter()
+            .find(|(k, _)| k == "display_data")
+            .expect("expected display_data broadcast");
+        let data = &display_frame.1.content["data"];
+        let plain = data["text/plain"]
+            .as_str()
+            .expect("rc magic must populate text/plain");
+        assert!(
+            plain.contains("process.d"),
+            "row must surface qualified binding name; got:\n{plain}",
+        );
+        assert!(
+            plain.contains("direct re-use after consume"),
+            "row must surface trigger label; got:\n{plain}",
+        );
+        assert!(
+            plain.contains("[Rc]"),
+            "row must surface Rc kind; got:\n{plain}",
+        );
+        let html = data["text/html"]
+            .as_str()
+            .expect("rc magic must populate text/html");
+        assert!(
+            html.contains("<table>") && html.contains("<th>Binding</th>"),
+            "html must include the table + Binding header; got: {html}",
+        );
+        // text-only stream is suppressed when the bundle is present.
+        let stream_count = iopub.iter().filter(|(k, _)| k == "stream").count();
+        assert_eq!(stream_count, 0, "stream broadcast must be suppressed");
+    }
+
+    #[test]
     fn execute_request_session_state_persists_across_cells() {
         // Two cells: the first declares a binding, the second uses
         // it. The shared `Session` in the Kernel keeps the binding
