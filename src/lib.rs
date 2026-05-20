@@ -680,4 +680,42 @@ mod playground_tests {
         assert!(first.column >= 1);
         assert!(first.length > 0);
     }
+
+    #[test]
+    fn run_playground_reports_multiple_resolve_errors_in_one_pass() {
+        // Two undefined names in one function — both must surface as separate
+        // diagnostics so the playground's diagnostics list shows all the
+        // pinpoints rather than only the first. Pins that the early-return
+        // copies every error, not just `errors[0]`.
+        let result = run_playground("fn main() { let _ = first_undef(); let _ = second_undef(); }");
+        assert!(!result.ok);
+        let resolve_count = result
+            .diagnostics
+            .iter()
+            .filter(|d| d.phase == "resolve")
+            .count();
+        assert!(
+            resolve_count >= 2,
+            "expected at least 2 resolve diagnostics, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[test]
+    fn run_playground_ok_false_when_typecheck_error_even_if_stdout_present() {
+        // A program with a type error still gets executed (the tree-walk
+        // interpreter is dynamically typed), so stdout is captured — but
+        // `ok` must be false so the playground UI flags the run as not
+        // clean. Specifically pins that the `pre_interp_diag_count`
+        // bookkeeping flows into `ok` correctly.
+        let result =
+            run_playground("fn main() { let x: i32 = \"not an int\"; println(\"ran anyway\"); }");
+        assert!(
+            !result.ok,
+            "expected ok=false; diagnostics: {:?}",
+            result.diagnostics
+        );
+        assert_eq!(result.stdout, vec!["ran anyway\n".to_string()]);
+        assert!(result.diagnostics.iter().any(|d| d.phase == "typecheck"));
+    }
 }
