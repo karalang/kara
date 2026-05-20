@@ -422,6 +422,9 @@ pub(super) fn io_error_from_std(e: &std::io::Error) -> Value {
 
 // ── std.http helpers ──────────────────────────────────────────────────────────
 
+// Native-only: the wasm32 build's http stubs short-circuit to
+// `make_http_error` and never build a successful response.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn make_response(status: u16, body: String, headers: Vec<(String, String)>) -> Value {
     let mut fields = HashMap::new();
     fields.insert("status".to_string(), Value::Int(status as i64));
@@ -462,6 +465,12 @@ pub(super) fn make_http_error(message: String) -> Value {
     }
 }
 
+// `ureq` is native-only — wasm32 builds (browser playground, tracker
+// line 703) replace these arms with stubs that surface a runtime
+// `HttpError` so user code calling `Http.get` / `Http.post` fails
+// cleanly instead of compile-erroring. The interpreter does not enforce
+// effects, so a `reads(Net)` declaration on user code stays untouched.
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn wrap_ok_response(resp: ureq::Response) -> Value {
     let status = resp.status();
     // Collect headers before consuming the response.
@@ -478,11 +487,17 @@ pub(super) fn wrap_ok_response(resp: ureq::Response) -> Value {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn eval_http_get(url: &str) -> Value {
     match ureq::get(url).call() {
         Ok(resp) => wrap_ok_response(resp),
         Err(e) => make_http_error(e.to_string()),
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn eval_http_get(_url: &str) -> Value {
+    make_http_error("Http.get is not available in the browser playground".to_string())
 }
 
 // ── Slice F (`std.json`) helpers ─────────────────────────────────────────
@@ -621,9 +636,15 @@ pub(super) fn make_json_error(e: &serde_json::Error) -> Value {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub(super) fn eval_http_post(url: &str, body: &str) -> Value {
     match ureq::post(url).send_string(body) {
         Ok(resp) => wrap_ok_response(resp),
         Err(e) => make_http_error(e.to_string()),
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub(super) fn eval_http_post(_url: &str, _body: &str) -> Value {
+    make_http_error("Http.post is not available in the browser playground".to_string())
 }

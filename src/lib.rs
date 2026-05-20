@@ -3,6 +3,13 @@ pub mod attribute_validator;
 pub mod call_graph;
 pub mod catalog;
 pub mod cfg;
+// CLI / REPL / multi-file driver surfaces are native-only — they reach
+// `std::fs`, `std::process`, `rustyline`, and `ureq`, none of which have
+// a wasm32 surface. The browser playground (tracker line 703) consumes
+// only the in-process check pipeline + `Interpreter`, so excluding these
+// modules from the wasm32 build is a strict subset of what the playground
+// needs — see `pub fn run_playground` at the bottom of this file.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod cli;
 #[cfg(feature = "llvm")]
 pub mod codegen;
@@ -14,6 +21,7 @@ pub mod def_path;
 pub mod desugar;
 pub mod diagnostic_attrs_lint;
 pub mod diagnostic_class;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod doc;
 pub mod dominator;
 pub mod edit_distance;
@@ -29,6 +37,12 @@ pub mod lowering;
 pub mod manifest;
 pub mod missing_must_use_lint;
 pub mod missing_track_caller_lint;
+// `module`, `walker`, `manifest` carry data types consumed by `resolver`
+// and `typechecker`, so they stay always-on. The fs-reading entry points
+// inside them (`build_program_tree_with`'s `fs::read_to_string`,
+// `walker::walk_project`, `manifest::Manifest::load_from`) are cfg-gated
+// on `not(target_arch = "wasm32")` at the function level — see those
+// modules for the wasm32 surface.
 pub mod module;
 pub mod monomorphization;
 pub mod must_use_lint;
@@ -40,8 +54,10 @@ pub mod queries;
 pub mod query_attributes;
 pub mod raii_check;
 pub mod rc_predicate;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod repl;
 pub mod resolver;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod scaffold;
 pub mod span_visitor;
 pub mod token;

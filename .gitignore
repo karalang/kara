@@ -19,3 +19,10 @@ bench/hot_swap_cost/tight_call_hotswap
 bench/hot_swap_cost/moderate_call
 bench/hot_swap_cost/moderate_call_baseline
 bench/hot_swap_cost/moderate_call_hotswap
+
+# wasm-pack build output for the browser playground (tracker line 703).
+# Regenerate via `wasm-pack build --target web --out-dir web/pkg` from
+# `playground/`. wasm-pack writes a `*` gitignore inside the directory;
+# this entry covers the directory itself so a fresh checkout starts
+# without it.
+playground/web/pkg/
