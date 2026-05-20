@@ -33,6 +33,14 @@
 //! - `"path+<path>"` — local path-dep; `<path>` is relative to the project root
 //! - `"registry+<url>"` — forward-compat placeholder for the registry-proxy fetch
 //! - `"git+<url>"` / `"git+<url>?branch=…"` / `…?tag=…` / `…?rev=…` — forward-compat placeholder
+//!
+//! Optional fields on `[[package]]` tables:
+//! - `mirror = "<proxy-mirror-url>"` — only valid on `registry+` / `git+`
+//!   sources. Records the proxy mirror reference (slice 3 of phase-5
+//!   line 851) so the lockfile carries both the upstream URL for human
+//!   readability and the mirror URL for fetch reproducibility. v1.1
+//!   never emits this field (no live fetch); v1.1.x writes it after a
+//!   successful proxy fetch.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -94,11 +102,25 @@ pub enum LockSource {
     Root,
     Path(PathBuf),
     Registry {
+        /// Upstream source URL (the original registry / catalog entry).
+        /// Kept verbatim so a human reading `kara.lock` recognizes what
+        /// the dep actually is.
         url: String,
+        /// Optional proxy mirror reference recorded after a fetch
+        /// through `proxy.kara-lang.org` (or the configured override).
+        /// `None` in v1.1 — the registry-proxy fetch surface
+        /// (tracker line 851) hasn't shipped, so no real mirror URL
+        /// exists yet. The schema is in place for the v1.1.x slice.
+        mirror: Option<String>,
     },
     Git {
         url: String,
         reference: Option<GitRef>,
+        /// Proxy mirror reference — see `Registry::mirror` above. Both
+        /// halves are recorded into `kara.lock` per the tracker entry's
+        /// "original git URL (for human readability) + proxy mirror
+        /// reference (for fetch reproducibility)" requirement.
+        mirror: Option<String>,
     },
 }
 
@@ -317,6 +339,9 @@ impl Lockfile {
                 "source = {}\n",
                 quote_string(&encode_source(&pkg.source))
             ));
+            if let Some(mirror) = source_mirror(&pkg.source) {
+                out.push_str(&format!("mirror = {}\n", quote_string(mirror)));
+            }
             out.push_str(&format!(
                 "content_hash = {}\n",
                 quote_string(&pkg.content_hash)
@@ -374,6 +399,18 @@ fn parse_package(path: &Path, table: &toml::Table) -> Result<LockedPackage, Lock
     let source_str = expect_string_field(path, table, "source")?;
     let content_hash = expect_string_field(path, table, "content_hash")?;
     let source = decode_source(path, &source_str)?;
+    let mirror = match table.get("mirror") {
+        Some(toml::Value::String(s)) => Some(s.clone()),
+        Some(_) => {
+            return Err(LockfileError::InvalidField {
+                path: path.to_path_buf(),
+                field: "mirror".to_string(),
+                message: "expected string".to_string(),
+            });
+        }
+        None => None,
+    };
+    let source = apply_mirror(path, source, mirror)?;
 
     let dependencies = match table.get("dependencies") {
         Some(toml::Value::Array(a)) => {
@@ -442,10 +479,17 @@ fn convert_source(src: &ResolvedSource, root_dir: &Path) -> LockSource {
             }
             Err(_) => LockSource::Path(abs.clone()),
         },
-        ResolvedSource::Registry { url } => LockSource::Registry { url: url.clone() },
+        ResolvedSource::Registry { url } => LockSource::Registry {
+            url: url.clone(),
+            // Mirror is populated by the registry-proxy fetch path
+            // (line-851 v1.1.x slice). Until then no real mirror URL
+            // exists; the lockfile records only the upstream URL.
+            mirror: None,
+        },
         ResolvedSource::Git { url, reference } => LockSource::Git {
             url: url.clone(),
             reference: reference.clone(),
+            mirror: None,
         },
     }
 }
@@ -454,13 +498,25 @@ fn encode_source(source: &LockSource) -> String {
     match source {
         LockSource::Root => "root".to_string(),
         LockSource::Path(p) => format!("path+{}", p.display()),
-        LockSource::Registry { url } => format!("registry+{url}"),
-        LockSource::Git { url, reference } => match reference {
+        LockSource::Registry { url, .. } => format!("registry+{url}"),
+        LockSource::Git { url, reference, .. } => match reference {
             None => format!("git+{url}"),
             Some(GitRef::Branch(b)) => format!("git+{url}?branch={b}"),
             Some(GitRef::Tag(t)) => format!("git+{url}?tag={t}"),
             Some(GitRef::Rev(r)) => format!("git+{url}?rev={r}"),
         },
+    }
+}
+
+/// Extract the proxy mirror reference (if any) from a `LockSource`.
+/// Only `Registry` and `Git` carry one; the other variants always
+/// return `None`. The mirror is serialized to a separate TOML key
+/// rather than embedded in the `source` string so the existing wire
+/// format stays byte-stable for path-dep / root entries.
+fn source_mirror(source: &LockSource) -> Option<&str> {
+    match source {
+        LockSource::Registry { mirror, .. } | LockSource::Git { mirror, .. } => mirror.as_deref(),
+        LockSource::Root | LockSource::Path(_) => None,
     }
 }
 
@@ -474,6 +530,7 @@ fn decode_source(path: &Path, s: &str) -> Result<LockSource, LockfileError> {
     if let Some(rest) = s.strip_prefix("registry+") {
         return Ok(LockSource::Registry {
             url: rest.to_string(),
+            mirror: None,
         });
     }
     if let Some(rest) = s.strip_prefix("git+") {
@@ -497,12 +554,45 @@ fn decode_source(path: &Path, s: &str) -> Result<LockSource, LockfileError> {
             }
             None => (rest.to_string(), None),
         };
-        return Ok(LockSource::Git { url, reference });
+        return Ok(LockSource::Git {
+            url,
+            reference,
+            mirror: None,
+        });
     }
     Err(LockfileError::InvalidSource {
         path: path.to_path_buf(),
         source_str: s.to_string(),
     })
+}
+
+/// Apply the optional `mirror` TOML field to a `LockSource`. Returns
+/// an error if `mirror` is set on a variant that cannot carry one
+/// (root / path) — that combination is a malformed lockfile.
+fn apply_mirror(
+    path: &Path,
+    source: LockSource,
+    mirror: Option<String>,
+) -> Result<LockSource, LockfileError> {
+    let Some(m) = mirror else {
+        return Ok(source);
+    };
+    match source {
+        LockSource::Registry { url, .. } => Ok(LockSource::Registry {
+            url,
+            mirror: Some(m),
+        }),
+        LockSource::Git { url, reference, .. } => Ok(LockSource::Git {
+            url,
+            reference,
+            mirror: Some(m),
+        }),
+        LockSource::Root | LockSource::Path(_) => Err(LockfileError::InvalidField {
+            path: path.to_path_buf(),
+            field: "mirror".to_string(),
+            message: "mirror is only valid on `registry+` or `git+` sources".to_string(),
+        }),
+    }
 }
 
 /// TOML basic-string escape for embedding a value in lockfile output.
@@ -683,6 +773,7 @@ content_hash = "blake3:x"
                     version: "1.2.3".to_string(),
                     source: LockSource::Registry {
                         url: "https://crates.io".to_string(),
+                        mirror: None,
                     },
                     content_hash: "blake3:alpha".to_string(),
                     dependencies: vec![],
@@ -693,6 +784,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/foo/bar".to_string(),
                         reference: Some(GitRef::Branch("main".to_string())),
+                        mirror: None,
                     },
                     content_hash: "blake3:beta".to_string(),
                     dependencies: vec![],
@@ -703,6 +795,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/baz/qux".to_string(),
                         reference: Some(GitRef::Tag("v1.0".to_string())),
+                        mirror: None,
                     },
                     content_hash: "blake3:gamma".to_string(),
                     dependencies: vec![],
@@ -713,6 +806,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/quux/corge".to_string(),
                         reference: Some(GitRef::Rev("abc123".to_string())),
+                        mirror: None,
                     },
                     content_hash: "blake3:delta".to_string(),
                     dependencies: vec![],
@@ -723,6 +817,7 @@ content_hash = "blake3:x"
                     source: LockSource::Git {
                         url: "https://github.com/grault/garply".to_string(),
                         reference: None,
+                        mirror: None,
                     },
                     content_hash: "blake3:eps".to_string(),
                     dependencies: vec![],
@@ -736,16 +831,21 @@ content_hash = "blake3:x"
         let names: Vec<_> = re_parsed.packages.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, vec!["alpha", "beta", "delta", "epsilon", "gamma"]);
         match &re_parsed.packages[0].source {
-            LockSource::Registry { url } => assert_eq!(url, "https://crates.io"),
+            LockSource::Registry { url, mirror } => {
+                assert_eq!(url, "https://crates.io");
+                assert_eq!(mirror, &None);
+            }
             other => panic!("expected Registry, got {other:?}"),
         }
         match &re_parsed.packages[1].source {
             LockSource::Git {
                 url,
                 reference: Some(GitRef::Branch(b)),
+                mirror,
             } => {
                 assert_eq!(url, "https://github.com/foo/bar");
                 assert_eq!(b, "main");
+                assert_eq!(mirror, &None);
             }
             other => panic!("expected Git+branch, got {other:?}"),
         }
@@ -760,7 +860,11 @@ content_hash = "blake3:x"
             LockSource::Git {
                 url,
                 reference: None,
-            } => assert_eq!(url, "https://github.com/grault/garply"),
+                mirror,
+            } => {
+                assert_eq!(url, "https://github.com/grault/garply");
+                assert_eq!(mirror, &None);
+            }
             other => panic!("expected Git+no-ref, got {other:?}"),
         }
         match &re_parsed.packages[4].source {
@@ -769,6 +873,189 @@ content_hash = "blake3:x"
                 ..
             } => assert_eq!(t, "v1.0"),
             other => panic!("expected Git+tag, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn registry_mirror_round_trips() {
+        // Slice 3 of line 851 — the proxy mirror reference is recorded
+        // in `kara.lock` alongside the upstream URL. The wire format
+        // emits the mirror as a separate TOML key so the existing
+        // source-string shape stays byte-stable.
+        let lf = Lockfile {
+            version: 1,
+            packages: vec![LockedPackage {
+                name: "http".to_string(),
+                version: "1.2.3".to_string(),
+                source: LockSource::Registry {
+                    url: "https://github.com/kara/http".to_string(),
+                    mirror: Some("https://proxy.kara-lang.org/http/1.2.3".to_string()),
+                },
+                content_hash: "blake3:cafe".to_string(),
+                dependencies: vec![],
+            }],
+        };
+        let toml = lf.to_toml();
+        assert!(
+            toml.contains("source = \"registry+https://github.com/kara/http\""),
+            "source string should remain unchanged when mirror is set; got: {toml}",
+        );
+        assert!(
+            toml.contains("mirror = \"https://proxy.kara-lang.org/http/1.2.3\""),
+            "mirror should appear as a separate TOML key; got: {toml}",
+        );
+        let re = Lockfile::parse(dummy_path(), &toml).unwrap();
+        match &re.packages[0].source {
+            LockSource::Registry { url, mirror } => {
+                assert_eq!(url, "https://github.com/kara/http");
+                assert_eq!(
+                    mirror.as_deref(),
+                    Some("https://proxy.kara-lang.org/http/1.2.3")
+                );
+            }
+            other => panic!("expected Registry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn git_mirror_round_trips_with_branch() {
+        // Combined coverage: git+branch + proxy mirror. The branch goes
+        // in the source-string query suffix; the mirror goes in the
+        // separate `mirror` TOML key.
+        let lf = Lockfile {
+            version: 1,
+            packages: vec![LockedPackage {
+                name: "graphql".to_string(),
+                version: "2.0.0".to_string(),
+                source: LockSource::Git {
+                    url: "https://github.com/kara/graphql".to_string(),
+                    reference: Some(GitRef::Branch("main".to_string())),
+                    mirror: Some("https://proxy.kara-lang.org/git/graphql@main".to_string()),
+                },
+                content_hash: "blake3:deadbeef".to_string(),
+                dependencies: vec![],
+            }],
+        };
+        let toml = lf.to_toml();
+        let re = Lockfile::parse(dummy_path(), &toml).unwrap();
+        match &re.packages[0].source {
+            LockSource::Git {
+                url,
+                reference,
+                mirror,
+            } => {
+                assert_eq!(url, "https://github.com/kara/graphql");
+                assert_eq!(reference, &Some(GitRef::Branch("main".to_string())));
+                assert_eq!(
+                    mirror.as_deref(),
+                    Some("https://proxy.kara-lang.org/git/graphql@main")
+                );
+            }
+            other => panic!("expected Git, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mirror_absent_reads_as_none_back_compat() {
+        // Back-compat pin: a lockfile produced before slice 3 has no
+        // `mirror` key. Reading it must round-trip to `mirror = None`
+        // rather than failing — existing v1 lockfiles on disk continue
+        // to load.
+        let toml = "\
+# header
+version = 1
+
+[[package]]
+name = \"x\"
+version = \"1.0.0\"
+source = \"registry+https://crates.io\"
+content_hash = \"blake3:x\"
+dependencies = []
+";
+        let lf = Lockfile::parse(dummy_path(), toml).unwrap();
+        match &lf.packages[0].source {
+            LockSource::Registry { url, mirror } => {
+                assert_eq!(url, "https://crates.io");
+                assert_eq!(mirror, &None);
+            }
+            other => panic!("expected Registry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn mirror_on_root_source_is_rejected() {
+        // Sanity: `mirror` is only meaningful on `registry+` / `git+`
+        // sources. A `mirror` key on a `root` or `path+` source is a
+        // malformed lockfile.
+        let toml = "\
+# header
+version = 1
+
+[[package]]
+name = \"app\"
+version = \"0.1.0\"
+source = \"root\"
+mirror = \"https://proxy.example/app\"
+content_hash = \"blake3:r\"
+dependencies = []
+";
+        let err = Lockfile::parse(dummy_path(), toml).unwrap_err();
+        assert_eq!(err.code(), "E_LOCKFILE_INVALID_FIELD");
+    }
+
+    #[test]
+    fn mirror_wrong_type_rejected() {
+        // The `mirror` field must be a string when present. An integer
+        // (or other non-string) is a malformed lockfile.
+        let toml = "\
+# header
+version = 1
+
+[[package]]
+name = \"x\"
+version = \"1.0.0\"
+source = \"registry+https://crates.io\"
+mirror = 42
+content_hash = \"blake3:x\"
+dependencies = []
+";
+        let err = Lockfile::parse(dummy_path(), toml).unwrap_err();
+        assert_eq!(err.code(), "E_LOCKFILE_INVALID_FIELD");
+    }
+
+    #[test]
+    fn convert_source_populates_mirror_as_none() {
+        // Slice 3 wires `convert_source` to set `mirror: None` for
+        // registry / git resolved sources. Pinning that no real mirror
+        // URL is invented before the proxy fetch surface ships.
+        let registry = ResolvedSource::Registry {
+            url: "https://crates.io".to_string(),
+        };
+        let lock_src = convert_source(&registry, Path::new("/proj"));
+        match lock_src {
+            LockSource::Registry { url, mirror } => {
+                assert_eq!(url, "https://crates.io");
+                assert_eq!(mirror, None);
+            }
+            other => panic!("expected Registry, got {other:?}"),
+        }
+
+        let git = ResolvedSource::Git {
+            url: "https://github.com/foo/bar".to_string(),
+            reference: Some(GitRef::Tag("v1.0".to_string())),
+        };
+        let lock_src = convert_source(&git, Path::new("/proj"));
+        match lock_src {
+            LockSource::Git {
+                url,
+                reference,
+                mirror,
+            } => {
+                assert_eq!(url, "https://github.com/foo/bar");
+                assert_eq!(reference, Some(GitRef::Tag("v1.0".to_string())),);
+                assert_eq!(mirror, None);
+            }
+            other => panic!("expected Git, got {other:?}"),
         }
     }
 
