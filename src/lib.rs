@@ -19,6 +19,8 @@ pub mod concurrency_report;
 pub mod cost_summary;
 pub mod def_path;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod dep_diagnostic;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dep_graph;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod dep_resolver;
