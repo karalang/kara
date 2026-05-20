@@ -300,21 +300,51 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
             }
         } else if val.is_struct_value() {
-            // String struct { ptr, i64, i64 } — extract the data pointer for printf %s.
+            // String struct `{ ptr, i64, i64 }` (data, len, cap). The
+            // pre-fix path passed the data pointer to `%s` directly,
+            // which puts/printf treats as a NUL-terminated C string —
+            // and string-literal `cap = 0` storage happens to hit a
+            // NUL by luck (clang's `c"...\0"` global form), but
+            // heap-allocated Strings (concat result, `String + String`,
+            // any function return that allocates) carry `len` bytes
+            // with no terminator. A `%s` read then walks past the
+            // buffer, which AddressSanitizer flags as a 1-byte
+            // heap-buffer-overflow at puts (LLVM rewrites
+            // `printf("%s\n", str)` to `puts(str)` as a libc-call
+            // optimization — same shape either way).
+            //
+            // Fix: use `%.*s` with the explicit length from field 1,
+            // so printf reads exactly `len` bytes and never touches
+            // the byte past the buffer. Mirrors the char-codepoint
+            // arm above and the per-type Display synthesizer in
+            // `synth_display`. Precision is `int` per printf's
+            // varargs ABI, so truncate the i64 length to i32 — String
+            // lengths > 2 GiB are far outside v1's scope.
+            let sv = val.into_struct_value();
             let str_ptr = self
                 .builder
-                .build_extract_value(val.into_struct_value(), 0, "str.ptr")
+                .build_extract_value(sv, 0, "str.ptr")
                 .unwrap()
                 .into_pointer_value();
+            let str_len = self
+                .builder
+                .build_extract_value(sv, 1, "str.len")
+                .unwrap()
+                .into_int_value();
+            let len_i32 = self
+                .builder
+                .build_int_truncate(str_len, self.context.i32_type(), "str.len.i32")
+                .unwrap();
             let fmt = self
                 .builder
-                .build_global_string_ptr(&format!("%s{nl}"), "fsp")
+                .build_global_string_ptr(&format!("%.*s{nl}"), "fsp")
                 .unwrap();
             self.builder
                 .build_call(
                     self.printf_fn,
                     &[
                         BasicMetadataValueEnum::from(fmt.as_pointer_value()),
+                        BasicMetadataValueEnum::from(len_i32),
                         BasicMetadataValueEnum::from(str_ptr),
                     ],
                     "printf",

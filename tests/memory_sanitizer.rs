@@ -206,6 +206,111 @@ fn main() {
         );
     }
 
+    // ── `println(String)` — `%.*s` length-bounded format ──────────
+    //
+    // Pre-fix `compile_print`'s struct-value arm passed the String's
+    // data pointer to `printf("%s\n", str)` directly. LLVM rewrote
+    // the call to `puts(str)` as a libc-call optimization, and ASAN
+    // flagged the 1-byte overread when puts walked past the
+    // non-NUL-terminated heap buffer. String-literal cases worked
+    // by luck — clang's `c"...\0"` global form puts a NUL right
+    // after — but any heap-allocated String (concat result, function
+    // return) overran. The fix routes through `%.*s` with the
+    // explicit length, so printf reads exactly `len` bytes and the
+    // libc-call optimizer doesn't substitute puts. Covers four
+    // shapes that all hit the same struct-value arm: literal,
+    // heap concat, function-return-via-let-binding, ref-String
+    // parameter to a heap source.
+
+    #[test]
+    fn asan_println_string_literal_no_overread() {
+        // Literal: `cap = 0`, buffer in .rodata. Pre-fix this case
+        // worked by luck because the compiler's static-string emitter
+        // (clang's `c"...\0"` form) writes a trailing NUL into
+        // .rodata even though `cap` doesn't account for it. The fix
+        // routes the same buffer through `%.*s` with the explicit
+        // length, never depending on the trailing-byte coincidence.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    println("hello literal");
+}
+"#,
+            &["hello literal"],
+            "println_string_literal_no_overread",
+        );
+    }
+
+    #[test]
+    fn asan_println_heap_string_concat() {
+        // Heap-owning rvalue from concatenation. Pre-fix this case
+        // failed with a heap-buffer-overflow at puts because the
+        // concat helper allocates exactly `len` bytes (no trailing
+        // NUL) and `printf("%s\n", str)` → `puts(str)` walked one
+        // past the buffer.
+        assert_clean_asan_run(
+            r#"
+fn main() {
+    let a = "left ";
+    let b = "right";
+    println(a + b);
+}
+"#,
+            &["left right"],
+            "println_heap_string_concat",
+        );
+    }
+
+    #[test]
+    fn asan_println_function_return_string_via_let_binding() {
+        // Function returns owned heap String; bound to a local;
+        // printed. This is the let-binding form the kata workaround
+        // used pre-C — even with the materialization fix landed,
+        // `println(m)` still hit the overread until this slice.
+        assert_clean_asan_run(
+            r#"
+fn make() -> String {
+    let a = "made ";
+    let b = "string";
+    return a + b;
+}
+
+fn main() {
+    let m = make();
+    println(m);
+}
+"#,
+            &["made string"],
+            "println_function_return_string_via_let_binding",
+        );
+    }
+
+    #[test]
+    fn asan_println_ref_string_param_over_heap_source() {
+        // `s: ref String` parameter, heap-source caller. The
+        // identifier `s` inside `show` loads through the ref param
+        // and arrives at compile_print as a struct value (per
+        // `load_variable`'s ref-deref). Pre-fix the struct-value
+        // arm overread; with `%.*s` it reads exactly `len` bytes.
+        // This was the canonical failure shape during the
+        // C-followup ASAN test development.
+        assert_clean_asan_run(
+            r#"
+fn show(s: ref String) {
+    println(s);
+}
+
+fn main() {
+    let a = "left ";
+    let b = "right";
+    show(a + b);
+}
+"#,
+            &["left right"],
+            "println_ref_string_param_over_heap_source",
+        );
+    }
+
     // ── Vec: owned heap buffer, scope-exit free ───────────────────
     // Exercises `emit_scope_vec_cleanup` — the Vec's data pointer must be
     // freed when `v` goes out of scope at the end of `main`.
