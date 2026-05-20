@@ -72,6 +72,10 @@ COMMANDS:
     clean [--global]  Remove the project-local `dist/` cache. With
                       --global, instead removes the user-wide cache
                       at ~/.kara/cache/.
+    cache <sub>       Inspect the global build-artifact cache.
+                        info  - print cache root + entry count + bytes
+                        key   - derive the cache-key digest for a key
+                                tuple (--pkg / --version required)
     install <spec>    Build a binary package and install it into
                       ~/.kara/bin/. Spec accepts `path = ...`,
                       `git = ...`, or a registry-proxy reference.
@@ -357,6 +361,55 @@ RESOURCE PROBES:
 EXIT CODE:
     0 if every test passed or was skipped under permitted conditions.
     Non-zero if any test failed, or if any test was skipped under `--all`."
+        }
+        "cache" => {
+            "\
+karac cache - Inspect the global build-artifact cache
+
+USAGE:
+    karac cache info [--output=json|jsonl]
+    karac cache key --pkg NAME --version V [--edition E] [--profile P]
+                    [--target-triple T] [--compiler-version C]
+                    [--output=json|jsonl]
+
+SUB-MODES:
+    info    Print the cache root, populated entry count, and total bytes.
+            Useful for eyeballing how much disk the cache currently holds.
+    key     Derive and print the cache-key digest for the given five-tuple
+            (compiler-version, package-version, edition, profile, target-triple)
+            plus the package name. `--pkg` and `--version` are required;
+            other axes fall back to the active toolchain (compiler version
+            from this karac binary, host target triple, edition `2026`,
+            profile `default`). Useful for CI to verify expected keys
+            without populating the cache first.
+
+OPTIONS (cache info):
+    --output=json    JSON envelope on stdout: {\"status\":\"ok\",\"command\":
+                     \"cache_info\",\"root\":...,\"entries\":...,\"bytes\":...}
+    --output=jsonl   Emits one `cache_info` event with the same fields.
+    -h, --help       Print this message.
+
+OPTIONS (cache key):
+    --pkg=NAME              Package name (required).
+    --version=V             Package version (required).
+    --edition=E             Edition slot in the key (default `2026`).
+    --profile=P             Profile slot (default `default`).
+    --target-triple=T       Target triple slot (default = active host).
+    --compiler-version=C    Compiler-version slot (default = active karac).
+    --output=json|jsonl     Structured output as above.
+    -h, --help              Print this message.
+
+CACHE ROOT:
+    Resolved from $KARAC_BUILD_CACHE_ROOT if set (non-empty); else
+    ~/.kara/cache/build/. Eviction via `karac clean --global` (which
+    targets the umbrella ~/.kara/cache/ root). This subcommand never
+    mutates the cache.
+
+V1.1 NOTE:
+    Today's compiler does whole-program codegen — no per-dep artifacts
+    are written to this cache yet. The subcommand surfaces the typed
+    cache protocol so tooling can integrate against it from day one.
+    See `docs/implementation_checklist/phase-5-diagnostics.md`."
         }
         "clean" => {
             "\

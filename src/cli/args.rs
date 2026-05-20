@@ -64,6 +64,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "test" => parse_test_command(args),
         "repl" => parse_repl_command(args),
         "doc" => Command::Doc,
+        "cache" => parse_cache_command(args),
         "clean" => parse_clean_command(args),
         "install" => parse_install_command(args),
         "vendor" => parse_vendor_command(args),
@@ -271,6 +272,122 @@ fn parse_build_command(args: &[String]) -> Command {
             no_proxy,
         },
     }
+}
+
+fn parse_cache_command(args: &[String]) -> Command {
+    // `karac cache <info|key> [flags]`. The sub-mode is the first
+    // positional after `cache`; absent → error with the supported set
+    // listed.
+    let sub = match args.get(2).map(|s| s.as_str()) {
+        Some("info") => parse_cache_info_args(&args[3..]),
+        Some("key") => parse_cache_key_args(&args[3..]),
+        Some(other) => {
+            eprintln!(
+                "error: unknown `karac cache` sub-mode '{other}' (expected one of: info, key)"
+            );
+            process::exit(1);
+        }
+        None => {
+            eprintln!("error: `karac cache` requires a sub-mode (one of: info, key)");
+            process::exit(1);
+        }
+    };
+    let output = scan_output_mode_flag(args);
+    Command::Cache { sub, output }
+}
+
+fn parse_cache_info_args(rest: &[String]) -> super::CacheSub {
+    // `karac cache info` takes no positionals and no flags other than
+    // the shared `--output=` recognized at the outer level. Reject
+    // anything else with the canonical pattern.
+    for arg in rest {
+        match arg.as_str() {
+            s if s.starts_with("--output=") => {}
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac cache info`");
+                process::exit(1);
+            }
+            other => {
+                eprintln!(
+                    "error: `karac cache info` takes no positional arguments (got '{other}')"
+                );
+                process::exit(1);
+            }
+        }
+    }
+    super::CacheSub::Info
+}
+
+fn parse_cache_key_args(rest: &[String]) -> super::CacheSub {
+    // `karac cache key --pkg NAME --version V [--edition E] [--profile P]
+    // [--target-triple T] [--compiler-version C]`. `--pkg` and
+    // `--version` are required; everything else falls back to the
+    // active toolchain's defaults at handler time.
+    let mut pkg: Option<String> = None;
+    let mut version: Option<String> = None;
+    let mut edition: Option<String> = None;
+    let mut profile: Option<String> = None;
+    let mut target_triple: Option<String> = None;
+    let mut compiler_version: Option<String> = None;
+    for arg in rest {
+        let s = arg.as_str();
+        if let Some(v) = s.strip_prefix("--pkg=") {
+            pkg = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("--version=") {
+            version = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("--edition=") {
+            edition = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("--profile=") {
+            profile = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("--target-triple=") {
+            target_triple = Some(v.to_string());
+        } else if let Some(v) = s.strip_prefix("--compiler-version=") {
+            compiler_version = Some(v.to_string());
+        } else if s.starts_with("--output=") {
+            // handled at outer level
+        } else if s.starts_with("--") {
+            eprintln!("error: unknown flag '{s}' for `karac cache key`");
+            process::exit(1);
+        } else {
+            eprintln!("error: `karac cache key` takes no positional arguments (got '{s}')");
+            process::exit(1);
+        }
+    }
+    let Some(pkg) = pkg else {
+        eprintln!("error: `karac cache key` requires --pkg=NAME");
+        process::exit(1);
+    };
+    let Some(version) = version else {
+        eprintln!("error: `karac cache key` requires --version=V");
+        process::exit(1);
+    };
+    super::CacheSub::Key {
+        pkg,
+        version,
+        edition,
+        profile,
+        target_triple,
+        compiler_version,
+    }
+}
+
+// Scan args for `--output=json|jsonl` regardless of position. Used by
+// `parse_cache_command` so the flag can sit either before or after
+// the sub-mode word — the natural CLI ergonomics.
+fn scan_output_mode_flag(args: &[String]) -> OutputMode {
+    for arg in args.iter().skip(2) {
+        if arg == "--output=json" {
+            return OutputMode::Json;
+        }
+        if arg == "--output=jsonl" {
+            return OutputMode::Jsonl;
+        }
+        if let Some(rest) = arg.strip_prefix("--output=") {
+            eprintln!("error: unknown output mode '{rest}'. Use json or jsonl.");
+            process::exit(1);
+        }
+    }
+    OutputMode::Text
 }
 
 fn parse_clean_command(args: &[String]) -> Command {

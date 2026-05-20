@@ -5447,3 +5447,248 @@ fn test_vendor_rejects_unknown_flag() {
         "expected unknown-flag error; got: {stderr}",
     );
 }
+
+// ── karac cache ───────────────────────────────────────────────────
+//
+// Line 861 slice 2 — `karac cache info` and `karac cache key` lookups.
+// The subcommand is never expected to mutate the cache; these tests
+// verify the protocol surface (digest derivation, env-var override,
+// stats reporting on populated vs empty caches, JSON envelope).
+
+fn cache_tempdir(slug: &str) -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("karac-cache-test-{slug}"));
+    let _ = std::fs::remove_dir_all(&p);
+    std::fs::create_dir_all(&p).unwrap();
+    p
+}
+
+#[test]
+fn test_cache_info_on_empty_cache_reports_zero() {
+    // A cache root that doesn't exist yet should report 0 entries / 0
+    // bytes and exit 0. This is the cold-machine case.
+    let root = cache_tempdir("info-empty");
+    let nonexistent = root.join("never-populated");
+    let out = karac_bin()
+        .args(["cache", "info"])
+        .env("KARAC_BUILD_CACHE_ROOT", &nonexistent)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("karac cache info:"));
+    assert!(stdout.contains("entries: 0"));
+    assert!(stdout.contains("bytes:   0"));
+    assert!(stdout.contains(nonexistent.to_str().unwrap()));
+}
+
+#[test]
+fn test_cache_info_json_envelope() {
+    // --output=json must produce the canonical envelope shape so
+    // tooling (IDE, CI) can parse it without scraping text.
+    let root = cache_tempdir("info-json");
+    let out = karac_bin()
+        .args(["cache", "info", "--output=json"])
+        .env("KARAC_BUILD_CACHE_ROOT", &root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&root);
+
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("\"status\":\"ok\""));
+    assert!(stdout.contains("\"command\":\"cache_info\""));
+    assert!(stdout.contains("\"entries\":0"));
+    assert!(stdout.contains("\"bytes\":0"));
+}
+
+#[test]
+fn test_cache_key_default_axes_print_digest() {
+    // `karac cache key --pkg foo --version 1.0.0` derives the digest
+    // for the supplied pair against the active toolchain's defaults
+    // (compiler version, host triple, edition `2026`, profile `default`).
+    let out = karac_bin()
+        .args(["cache", "key", "--pkg=foo", "--version=1.0.0"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("karac cache key:"));
+    assert!(stdout.contains("pkg:              foo"));
+    assert!(stdout.contains("version:          1.0.0"));
+    assert!(stdout.contains("edition:          2026"));
+    assert!(stdout.contains("profile:          default"));
+    // The digest line must include a 64-hex string. We check for the
+    // `digest:` label + the prefix; a full regex would be overkill.
+    assert!(stdout.contains("digest:"));
+    // Pull out the digest line and verify hex-shape.
+    let digest_line = stdout
+        .lines()
+        .find(|l| l.trim_start().starts_with("digest:"))
+        .expect("expected a digest line");
+    let hex = digest_line.trim().trim_start_matches("digest:").trim();
+    assert_eq!(hex.len(), 64, "expected 64-hex digest, got `{hex}`");
+    assert!(
+        hex.chars().all(|c| c.is_ascii_hexdigit()),
+        "expected hex, got `{hex}`"
+    );
+}
+
+#[test]
+fn test_cache_key_is_deterministic_across_invocations() {
+    // Same five-tuple → same digest. Pin the host-axis defaults
+    // explicitly so the test is hermetic against the machine running
+    // it.
+    let args = [
+        "cache",
+        "key",
+        "--pkg=demo",
+        "--version=1.2.3",
+        "--edition=2026",
+        "--profile=default",
+        "--target-triple=aarch64-apple-darwin",
+        "--compiler-version=0.1.0",
+    ];
+    let extract_digest = |stdout: &str| -> String {
+        stdout
+            .lines()
+            .find(|l| l.trim_start().starts_with("digest:"))
+            .expect("digest line")
+            .trim()
+            .trim_start_matches("digest:")
+            .trim()
+            .to_string()
+    };
+    let a = karac_bin().args(args).output().unwrap();
+    let b = karac_bin().args(args).output().unwrap();
+    let a_out = String::from_utf8_lossy(&a.stdout).to_string();
+    let b_out = String::from_utf8_lossy(&b.stdout).to_string();
+    let a_d = extract_digest(&a_out);
+    let b_d = extract_digest(&b_out);
+    assert_eq!(a_d, b_d, "digest must be deterministic");
+}
+
+#[test]
+fn test_cache_key_axis_change_changes_digest() {
+    // Changing any axis (here: edition) must produce a different
+    // digest. Pins that the key derivation actually mixes the axis
+    // through to the hash.
+    let common = [
+        "cache",
+        "key",
+        "--pkg=demo",
+        "--version=1.2.3",
+        "--profile=default",
+        "--target-triple=aarch64-apple-darwin",
+        "--compiler-version=0.1.0",
+    ];
+    let extract = |stdout: &str| -> String {
+        stdout
+            .lines()
+            .find(|l| l.trim_start().starts_with("digest:"))
+            .unwrap()
+            .trim()
+            .trim_start_matches("digest:")
+            .trim()
+            .to_string()
+    };
+    let mut a_args = common.to_vec();
+    a_args.push("--edition=2026");
+    let mut b_args = common.to_vec();
+    b_args.push("--edition=2027");
+    let a = karac_bin().args(&a_args).output().unwrap();
+    let b = karac_bin().args(&b_args).output().unwrap();
+    let a_d = extract(&String::from_utf8_lossy(&a.stdout));
+    let b_d = extract(&String::from_utf8_lossy(&b.stdout));
+    assert_ne!(a_d, b_d, "edition change must shift the digest");
+}
+
+#[test]
+fn test_cache_key_json_envelope() {
+    let out = karac_bin()
+        .args([
+            "cache",
+            "key",
+            "--pkg=demo",
+            "--version=1.0.0",
+            "--output=json",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+
+    assert!(out.status.success(), "stdout: {stdout}");
+    assert!(stdout.contains("\"status\":\"ok\""));
+    assert!(stdout.contains("\"command\":\"cache_key\""));
+    assert!(stdout.contains("\"pkg\":\"demo\""));
+    assert!(stdout.contains("\"version\":\"1.0.0\""));
+    assert!(stdout.contains("\"digest\":\""));
+}
+
+#[test]
+fn test_cache_key_requires_pkg() {
+    let out = karac_bin()
+        .args(["cache", "key", "--version=1.0.0"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("requires --pkg"),
+        "expected `requires --pkg`, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_cache_key_requires_version() {
+    let out = karac_bin()
+        .args(["cache", "key", "--pkg=demo"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("requires --version"),
+        "expected `requires --version`, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_cache_requires_sub_mode() {
+    // Bare `karac cache` should list the supported sub-modes rather
+    // than fall through silently.
+    let out = karac_bin().arg("cache").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("requires a sub-mode"),
+        "expected sub-mode error, got: {stderr}"
+    );
+    assert!(stderr.contains("info"));
+    assert!(stderr.contains("key"));
+}
+
+#[test]
+fn test_cache_rejects_unknown_sub_mode() {
+    let out = karac_bin().args(["cache", "purge"]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("unknown `karac cache` sub-mode 'purge'"),
+        "expected unknown-sub-mode error, got: {stderr}"
+    );
+}
+
+#[test]
+fn test_cache_info_help_flag() {
+    // Subcommand-scoped --help must surface the cache help block.
+    let out = karac_bin().args(["cache", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success());
+    assert!(stdout.contains("karac cache - Inspect the global build-artifact cache"));
+    assert!(stdout.contains("SUB-MODES:"));
+    assert!(stdout.contains("info"));
+    assert!(stdout.contains("key"));
+}

@@ -203,6 +203,26 @@ pub enum Command {
     Clean {
         global: bool,
     },
+    /// Inspect the global build-artifact cache at `~/.kara/cache/build/`.
+    /// Two sub-modes:
+    /// - `karac cache info` — print the cache root and aggregate stats
+    ///   (populated entry count, total artifact bytes). Useful for
+    ///   eyeballing how much disk the cache currently holds.
+    /// - `karac cache key --pkg NAME --version V [--edition E] [--profile P]
+    ///   [--target-triple T] [--compiler-version C]` — derive and print
+    ///   the cache-key digest for the given five-tuple. Lets CI verify
+    ///   that the key derivation matches an external expectation
+    ///   without having to populate the cache first.
+    ///
+    /// The cache itself is consumed by the build pipeline when per-dep
+    /// codegen ships (v1.1.x carve-out); this subcommand surfaces the
+    /// typed cache protocol today so tooling can integrate against it
+    /// from day one. `karac clean --global` evicts the cache; this
+    /// command never mutates anything.
+    Cache {
+        sub: CacheSub,
+        output: OutputMode,
+    },
     /// Build a binary package and install it into `~/.kara/bin/`. The
     /// `spec` accepts `path = ...`, `git = ...`, or a registry-proxy
     /// reference per the manifest dependency spec shape. v1 surface —
@@ -263,6 +283,30 @@ pub enum Command {
     },
     Help,
     Version,
+}
+
+/// Sub-mode for `karac cache`. Line 861 slice 2 — info + key
+/// inspection. The five-tuple key fields are all optional except
+/// `pkg` and `version`; missing optionals default to the active
+/// compiler's view of the world (the compiler version from
+/// `CARGO_PKG_VERSION`, the host target triple, edition `2026`,
+/// profile `default`) so the common case is short.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CacheSub {
+    /// `karac cache info` — print the cache root and aggregate stats.
+    Info,
+    /// `karac cache key --pkg ... --version ...` — derive + print
+    /// the cache-key digest for the supplied five-tuple. Each
+    /// optional field falls back to a sensible default so a bare
+    /// `--pkg foo --version 1.2.3` is enough.
+    Key {
+        pkg: String,
+        version: String,
+        edition: Option<String>,
+        profile: Option<String>,
+        target_triple: Option<String>,
+        compiler_version: Option<String>,
+    },
 }
 
 /// What `karac explain` should look up. Line 619 slice 3 widens the
@@ -419,6 +463,7 @@ pub fn execute(cmd: Command) {
         }
         Command::Doc => cmd_doc(),
         Command::Clean { global } => cmd_clean(global),
+        Command::Cache { sub, output } => cmd_cache(sub, output),
         Command::Install { spec } => cmd_install(&spec),
         Command::Vendor { no_proxy } => cmd_vendor(no_proxy),
         Command::Update {
@@ -6798,6 +6843,170 @@ fn cmd_clean(global: bool) {
         Err(e) => {
             eprintln!("error: cannot stat {}: {e}", target.display());
             process::exit(1);
+        }
+    }
+}
+
+// ── karac cache ──────────────────────────────────────────────────
+//
+// Inspect the global build-artifact cache. Two sub-modes: `info`
+// prints aggregate stats; `key` derives + prints the cache-key digest
+// for a hypothetical five-tuple. The cache root is sourced through
+// `build_cache::default_cache_root()` so the `KARAC_BUILD_CACHE_ROOT`
+// env override works without any per-call plumbing.
+
+fn cmd_cache(sub: crate::cli::CacheSub, output: OutputMode) {
+    let root = match crate::build_cache::default_cache_root() {
+        Ok(p) => p,
+        Err(e) => {
+            emit_cache_error(&e, output);
+            process::exit(1);
+        }
+    };
+    match sub {
+        crate::cli::CacheSub::Info => cmd_cache_info(&root, output),
+        crate::cli::CacheSub::Key {
+            pkg,
+            version,
+            edition,
+            profile,
+            target_triple,
+            compiler_version,
+        } => cmd_cache_key(
+            &pkg,
+            &version,
+            edition.as_deref(),
+            profile.as_deref(),
+            target_triple.as_deref(),
+            compiler_version.as_deref(),
+            output,
+        ),
+    }
+}
+
+fn cmd_cache_info(root: &std::path::Path, output: OutputMode) {
+    let stats = match crate::build_cache::stats(root) {
+        Ok(s) => s,
+        Err(e) => {
+            emit_cache_error(&e, output);
+            process::exit(1);
+        }
+    };
+    match output {
+        OutputMode::Text => {
+            println!("karac cache info:");
+            println!("  root:    {}", root.display());
+            println!("  entries: {}", stats.entry_count);
+            println!("  bytes:   {}", stats.total_bytes);
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"cache_info\",\"root\":{},\"entries\":{},\"bytes\":{}}}",
+                json_string(&root.display().to_string()),
+                stats.entry_count,
+                stats.total_bytes,
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "cache_info",
+                &format!(
+                    "\"root\":{},\"entries\":{},\"bytes\":{}",
+                    json_string(&root.display().to_string()),
+                    stats.entry_count,
+                    stats.total_bytes,
+                ),
+            );
+        }
+    }
+}
+
+fn cmd_cache_key(
+    pkg: &str,
+    version: &str,
+    edition: Option<&str>,
+    profile: Option<&str>,
+    target_triple: Option<&str>,
+    compiler_version: Option<&str>,
+    output: OutputMode,
+) {
+    let key = crate::build_cache::CacheKey {
+        compiler_version: compiler_version
+            .unwrap_or_else(|| crate::build_cache::active_compiler_version())
+            .to_string(),
+        package_name: pkg.to_string(),
+        package_version: version.to_string(),
+        edition: edition.unwrap_or("2026").to_string(),
+        profile: profile.unwrap_or("default").to_string(),
+        target_triple: target_triple
+            .map(|s| s.to_string())
+            .unwrap_or_else(crate::build_cache::host_target_triple),
+    };
+    let digest = key.digest();
+    match output {
+        OutputMode::Text => {
+            println!("karac cache key:");
+            println!("  pkg:              {}", key.package_name);
+            println!("  version:          {}", key.package_version);
+            println!("  edition:          {}", key.edition);
+            println!("  profile:          {}", key.profile);
+            println!("  target-triple:    {}", key.target_triple);
+            println!("  compiler-version: {}", key.compiler_version);
+            println!("  digest:           {digest}");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"ok\",\"command\":\"cache_key\",\"pkg\":{},\"version\":{},\"edition\":{},\"profile\":{},\"target_triple\":{},\"compiler_version\":{},\"digest\":{}}}",
+                json_string(&key.package_name),
+                json_string(&key.package_version),
+                json_string(&key.edition),
+                json_string(&key.profile),
+                json_string(&key.target_triple),
+                json_string(&key.compiler_version),
+                json_string(&digest),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "cache_key",
+                &format!(
+                    "\"pkg\":{},\"version\":{},\"edition\":{},\"profile\":{},\"target_triple\":{},\"compiler_version\":{},\"digest\":{}",
+                    json_string(&key.package_name),
+                    json_string(&key.package_version),
+                    json_string(&key.edition),
+                    json_string(&key.profile),
+                    json_string(&key.target_triple),
+                    json_string(&key.compiler_version),
+                    json_string(&digest),
+                ),
+            );
+        }
+    }
+}
+
+fn emit_cache_error(e: &crate::build_cache::CacheError, output: OutputMode) {
+    let code = e.code();
+    let message = e.to_string();
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[{code}]: {message}");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"cache\",\"code\":{},\"message\":{}}}]}}",
+                json_string(code),
+                json_string(&message),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "cache_error",
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(code),
+                    json_string(&message),
+                ),
+            );
         }
     }
 }
