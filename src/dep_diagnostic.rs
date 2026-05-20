@@ -139,6 +139,30 @@ pub fn render_resolver_error(err: &ResolverError) -> Diagnostic {
                     .to_string(),
             ),
         },
+        ResolverError::ToolchainTooOld {
+            package,
+            manifest_dir,
+            kara_version_req,
+            active_version,
+        } => Diagnostic {
+            code: err.code(),
+            primary: format!(
+                "package `{}` requires a newer toolchain than the one currently in use",
+                package,
+            ),
+            notes: vec![
+                format!(
+                    "`{}/kara.toml` declares `kara-version = \"{}\"`",
+                    manifest_dir.display(),
+                    kara_version_req,
+                ),
+                format!("active toolchain: `{}`", active_version),
+            ],
+            help: Some(
+                "upgrade the karac toolchain (`karaup` when it ships, or rebuild from source) — or relax the package's `[package].kara-version` constraint if the version pin is overly tight"
+                    .to_string(),
+            ),
+        },
     }
 }
 
@@ -417,6 +441,26 @@ mod tests {
         let diag = render_dep_graph_error(&err);
         assert_eq!(diag.code, "E_PATH_DEP_MANIFEST_INVALID");
         assert!(diag.notes.iter().any(|n| n.contains("underlying error")));
+    }
+
+    #[test]
+    fn toolchain_too_old_renders_with_upgrade_guidance() {
+        let err = ResolverError::ToolchainTooOld {
+            package: "modernlib".into(),
+            manifest_dir: PathBuf::from("/proj/modernlib"),
+            kara_version_req: VersionReq::parse(">=2.0").unwrap(),
+            active_version: Version::parse("1.0.0").unwrap(),
+        };
+        let diag = render_resolver_error(&err);
+        assert_eq!(diag.code, "E_TOOLCHAIN_TOO_OLD");
+        assert!(diag.primary.contains("modernlib"));
+        // The two notes name the declared constraint and the active version.
+        assert!(diag.notes.iter().any(|n| n.contains(">=2.0")));
+        assert!(diag.notes.iter().any(|n| n.contains("active toolchain")));
+        assert!(diag.notes.iter().any(|n| n.contains("1.0.0")));
+        // Help line mentions both upgrade paths so the user has a choice.
+        let help = diag.help.as_ref().unwrap();
+        assert!(help.contains("upgrade") || help.contains("relax"));
     }
 
     #[test]

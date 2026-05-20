@@ -119,6 +119,16 @@ pub enum ResolverError {
         first_source: ResolvedSource,
         second_source: ResolvedSource,
     },
+    /// A package in the resolved graph declares `[package].kara-version =
+    /// "..."` whose constraint excludes the active compiler version. Maps
+    /// to `E_TOOLCHAIN_TOO_OLD`. Closes the deferred sub-bullet at line
+    /// 842 of `docs/implementation_checklist/phase-5-diagnostics.md`.
+    ToolchainTooOld {
+        package: String,
+        manifest_dir: PathBuf,
+        kara_version_req: semver::VersionReq,
+        active_version: semver::Version,
+    },
 }
 
 /// One link in a version-conflict constraint chain: the parent manifest's
@@ -137,6 +147,7 @@ impl ResolverError {
             Self::GitDepUnsupported { .. } => "E_GIT_DEP_UNSUPPORTED",
             Self::VersionConflict { .. } => "E_DEPENDENCY_VERSION_CONFLICT",
             Self::SourceConflict { .. } => "E_DEPENDENCY_SOURCE_CONFLICT",
+            Self::ToolchainTooOld { .. } => "E_TOOLCHAIN_TOO_OLD",
         }
     }
 }
@@ -186,8 +197,31 @@ impl std::fmt::Display for ResolverError {
                 f,
                 "dependency `{package}` is declared from incompatible sources: {first_source:?} and {second_source:?}",
             ),
+            Self::ToolchainTooOld {
+                package,
+                manifest_dir,
+                kara_version_req,
+                active_version,
+            } => write!(
+                f,
+                "package `{}` at `{}/kara.toml` requires kara-version `{}` but the active toolchain is `{}`",
+                package,
+                manifest_dir.display(),
+                kara_version_req,
+                active_version,
+            ),
         }
     }
+}
+
+/// The active compiler version. Used as the right-hand operand in every
+/// `[package].kara-version` constraint comparison during MSRV enforcement
+/// (slice 6). Sourced from `CARGO_PKG_VERSION` at compile time; tests pass
+/// a fixed `Version` so they're hermetic against the running compiler's
+/// version number.
+pub fn active_toolchain_version() -> semver::Version {
+    semver::Version::parse(env!("CARGO_PKG_VERSION"))
+        .expect("CARGO_PKG_VERSION must be a valid semver string")
 }
 
 /// Resolve the dependency graph into a concrete `Resolution`. Path-deps
@@ -195,7 +229,38 @@ impl std::fmt::Display for ResolverError {
 /// matching `*_DEP_UNSUPPORTED` error until fetch ships. The function is
 /// deterministic — `BTreeMap` iteration order in the input graph drives
 /// the output ordering, so diagnostic output is stable across runs.
-pub fn resolve(graph: &DepGraph) -> Result<Resolution, Box<ResolverError>> {
+///
+/// `active_toolchain` is the version every reachable manifest's
+/// `[package].kara-version` constraint is checked against (slice 6 — MSRV
+/// enforcement). A package whose constraint excludes the active version
+/// surfaces as `ResolverError::ToolchainTooOld`. Production callers pass
+/// `active_toolchain_version()`; tests pass a fixed `Version` so they
+/// stay hermetic.
+pub fn resolve(
+    graph: &DepGraph,
+    active_toolchain: &semver::Version,
+) -> Result<Resolution, Box<ResolverError>> {
+    // MSRV check runs first — a package whose kara-version excludes the
+    // active toolchain can't be built regardless of how the dep graph
+    // resolves. Surfacing the toolchain mismatch up front gives a clearer
+    // diagnostic than "version conflict" would, since the failure isn't
+    // a constraint clash among parents but a compiler-vs-package gap.
+    // Walks in deterministic order so multiple violations would report
+    // the alphabetically-first one (per-manifest BTreeMap iteration).
+    for (manifest_dir, mf) in &graph.manifests {
+        let Some(req) = &mf.kara_version else {
+            continue;
+        };
+        if !req.matches(active_toolchain) {
+            return Err(Box::new(ResolverError::ToolchainTooOld {
+                package: mf.name.clone(),
+                manifest_dir: manifest_dir.clone(),
+                kara_version_req: req.clone(),
+                active_version: active_toolchain.clone(),
+            }));
+        }
+    }
+
     let mut packages: BTreeMap<String, ResolvedPackage> = BTreeMap::new();
     let sentinel = semver::Version::parse(PATH_DEP_SENTINEL_VERSION)
         .expect("PATH_DEP_SENTINEL_VERSION must parse");
@@ -412,6 +477,13 @@ mod tests {
         }
     }
 
+    /// Hermetic active-toolchain version for tests. Distinct from
+    /// `active_toolchain_version()` (which reads `CARGO_PKG_VERSION`) so
+    /// tests stay stable across compiler-version bumps.
+    fn test_version() -> semver::Version {
+        semver::Version::parse("1.0.0").unwrap()
+    }
+
     #[test]
     fn solo_manifest_resolves_to_root_only() {
         let root = empty_manifest("solo");
@@ -423,7 +495,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let resolution = resolve(&graph).expect("resolve");
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
         assert_eq!(resolution.packages.len(), 1);
         let solo = &resolution.packages["solo"];
         assert_eq!(solo.source, ResolvedSource::Root);
@@ -442,7 +514,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let resolution = resolve(&graph).expect("resolve");
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
         assert_eq!(resolution.packages.len(), 2);
         // The path-dep is identified by the child manifest's [package].name,
         // not the parent's local entry name.
@@ -463,7 +535,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let err = resolve(&graph).unwrap_err();
+        let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_REGISTRY_DEP_UNSUPPORTED");
         match *err {
             ResolverError::RegistryDepUnsupported { package, .. } => {
@@ -492,7 +564,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let err = resolve(&graph).unwrap_err();
+        let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_GIT_DEP_UNSUPPORTED");
     }
 
@@ -517,7 +589,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let err = resolve(&graph).unwrap_err();
+        let err = resolve(&graph, &test_version()).unwrap_err();
         assert_eq!(err.code(), "E_DEPENDENCY_VERSION_CONFLICT");
         match *err {
             ResolverError::VersionConflict {
@@ -554,7 +626,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let resolution = resolve(&graph).expect("resolve");
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
         assert!(resolution.packages.contains_key("a_pkg"));
     }
 
@@ -583,7 +655,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let resolution = resolve(&graph).expect("resolve");
+        let resolution = resolve(&graph, &test_version()).expect("resolve");
         assert_eq!(resolution.packages.len(), 4);
         let c_resolved = &resolution.packages["c_pkg"];
         assert_eq!(c_resolved.declared_by.len(), 2);
@@ -625,7 +697,7 @@ mod tests {
             },
         )
         .expect("graph");
-        let err = resolve(&graph).unwrap_err();
+        let err = resolve(&graph, &test_version()).unwrap_err();
         match *err {
             ResolverError::VersionConflict { chain, .. } => {
                 assert_eq!(chain.len(), 2, "expected both edges to surface");
@@ -635,8 +707,137 @@ mod tests {
     }
 
     #[test]
+    fn msrv_satisfied_constraint_resolves() {
+        // Constraint `>=1.0` against active-toolchain `1.0.0` → satisfied.
+        let mut root = empty_manifest("root");
+        root.kara_version = Some(VersionReq::parse(">=1.0").unwrap());
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::new(),
+            },
+        )
+        .expect("graph");
+        resolve(&graph, &test_version()).expect("MSRV-satisfied resolution");
+    }
+
+    #[test]
+    fn msrv_too_old_surfaces_toolchain_too_old() {
+        // Constraint `>=2.0` against active-toolchain `1.0.0` → fails.
+        let mut root = empty_manifest("root");
+        root.kara_version = Some(VersionReq::parse(">=2.0").unwrap());
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::new(),
+            },
+        )
+        .expect("graph");
+        let err = resolve(&graph, &test_version()).unwrap_err();
+        assert_eq!(err.code(), "E_TOOLCHAIN_TOO_OLD");
+        match *err {
+            ResolverError::ToolchainTooOld {
+                package,
+                kara_version_req,
+                active_version,
+                ..
+            } => {
+                assert_eq!(package, "root");
+                assert_eq!(kara_version_req, VersionReq::parse(">=2.0").unwrap());
+                assert_eq!(active_version, test_version());
+            }
+            other => panic!("expected ToolchainTooOld, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn msrv_failure_attributed_to_offending_dep() {
+        // Root has no MSRV, but a path-dep requires a newer toolchain.
+        // The failure attributes to the dep, not the root.
+        let mut root = empty_manifest("root");
+        root.dependencies.insert("a".into(), path_dep("a"));
+        let mut a = empty_manifest("a_pkg");
+        a.kara_version = Some(VersionReq::parse(">=2.0").unwrap());
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::from([(PathBuf::from("/root/a"), a)]),
+            },
+        )
+        .expect("graph");
+        let err = resolve(&graph, &test_version()).unwrap_err();
+        match *err {
+            ResolverError::ToolchainTooOld {
+                package,
+                manifest_dir,
+                ..
+            } => {
+                assert_eq!(package, "a_pkg");
+                assert_eq!(manifest_dir, PathBuf::from("/root/a"));
+            }
+            other => panic!("expected ToolchainTooOld, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn msrv_absent_kara_version_does_not_block() {
+        // No kara-version declared anywhere → MSRV check is silent.
+        let root = empty_manifest("root");
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::new(),
+            },
+        )
+        .expect("graph");
+        resolve(&graph, &test_version()).expect("absent MSRV resolves cleanly");
+    }
+
+    #[test]
+    fn msrv_runs_before_dep_resolution() {
+        // Root with both a registry dep (would otherwise error) AND an
+        // MSRV violation. The MSRV error should win — surfacing it first
+        // gives a clearer signal than the registry-unsupported error.
+        let mut root = empty_manifest("root");
+        root.kara_version = Some(VersionReq::parse(">=2.0").unwrap());
+        root.dependencies.insert("http".into(), registry("1.0"));
+        let graph = build_dep_graph(
+            &PathBuf::from("/root"),
+            root,
+            &MemLoader {
+                manifests: BTreeMap::new(),
+            },
+        )
+        .expect("graph");
+        let err = resolve(&graph, &test_version()).unwrap_err();
+        assert_eq!(err.code(), "E_TOOLCHAIN_TOO_OLD");
+    }
+
+    #[test]
+    fn active_toolchain_version_parses_cargo_pkg_version() {
+        // The compile-time CARGO_PKG_VERSION must always be a valid
+        // semver. Regression pin against a future Cargo.toml bump that
+        // accidentally introduces a non-semver string.
+        let v = active_toolchain_version();
+        assert!(!v.to_string().is_empty());
+    }
+
+    #[test]
     fn error_codes_round_trip() {
         let cases = [
+            (
+                ResolverError::ToolchainTooOld {
+                    package: "x".into(),
+                    manifest_dir: PathBuf::from("/x"),
+                    kara_version_req: VersionReq::parse(">=2.0").unwrap(),
+                    active_version: test_version(),
+                },
+                "E_TOOLCHAIN_TOO_OLD",
+            ),
             (
                 ResolverError::RegistryDepUnsupported {
                     package: "x".into(),
@@ -693,8 +894,8 @@ mod tests {
         )
         .expect("graph1");
         let graph2 = build_dep_graph(&PathBuf::from("/root"), root, &loader).expect("graph2");
-        let r1 = resolve(&graph1).expect("r1");
-        let r2 = resolve(&graph2).expect("r2");
+        let r1 = resolve(&graph1, &test_version()).expect("r1");
+        let r2 = resolve(&graph2, &test_version()).expect("r2");
         let names1: Vec<&String> = r1.packages.keys().collect();
         let names2: Vec<&String> = r2.packages.keys().collect();
         assert_eq!(names1, names2);

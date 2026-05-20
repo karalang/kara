@@ -107,14 +107,12 @@ pub struct Manifest {
     /// when surfaced in diagnostics, but cheap to guarantee).
     pub test_resources: BTreeMap<String, String>,
     /// `[package].kara-version` — the minimum compiler version this
-    /// package requires (MSRV in Rust parlance). Stored as the raw
-    /// version string the manifest declared; `None` when the field
-    /// is absent. The resolver enforces this against the active
-    /// toolchain version per design.md once the version-comparison
-    /// pipeline lands (separate slice). For now the field is purely
-    /// structural — accepted, surfaced through manifest output, but
-    /// not validated against the running compiler.
-    pub kara_version: Option<String>,
+    /// package requires (MSRV in Rust parlance). Lifted at parse time
+    /// from the raw string into a `semver::VersionReq` (Cargo-style
+    /// constraint vocabulary, same as `DependencySpec` versions) so the
+    /// resolver can intersect it against the active toolchain version
+    /// in a uniform way. `None` when the field is absent.
+    pub kara_version: Option<semver::VersionReq>,
     /// `[dependencies]` table — structured capture of every entry. v1
     /// parses but does not resolve; the resolver (PubGrub) attaches as
     /// a future slice and consumes this map. `BTreeMap` keeps iteration
@@ -488,19 +486,31 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
 
     // `[package].kara-version` — optional MSRV constraint. Wrong
     // type is a hard error (typos shouldn't silently disable the
-    // constraint); absent is the common case. Per design.md the
-    // value is a free-form version string surfaced verbatim in
-    // resolution diagnostics; no parsing-time validation today.
+    // constraint); absent is the common case. Slice 6 of the
+    // PubGrub-resolver entry lifts the raw string into a structured
+    // `VersionReq` so the resolver intersects it uniformly against
+    // the active toolchain. Parse failure surfaces as an
+    // `InvalidFieldType` so the diagnostic shape stays consistent
+    // with every other manifest-side validation.
     let kara_version = match package.get("kara-version") {
         Some(toml::Value::String(s)) => {
             if s.trim().is_empty() {
                 return Err(ManifestError::InvalidFieldType {
                     path: path.to_path_buf(),
                     key: "kara-version".to_string(),
-                    expected: "a non-empty version string (e.g. \"1.0\" or \"1.2.3\")",
+                    expected: "a non-empty version constraint (e.g. \"1.0\" or \">=1.2, <2.0\")",
                 });
             }
-            Some(s.clone())
+            match semver::VersionReq::parse(s) {
+                Ok(req) => Some(req),
+                Err(_) => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: "kara-version".to_string(),
+                        expected: "a valid Cargo-style semver constraint (e.g. \"1.0\", \"^1.2\", \">=1.0, <2.0\")",
+                    });
+                }
+            }
         }
         Some(_) => {
             return Err(ManifestError::InvalidFieldType {
@@ -1054,7 +1064,7 @@ name = "hello"
 kara-version = "1.0"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
-        assert_eq!(m.kara_version.as_deref(), Some("1.0"));
+        assert_eq!(m.kara_version, Some(req("1.0")));
         // No warning — `kara-version` is a recognised key.
         assert!(m.warnings.is_empty(), "got warnings: {:?}", m.warnings);
     }
@@ -1066,20 +1076,36 @@ name = "hello"
 kara-version = "1.2.3"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
-        assert_eq!(m.kara_version.as_deref(), Some("1.2.3"));
+        assert_eq!(m.kara_version, Some(req("1.2.3")));
     }
 
     #[test]
     fn kara_version_accepts_caret_constraint() {
-        // Cargo-style constraint strings — the parser stores the raw
-        // string; resolution-time interpretation is a follow-up
-        // slice. Today only the parse-time capture is pinned.
+        // Slice 6 lifted the raw string into a VersionReq so the resolver
+        // can intersect it against the active toolchain version.
         let src = r#"[package]
 name = "hello"
 kara-version = "^1.0"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
-        assert_eq!(m.kara_version.as_deref(), Some("^1.0"));
+        assert_eq!(m.kara_version, Some(req("^1.0")));
+    }
+
+    #[test]
+    fn kara_version_malformed_string_is_hard_error() {
+        // Slice 6: lifting to VersionReq adds parse-shape validation on
+        // top of the existing non-empty / non-whitespace checks.
+        let src = r#"[package]
+name = "hello"
+kara-version = "not-a-version"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "kara-version");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
     }
 
     #[test]
