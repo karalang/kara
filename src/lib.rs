@@ -37,6 +37,8 @@ pub mod effectchecker;
 pub mod exhaustive;
 pub mod ffi_lint;
 pub mod formatter;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod install_spec;
 pub mod interpreter;
 pub mod lexer;
 pub mod lints;
