@@ -3371,50 +3371,31 @@ fn test_install_requires_spec() {
     assert!(stderr.contains("requires a <bin-spec>"));
 }
 
+// Build-pipeline slice (line 874) — path sources now drive the existing
+// build pipeline and copy the produced binary into the install root. Git /
+// registry sources surface a forward-compat `E_INSTALL_*_UNSUPPORTED`
+// diagnostic until the package-fetch slice (line 845) ships.
+
 #[test]
-fn test_install_with_spec_emits_not_yet_wired_notice() {
+fn test_install_path_spec_missing_directory_emits_focused_diagnostic() {
+    // The spec parses cleanly but the filesystem entry doesn't exist —
+    // the pipeline-stage error surfaces with its own symbolic code so
+    // CI scripts can distinguish "operator typo in spec" from "the
+    // referenced directory isn't here".
     let out = karac_bin()
-        .args(["install", "path=./tools/my-tool"])
+        .args(["install", "path=./does_not_exist_kara_install_target"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "missing directory must error");
     assert!(
-        !out.status.success(),
-        "v1 placeholder should exit non-zero so CI scripts notice the gap"
-    );
-    assert!(stderr.contains("not yet wired"));
-    assert!(
-        stderr.contains("path=./tools/my-tool"),
-        "diagnostic must name the spec back, got: {stderr}"
-    );
-}
-
-// Spec-resolution slice (slice 2 of line 871) — the install command now parses
-// `<bin-spec>` against the four-shape grammar (`path=`, `git=`, `<name>`,
-// `<name>@<version>`) and echoes the resolved source kind back. The build /
-// `~/.kara/bin/` install step is still gated on the pipeline-integration
-// slice (line 874); these tests pin the spec-parse surface only.
-
-#[test]
-fn test_install_path_spec_resolves_as_path_source() {
-    let out = karac_bin()
-        .args(["install", "path=./tools/my_tool"])
-        .output()
-        .unwrap();
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(!out.status.success(), "stub still exits non-zero");
-    assert!(
-        stderr.contains("parsed `<bin-spec>` as a path source"),
-        "diagnostic must announce the resolved kind, got: {stderr}"
-    );
-    assert!(
-        stderr.contains("resolved: path=./tools/my_tool"),
-        "diagnostic must echo the resolved source, got: {stderr}"
+        stderr.contains("E_INSTALL_PATH_NOT_FOUND"),
+        "expected E_INSTALL_PATH_NOT_FOUND, got: {stderr}"
     );
 }
 
 #[test]
-fn test_install_git_spec_resolves_as_git_source() {
+fn test_install_git_spec_surfaces_unsupported_error() {
     let out = karac_bin()
         .args(["install", "git=https://github.com/example/my_tool.git"])
         .output()
@@ -3422,36 +3403,51 @@ fn test_install_git_spec_resolves_as_git_source() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(
-        stderr.contains("parsed `<bin-spec>` as a git source"),
-        "got: {stderr}"
+        stderr.contains("E_INSTALL_GIT_UNSUPPORTED"),
+        "expected E_INSTALL_GIT_UNSUPPORTED, got: {stderr}"
     );
     assert!(
-        stderr.contains("resolved: git=https://github.com/example/my_tool.git"),
-        "got: {stderr}"
+        stderr.contains("git=https://github.com/example/my_tool.git"),
+        "diagnostic must echo the spec, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("line 845"),
+        "diagnostic must point at the fetch tracker entry, got: {stderr}"
     );
 }
 
 #[test]
-fn test_install_bare_name_resolves_as_registry_unpinned() {
+fn test_install_registry_unpinned_surfaces_unsupported_error() {
     let out = karac_bin().args(["install", "my_tool"]).output().unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(stderr.contains("registry (unpinned)"), "got: {stderr}");
-    assert!(stderr.contains("resolved: my_tool"), "got: {stderr}");
+    assert!(
+        stderr.contains("E_INSTALL_REGISTRY_UNSUPPORTED"),
+        "expected E_INSTALL_REGISTRY_UNSUPPORTED, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("received: my_tool"),
+        "diagnostic must echo the spec, got: {stderr}"
+    );
 }
 
 #[test]
-fn test_install_name_at_version_resolves_as_registry_pinned() {
+fn test_install_registry_pinned_surfaces_unsupported_error() {
     let out = karac_bin()
         .args(["install", "my_tool@^1.0"])
         .output()
         .unwrap();
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
-    assert!(stderr.contains("registry (pinned)"), "got: {stderr}");
-    // VersionReq's Display is canonical (`^1.0`); the render echoes that
-    // canonical form back so the operator sees what was parsed.
-    assert!(stderr.contains("resolved: my_tool@^1.0"), "got: {stderr}");
+    assert!(
+        stderr.contains("E_INSTALL_REGISTRY_UNSUPPORTED"),
+        "expected E_INSTALL_REGISTRY_UNSUPPORTED, got: {stderr}"
+    );
+    // VersionReq's canonical Display preserves `^1.0`.
+    assert!(
+        stderr.contains("received: my_tool@^1.0"),
+        "diagnostic must echo the canonical render, got: {stderr}"
+    );
 }
 
 #[test]
@@ -3496,6 +3492,135 @@ fn test_install_trailing_at_diagnostic() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!out.status.success());
     assert!(stderr.contains("E_INSTALL_EMPTY_VERSION"), "got: {stderr}");
+}
+
+fn install_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-install-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_install_path_missing_manifest_surfaces_manifest_error() {
+    // The directory exists but has no kara.toml — the install path
+    // reaches the manifest loader, which emits its existing
+    // `not inside a kara project` diagnostic. install doesn't try to
+    // wrap that in an install-specific code; the manifest layer
+    // already produces a focused error.
+    let tmp = install_tempdir("no-manifest");
+    let spec = format!("path={}", tmp.display());
+    let out = karac_bin().args(["install", &spec]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "missing manifest must error");
+    // Manifest layer emits a recognisable phrase when the project
+    // root has no kara.toml; we don't pin the exact code here because
+    // it lives in the manifest module.
+    assert!(
+        stderr.to_lowercase().contains("kara.toml")
+            || stderr.to_lowercase().contains("manifest")
+            || stderr.to_lowercase().contains("not inside"),
+        "expected manifest-layer diagnostic, got: {stderr}"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_install_path_source_builds_and_copies_binary_into_install_root() {
+    let tmp = install_tempdir("path-build");
+    let project = tmp.join("project");
+    let install_root = tmp.join("install_root");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("kara.toml"),
+        r#"[package]
+name = "install_demo"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let spec = format!("path={}", project.display());
+    let out = karac_bin()
+        .args(["install", &spec])
+        .env("KARAC_INSTALL_ROOT", &install_root)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let installed = install_root.join("install_demo");
+    let installed_exists = installed.exists();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        out.status.success(),
+        "install of a path source must succeed; stdout={stdout} stderr={stderr}"
+    );
+    assert!(
+        installed_exists,
+        "the binary must be copied into KARAC_INSTALL_ROOT; expected: {}",
+        installed.display()
+    );
+    assert!(
+        stdout.contains("installed `install_demo`"),
+        "expected success summary, got stdout={stdout}"
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_install_path_source_overwrites_existing_binary() {
+    // Idempotency pin: a second install over the same install root
+    // overwrites the existing binary (no "file exists" failure).
+    let tmp = install_tempdir("path-overwrite");
+    let project = tmp.join("project");
+    let install_root = tmp.join("install_root");
+    std::fs::create_dir_all(project.join("src")).unwrap();
+    std::fs::write(
+        project.join("kara.toml"),
+        r#"[package]
+name = "overwrite_demo"
+"#,
+    )
+    .unwrap();
+    std::fs::write(project.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let spec = format!("path={}", project.display());
+    let first = karac_bin()
+        .args(["install", &spec])
+        .env("KARAC_INSTALL_ROOT", &install_root)
+        .output()
+        .unwrap();
+    let second = karac_bin()
+        .args(["install", &spec])
+        .env("KARAC_INSTALL_ROOT", &install_root)
+        .output()
+        .unwrap();
+    let installed = install_root.join("overwrite_demo");
+    let installed_exists = installed.exists();
+    let first_stderr = String::from_utf8_lossy(&first.stderr).into_owned();
+    let second_stderr = String::from_utf8_lossy(&second.stderr).into_owned();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    assert!(
+        first.status.success(),
+        "first install must succeed; stderr={first_stderr}"
+    );
+    assert!(
+        second.status.success(),
+        "second install must succeed (idempotent); stderr={second_stderr}"
+    );
+    assert!(
+        installed_exists,
+        "the binary must still be present after the second install"
+    );
 }
 
 #[test]

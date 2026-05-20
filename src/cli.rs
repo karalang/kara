@@ -7030,15 +7030,23 @@ fn dirs_kara_cache_path() -> Result<PathBuf, String> {
 // the manifest dependency entry: `path=<path>`, `git=<url>`, a bare
 // registry reference `<name>`, or a pinned `<name>@<version>`.
 //
-// This slice (slice 2 of line 871) ships the spec-resolution surface —
-// `install_spec::parse_install_spec` turns the CLI string into a typed
-// `InstallSource`. The build + `~/.kara/bin/` install step depends on
-// per-dep codegen + lookup-through-cache + linker integration (the same
-// pipeline gating as `karac build --offline`); until that lands we
-// echo the resolved source back to the operator and exit non-zero so
-// CI scripts notice the gap. The diagnostic names the parsed source
-// shape (not the raw input) so an operator can confirm their spec was
-// interpreted as intended.
+// **Path sources are fully wired** as of line 874: the install spec is
+// resolved, the build pipeline runs against the resolved directory
+// (via a recursive `karac build` invocation so all phases — dep
+// resolution, MSRV check, codegen, link — are inherited for free),
+// and the produced executable is copied into `<install-root>/<name>`.
+//
+// **Git / registry sources still surface a forward-compat error.** The
+// fetch surface they depend on (tracker line 845) hasn't shipped, so
+// there's no source tree to feed the build pipeline. The diagnostic
+// names the unsupported source kind and the tracker entry the operator
+// should watch.
+//
+// The install root resolves from `$KARAC_INSTALL_ROOT` first (for tests
+// and power-user overrides — empty / whitespace-only values are
+// ignored so a stale shell export doesn't silently misroute), then
+// falls back to `<HOME>/.kara/bin/`. Same precedence rule the cache
+// uses for `KARAC_BUILD_CACHE_ROOT`.
 
 fn cmd_install(spec: &str) {
     use crate::install_spec::{parse_install_spec, InstallSource};
@@ -7052,24 +7060,198 @@ fn cmd_install(spec: &str) {
         }
     };
 
-    let kind = match &source {
-        InstallSource::Path { .. } => "path",
-        InstallSource::Git { .. } => "git",
-        InstallSource::Registry { version: None, .. } => "registry (unpinned)",
-        InstallSource::Registry {
-            version: Some(_), ..
-        } => "registry (pinned)",
-    };
-    let rendered = source.render();
+    match source {
+        InstallSource::Path { path } => install_from_path(&path),
+        InstallSource::Git { url } => {
+            eprintln!(
+                "error[E_INSTALL_GIT_UNSUPPORTED]: git sources are not yet supported by `karac install`"
+            );
+            eprintln!("       received: git={url}");
+            eprintln!(
+                "       note: git fetch lands alongside the package-fetch slice (tracker line 845);\n             \
+                          once it ships, this install path activates without spec changes."
+            );
+            process::exit(2);
+        }
+        InstallSource::Registry { name, version } => {
+            let rendered = match &version {
+                Some(v) => format!("{name}@{v}"),
+                None => name.clone(),
+            };
+            eprintln!(
+                "error[E_INSTALL_REGISTRY_UNSUPPORTED]: registry sources are not yet supported by `karac install`"
+            );
+            eprintln!("       received: {rendered}");
+            eprintln!(
+                "       note: registry fetch lands alongside the package-fetch slice (tracker line 845);\n             \
+                          once it ships, this install path activates without spec changes."
+            );
+            process::exit(2);
+        }
+    }
+}
 
+// Resolve the install-binary root. Honors `$KARAC_INSTALL_ROOT` first
+// (test + power-user override; whitespace-only values are ignored so
+// a stale shell export doesn't silently misroute), then falls back to
+// `<HOME>/.kara/bin/`. Mirrors the precedence rule that
+// `build_cache::default_cache_root` uses for `KARAC_BUILD_CACHE_ROOT`.
+fn install_bin_root() -> Result<PathBuf, String> {
+    if let Ok(v) = std::env::var("KARAC_INSTALL_ROOT") {
+        if !v.trim().is_empty() {
+            return Ok(PathBuf::from(v));
+        }
+    }
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .map_err(|_| "$HOME (and $USERPROFILE) unset".to_string())?;
+    Ok(PathBuf::from(home).join(".kara").join("bin"))
+}
+
+// Build the project at `path` (via a recursive `karac build` so the
+// full pipeline is inherited verbatim — dep resolution, MSRV check,
+// codegen, link) and copy the produced executable into the install
+// root. On non-zero build exit, the subprocess already streamed its
+// own diagnostics; install exits with the same code so CI scripts see
+// the underlying failure.
+fn install_from_path(path: &std::path::Path) {
+    // 1. Canonicalize the path so the subprocess sees a stable cwd
+    // even if the operator passed `./tools/my_tool` or a symlink. A
+    // missing path surfaces a focused diagnostic — the spec parsed
+    // fine, but the filesystem disagreed.
+    let canonical = match std::fs::canonicalize(path) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "error[E_INSTALL_PATH_NOT_FOUND]: cannot resolve install source path `{}`: {e}",
+                path.display()
+            );
+            eprintln!(
+                "       note: the spec parsed but the filesystem entry doesn't exist or is unreadable."
+            );
+            process::exit(1);
+        }
+    };
+    if !canonical.is_dir() {
+        eprintln!(
+            "error[E_INSTALL_PATH_NOT_DIR]: install source `{}` is not a directory",
+            canonical.display()
+        );
+        eprintln!(
+            "       note: a path install spec must point at a project root (the directory holding `kara.toml`)."
+        );
+        process::exit(1);
+    }
+
+    // 2. Load the manifest to discover the binary name (the build
+    // pipeline writes the executable to `<root>/<mf.name>`; the
+    // install copies it to `<install-root>/<mf.name>`). Surfacing
+    // manifest errors here — before invoking the build subprocess —
+    // gives the operator a focused diagnostic instead of letting the
+    // subprocess report the same thing under "build failure".
+    let manifest = match manifest::load_from_root(&canonical) {
+        Ok(mf) => mf,
+        Err(e) => {
+            emit_manifest_error(&e, OutputMode::Text);
+            process::exit(1);
+        }
+    };
+    let binary_name = manifest.name.clone();
+
+    // 3. Resolve the install root and ensure it exists. The directory
+    // is created lazily — a fresh machine never has `~/.kara/bin/`.
+    let install_root = match install_bin_root() {
+        Ok(r) => r,
+        Err(e) => {
+            eprintln!("error[E_INSTALL_HOME_UNSET]: cannot resolve install root: {e}");
+            process::exit(1);
+        }
+    };
+    if let Err(e) = std::fs::create_dir_all(&install_root) {
+        eprintln!(
+            "error[E_INSTALL_BIN_DIR_UNWRITABLE]: cannot create install directory `{}`: {e}",
+            install_root.display()
+        );
+        process::exit(1);
+    }
+
+    // 4. Invoke the build subprocess. Spawning ourselves with `build`
+    // as the verb inherits every pipeline feature (dep resolution,
+    // MSRV check, codegen, link) for free — the alternative would
+    // require refactoring `cmd_build_project` to accept a root
+    // parameter, which is a larger surgery than this slice warrants.
+    // Stdio is inherited so build progress reaches the operator
+    // directly.
+    let karac_exe = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("error[E_INSTALL_EXE_UNRESOLVABLE]: cannot locate karac executable: {e}");
+            process::exit(1);
+        }
+    };
     eprintln!(
-        "karac install: not yet wired — parsed `<bin-spec>` as a {kind} source.\n\
-         resolved: {rendered}\n\
-         note: spec resolution is implemented (line 871 slice 2); the build + ~/.kara/bin/\n\
-               install step depends on the per-dep codegen / cache / linker pipeline (line\n\
-               874). Tracking: docs/implementation_checklist/phase-5-diagnostics.md."
+        "karac install: building `{binary_name}` from `{}`",
+        canonical.display()
     );
-    process::exit(2);
+    let build_status = std::process::Command::new(&karac_exe)
+        .arg("build")
+        .current_dir(&canonical)
+        .status();
+    let build_status = match build_status {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error[E_INSTALL_BUILD_SPAWN_FAILED]: cannot spawn build subprocess: {e}");
+            process::exit(1);
+        }
+    };
+    if !build_status.success() {
+        // The subprocess already streamed its diagnostics; mirror its
+        // exit code so CI scripts see the underlying failure rather
+        // than a synthetic install code.
+        let code = build_status.code().unwrap_or(1);
+        eprintln!("error[E_INSTALL_BUILD_FAILED]: build of `{binary_name}` failed (exit {code})");
+        process::exit(code);
+    }
+
+    // 5. The build wrote the executable to `<root>/<mf.name>`. If it
+    // isn't there, the most likely cause is karac was built without
+    // the `llvm` feature — the build "succeeds" in that mode but
+    // emits a note rather than an executable. Surface that case
+    // explicitly so the operator isn't left wondering why a clean
+    // build produced nothing to install.
+    let built_exe = canonical.join(&binary_name);
+    if !built_exe.exists() {
+        eprintln!(
+            "error[E_INSTALL_NO_EXECUTABLE]: build succeeded but no executable was produced at `{}`",
+            built_exe.display()
+        );
+        eprintln!(
+            "       note: karac must be built with `--features llvm` to emit a binary; without llvm\n             \
+                          the build only type-checks the project."
+        );
+        process::exit(1);
+    }
+
+    // 6. Copy into the install root. Overwriting is the intended
+    // behavior — reinstalling an updated version should replace the
+    // existing binary. `std::fs::copy` preserves the executable bit
+    // on Unix (it copies the source's mode); on Windows the file is
+    // copied byte-for-byte and stays executable by virtue of its
+    // extension.
+    let dest = install_root.join(&binary_name);
+    if let Err(e) = std::fs::copy(&built_exe, &dest) {
+        eprintln!(
+            "error[E_INSTALL_COPY_FAILED]: cannot copy `{}` → `{}`: {e}",
+            built_exe.display(),
+            dest.display()
+        );
+        process::exit(1);
+    }
+
+    println!(
+        "karac install: installed `{binary_name}` → {}",
+        dest.display()
+    );
 }
 
 // ── karac vendor ─────────────────────────────────────────────────

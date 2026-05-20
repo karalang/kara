@@ -452,12 +452,21 @@ NAMES:
     mixed-case input produces an `E_INSTALL_INVALID_NAME` diagnostic with
     a snake_case suggestion when one applies.
 
-v1 status: spec resolution is implemented (line 871 slice 2); the build +
-~/.kara/bin/ install step depends on the per-dep codegen / cache / linker
-pipeline (line 874). Until that lands, `karac install` parses the spec
-and echoes the resolved source so CI scripts can validate spec shape
-before the pipeline integration goes live. See
-`docs/implementation_checklist/phase-5-diagnostics.md`."
+INSTALL ROOT:
+    `<HOME>/.kara/bin/` by default. Override via `KARAC_INSTALL_ROOT`
+    (whitespace-only values ignored — same precedence rule the build
+    cache uses for `KARAC_BUILD_CACHE_ROOT`). The directory is created
+    on first install.
+
+v1 status:
+    Path sources (`path=...`) are fully wired — the project is built
+    through the existing pipeline (dep resolution, MSRV check, codegen,
+    link) and the produced executable is copied into the install root.
+    Git / registry sources surface a forward-compat
+    `E_INSTALL_GIT_UNSUPPORTED` / `E_INSTALL_REGISTRY_UNSUPPORTED`
+    diagnostic — they activate without spec changes once the
+    package-fetch slice lands (tracker line 845). See
+    `docs/implementation_checklist/phase-5-diagnostics.md`."
         }
         "explain" => {
             "\
