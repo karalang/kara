@@ -543,6 +543,221 @@ pub unsafe extern "C" fn karac_par_run(
     }
 }
 
+// ── Auto-par reduction: karac_par_reduce (slice 2, 2026-05-19) ─────────────
+//
+// Sibling to `karac_par_run`. Splits a single loop's iteration space across
+// N workers, each accumulating into a private slot via the codegen-provided
+// `worker_fn`; the runtime then runs a serial combine pass over the slots
+// into a caller-owned `out_slot`. The recognizer that surfaces reductions
+// lives in `src/concurrency.rs` (slice 1, `LoopReduction`); the codegen
+// lowering that calls into this entry point lands as slice 3.
+//
+// **ABI shape (opaque slot bytes + caller-provided init/combine fn).**
+// The runtime treats accumulator slots as `slot_size` bytes at `slot_align`
+// alignment with no type knowledge. Typing flows through the three function
+// pointers (`init_slot`, `worker_fn`, `combine_fn`) that codegen emits per
+// accumulator type. A single `karac_par_reduce` symbol therefore covers
+// every op × type combination in the allow-list without ABI growth — adding
+// a new (op, type) pair only requires a new codegen path, not a new runtime
+// entry point.
+//
+// **Identity-element discipline.** Reductions need an identity (0 for `+`,
+// 1 for `*`, `!0` for `&`, 0 for `|`/`^`). Each worker's slot starts at
+// identity (caller calls `init_slot`), then the worker_fn folds its range
+// into the slot. The final serial combine seeds `out_slot` at identity and
+// folds each worker slot in — so a 0-iter call returns identity, matching
+// the source-level semantics of a 0-iter for-loop over the accumulator.
+//
+// **v1 dispatch path: `thread::scope` per call, not the long-lived pool.**
+// Each invocation spawns N OS threads inside a scope and joins them on
+// return. The pool-sharing follow-up (deferred) would let nested reductions
+// avoid spawn overhead and would close a residual gap with `karac_par_run`'s
+// long-lived-worker behavior. The scope path was chosen for v1 because
+// (a) reductions are typically called once per source loop with a large
+// iter count (~ms+ per worker), so per-call spawn overhead is amortized,
+// and (b) it avoids introducing a second internal task shape in the pool's
+// `Task` struct — the existing pool stays at one task kind (plain ctx).
+
+/// FFI descriptor for `karac_par_reduce`. Codegen emits an instance per
+/// recognized reduction site; the runtime borrows the descriptor for the
+/// duration of one call and never retains pointers across the boundary.
+///
+/// Field layout is `#[repr(C)]` so the codegen can stamp it directly
+/// without needing a Rust-to-LLVM struct adapter.
+#[repr(C)]
+pub struct KaracReduceDescriptor {
+    /// Iteration count — the worker fan-out splits `[0, iter_total)` into
+    /// `min(pool_workers, iter_total)` contiguous chunks. When zero, no
+    /// workers run and `out_slot` is left at identity.
+    pub iter_total: usize,
+    /// Bytes per accumulator slot. Must match the size implied by the type
+    /// the codegen-emitted `init_slot` / `worker_fn` / `combine_fn` operate on.
+    pub slot_size: usize,
+    /// Required alignment of an accumulator slot. The runtime aligns each
+    /// per-worker slot to this value when carving up the slot buffer.
+    pub slot_align: usize,
+    /// Write the operator's identity element into `slot`.
+    pub init_slot: unsafe extern "C" fn(slot: *mut u8),
+    /// Accumulate iterations `[start, end)` into `slot`. The closure
+    /// context `ctx` is the same pointer passed at the descriptor level
+    /// — every worker receives it verbatim (it's the source-level
+    /// closure capture record). `cancel` is the per-call atomic flag;
+    /// today no worker is expected to consult it (reductions don't have a
+    /// fail-fast story), but it's threaded for future cancellation work.
+    pub worker_fn: unsafe extern "C" fn(
+        slot: *mut u8,
+        start: usize,
+        end: usize,
+        ctx: *mut c_void,
+        cancel: *const AtomicBool,
+    ),
+    /// Fold the partial in `src` into the accumulator at `dst` —
+    /// `*dst = *dst <op> *src`. Codegen emits this with the op locked at
+    /// compile time, so the runtime never needs to dispatch on op kind.
+    pub combine_fn: unsafe extern "C" fn(dst: *mut u8, src: *const u8),
+    /// Source-level closure context. Passed verbatim to every `worker_fn`
+    /// invocation. May be null if the source loop body captures nothing.
+    pub ctx: *mut c_void,
+}
+
+// SAFETY: The descriptor's pointer fields are exclusively borrowed by the
+// runtime for the duration of one karac_par_reduce call (caller guarantees
+// validity at call time; runtime joins all workers before returning).
+unsafe impl Send for KaracReduceDescriptor {}
+unsafe impl Sync for KaracReduceDescriptor {}
+
+/// Split a loop's iteration space across N workers; each accumulates a
+/// partial into a private slot; the runtime combines the partials into
+/// `out_slot` and returns. Sibling to `karac_par_run` — see the
+/// section-level comment above for the design discussion.
+///
+/// **Worker count.** `N = min(available_parallelism, iter_total).max(1)`.
+/// When `iter_total == 0`, the runtime initializes `out_slot` to identity
+/// and returns immediately. When `N == 1`, the runtime calls `worker_fn`
+/// directly into `out_slot` and skips the slot buffer + combine pass.
+///
+/// **Determinism caveat.** The op the recognizer accepts is
+/// associative + commutative, so the per-worker combine order doesn't
+/// affect the result — the runtime is free to combine slot 0 + slot 1 +
+/// slot 2 + … in any order. Float ops are intentionally *not* in the v1
+/// allow-list because IEEE-754 addition is not associative; the
+/// recognizer's allow-list and this runtime's combine-order freedom move
+/// in lock-step.
+///
+/// # Safety
+///
+/// - `descriptor` must point to a valid `KaracReduceDescriptor`.
+/// - `out_slot` must point to writable bytes of at least `slot_size`
+///   with at least `slot_align` alignment.
+/// - The descriptor's function pointers must satisfy the contracts
+///   described on each field.
+///
+/// The compiler always satisfies these preconditions.
+#[no_mangle]
+pub unsafe extern "C" fn karac_par_reduce(
+    descriptor: *const KaracReduceDescriptor,
+    out_slot: *mut u8,
+    _spawn_site_id: u32,
+) {
+    let desc = &*descriptor;
+
+    // Seed the output slot at identity so 0-iter calls return identity
+    // and the final combine pass can fold every worker slot uniformly.
+    (desc.init_slot)(out_slot);
+
+    if desc.iter_total == 0 {
+        return;
+    }
+
+    // Worker count: cap at `iter_total` so each worker gets at least one
+    // iteration, and at least 1 so the single-thread fast path below
+    // doesn't divide by zero.
+    let pool_workers = thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(2)
+        .max(2);
+    let n_workers = pool_workers.min(desc.iter_total).max(1);
+
+    // Single-worker fast path: bypass the slot buffer + spawn machinery
+    // and run the worker directly into `out_slot`. The serial combine
+    // would be a no-op anyway (one slot folded into itself) so skipping
+    // it preserves observable behavior.
+    if n_workers == 1 {
+        let dummy = AtomicBool::new(false);
+        (desc.worker_fn)(out_slot, 0, desc.iter_total, desc.ctx, &dummy);
+        return;
+    }
+
+    // Allocate the per-worker slot buffer in one chunk so the worker
+    // slots share locality and the dealloc on return is a single call.
+    let stride = align_up(desc.slot_size, desc.slot_align);
+    let layout = std::alloc::Layout::from_size_align(stride * n_workers, desc.slot_align)
+        .expect("karac_par_reduce: slot_size * n_workers overflows or alignment is invalid");
+    let slots: *mut u8 = std::alloc::alloc(layout);
+    if slots.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+
+    // Seed every worker's slot at identity. The worker_fn folds into the
+    // slot from there; reading an uninitialized slot would surface as
+    // miscompile-grade UB.
+    for w in 0..n_workers {
+        (desc.init_slot)(slots.add(w * stride));
+    }
+
+    // Cancel flag is allocated even though no worker is expected to
+    // consult it today — futureproofs the FFI shape for the panic /
+    // first-Err propagation slice that the par_run side already has.
+    let cancel = AtomicBool::new(false);
+    let chunk = desc.iter_total.div_ceil(n_workers);
+
+    // `thread::scope` joins every spawned thread before this returns,
+    // so the slot buffer remains valid for the combine pass below.
+    // The captured `ctx_addr` and `slot_base` round-trip through usize
+    // so the closure is Send without an unsafe impl on the FFI types.
+    let ctx_addr = desc.ctx as usize;
+    let slot_base = slots as usize;
+    let worker_fn = desc.worker_fn;
+    let stride_local = stride;
+    let iter_total = desc.iter_total;
+    thread::scope(|scope| {
+        let cancel_ref = &cancel;
+        for w in 0..n_workers {
+            let start = w * chunk;
+            let end = ((w + 1) * chunk).min(iter_total);
+            scope.spawn(move || unsafe {
+                let slot = (slot_base as *mut u8).add(w * stride_local);
+                (worker_fn)(
+                    slot,
+                    start,
+                    end,
+                    ctx_addr as *mut c_void,
+                    cancel_ref as *const AtomicBool,
+                );
+            });
+        }
+    });
+
+    // Serial combine: fold each worker's slot into `out_slot` in worker
+    // order. The op is associative + commutative (recognizer's allow-list
+    // requirement) so this order is one of many equally-valid orderings.
+    for w in 0..n_workers {
+        (desc.combine_fn)(out_slot, slots.add(w * stride));
+    }
+
+    std::alloc::dealloc(slots, layout);
+}
+
+/// Round `n` up to the nearest multiple of `align`. `align` must be a
+/// power of two — the caller (`karac_par_reduce` above) gets `align` from
+/// the FFI descriptor, where the codegen guarantees `align` is the
+/// natural alignment of a Kara primitive type (1, 2, 4, or 8).
+#[inline]
+fn align_up(n: usize, align: usize) -> usize {
+    debug_assert!(align.is_power_of_two(), "align must be a power of two");
+    (n + align - 1) & !(align - 1)
+}
+
 /// Public extern getter for slice 5 / tests. Returns the current thread's
 /// active worker frame, or `null` for root tasks (and any thread outside a
 /// par-block context, including any thread when
@@ -3283,5 +3498,209 @@ mod tests {
             assert_eq!(keys, vec!["z", "a", "m"]);
             karac_runtime_json_free_value(tree);
         }
+    }
+
+    // ── karac_par_reduce tests (slice 2, 2026-05-19) ──────────────────────
+    //
+    // These tests stub the codegen-emitted `init_slot` / `worker_fn` /
+    // `combine_fn` directly in Rust so the runtime's dispatch path can be
+    // exercised without standing up the full compiler pipeline. Each helper
+    // mirrors what slice 3's codegen will emit per (op, type) pair.
+
+    /// Identity-element init: write 0 into an i64 slot. Mirrors what
+    /// codegen will emit for the `+` reduction on i64.
+    unsafe extern "C" fn init_i64_zero(slot: *mut u8) {
+        *(slot as *mut i64) = 0;
+    }
+
+    /// Identity-element init: write 1 into an i64 slot. For `*` reductions.
+    unsafe extern "C" fn init_i64_one(slot: *mut u8) {
+        *(slot as *mut i64) = 1;
+    }
+
+    /// Combine two i64 slots: `*dst += *src`. Mirrors the `+` op's combine.
+    unsafe extern "C" fn combine_i64_add(dst: *mut u8, src: *const u8) {
+        *(dst as *mut i64) += *(src as *const i64);
+    }
+
+    /// Combine two i64 slots: `*dst *= *src`. Mirrors the `*` op's combine.
+    unsafe extern "C" fn combine_i64_mul(dst: *mut u8, src: *const u8) {
+        *(dst as *mut i64) *= *(src as *const i64);
+    }
+
+    /// Worker function for the canonical "sum k for k in [start, end)"
+    /// reduction. `ctx` is unused here (no captures); the kata-7 codegen
+    /// will thread `inputs` and `reverse` through ctx in slice 3.
+    unsafe extern "C" fn worker_sum_range(
+        slot: *mut u8,
+        start: usize,
+        end: usize,
+        _ctx: *mut c_void,
+        _cancel: *const AtomicBool,
+    ) {
+        let mut acc: i64 = *(slot as *const i64);
+        for k in start..end {
+            acc += k as i64;
+        }
+        *(slot as *mut i64) = acc;
+    }
+
+    /// Worker function for "product (k+1) for k in [start, end)" — the
+    /// `+1` keeps the seed value out of zero (otherwise a 0 in the range
+    /// zeroes the entire product). Multiplicative reduction sanity check.
+    unsafe extern "C" fn worker_product_range_plus_one(
+        slot: *mut u8,
+        start: usize,
+        end: usize,
+        _ctx: *mut c_void,
+        _cancel: *const AtomicBool,
+    ) {
+        let mut acc: i64 = *(slot as *const i64);
+        for k in start..end {
+            acc *= (k as i64) + 1;
+        }
+        *(slot as *mut i64) = acc;
+    }
+
+    fn run_reduce(
+        iter_total: usize,
+        init: unsafe extern "C" fn(*mut u8),
+        worker: unsafe extern "C" fn(*mut u8, usize, usize, *mut c_void, *const AtomicBool),
+        combine: unsafe extern "C" fn(*mut u8, *const u8),
+    ) -> i64 {
+        let desc = KaracReduceDescriptor {
+            iter_total,
+            slot_size: std::mem::size_of::<i64>(),
+            slot_align: std::mem::align_of::<i64>(),
+            init_slot: init,
+            worker_fn: worker,
+            combine_fn: combine,
+            ctx: std::ptr::null_mut(),
+        };
+        let mut out: i64 = 0xDEAD_BEEF; // arbitrary sentinel — init must overwrite
+        unsafe {
+            karac_par_reduce(&desc, &mut out as *mut i64 as *mut u8, 0);
+        }
+        out
+    }
+
+    /// 0-iter reduction returns the identity element (init_slot output).
+    /// Catches the "skip dispatch but forget to seed out_slot" bug.
+    #[test]
+    fn test_par_reduce_zero_iter_returns_identity_add() {
+        assert_eq!(
+            run_reduce(0, init_i64_zero, worker_sum_range, combine_i64_add),
+            0
+        );
+    }
+
+    #[test]
+    fn test_par_reduce_zero_iter_returns_identity_mul() {
+        assert_eq!(
+            run_reduce(
+                0,
+                init_i64_one,
+                worker_product_range_plus_one,
+                combine_i64_mul
+            ),
+            1
+        );
+    }
+
+    /// 1-iter exercises the single-worker fast path (skip slot buffer +
+    /// combine), which is a distinct code path from the multi-worker
+    /// dispatch — regression locks it in.
+    #[test]
+    fn test_par_reduce_single_iter_add() {
+        // Σ k for k in [0, 1) = 0
+        assert_eq!(
+            run_reduce(1, init_i64_zero, worker_sum_range, combine_i64_add),
+            0
+        );
+    }
+
+    /// Small iter count below pool size — runtime caps n_workers at
+    /// `iter_total`, so each worker handles exactly one iteration.
+    /// Same expected total as the serial sum.
+    #[test]
+    fn test_par_reduce_below_pool_size_add() {
+        // Σ k for k in [0, 4) = 0 + 1 + 2 + 3 = 6
+        let total = run_reduce(4, init_i64_zero, worker_sum_range, combine_i64_add);
+        assert_eq!(total, 6);
+    }
+
+    /// Multi-worker dispatch over a range large enough that each worker
+    /// owns a real chunk. Checks the chunking math + combine ordering
+    /// against the closed-form serial sum.
+    #[test]
+    fn test_par_reduce_multi_worker_add_matches_serial() {
+        let n = 100_000;
+        let parallel_total = run_reduce(n, init_i64_zero, worker_sum_range, combine_i64_add);
+        let serial_total: i64 = (0..n as i64).sum();
+        assert_eq!(parallel_total, serial_total);
+    }
+
+    /// Multi-worker `*` reduction over a range. Multiplication is
+    /// associative + commutative but order-sensitive enough that a
+    /// mis-combined chunk would land a wildly wrong answer — small N
+    /// keeps the product in i64 range. `(k+1) for k in [0, 12)` = 12! =
+    /// 479_001_600.
+    #[test]
+    fn test_par_reduce_multi_worker_mul_matches_serial() {
+        let n = 12;
+        let parallel_total = run_reduce(
+            n,
+            init_i64_one,
+            worker_product_range_plus_one,
+            combine_i64_mul,
+        );
+        let serial_total: i64 = (1..=n as i64).product();
+        assert_eq!(parallel_total, serial_total);
+    }
+
+    /// Stride math sanity check: a slot with non-default alignment still
+    /// gets correctly aligned per-worker slots from the buffer. Pad to 16
+    /// bytes — wider than i64's natural alignment — and verify the
+    /// runtime respects it. (LLVM SIMD types ride in on this path
+    /// eventually, and they're 16/32-byte aligned.)
+    #[test]
+    fn test_par_reduce_respects_oversized_alignment() {
+        // We use 8-byte slot_size but request 16-byte alignment. Each
+        // worker slot is stride=16 bytes in the buffer, but only the
+        // first 8 bytes hold meaningful data.
+        let desc = KaracReduceDescriptor {
+            iter_total: 1000,
+            slot_size: std::mem::size_of::<i64>(),
+            slot_align: 16,
+            init_slot: init_i64_zero,
+            worker_fn: worker_sum_range,
+            combine_fn: combine_i64_add,
+            ctx: std::ptr::null_mut(),
+        };
+        // out_slot must be 16-byte aligned to match the descriptor;
+        // allocate a 16-byte-aligned scratch slot via a wrapper struct.
+        #[repr(C, align(16))]
+        struct AlignedSlot([u8; 8]);
+        let mut out = AlignedSlot([0u8; 8]);
+        unsafe {
+            karac_par_reduce(&desc, out.0.as_mut_ptr(), 0);
+            let val = *(out.0.as_ptr() as *const i64);
+            let expected: i64 = (0..1000i64).sum();
+            assert_eq!(val, expected);
+        }
+    }
+
+    /// A reduction whose iter range is exactly the pool worker count: one
+    /// iteration per worker, the closing edge of the "below pool size"
+    /// fast path becoming the multi-worker general path.
+    #[test]
+    fn test_par_reduce_iter_equals_pool_size_add() {
+        let n = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(2)
+            .max(2);
+        let total = run_reduce(n, init_i64_zero, worker_sum_range, combine_i64_add);
+        let expected: i64 = (0..n as i64).sum();
+        assert_eq!(total, expected);
     }
 }
