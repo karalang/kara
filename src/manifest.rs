@@ -135,8 +135,9 @@ pub struct Manifest {
 /// `docs/implementation_checklist/phase-5-diagnostics.md`).
 ///
 /// - `Registry { version }`: the bare-string shorthand `name = "1.2"` or
-///   `name = { version = "1.2" }`. The version string is stored verbatim;
-///   semver-constraint parsing lives in the resolver.
+///   `name = { version = "1.2" }`. Version strings parse as Cargo-style
+///   comparators via `semver::VersionReq` — bare `"1.2"` means `^1.2.0`
+///   (i.e. `>=1.2.0, <2.0.0`); `"=1.2.3"` exact; `">=1.0, <1.5"` range.
 /// - `Path { path, version }`: `name = { path = "../foo" }`, optionally with
 ///   a `version` for publication compatibility.
 /// - `Git { url, reference, version }`: `name = { git = "https://…" }` with
@@ -144,16 +145,16 @@ pub struct Manifest {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DependencySpec {
     Registry {
-        version: String,
+        version: semver::VersionReq,
     },
     Path {
         path: PathBuf,
-        version: Option<String>,
+        version: Option<semver::VersionReq>,
     },
     Git {
         url: String,
         reference: Option<GitRef>,
-        version: Option<String>,
+        version: Option<semver::VersionReq>,
     },
     /// `name = { workspace = true }` — the entry's source is the
     /// workspace root's `[workspace.dependencies]` table. v1's slice 1
@@ -578,9 +579,8 @@ fn parse_dependency_value(
                         .to_string(),
                 ));
             }
-            Ok(DependencySpec::Registry {
-                version: version.clone(),
-            })
+            let req = parse_version_req(version, &invalid)?;
+            Ok(DependencySpec::Registry { version: req })
         }
         toml::Value::Table(entry) => {
             parse_dependency_inline_table(path, table, name, entry, warnings, &invalid)
@@ -591,6 +591,22 @@ fn parse_dependency_value(
                 .to_string(),
         )),
     }
+}
+
+/// Parse a Cargo-style semver constraint string into a `VersionReq`. The
+/// `semver` crate accepts the same syntax Cargo uses (bare `"1.2"` → `^1.2.0`;
+/// `"=1.2.3"` exact; `">=1.0, <1.5"` range; `"*"` wildcard); any malformed
+/// form lands here as a focused `InvalidDependencySpec` diagnostic naming the
+/// offending input and the parser's failure message.
+fn parse_version_req(
+    raw: &str,
+    invalid: &dyn Fn(String) -> ManifestError,
+) -> Result<semver::VersionReq, ManifestError> {
+    semver::VersionReq::parse(raw).map_err(|e| {
+        invalid(format!(
+            "version constraint `{raw}` is not a valid semver requirement: {e}"
+        ))
+    })
 }
 
 fn parse_dependency_inline_table(
@@ -647,7 +663,11 @@ fn parse_dependency_inline_table(
         }
     };
 
-    let version = get_string("version")?;
+    let version_raw = get_string("version")?;
+    let version = match version_raw {
+        Some(s) => Some(parse_version_req(&s, invalid)?),
+        None => None,
+    };
     let path_field = get_string("path")?;
     let git = get_string("git")?;
     let branch = get_string("branch")?;
@@ -760,6 +780,13 @@ mod tests {
 
     fn p() -> PathBuf {
         PathBuf::from("kara.toml")
+    }
+
+    /// Terse `VersionReq` construction for assertions. Test failures from a
+    /// bad literal would surface as a panic on the next line so a `.unwrap()`
+    /// here is fine — these strings are owned by the test source.
+    fn req(s: &str) -> semver::VersionReq {
+        semver::VersionReq::parse(s).unwrap()
     }
 
     #[test]
@@ -1066,7 +1093,7 @@ http = "1.2"
         assert_eq!(
             m.dependencies.get("http"),
             Some(&DependencySpec::Registry {
-                version: "1.2".to_string()
+                version: req("1.2")
             }),
         );
     }
@@ -1083,7 +1110,7 @@ http = { version = "1.2" }
         assert_eq!(
             m.dependencies.get("http"),
             Some(&DependencySpec::Registry {
-                version: "1.2".to_string()
+                version: req("1.2")
             }),
         );
     }
@@ -1119,7 +1146,7 @@ logging = { path = "../logging", version = "0.2" }
             m.dependencies.get("logging"),
             Some(&DependencySpec::Path {
                 path: PathBuf::from("../logging"),
-                version: Some("0.2".to_string()),
+                version: Some(req("0.2")),
             }),
         );
     }
@@ -1216,7 +1243,7 @@ json = { version = "0.8", git = "https://example.com/json-kara" }
             Some(&DependencySpec::Git {
                 url: "https://example.com/json-kara".to_string(),
                 reference: None,
-                version: Some("0.8".to_string()),
+                version: Some(req("0.8")),
             }),
         );
     }
@@ -1236,7 +1263,7 @@ mocktest = { path = "../mocktest" }
         assert_eq!(
             m.dev_dependencies.get("proptest"),
             Some(&DependencySpec::Registry {
-                version: "0.4".to_string()
+                version: req("0.4")
             }),
         );
         assert_eq!(
@@ -1442,7 +1469,7 @@ http = { version = "1.0", features = ["derive"] }
         assert_eq!(
             m.dependencies.get("http"),
             Some(&DependencySpec::Registry {
-                version: "1.0".to_string()
+                version: req("1.0")
             }),
         );
         assert_eq!(m.warnings.len(), 1);
@@ -1510,6 +1537,171 @@ http = { workspace = true, version = "1.0" }
             }
             other => panic!("expected InvalidDependencySpec, got {other:?}"),
         }
+    }
+
+    // ── PubGrub resolver slice 2: semver-constraint vocabulary ────
+
+    #[test]
+    fn semver_caret_constraint_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "^1.2.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        // Caret matches `^1.2.0` — same as the bare-string `"1.2"` shorthand.
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req("^1.2.0")
+            }),
+        );
+    }
+
+    #[test]
+    fn semver_exact_constraint_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "=1.2.3"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req("=1.2.3")
+            }),
+        );
+    }
+
+    #[test]
+    fn semver_range_constraint_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = ">=1.0, <1.5"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req(">=1.0, <1.5")
+            }),
+        );
+    }
+
+    #[test]
+    fn semver_tilde_constraint_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "~1.2"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req("~1.2")
+            }),
+        );
+    }
+
+    #[test]
+    fn semver_wildcard_constraint_parses() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "*"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry { version: req("*") }),
+        );
+    }
+
+    #[test]
+    fn semver_bare_one_segment_parses() {
+        // Bare `"1"` is `^1` — `>=1.0.0, <2.0.0`. Useful regression pin so
+        // the resolver doesn't insist on three segments.
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "1"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.dependencies.get("http"),
+            Some(&DependencySpec::Registry { version: req("1") }),
+        );
+    }
+
+    #[test]
+    fn semver_malformed_string_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "not-a-version"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "http");
+                assert!(
+                    message.contains("not a valid semver requirement"),
+                    "expected semver parse failure; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semver_malformed_inline_table_version_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = { version = ">>> bogus" }
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidDependencySpec { name, message, .. } => {
+                assert_eq!(name, "http");
+                assert!(
+                    message.contains("not a valid semver requirement"),
+                    "expected semver parse failure; got `{message}`",
+                );
+            }
+            other => panic!("expected InvalidDependencySpec, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn semver_constraint_matches_compatible_version() {
+        // Pin that the parsed VersionReq is the same object pubgrub will
+        // intersect — a `0.8` constraint accepts `0.8.5` (caret default) and
+        // rejects `0.7.0`. Compares using semver's own matches semantics.
+        let src = r#"[package]
+name = "hello"
+
+[dependencies]
+http = "0.8"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        let DependencySpec::Registry { version: vr } = m.dependencies.get("http").unwrap() else {
+            panic!("expected Registry spec");
+        };
+        assert!(vr.matches(&semver::Version::parse("0.8.5").unwrap()));
+        assert!(!vr.matches(&semver::Version::parse("0.7.0").unwrap()));
+        assert!(!vr.matches(&semver::Version::parse("1.0.0").unwrap()));
     }
 
     #[test]

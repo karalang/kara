@@ -683,6 +683,7 @@ dependencies = [
  "pulldown-cmark",
  "regex",
  "rustyline",
+ "semver",
  "serde_json",
  "toml",
  "ureq",

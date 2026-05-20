@@ -23,6 +23,12 @@ llvm = ["inkwell"]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
+# Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
+# semver-constraint vocabulary. `VersionReq` parses Cargo-style comparators
+# (bare `1.2` → `^1.2.0` → `>=1.2.0, <2.0.0`; `=1.2.3`; `>=1.0, <1.5`; etc.)
+# so the resolver can intersect them. `Version` is what each candidate
+# package's catalog entry exposes.
+semver = "1"
 pulldown-cmark = { version = "0.13.3", default-features = false, features = ["html"] }
 # Slice F (`std.json`): backs the interpreter's `Json.parse` /
 # `Json.stringify` dispatch directly (the runtime crate exposes the
