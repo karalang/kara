@@ -1327,28 +1327,75 @@ fn magic_set_unknown_setting() {
 }
 
 #[test]
-fn magic_provide_returns_deferred_error() {
-    // %provide / %end-provide share their compilation path with the
-    // :provide / :end-provide REPL meta-commands tracked at line 681.
-    // Line 681 has not shipped, so the magic dispatcher surfaces a
-    // structured deferral pointer rather than a "no such magic"
-    // error — the kernel can render this in the cell output without
-    // hiding the spec'd surface.
+fn magic_provide_forwards_to_meta_handler() {
+    // %provide / %end-provide forward to the same add_provider /
+    // end_provider handlers the :provide / :end-provide meta-commands
+    // use — line 681 shipped, so the magic surface is wire-compatible
+    // with the REPL surface. Construction failures surface as
+    // MagicOutput::error; successful opens / closes surface as
+    // MagicOutput::ok with the same text the meta handler returns.
     let mut s = Session::new();
+    // Failed construction → error (the resolver hits `SomeProvider`,
+    // which isn't defined in this session).
     let out = s.dispatch_magic("%provide MyResource = SomeProvider {}");
-    assert!(!out.ok, "deferred magic must surface as error");
+    assert!(!out.ok, "construction failure must surface as error");
     assert!(
-        out.text.contains("not yet wired") && out.text.contains("line 681"),
-        "expected the error to mention the tracker pointer; got: {}",
+        out.text.contains("MyResource"),
+        "error text must name the resource; got: {}",
+        out.text,
+    );
+    assert!(
+        out.text.contains("not opened"),
+        "error text must say the scope wasn't opened; got: {}",
         out.text,
     );
 
-    let out = s.dispatch_magic("%end-provide MyResource");
-    assert!(!out.ok);
+    // Valid construction → ok.
+    let out = s.dispatch_magic("%provide R = 42");
     assert!(
-        out.text.contains("not yet wired"),
-        "%end-provide must also surface as deferred; got: {}",
+        out.ok,
+        "valid construction must surface as ok; got: {}",
+        out.text
+    );
+    assert!(
+        out.text.contains("opened"),
+        "ok text must announce the open; got: {}",
         out.text,
+    );
+
+    // Close via magic.
+    let out = s.dispatch_magic("%end-provide R");
+    assert!(out.ok, "valid close must surface as ok; got: {}", out.text);
+    assert!(
+        out.text.contains("closed"),
+        "ok text must announce the close; got: {}",
+        out.text,
+    );
+
+    // LIFO mismatch via magic.
+    s.dispatch_magic("%provide A = 1");
+    let out = s.dispatch_magic("%end-provide B");
+    assert!(!out.ok, "mismatch must surface as error");
+    assert!(
+        out.text.contains("attempts to close an outer scope")
+            || out.text.contains("no active provider"),
+        "expected LIFO mismatch / empty-stack hint; got: {}",
+        out.text,
+    );
+}
+
+#[test]
+fn magic_and_meta_provide_share_stack() {
+    // Open via :provide (meta) and close via %end-provide (magic) —
+    // both must touch the same Session.provider_stack.
+    let mut s = Session::new();
+    s.dispatch_meta(":provide M = 7");
+    assert_eq!(s.provider_stack().len(), 1);
+    let out = s.dispatch_magic("%end-provide M");
+    assert!(out.ok, "{}", out.text);
+    assert!(
+        s.provider_stack().is_empty(),
+        "magic close did not pop the stack"
     );
 }
 

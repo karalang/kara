@@ -513,14 +513,11 @@ impl Session {
     /// - `%provide R = expr`      — open a cross-cell `with_provider` scope
     /// - `%end-provide R`         — close the matching provider scope
     ///
-    /// The `%provide` / `%end-provide` forms parse cleanly but return a
-    /// structured `not yet wired` error today — they share their
-    /// compilation path with the `:provide` / `:end-provide` REPL
-    /// meta-commands tracked at line 681 of the tracker, which has not
-    /// shipped. Once line 681 lands, the wiring here forwards to the
-    /// same handler the meta-command uses; the magic-side parser stays
-    /// in place. `%rc` is deferred to post-MVP per the spec (RC
-    /// fallback's introspection surface still settling).
+    /// `%provide` / `%end-provide` forward to the same `add_provider` /
+    /// `end_provider` handlers the REPL meta-commands use — `:provide`
+    /// and `%provide` are wire-compatible, returning the same `Ok` /
+    /// `Err` string shapes. `%rc` is deferred to post-MVP per the spec
+    /// (RC fallback's introspection surface still settling).
     pub fn dispatch_magic(&mut self, line: &str) -> MagicOutput {
         let trimmed = line.trim();
         let body = trimmed.strip_prefix('%').unwrap_or(trimmed).trim();
@@ -533,12 +530,14 @@ impl Session {
             "ownership" => self.magic_ownership(),
             "explain" => self.magic_explain(rest),
             "set" => self.magic_set(rest),
-            "provide" => MagicOutput::error(
-                "magic `%provide` not yet wired — cross-cell provider scoping (`:provide` / `%provide`) lands once tracker line 681 ships; tracked at the `Cross-cell providers` entry in `docs/implementation_checklist/phase-5-diagnostics.md`",
-            ),
-            "end-provide" => MagicOutput::error(
-                "magic `%end-provide` not yet wired — see `%provide` above; tracker line 681",
-            ),
+            "provide" => match self.add_provider(rest) {
+                Ok(msg) => MagicOutput::ok(msg),
+                Err(msg) => MagicOutput::error(msg),
+            },
+            "end-provide" => match self.end_provider(rest) {
+                Ok(msg) => MagicOutput::ok(msg),
+                Err(msg) => MagicOutput::error(msg),
+            },
             "rc" => MagicOutput::error(
                 "magic `%rc` is deferred to post-MVP per the line 689 spec — RC fallback's introspection surface is still settling",
             ),
@@ -874,14 +873,20 @@ impl Session {
                 if rest.is_empty() {
                     eprintln!("usage: :provide <Resource> = <expr>");
                 } else {
-                    self.add_provider(rest);
+                    match self.add_provider(rest) {
+                        Ok(msg) => println!("{msg}"),
+                        Err(msg) => eprintln!("{msg}"),
+                    }
                 }
             }
             ":end-provide" => {
                 if rest.is_empty() {
                     eprintln!("usage: :end-provide <Resource>");
                 } else {
-                    self.end_provider(rest);
+                    match self.end_provider(rest) {
+                        Ok(msg) => println!("{msg}"),
+                        Err(msg) => eprintln!("{msg}"),
+                    }
                 }
             }
             other => {
@@ -2067,23 +2072,19 @@ impl Session {
     /// nested forms (e.g. `:provide B = use_A()` while `A` is already
     /// provided) see the outer provider stack the same way subsequent
     /// cells will.
-    fn add_provider(&mut self, rest: &str) {
-        let (resource, expr_src) = match parse_provide_form(rest) {
-            Ok(p) => p,
-            Err(msg) => {
-                eprintln!("{msg}");
-                return;
-            }
-        };
+    fn add_provider(&mut self, rest: &str) -> Result<String, String> {
+        let (resource, expr_src) = parse_provide_form(rest)?;
         // Nested same-resource :provides are legal (mirroring nested
-        // `with_provider[R]` in file code) but easy to misuse. Surface a
-        // hint without rejecting — :end-provide will close the innermost
-        // frame, which is what the user almost certainly wants.
+        // `with_provider[R]` in file code) but easy to misuse. Prepend a
+        // hint to the result without rejecting — :end-provide will close
+        // the innermost frame, which is what the user almost certainly
+        // wants.
+        let mut prefix = String::new();
         if let Some(existing) = self.provider_stack.iter().find(|f| f.resource == resource) {
-            eprintln!(
-                "(note: `:provide {resource}` shadows an outer `:provide {resource}` opened in cell {}; the innermost scope is what :end-provide will close.)",
+            prefix.push_str(&format!(
+                "(note: `:provide {resource}` shadows an outer `:provide {resource}` opened in cell {}; the innermost scope is what :end-provide will close.)\n",
                 existing.opened_cell
-            );
+            ));
         }
         match self.try_construct_provider(&resource, &expr_src) {
             Ok(()) => {
@@ -2100,12 +2101,13 @@ impl Session {
                     expr_src,
                     opened_cell,
                 });
-                println!("(provider scope `:provide {resource}` opened)");
+                Ok(format!(
+                    "{prefix}(provider scope `:provide {resource}` opened)"
+                ))
             }
-            Err(msg) => {
-                eprintln!("{msg}");
-                eprintln!("       (`:provide {resource}` was not opened.)");
-            }
+            Err(msg) => Err(format!(
+                "{prefix}{msg}\n       (`:provide {resource}` was not opened.)"
+            )),
         }
     }
 
@@ -2114,26 +2116,26 @@ impl Session {
     /// innermost frame surfaces a structured error naming the frame
     /// that would have to close first (design.md § Cross-Cell
     /// Providers).
-    fn end_provider(&mut self, rest: &str) {
+    fn end_provider(&mut self, rest: &str) -> Result<String, String> {
         let resource = rest.trim();
         if resource.is_empty() {
-            eprintln!("usage: :end-provide <Resource>");
-            return;
+            return Err("usage: :end-provide <Resource>".to_string());
         }
         if !is_valid_resource_ident(resource) {
-            eprintln!("error: `:end-provide {resource}` — resource name must be a Kāra identifier");
-            return;
+            return Err(format!(
+                "error: `:end-provide {resource}` — resource name must be a Kāra identifier"
+            ));
         }
         let Some(top) = self.provider_stack.last() else {
-            eprintln!("error: `:end-provide {resource}` with no active provider scope");
-            return;
+            return Err(format!(
+                "error: `:end-provide {resource}` with no active provider scope"
+            ));
         };
         if top.resource != resource {
-            eprintln!(
+            return Err(format!(
                 "error: `:end-provide {resource}` attempts to close an outer scope while `:provide {}` is still active; close {} first",
                 top.resource, top.resource
-            );
-            return;
+            ));
         }
         // Snapshot the active provider stack BEFORE popping the
         // closing frame — every persistent-let captured with this exact
@@ -2193,10 +2195,10 @@ impl Session {
         self.persistent_let_origin = kept_origin;
         self.persistent_let_provider_scope = kept_scope;
 
-        println!(
+        Ok(format!(
             "(provider scope `:provide {}` from cell {} closed)",
             frame.resource, frame.opened_cell
-        );
+        ))
     }
 
     /// Eagerly evaluate the construction expression for `:provide R =
