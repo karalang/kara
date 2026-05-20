@@ -11,13 +11,18 @@
 //! alloca, so subsequent reads (`println(acc)`, etc.) see the reduced
 //! value.
 //!
-//! ## v1 narrow shape (slice 3b)
+//! ## v1 supported shape
 //!
-//! - Source loop: `for k in 0..hi { ... }` only (no `while`, no
-//!   non-zero `lo` — those land in 3b.1).
-//! - Op: `+` only. The other allow-listed ops (`*`, `|`, `&`, `^`) need
-//!   one new (init, combine) specialization each — additive follow-up.
-//! - Accumulator type: i64 only.  Same extension story as the op set.
+//! - Source loop: `for k in 0..hi { ... }` (slice 3b) and
+//!   `while k < hi { ...; k = k + 1; }` (slice 3b.4). Non-zero `lo`
+//!   is still rejected — lands in 3b.3.
+//! - Op: all five recognized reduction ops — `+`, `*`, `|`, `&`, `^`
+//!   (slice 3b.1).
+//! - Accumulator type: any integer width — i8/i16/i32/i64 (and the
+//!   matching unsigned widths, which LLVM doesn't distinguish from
+//!   signed at the IR layer) (slice 3b.2). The (op, type) pair
+//!   determines the identity element and combine instruction; helpers
+//!   are cached per pair via the LLVM symbol table.
 //! - Body: anything `compile_block` already lowers, with the source-
 //!   level accumulator and loop-variable rebound to fresh per-worker
 //!   allocas. Captures of outer-scope variables are passed through an
@@ -36,7 +41,7 @@ use std::collections::HashSet;
 use crate::ast::{BinOp, Block, CompoundOp, Expr, ExprKind, PatternKind, Stmt, StmtKind};
 use crate::concurrency::{LoopReduction, ReductionOp};
 
-use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -68,12 +73,6 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
-        // v1 only supports `+`. Other allow-list ops fall through — the
-        // analyzer's tag is preserved for the follow-up specialization.
-        if reduction.op != ReductionOp::Add {
-            return Ok(None);
-        }
-
         // Unpack the loop expression. Two shapes supported in v1:
         //   - `for k in 0..hi { ... }` (slice 3b)
         //   - `while k < hi { ...; k = k + 1; }` (slice 3b.4)
@@ -85,14 +84,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
-        // Verify the accumulator's lowered type is i64. The reduction's
-        // identity (0 for `+`) and combine op are type-specialized; other
-        // int widths add one (init, combine) pair each.
+        // Verify the accumulator's lowered type is one of the supported
+        // integer widths (i8 / i16 / i32 / i64; unsigned widths share the
+        // same LLVM int type). The (op, type) pair drives the identity
+        // element and combine instruction, both threaded through to the
+        // helper synthesis below. Non-int (struct / float / pointer) and
+        // non-power-of-two widths fall through to sequential codegen —
+        // float reductions specifically need an `#[fp_reassoc]` opt-in
+        // (see `ReductionOp` doc comment) and aren't in v1.
         let Some(acc_slot) = self.variables.get(&reduction.accumulator).copied() else {
             return Ok(None);
         };
-        let i64_t: BasicTypeEnum<'ctx> = self.context.i64_type().into();
-        if acc_slot.ty != i64_t {
+        let BasicTypeEnum::IntType(acc_int_ty) = acc_slot.ty else {
+            return Ok(None);
+        };
+        if !matches!(acc_int_ty.get_bit_width(), 8 | 16 | 32 | 64) {
             return Ok(None);
         }
 
@@ -122,14 +128,27 @@ impl<'ctx> super::Codegen<'ctx> {
         }
 
         // Compile the end bound in the parent context. This is `iter_total`
-        // for the runtime (since lo == 0 — checked inside extract_loop_shape).
-        // Must be i64 — the descriptor and worker fn both treat the
-        // iteration index space as i64.
+        // for the runtime; we widen below to i64 (the descriptor's
+        // `iter_total` field width) before storing in the descriptor.
         let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
 
+        // The source-level loop variable's type is unified with the
+        // range elem type, which equals end_val's type. The body's
+        // `acc <op> k` requires acc and k to have the same int type
+        // (no implicit numeric conversion in kara), so a mismatch
+        // between end_val's type and the accumulator's type means the
+        // source wouldn't have type-checked in the first place — but
+        // we belt-and-suspenders gate it explicitly here so the worker
+        // fn synthesis can rely on `loop_var_ty == acc_int_ty` and emit
+        // one consistent type throughout. The dead `end_val` instructions
+        // when this gate fires are removed by LLVM's DCE pass.
+        if end_val.get_type() != acc_int_ty {
+            return Ok(None);
+        }
+
         // Synthesize the per-(op, type) helper functions.
-        let init_fn = self.emit_reduce_init_fn_add_i64();
-        let combine_fn = self.emit_reduce_combine_fn_add_i64();
+        let init_fn = self.emit_reduce_init_fn(reduction.op, acc_int_ty);
+        let combine_fn = self.emit_reduce_combine_fn(reduction.op, acc_int_ty);
 
         // Capture set for the worker fn: variables the body reads that
         // aren't the accumulator, aren't the loop variable, and aren't
@@ -139,11 +158,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let captures =
             self.collect_reduction_captures(&shape.body, &reduction.accumulator, &shape.loop_var);
 
-        let worker_fn =
-            self.emit_reduce_worker_fn(&reduction, &shape.loop_var, &shape.body, &captures)?;
+        let worker_fn = self.emit_reduce_worker_fn(
+            &reduction,
+            acc_int_ty,
+            &shape.loop_var,
+            &shape.body,
+            &captures,
+        )?;
 
         self.emit_reduce_call(
-            init_fn, worker_fn, combine_fn, end_val, acc_slot, &reduction, &captures,
+            init_fn, worker_fn, combine_fn, end_val, acc_slot, acc_int_ty, &reduction, &captures,
         )?;
 
         Ok(Some(()))
@@ -263,13 +287,24 @@ impl<'ctx> super::Codegen<'ctx> {
         out
     }
 
-    /// `void init_slot(*mut u8 slot) { *(i64*)slot = 0; }` — Add identity
-    /// for i64. Cached per module via the LLVM symbol table (re-adding
-    /// the same name returns the existing function), so multiple
-    /// reduction sites share one definition.
-    fn emit_reduce_init_fn_add_i64(&mut self) -> FunctionValue<'ctx> {
-        let name = "__karac_reduce_init_add_i64";
-        if let Some(existing) = self.module.get_function(name) {
+    /// Synthesize `void init_slot(*mut u8 slot) { *(IntT*)slot = identity; }`
+    /// for the given `(op, int_ty)` pair. Helpers are cached per pair via
+    /// the LLVM symbol table (re-adding the same name returns the existing
+    /// function), so multiple reduction sites in the same module that share
+    /// an (op, type) share one definition.
+    ///
+    /// Identity per op:
+    /// - `Add`, `BitOr`, `BitXor` → 0
+    /// - `Mul`                    → 1
+    /// - `BitAnd`                 → all-ones (-1 / `TYPE_MAX` unsigned —
+    ///   same bit pattern under two's-complement, which LLVM uses uniformly)
+    fn emit_reduce_init_fn(
+        &mut self,
+        op: ReductionOp,
+        int_ty: IntType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let name = reduce_helper_name("init", op, int_ty);
+        if let Some(existing) = self.module.get_function(&name) {
             return existing;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -277,14 +312,14 @@ impl<'ctx> super::Codegen<'ctx> {
             .context
             .void_type()
             .fn_type(&[BasicMetadataTypeEnum::from(ptr_ty)], false);
-        let f = self.module.add_function(name, fn_ty, None);
+        let f = self.module.add_function(&name, fn_ty, None);
 
         let saved_bb = self.builder.get_insert_block();
         let entry = self.context.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
         let slot_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
         self.builder
-            .build_store(slot_ptr, self.context.i64_type().const_zero())
+            .build_store(slot_ptr, reduce_identity(op, int_ty))
             .unwrap();
         self.builder.build_return(None).unwrap();
 
@@ -294,11 +329,22 @@ impl<'ctx> super::Codegen<'ctx> {
         f
     }
 
-    /// `void combine(*mut u8 dst, *const u8 src) { *(i64*)dst += *(i64*)src; }`
-    /// — Add fold for i64. Same caching pattern as `emit_reduce_init_fn_add_i64`.
-    fn emit_reduce_combine_fn_add_i64(&mut self) -> FunctionValue<'ctx> {
-        let name = "__karac_reduce_combine_add_i64";
-        if let Some(existing) = self.module.get_function(name) {
+    /// Synthesize `void combine(*mut u8 dst, *const u8 src)
+    /// { *(IntT*)dst = *(IntT*)dst <op> *(IntT*)src; }` for the given
+    /// `(op, int_ty)` pair. Same caching pattern as `emit_reduce_init_fn`.
+    /// Op → LLVM instruction:
+    /// - `Add`    → `add`
+    /// - `Mul`    → `mul`
+    /// - `BitOr`  → `or`
+    /// - `BitAnd` → `and`
+    /// - `BitXor` → `xor`
+    fn emit_reduce_combine_fn(
+        &mut self,
+        op: ReductionOp,
+        int_ty: IntType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let name = reduce_helper_name("combine", op, int_ty);
+        if let Some(existing) = self.module.get_function(&name) {
             return existing;
         }
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -309,26 +355,31 @@ impl<'ctx> super::Codegen<'ctx> {
             ],
             false,
         );
-        let f = self.module.add_function(name, fn_ty, None);
+        let f = self.module.add_function(&name, fn_ty, None);
 
         let saved_bb = self.builder.get_insert_block();
         let entry = self.context.append_basic_block(f, "entry");
         self.builder.position_at_end(entry);
-        let i64_t = self.context.i64_type();
         let dst_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
         let src_ptr = f.get_nth_param(1).unwrap().into_pointer_value();
         let d = self
             .builder
-            .build_load(i64_t, dst_ptr, "d")
+            .build_load(int_ty, dst_ptr, "d")
             .unwrap()
             .into_int_value();
         let s = self
             .builder
-            .build_load(i64_t, src_ptr, "s")
+            .build_load(int_ty, src_ptr, "s")
             .unwrap()
             .into_int_value();
-        let sum = self.builder.build_int_add(d, s, "sum").unwrap();
-        self.builder.build_store(dst_ptr, sum).unwrap();
+        let folded = match op {
+            ReductionOp::Add => self.builder.build_int_add(d, s, "sum").unwrap(),
+            ReductionOp::Mul => self.builder.build_int_mul(d, s, "prod").unwrap(),
+            ReductionOp::BitOr => self.builder.build_or(d, s, "or").unwrap(),
+            ReductionOp::BitAnd => self.builder.build_and(d, s, "and").unwrap(),
+            ReductionOp::BitXor => self.builder.build_xor(d, s, "xor").unwrap(),
+        };
+        self.builder.build_store(dst_ptr, folded).unwrap();
         self.builder.build_return(None).unwrap();
 
         if let Some(bb) = saved_bb {
@@ -368,6 +419,7 @@ impl<'ctx> super::Codegen<'ctx> {
     fn emit_reduce_worker_fn(
         &mut self,
         reduction: &LoopReduction,
+        acc_int_ty: IntType<'ctx>,
         loop_var_name: &str,
         body: &Block,
         captures: &[String],
@@ -446,35 +498,54 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Allocate the worker-local accumulator at identity. Add identity
-        // for i64 is 0 — extending to other ops/types means picking the
-        // right constant per (op, type) pair here.
-        let acc_alloca = self.create_entry_alloca(worker_fn, &reduction.accumulator, i64_t.into());
+        // Allocate the worker-local accumulator at the (op, type) identity
+        // (see `reduce_identity`): 0 for `+` / `|` / `^`, 1 for `*`,
+        // all-ones for `&`. The combine fn folds these per-worker partials
+        // into the final result.
+        let acc_alloca =
+            self.create_entry_alloca(worker_fn, &reduction.accumulator, acc_int_ty.into());
         self.builder
-            .build_store(acc_alloca, i64_t.const_zero())
+            .build_store(acc_alloca, reduce_identity(reduction.op, acc_int_ty))
             .unwrap();
         self.variables.insert(
             reduction.accumulator.clone(),
             VarSlot {
                 ptr: acc_alloca,
-                ty: i64_t.into(),
+                ty: acc_int_ty.into(),
             },
         );
 
         // Allocate the loop variable, init to `start`. The body sees
-        // `<loop_var>` as a plain mutable i64 alloca; the increment runs
-        // in the bottom of `loop.body` (between body emission and the
-        // back-edge), so a body-internal read of `<loop_var>` observes
-        // the current iteration's value.
-        let start_val = worker_fn.get_nth_param(1).unwrap().into_int_value();
-        let end_val = worker_fn.get_nth_param(2).unwrap().into_int_value();
-        let k_alloca = self.create_entry_alloca(worker_fn, loop_var_name, i64_t.into());
+        // `<loop_var>` as a plain mutable alloca of `acc_int_ty`; the
+        // increment runs in the bottom of `loop.body` (between body
+        // emission and the back-edge), so a body-internal read of
+        // `<loop_var>` observes the current iteration's value. The
+        // runtime calls workers with i64 start/end (descriptor-driven);
+        // for narrower loop var types we truncate here. The gate in
+        // `try_emit_reduction_lowering` ensured the source end value fits
+        // in `acc_int_ty`, so the truncation is value-preserving.
+        let raw_start = worker_fn.get_nth_param(1).unwrap().into_int_value();
+        let raw_end = worker_fn.get_nth_param(2).unwrap().into_int_value();
+        let (start_val, end_val) = if acc_int_ty.get_bit_width() < 64 {
+            let s = self
+                .builder
+                .build_int_truncate(raw_start, acc_int_ty, "start.trunc")
+                .unwrap();
+            let e = self
+                .builder
+                .build_int_truncate(raw_end, acc_int_ty, "end.trunc")
+                .unwrap();
+            (s, e)
+        } else {
+            (raw_start, raw_end)
+        };
+        let k_alloca = self.create_entry_alloca(worker_fn, loop_var_name, acc_int_ty.into());
         self.builder.build_store(k_alloca, start_val).unwrap();
         self.variables.insert(
             loop_var_name.to_string(),
             VarSlot {
                 ptr: k_alloca,
-                ty: i64_t.into(),
+                ty: acc_int_ty.into(),
             },
         );
 
@@ -487,7 +558,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(cond_bb);
         let k_now = self
             .builder
-            .build_load(i64_t, k_alloca, "k")
+            .build_load(acc_int_ty, k_alloca, "k")
             .unwrap()
             .into_int_value();
         let cond = self
@@ -515,22 +586,25 @@ impl<'ctx> super::Codegen<'ctx> {
         if current_bb.get_terminator().is_none() {
             let k_cur = self
                 .builder
-                .build_load(i64_t, k_alloca, "k.cur")
+                .build_load(acc_int_ty, k_alloca, "k.cur")
                 .unwrap()
                 .into_int_value();
             let k_next = self
                 .builder
-                .build_int_add(k_cur, i64_t.const_int(1, false), "k.next")
+                .build_int_add(k_cur, acc_int_ty.const_int(1, false), "k.next")
                 .unwrap();
             self.builder.build_store(k_alloca, k_next).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
         }
 
         self.builder.position_at_end(exit_bb);
-        // Publish the worker's partial to the caller's slot.
+        // Publish the worker's partial to the caller's slot. The slot's
+        // memory width matches `acc_int_ty` — set up in `emit_reduce_call`
+        // via the descriptor's `slot_size` / `slot_align` fields, which the
+        // runtime uses to allocate one slot per worker.
         let final_acc = self
             .builder
-            .build_load(i64_t, acc_alloca, "acc.final")
+            .build_load(acc_int_ty, acc_alloca, "acc.final")
             .unwrap();
         let slot_ptr = worker_fn.get_nth_param(0).unwrap().into_pointer_value();
         self.builder.build_store(slot_ptr, final_acc).unwrap();
@@ -566,6 +640,7 @@ impl<'ctx> super::Codegen<'ctx> {
         combine_fn: FunctionValue<'ctx>,
         iter_total: IntValue<'ctx>,
         acc_slot: VarSlot<'ctx>,
+        acc_int_ty: IntType<'ctx>,
         _reduction: &LoopReduction,
         captures: &[String],
     ) -> Result<(), String> {
@@ -617,14 +692,23 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let desc_alloca = self.create_entry_alloca(parent_fn, "__reduce_desc", desc_ty.into());
 
-        let slot_size = i64_t.const_int(8, false); // i64
-        let slot_align = i64_t.const_int(8, false);
+        // Slot size / align track the accumulator width. Power-of-two
+        // widths (i8/i16/i32/i64) have align == size on every target
+        // karac compiles for; the gate in `try_emit_reduction_lowering`
+        // rejects any other width before we reach here.
+        let slot_byte_width: u64 = (acc_int_ty.get_bit_width() / 8) as u64;
+        let slot_size = i64_t.const_int(slot_byte_width, false);
+        let slot_align = i64_t.const_int(slot_byte_width, false);
 
         // Widen iter_total to i64 if the source's `end` evaluated to a
         // narrower int — the descriptor field is usize (i64 on 64-bit).
+        // zext (not sext): iter_total represents a non-negative count, so
+        // zero-extension is correct for both signed source types (whose
+        // positive values fit unchanged) and unsigned source types (whose
+        // high-bit-set values would sext to a wrong negative i64).
         let iter_total_widened = if iter_total.get_type().get_bit_width() < 64 {
             self.builder
-                .build_int_s_extend(iter_total, i64_t, "iter.widen")
+                .build_int_z_extend(iter_total, i64_t, "iter.widen")
                 .unwrap()
         } else {
             iter_total
@@ -676,8 +760,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Allocate the out_slot in the parent frame. The runtime writes
         // the reduced value here before returning; the parent then loads
-        // it back into the source-level accumulator's alloca.
-        let out_slot = self.create_entry_alloca(parent_fn, "__reduce_out", i64_t.into());
+        // it back into the source-level accumulator's alloca. The slot
+        // width matches `acc_int_ty` so the load below picks up the full
+        // reduced value with no widening.
+        let out_slot = self.create_entry_alloca(parent_fn, "__reduce_out", acc_int_ty.into());
 
         // Spawn site id — slice 3b reuses par_counter (the same monotonic
         // counter par-blocks use). The runtime currently ignores this
@@ -700,10 +786,60 @@ impl<'ctx> super::Codegen<'ctx> {
         // Load the reduced value and store into the source-level
         // accumulator's alloca. Subsequent reads of the source-level
         // accumulator (`println(sum)`) see the reduced value.
-        let reduced = self.builder.build_load(i64_t, out_slot, "reduced").unwrap();
+        let reduced = self
+            .builder
+            .build_load(acc_int_ty, out_slot, "reduced")
+            .unwrap();
         self.builder.build_store(acc_slot.ptr, reduced).unwrap();
 
         Ok(())
+    }
+}
+
+// ── (op, type) helper naming + identities ─────────────────────────────
+//
+// The init/combine fn pair for a given reduction is uniquely determined
+// by `(op, int_ty)`. Helper names follow `__karac_reduce_<role>_<op>_<ty>`
+// so multiple reduction sites that share an (op, type) share one
+// definition (cached via the LLVM module's symbol table) and the IR is
+// readable for the test suite (which greps for these names).
+
+/// Short-name slug for an op, used in helper fn names. Mirrors the
+/// op-method suffix used in `concurrency.rs::reduction_binary_shape`
+/// (`add` / `mul` / `bitor` / `bitand` / `bitxor`) so the IR symbol
+/// matches the analyzer's vocabulary.
+fn reduce_op_short_name(op: ReductionOp) -> &'static str {
+    match op {
+        ReductionOp::Add => "add",
+        ReductionOp::Mul => "mul",
+        ReductionOp::BitOr => "bitor",
+        ReductionOp::BitAnd => "bitand",
+        ReductionOp::BitXor => "bitxor",
+    }
+}
+
+/// Build the helper-fn name for a `(role, op, int_ty)` triple. `role`
+/// is `"init"` or `"combine"`. Types render as `i<bit_width>` —
+/// LLVM doesn't distinguish signed from unsigned at the IR layer, so
+/// `i32` covers both `i32` and `u32` source types.
+fn reduce_helper_name(role: &str, op: ReductionOp, int_ty: IntType<'_>) -> String {
+    format!(
+        "__karac_reduce_{role}_{}_i{}",
+        reduce_op_short_name(op),
+        int_ty.get_bit_width()
+    )
+}
+
+/// Identity element for `op` on `int_ty`. The per-worker accumulator is
+/// initialized to this value; the slot's init fn writes the same value.
+/// LLVM uses two's-complement for all int types, so `const_all_ones` for
+/// `BitAnd` is correct for both signed (-1) and unsigned (`TYPE_MAX`)
+/// source-level types.
+fn reduce_identity<'ctx>(op: ReductionOp, int_ty: IntType<'ctx>) -> IntValue<'ctx> {
+    match op {
+        ReductionOp::Add | ReductionOp::BitOr | ReductionOp::BitXor => int_ty.const_zero(),
+        ReductionOp::Mul => int_ty.const_int(1, false),
+        ReductionOp::BitAnd => int_ty.const_all_ones(),
     }
 }
 

@@ -105,6 +105,15 @@ mod par_codegen_tests {
     /// on success, None if link/exec fails (legitimate soft-skip when the
     /// runtime archive is missing). Parse and codegen failures panic — those
     /// are programming bugs, not environment issues.
+    ///
+    /// Runs the full analysis pipeline (resolve / typecheck / lower /
+    /// effectcheck / concurrency_analyze) and threads the concurrency
+    /// analysis into codegen, so reduction recognition (slice 1) actually
+    /// fires and the lowering (slice 3b onward) is exercised end-to-end.
+    /// Without this pipeline the par_reduce path would never be reached,
+    /// and reduction E2E tests would silently validate only the sequential
+    /// fallback's output (which happens to match by design, masking any
+    /// real lowering regression).
     fn run_program(src: &str) -> Option<String> {
         use karac::codegen::{compile_to_object, link_executable};
         use std::sync::atomic::{AtomicU64, Ordering};
@@ -113,7 +122,7 @@ mod par_codegen_tests {
         let rt = runtime_path()?;
         std::env::set_var("KARAC_RUNTIME", &rt);
 
-        let parsed = karac::parse(src);
+        let mut parsed = karac::parse(src);
         if !parsed.errors.is_empty() {
             let mut msg = String::from("test source failed to parse:\n");
             for e in &parsed.errors {
@@ -121,12 +130,17 @@ mod par_codegen_tests {
             }
             panic!("{}", msg);
         }
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_par_e2e_{}_{}", std::process::id(), id);
 
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None, None) {
+        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None, Some(&analysis)) {
             panic!("codegen failed for test program: {}", e);
         }
         link_executable(&obj_path, &exe_path).ok()?;
@@ -1680,6 +1694,346 @@ fn main() {
     while k < 1000i64 {
         sum = sum + k;
         k += 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "499500");
+    }
+
+    // ── Slice 3b.1: non-Add ops (Mul / BitOr / BitAnd / BitXor) ──────
+    //
+    // The recognizer (slice 1) tags any of the five associative +
+    // commutative ops as reductions, but slice 3b's narrow lowering only
+    // handled `+`. These tests pin that each remaining op lowers to a
+    // (op, type)-named helper pair (`__karac_reduce_init_<op>_<ty>` /
+    // `__karac_reduce_combine_<op>_<ty>`) and produces the correct fold
+    // under multi-worker dispatch. Variable-K loops (`for k in 0..k_iters`
+    // where `k_iters` is an outer-scope local) bypass the slice-3b.5
+    // cost-model gate, so small K can be used to keep test computations
+    // within i64 range while still exercising the lowering path.
+
+    #[test]
+    fn test_ir_reduction_mul_i64_slice3b1() {
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 18i64;
+    let mut prod: i64 = 1i64;
+    for k in 0i64..k_iters {
+        prod = prod * (k + 1i64);
+    }
+    println(prod);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_mul_i64"),
+            "expected Mul+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_mul_i64"),
+            "expected Mul+i64 combine helper; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_mul_i64_slice3b1() {
+        // 18! = 6_402_373_705_728_000 fits in i64 (9_223_372_036_854_775_807);
+        // 19! overflows. Identity for Mul is 1, so per-worker partials all
+        // start at 1 — if the init helper accidentally wrote 0 the combine
+        // fold would produce 0, which this assertion catches.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 18i64;
+    let mut prod: i64 = 1i64;
+    for k in 0i64..k_iters {
+        prod = prod * (k + 1i64);
+    }
+    println(prod);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "6402373705728000");
+    }
+
+    #[test]
+    fn test_ir_reduction_bitor_i64_slice3b1() {
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = 0i64;
+    for k in 0i64..k_iters {
+        acc = acc | k;
+    }
+    println(acc);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_bitor_i64"),
+            "expected BitOr+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_bitor_i64"),
+            "expected BitOr+i64 combine helper; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_bitor_i64_slice3b1() {
+        // OR of [0, 100): all bits up to and including bit 6 set = 127
+        // (next power of 2 >= 100 is 128 = 2^7).
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = 0i64;
+    for k in 0i64..k_iters {
+        acc = acc | k;
+    }
+    println(acc);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "127");
+    }
+
+    #[test]
+    fn test_e2e_reduction_bitor_i64_multi_worker_slice3b1() {
+        // K = 100_000 forces multi-chunk dispatch (each worker handles
+        // ~K/N iters); OR over [0, 100_000) = 131_071 (next power of 2
+        // >= 100_000 is 131_072 = 2^17). Per-worker partials each cover
+        // a sub-range; the OR-combine fold over them is the OR over
+        // [0, 100_000) — same answer as the serial loop.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut acc: i64 = 0i64;
+    for k in 0i64..k_iters {
+        acc = acc | k;
+    }
+    println(acc);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "131071");
+    }
+
+    #[test]
+    fn test_ir_reduction_bitand_i64_slice3b1() {
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = -1i64;
+    for k in 0i64..k_iters {
+        acc = acc & 255i64;
+    }
+    println(acc);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_bitand_i64"),
+            "expected BitAnd+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_bitand_i64"),
+            "expected BitAnd+i64 combine helper; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_bitand_i64_slice3b1() {
+        // BitAnd identity is all-ones (-1). Per-worker acc starts at -1
+        // and folds `acc & 255` → 255 after iteration 1, stays at 255.
+        // Combine via AND of 255 with itself across workers stays 255.
+        // If the init helper wrote 0 instead of all-ones, the per-worker
+        // partials would be 0 and the final fold would be 0 — caught
+        // by this assertion.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = -1i64;
+    for k in 0i64..k_iters {
+        acc = acc & 255i64;
+    }
+    println(acc);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "255");
+    }
+
+    #[test]
+    fn test_ir_reduction_bitxor_i64_slice3b1() {
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = 0i64;
+    for k in 0i64..k_iters {
+        acc = acc ^ k;
+    }
+    println(acc);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_bitxor_i64"),
+            "expected BitXor+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_bitxor_i64"),
+            "expected BitXor+i64 combine helper; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_bitxor_i64_slice3b1() {
+        // XOR of [0, N) cycles with period 4:
+        //   N % 4 == 0  ->  0
+        //   N % 4 == 1  ->  N-1
+        //   N % 4 == 2  ->  1
+        //   N % 4 == 3  ->  N
+        // For N = 100 (mod 4 == 0): result is 0.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut acc: i64 = 0i64;
+    for k in 0i64..k_iters {
+        acc = acc ^ k;
+    }
+    println(acc);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "0");
+    }
+
+    // ── Slice 3b.2: non-i64 accumulator types ────────────────────────
+    //
+    // Generalizes the worker fn + descriptor to any int width LLVM
+    // exposes (i8 / i16 / i32 / i64). The runtime ABI keeps i64
+    // start/end params on workers (unchanged across this slice); the
+    // worker fn truncates them to the source-level loop var type on
+    // entry so the body's `acc <op> k` lowers with matching int types.
+
+    #[test]
+    fn test_ir_reduction_add_i32_slice3b2() {
+        let src = r#"
+fn main() {
+    let k_iters: i32 = 1000i32;
+    let mut sum: i32 = 0i32;
+    for k in 0i32..k_iters {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_add_i32"),
+            "expected Add+i32 init helper (separate symbol from Add+i64); got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_add_i32"),
+            "expected Add+i32 combine helper; got:\n{ir}"
+        );
+        // For non-i64 accumulators, the worker fn truncates i64 start/end
+        // (the runtime ABI types) to acc_int_ty in its prologue. Pin
+        // those instructions so a regression that drops the truncation
+        // (and produces a type-mismatched cmp / store) is caught at the
+        // IR layer rather than crashing the e2e run.
+        assert!(
+            ir.contains("start.trunc"),
+            "expected i64 start to be truncated to i32 in worker fn; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("end.trunc"),
+            "expected i64 end to be truncated to i32 in worker fn; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_add_i32_slice3b2() {
+        // Σ k for k in [0, 1000) = 999 * 1000 / 2 = 499500. Fits in
+        // i32 (max 2_147_483_647). Multi-worker exercised since K > N
+        // for any reasonable worker count.
+        let src = r#"
+fn main() {
+    let k_iters: i32 = 1000i32;
+    let mut sum: i32 = 0i32;
+    for k in 0i32..k_iters {
+        sum = sum + k;
     }
     println(sum);
 }
