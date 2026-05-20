@@ -1616,6 +1616,78 @@ mod tests {
     }
 
     #[test]
+    fn execute_request_timeline_magic_broadcasts_display_data() {
+        // `%timeline` returns `MagicOutput::ok_rich` with a two-mime
+        // bundle (text/plain + text/html). The kernel must route the
+        // bundle through `display_data` on IOPub — same path as
+        // `%show`, no `stream(stdout)` mirror, both mimes present
+        // in the data envelope.
+        let transport = Arc::new(InMemoryTransport::new());
+        let signer = Signer::new("k");
+        let kernel = Kernel::new(transport.clone(), signer.clone(), KernelInfo::default());
+        // Cell 1 + cell 2: both write Env so the timeline records a
+        // write-after-write dependency on cell 2 → cell 1.
+        for code in ["env.set(\"A\", \"1\");", "env.set(\"B\", \"2\");"] {
+            transport.push_incoming(
+                Channel::Shell,
+                build_request(
+                    &signer,
+                    "execute_request",
+                    json!({"code": code, "silent": true}),
+                    vec![],
+                ),
+            );
+            run_one_pass(&kernel);
+        }
+        let _ = transport.drain_outgoing(Channel::Shell);
+        let _ = transport.drain_outgoing(Channel::IoPub);
+
+        // Cell 3: %timeline renders both prior cells + the WAW arrow.
+        transport.push_incoming(
+            Channel::Shell,
+            build_request(
+                &signer,
+                "execute_request",
+                json!({"code": "%timeline", "silent": false}),
+                vec![],
+            ),
+        );
+        run_one_pass(&kernel);
+
+        let shell = transport.drain_outgoing(Channel::Shell);
+        let reply = Message::decode(&shell[0], &signer).unwrap();
+        assert_eq!(reply.content["status"], "ok");
+
+        let iopub = drain_iopub_in_memory(&transport, &signer);
+        let display_frame = iopub
+            .iter()
+            .find(|(k, _)| k == "display_data")
+            .expect("expected display_data broadcast");
+        let data = &display_frame.1.content["data"];
+        let plain = data["text/plain"]
+            .as_str()
+            .expect("timeline must populate text/plain");
+        assert!(
+            plain.contains("cell 1") && plain.contains("cell 2"),
+            "timeline must list both cells; got:\n{plain}",
+        );
+        assert!(
+            plain.contains("writes Env already written by cell 1"),
+            "expected WAW arrow on cell 2; got:\n{plain}",
+        );
+        let html = data["text/html"]
+            .as_str()
+            .expect("timeline must populate text/html");
+        assert!(
+            html.contains("<table>") && html.contains("writes(Env)"),
+            "html must include the table + effects; got: {html}",
+        );
+        // text-only stream is suppressed when the bundle is present.
+        let stream_count = iopub.iter().filter(|(k, _)| k == "stream").count();
+        assert_eq!(stream_count, 0, "stream broadcast must be suppressed");
+    }
+
+    #[test]
     fn execute_request_session_state_persists_across_cells() {
         // Two cells: the first declares a binding, the second uses
         // it. The shared `Session` in the Kernel keeps the binding
