@@ -289,24 +289,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 let stripped_body = strip_terminal_step_one_increment(body, &loop_var)?;
 
                 // The immediately preceding stmt must be `let mut k: T =
-                // <int literal>;`. Slice 3b.9 normalizes the literal:
-                // `Integer(0)` → `lo_expr = None` (no shift math, current
-                // path); any other int literal → `lo_expr = Some(expr)`
-                // (same env-struct + shift machinery as slice 3b.3 for
-                // for-range). Variable / runtime init (e.g.
-                // `let mut k: T = lo;`) deferred to a future slice — it'd
-                // need to either re-evaluate the init at par_reduce
-                // dispatch time, or reach back into the parent's already-
-                // initialized k alloca.
+                // <anything>;`. Slices 3b.9 + 3b.10 normalize the init:
+                //   - `Integer(0)`: `lo_expr = None` (no shift math).
+                //   - Non-zero int literal: `lo_expr = Some(literal)` —
+                //     re-compile the literal in the par_reduce setup;
+                //     it's a constant, no side effects, free.
+                //   - Anything else: `lo_expr = Some(Identifier(k))` —
+                //     load from the parent's k alloca (the let-stmt
+                //     already evaluated the init expression and stored
+                //     the result; reading it back guarantees single
+                //     evaluation regardless of side effects in the init
+                //     expression).
+                // Adjacent let + while (no intervening stmts) means
+                // nothing modifies k between the init and the dispatch.
                 if stmt_index == 0 {
                     return None;
                 }
-                let init_expr =
-                    preceding_stmt_int_literal_init(parent_body, stmt_index, &loop_var)?;
-                let lo_expr = if matches!(init_expr.kind, ExprKind::Integer(0, _)) {
-                    None
-                } else {
-                    Some(init_expr)
+                let init_expr = preceding_stmt_init(parent_body, stmt_index, &loop_var)?;
+                let lo_expr = match &init_expr.kind {
+                    ExprKind::Integer(0, _) => None,
+                    ExprKind::Integer(_, _) => Some(init_expr),
+                    _ => Some(Expr {
+                        kind: ExprKind::Identifier(loop_var.clone()),
+                        span: init_expr.span,
+                    }),
                 };
 
                 Some(LoopShape {
@@ -1483,22 +1489,20 @@ fn stmt_writes_loop_var(stmt: &Stmt, loop_var: &str) -> bool {
     }
 }
 
-/// If `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T = <int
-/// literal>;`, return the init expression. The literal value flows out
-/// via `LoopShape.lo_expr` for non-zero starts (slice 3b.9 — mirror of
-/// the for-range `lo` handling from slice 3b.3): the worker shifts its
-/// chunk-local index by the literal so the body's reads of `k` match
-/// the source-level value at iteration 0. Returns `None` if the
-/// preceding stmt isn't a let-mut of the loop var with an integer-
-/// literal init (non-literal init lands in a future slice — would need
-/// to either re-evaluate the init expression at par_reduce dispatch
-/// time, or reach back into the parent's already-initialized k alloca).
-/// Caller guarantees `stmt_index > 0`.
-fn preceding_stmt_int_literal_init(
-    parent_body: &Block,
-    stmt_index: usize,
-    loop_var: &str,
-) -> Option<Expr> {
+/// If `parent_body.stmts[stmt_index - 1]` is `let mut loop_var: T =
+/// <anything>;`, return the init expression. Caller decides how to
+/// translate the init into the worker's chunk-local shift:
+///   - `Integer(0)` → `lo_expr = None` (no shift math, current path).
+///   - Non-zero int literal → `lo_expr = Some(literal)` (slice 3b.9 —
+///     re-compile literal in the parent's par_reduce setup, free).
+///   - Anything else → `lo_expr = Some(Identifier(loop_var))` (slice
+///     3b.10 — load from the parent's already-initialized k alloca
+///     instead of re-evaluating the init expression, which would
+///     double-evaluate side effects).
+///
+/// Returns `None` if the preceding stmt isn't a let-mut binding of the
+/// loop var. Caller guarantees `stmt_index > 0`.
+fn preceding_stmt_init(parent_body: &Block, stmt_index: usize, loop_var: &str) -> Option<Expr> {
     let prev = &parent_body.stmts[stmt_index - 1];
     let StmtKind::Let {
         pattern,
@@ -1513,9 +1517,6 @@ fn preceding_stmt_int_literal_init(
         return None;
     };
     if name != loop_var {
-        return None;
-    }
-    if !matches!(value.kind, ExprKind::Integer(_, _)) {
         return None;
     }
     Some(value.clone())

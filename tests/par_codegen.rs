@@ -2353,4 +2353,112 @@ fn main() {
         // = 5000950045 - 45 = 5000950000
         assert_eq!(out.trim(), "5000950000");
     }
+
+    // ── Slice 3b.10: while-shape arbitrary init expression ───────────
+    //
+    // Lifts slice 3b.9's int-literal-only init gate to accept any init
+    // expression by synthesizing `lo_expr = Identifier(loop_var)`.
+    // compile_expr loads from the parent's already-initialized k alloca,
+    // so the init expression is evaluated once (by the let-stmt itself,
+    // already compiled before we reach the while-stmt) regardless of
+    // whether it has side effects. The "nothing modifies k between let
+    // and while" invariant is guaranteed by the adjacent-stmt check in
+    // preceding_stmt_init.
+
+    #[test]
+    fn test_ir_reduction_while_shape_variable_init_slice3b10() {
+        // Variable lo bypasses the cost-model gate so the lowering
+        // fires regardless of K — easier to pin the IR shape.
+        let src = r#"
+fn main() {
+    let lo: i64 = 7i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = lo;
+    while k < 1000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        // Same lo-threading shape as slice 3b.9 — the par_reduce call
+        // exists, env-struct + __reduce_lo + start.shift / end.shift
+        // markers are all present. The new bit is that the loaded
+        // value comes from the parent's k alloca (load instruction in
+        // the par_reduce setup block), not a constant.
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "expected a karac_par_reduce call site for variable-init while-shape; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__reduce_lo"),
+            "expected lo unpack/insert symbol; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("start.shift") && ir.contains("end.shift"),
+            "expected worker to shift raw_start/raw_end by loaded k; got:\n{ir}"
+        );
+    }
+
+    /// Multi-worker E2E: variable init via outer `let lo` + multi-worker
+    /// K to exercise the chunked dispatch path with a loaded shift value.
+    #[test]
+    fn test_e2e_reduction_while_shape_variable_init_multi_worker_slice3b10() {
+        let src = r#"
+fn main() {
+    let lo: i64 = 20i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = lo;
+    while k < 100020i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [20, 100020) = (100019 * 100020 / 2) - (19 * 20 / 2)
+        // = 5001950190 - 190 = 5001950000
+        assert_eq!(out.trim(), "5001950000");
+    }
+
+    /// Complex init expression — `let mut k: i64 = base + offset;` —
+    /// confirms the load-from-k-alloca path handles any init RHS, not
+    /// just simple identifiers. The let-stmt evaluates `base + offset`
+    /// once; the par_reduce setup loads the result from k.
+    #[test]
+    fn test_e2e_reduction_while_shape_complex_init_slice3b10() {
+        let src = r#"
+fn main() {
+    let base: i64 = 30i64;
+    let offset: i64 = 7i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = base + offset;
+    while k < 100037i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [37, 100037) = (100036 * 100037 / 2) - (36 * 37 / 2)
+        // = 5003650666 - 666 = 5003650000
+        assert_eq!(out.trim(), "5003650000");
+    }
 }
