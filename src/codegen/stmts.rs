@@ -94,6 +94,32 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_block(body);
         };
 
+        // Auto-par reduction diagnostic (slice 3a, 2026-05-19). When the
+        // env var `KARAC_REDUCE_DEBUG=1` is set, print every recognized
+        // loop reduction discovered for the current function. This is the
+        // smoke test that the slice-1 analyzer's tags flow through to
+        // codegen unchanged; the actual `karac_par_reduce` lowering that
+        // consumes these tags lands in slice 3b. The diagnostic is gated
+        // (not always-on) because the recognizer fires for any matching
+        // shape — including reductions that won't be parallelized at
+        // codegen time (cost-model gate, type not in allow-list, etc.) —
+        // and routing those into a stable build-time stream would force
+        // every consumer to filter. Pretty-printer is one line per
+        // reduction so a tail of build output stays skimmable.
+        if std::env::var("KARAC_REDUCE_DEBUG").as_deref() == Ok("1") {
+            for r in &decision.loop_reductions {
+                eprintln!(
+                    "karac-reduce-debug: fn={} stmt_index={} line={} op={} accumulator={} \
+                     (slice 3b lowering not yet wired — sequential codegen runs)",
+                    self.current_fn_name,
+                    r.stmt_index,
+                    r.loop_line,
+                    r.op.symbol(),
+                    r.accumulator,
+                );
+            }
+        }
+
         // Defensive guard: the analyzer walks `func.body.stmts` directly,
         // so its indices should always be in bounds. A `debug_assert!`
         // catches future drift between the analysis and codegen views of

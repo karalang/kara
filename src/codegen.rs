@@ -717,6 +717,13 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) karac_branch_ty: StructType<'ctx>,
     /// Runtime entry point `void karac_par_run(const KaracBranch*, usize)`.
     pub(crate) karac_par_run_fn: FunctionValue<'ctx>,
+    /// Runtime entry point `void karac_par_reduce(*const KaracReduceDescriptor,
+    /// *mut u8 out_slot, u32 spawn_site_id)` — declared in slice 3a (wiring
+    /// only); call sites land in slice 3b alongside the actual lowering of
+    /// recognized reduction loops. See the field's declaration site below
+    /// and `runtime/src/lib.rs`'s `karac_par_reduce` for the ABI.
+    #[allow(dead_code)] // consumed by slice 3b's reduction-lowering call sites
+    pub(crate) karac_par_reduce_fn: FunctionValue<'ctx>,
     // ── Debugger contract: SpawnSiteId metadata (slice 3) ─────────
     /// One entry per `par {}` block (explicit or inferred). Populated by
     /// `record_spawn_site`; emitted as the `KARAC_SPAWN_SITES` global by
@@ -1077,6 +1084,29 @@ impl<'ctx> Codegen<'ctx> {
         );
         let karac_par_run_fn =
             module.add_function("karac_par_run", karac_par_run_type, Some(Linkage::External));
+
+        // Auto-par reduction-lowering runtime entry (slice 3a, 2026-05-19).
+        // `karac_par_reduce(*const KaracReduceDescriptor, *mut u8 out_slot,
+        // u32 spawn_site_id) -> ()` — see runtime/src/lib.rs's
+        // `karac_par_reduce` doc-comment for the ABI shape. Declared
+        // alongside `karac_par_run` so future slices (3b, the actual
+        // lowering of recognized reductions into a fan-out + serial-combine
+        // call) can route through `self.karac_par_reduce_fn` without
+        // touching this declaration site again. The slice-3a wiring proves
+        // the extern is linkable; slice 3b populates the call sites.
+        let karac_par_reduce_type = context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_type), // descriptor: *const KaracReduceDescriptor
+                BasicMetadataTypeEnum::from(ptr_type), // out_slot: *mut u8
+                BasicMetadataTypeEnum::from(i32_type), // spawn_site_id: u32
+            ],
+            false,
+        );
+        let karac_par_reduce_fn = module.add_function(
+            "karac_par_reduce",
+            karac_par_reduce_type,
+            Some(Linkage::External),
+        );
 
         // ── Theme 6: provider stack ABI ──────────────────────────────────
         //
@@ -1541,6 +1571,7 @@ impl<'ctx> Codegen<'ctx> {
             par_counter: 0,
             karac_branch_ty,
             karac_par_run_fn,
+            karac_par_reduce_fn,
             spawn_sites: Vec::new(),
             runtime_debug_metadata_enabled: read_runtime_debug_metadata_env(),
             auto_par_disabled: !read_auto_par_env(),
@@ -1736,6 +1767,27 @@ impl<'ctx> Codegen<'ctx> {
             return None;
         }
         self.concurrency_decisions.get(&self.current_fn_name)
+    }
+
+    /// Look up the recognized reduction (if any) for the loop statement at
+    /// `stmt_index` in the current function's body. Slice 3a-only utility
+    /// — the call sites that consume the returned `LoopReduction` to emit
+    /// a `karac_par_reduce` lowering land in slice 3b. Returns `None`
+    /// when no concurrency analysis was threaded in, when the function
+    /// has no recognized reductions, or when `stmt_index` isn't the
+    /// index of a recognized loop. The analyzer (slice 1, `src/concurrency.
+    /// rs`) only emits reductions for top-level loop statements, so this
+    /// lookup is by stmt index in `func.body.stmts`.
+    #[allow(dead_code)] // consumed by slice 3b's reduction-lowering call sites
+    pub(crate) fn loop_reduction_for_stmt(
+        &self,
+        stmt_index: usize,
+    ) -> Option<&crate::concurrency::LoopReduction> {
+        let decision = self.concurrency_decisions.get(&self.current_fn_name)?;
+        decision
+            .loop_reductions
+            .iter()
+            .find(|r| r.stmt_index == stmt_index)
     }
 
     // ── Program / function compilation ───────────────────────────

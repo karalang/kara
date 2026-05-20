@@ -1312,4 +1312,26 @@ fn main() {
             res.err()
         );
     }
+
+    // ── Auto-par reduction lowering (slice 3a wiring, 2026-05-19) ─────
+    //
+    // Slice 3a only declares the `karac_par_reduce` extern in the codegen
+    // module; the actual lowering of recognized reductions into a
+    // fan-out + serial-combine call lands in slice 3b. The test below
+    // pins that the extern is declared in every emitted module — so
+    // slice 3b's first commit can call into it without adding the extern
+    // in the same diff.
+
+    #[test]
+    fn test_ir_declares_karac_par_reduce_extern_slice3a() {
+        // The simplest program possible — no reductions, no par blocks.
+        // The extern is declared unconditionally at codegen init so the
+        // symbol is linkable from any module the karac compiler emits,
+        // not just modules that happen to call it.
+        let ir = ir_for(r#"fn main() { println(0); }"#);
+        assert!(
+            ir.contains("declare void @karac_par_reduce"),
+            "IR should declare karac_par_reduce as an extern (slice 3a wiring); got:\n{ir}"
+        );
+    }
 }
