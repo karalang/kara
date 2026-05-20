@@ -1310,3 +1310,178 @@ fn test_reduction_recognized_for_conditional_min_for_range_after_lowering() {
     assert_eq!(find_min_fc.loop_reductions[0].accumulator, "m");
     assert_eq!(find_min_fc.loop_reductions[0].op, ReductionOp::Min);
 }
+
+// ── Nested-binary chain recognition (slice: chain recognizer, 2026-05-20) ──
+// `sum = sum + a + b` parses left-associatively as
+// `Binary(+, Binary(+, sum, a), b)`. Today's `reduction_binary_shape`
+// only checks the outer Binary's direct operands for the acc identifier
+// — neither child of the outer matches, so the chain falls through to
+// "rejected." Slice extends recognition: count acc occurrences across
+// the same-op chain; recognize iff acc appears exactly once.
+
+#[test]
+fn test_reduction_recognized_for_chain_of_two() {
+    // `sum = sum + a + b` — kata-5-outer shape.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k * 2i64;
+                let b: i64 = k * 3i64;
+                sum = sum + a + b;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "expected one Add reduction on `sum`, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_chain_of_four() {
+    // Longer chain `sum + a + b + c + d` — pins that the chain walker
+    // recursion handles arbitrary depth, not just 2 levels.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k * 2i64;
+                let b: i64 = k * 3i64;
+                let c: i64 = k * 5i64;
+                let d: i64 = k * 7i64;
+                sum = sum + a + b + c + d;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_chain_with_acc_in_middle() {
+    // `a + sum + b` parses as `Binary(+, Binary(+, a, sum), b)`.
+    // Commutativity makes this equivalent to `sum + a + b`; the chain
+    // walker counts occurrences without caring about position.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k * 2i64;
+                let b: i64 = k * 3i64;
+                sum = a + sum + b;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_chain_does_not_recurse_into_mixed_ops() {
+    // `sum + a * b` — outer is `+`, inner is `*`. The walker stops at
+    // the inner `*` (not same op as target `+`), treating `a * b` as a
+    // single leaf. `sum + (a * b)` matches the direct `acc + expr`
+    // shape, so the reduction IS recognized — and correctly so, since
+    // `(a * b)` is just an opaque value combined with acc once per iter.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k * 2i64;
+                let b: i64 = k * 3i64;
+                sum = sum + a * b;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "outer `acc + (a*b)` should match direct shape"
+    );
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_rejects_chain_with_acc_twice() {
+    // `sum + sum + a` — acc appears twice in the chain. NOT a valid
+    // reduction step: per-iter combine `sum := sum + sum + a` is
+    // `2*sum + a`, but partials initialized to identity (0) wouldn't
+    // compose correctly under the standard fan-out + Add-combine model.
+    // Chain walker counts acc=2; recognizer rejects.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k;
+                sum = sum + sum + a;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "double-acc chain should reject; got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_recognized_for_chain_after_lowering() {
+    // End-to-end through the lowering pipeline — the chain becomes
+    // `Call(Path([T, "add"]), [Call(Path([T, "add"]), [sum, a]), b])`.
+    // Chain walker recurses through the Call shape too.
+    let analysis = analyze_lowered(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let a: i64 = k * 2i64;
+                let b: i64 = k * 3i64;
+                sum = sum + a + b;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "post-lowering chain Call shape must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}

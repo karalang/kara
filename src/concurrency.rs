@@ -1771,7 +1771,23 @@ fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
     match &value.kind {
         ExprKind::Binary { op, left, right } => {
             let red_op = ReductionOp::from_bin_op(op)?;
-            acc_matches_either(&left.kind, &right.kind, acc_name).then_some(red_op)
+            // Direct shape: `acc <op> expr` or `expr <op> acc`.
+            if acc_matches_either(&left.kind, &right.kind, acc_name) {
+                return Some(red_op);
+            }
+            // Nested chain: `acc + a + b` parses left-associatively as
+            // `Binary(+, Binary(+, acc, a), b)` — the direct match
+            // above sees neither operand as the acc identifier. By
+            // commutativity of the allow-list ops, any chain of the
+            // same op containing the accumulator exactly once is a
+            // valid reduction step: reorder to `acc + (others-combined)`
+            // and the recognized reduction shape falls out. Count acc
+            // occurrences across the same-op chain; recognize iff it
+            // appears exactly once.
+            if count_acc_in_chain(value, op, op_method_for_bin_op(op), acc_name) == 1 {
+                return Some(red_op);
+            }
+            None
         }
         ExprKind::Call { callee, args } => {
             let ExprKind::Path { segments, .. } = &callee.kind else {
@@ -1790,8 +1806,90 @@ fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
                 "max" => ReductionOp::Max,
                 _ => return None,
             };
-            acc_matches_either(&args[0].value.kind, &args[1].value.kind, acc_name).then_some(red_op)
+            // Direct shape: `T.op(acc, expr)` / `T.op(expr, acc)`.
+            if acc_matches_either(&args[0].value.kind, &args[1].value.kind, acc_name) {
+                return Some(red_op);
+            }
+            // Post-lowering chain — mirror of the Binary branch above
+            // but for the `Call(Path([T, op_method]), [a, b])` shape the
+            // lowering pass emits. Use the bin-op corresponding to
+            // segments[1] so the chain walker recognizes both pre- and
+            // post-lowering nodes uniformly.
+            let chain_op = bin_op_for_op_method(segments[1].as_str())?;
+            if count_acc_in_chain(value, &chain_op, segments[1].as_str(), acc_name) == 1 {
+                return Some(red_op);
+            }
+            None
         }
+        _ => None,
+    }
+}
+
+/// Count occurrences of `acc_name` (as a leaf `Identifier`) in a chain
+/// of nested expressions where each level is either a `Binary(op, ...)`
+/// matching `target_op` or a `Call(Path([_, target_method]), [...])`
+/// matching `target_method`. Recursion stops at any expression that's
+/// not a same-op chain node (those count as leaves and contribute 1
+/// iff they're the acc identifier, else 0).
+///
+/// Used by `reduction_binary_shape` to recognize commutative-reduction
+/// chains like `acc + a + b` (parses as `Binary(+, Binary(+, acc, a),
+/// b)`) — any chain of the same allow-list op containing acc exactly
+/// once is a valid reduction step under commutativity, since the chain
+/// can be reordered to `acc + (others-combined)`.
+fn count_acc_in_chain(
+    expr: &Expr,
+    target_op: &BinOp,
+    target_method: &str,
+    acc_name: &str,
+) -> usize {
+    match &expr.kind {
+        ExprKind::Binary { op, left, right } if op == target_op => {
+            count_acc_in_chain(left, target_op, target_method, acc_name)
+                + count_acc_in_chain(right, target_op, target_method, acc_name)
+        }
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                if segments.len() == 2 && segments[1] == target_method {
+                    return count_acc_in_chain(&args[0].value, target_op, target_method, acc_name)
+                        + count_acc_in_chain(&args[1].value, target_op, target_method, acc_name);
+                }
+            }
+            0
+        }
+        ExprKind::Identifier(n) if n == acc_name => 1,
+        _ => 0,
+    }
+}
+
+/// Map a `BinOp` to its lowered op-method name (`Add` → `"add"`, etc.).
+/// Mirror of `ReductionOp::from_bin_op`'s op-method conventions; used
+/// by the chain walker so it can match both pre-lowering Binary and
+/// post-lowering Call nodes uniformly under the same chain.
+fn op_method_for_bin_op(op: &BinOp) -> &'static str {
+    match op {
+        BinOp::Add => "add",
+        BinOp::Mul => "mul",
+        BinOp::BitOr => "bitor",
+        BinOp::BitAnd => "bitand",
+        BinOp::BitXor => "bitxor",
+        // Min/Max have no BinOp glyph — never recognized as chain
+        // members through the Binary path. Falls back to a name that
+        // won't match any Call segment.
+        _ => "",
+    }
+}
+
+fn bin_op_for_op_method(method: &str) -> Option<BinOp> {
+    match method {
+        "add" => Some(BinOp::Add),
+        "mul" => Some(BinOp::Mul),
+        "bitor" => Some(BinOp::BitOr),
+        "bitand" => Some(BinOp::BitAnd),
+        "bitxor" => Some(BinOp::BitXor),
+        // Min/Max are call-form only, no BinOp counterpart — the
+        // chain walker still works through `target_method` matching
+        // even though the BinOp side never fires.
         _ => None,
     }
 }
