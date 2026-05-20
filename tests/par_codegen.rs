@@ -1342,10 +1342,17 @@ fn main() {
     /// `LoopReduction` tag is threaded through to codegen.
     #[test]
     fn test_ir_reduction_emits_par_reduce_call_slice3b() {
+        // K = 100_000 puts total cost at ~300_000 unit-iters (sum + add
+        // per iter), well above the slice-3b.5 cost-model threshold of
+        // 80_000 unit-iters. Without the bump from K=1000 to K=100_000,
+        // the gate would block this loop from lowering — which would be
+        // correct behavior but defeats the test's purpose of pinning
+        // the IR-emission shape. The dedicated gate test below uses
+        // K=100 to pin the small-loop-skips-lowering behavior.
         let src = r#"
 fn main() {
     let mut sum: i64 = 0i64;
-    for k in 0i64..1000i64 {
+    for k in 0i64..100000i64 {
         sum = sum + k;
     }
     println(sum);
@@ -1438,11 +1445,15 @@ fn main() {
 
     #[test]
     fn test_ir_reduction_while_shape_emits_par_reduce_call_slice3b4() {
+        // K = 100_000 to cross the slice-3b.5 cost-model gate threshold
+        // (see test_ir_reduction_emits_par_reduce_call_slice3b for the
+        // same rationale; the dedicated gate test uses K=100 to pin the
+        // small-loop-skips-lowering behavior).
         let src = r#"
 fn main() {
     let mut sum: i64 = 0i64;
     let mut k: i64 = 0i64;
-    while k < 1000i64 {
+    while k < 100000i64 {
         sum = sum + k;
         k = k + 1i64;
     }
@@ -1510,6 +1521,151 @@ fn main() {
 "#;
         let Some(out) = run_program(src) else { return };
         assert_eq!(out.trim(), "4999950000");
+    }
+
+    // ── Slice 3b.5: cost-model gate ──────────────────────────────────
+    //
+    // When the iteration count is statically known and total work is
+    // below the dispatch threshold (~80,000 unit-iterations ≈ ~80µs),
+    // the lowering bails and sequential codegen runs. Tests pin both
+    // directions: small K → no par_reduce call; large K → par_reduce
+    // call. The dispatch-overhead-vs-work calibration lives in
+    // `src/codegen/reduce.rs`'s `REDUCE_DISPATCH_THRESHOLD_UNITS`.
+
+    #[test]
+    fn test_ir_cost_gate_blocks_small_loop_slice3b5() {
+        // K = 100 with body cost ~3 (sum + add per iter) → 300 unit-iters,
+        // far below the 80,000 threshold. Expected: no par_reduce call
+        // in the IR; sequential for-loop codegen runs instead. Sink is
+        // still correct (just not parallelized).
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "small loop (K=100, trivial body) should NOT lower to karac_par_reduce; \
+             cost-model gate should block. Got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_cost_gate_small_loop_still_correct_slice3b5() {
+        // Same small-K case as the IR test, plus an E2E correctness
+        // check: even though the loop runs sequentially, the sink must
+        // match the Σ formula. Pins that the cost-model gate is a
+        // codegen optimization (skips lowering), not a semantic change.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [0, 100) = 99 * 100 / 2 = 4950
+        assert_eq!(out.trim(), "4950");
+    }
+
+    #[test]
+    fn test_ir_cost_gate_blocks_small_loop_with_method_call_slice3b5() {
+        // K = 100 with a method-call body (cost ≈ 11 per iter, including
+        // CALL_COST_UNITS = 10). Total ~1100 unit-iters, still well below
+        // the 80,000 threshold. Pins that the cost gate sees through the
+        // function-call weight and still bails.
+        let src = r#"
+fn double(x: i64) -> i64 { x + x }
+
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 0i64..100i64 {
+        sum = sum + double(k);
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("call void @karac_par_reduce"),
+            "K=100 with method-call body still below threshold; gate should block. Got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_cost_gate_allows_variable_k_slice3b5() {
+        // Variable-K loops bypass the compile-time gate (K isn't a
+        // literal at codegen time). Even with a trivial body, the
+        // lowering fires because the runtime can't see through to
+        // const-eval k_iters cheaply. In practice variable-K loops are
+        // typically large (kata-7 = 50M). A dynamic runtime-side gate
+        // is a follow-up; the v1 cost-model is compile-time-only.
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k_iters: i64 = 100i64;
+    let mut k: i64 = 0i64;
+    while k < k_iters {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "variable-K loop should bypass the compile-time gate and lower; got:\n{ir}"
+        );
     }
 
     #[test]
