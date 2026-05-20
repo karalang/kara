@@ -2041,4 +2041,140 @@ fn main() {
         let Some(out) = run_program(src) else { return };
         assert_eq!(out.trim(), "499500");
     }
+
+    // ── Slice 3b.3: non-zero `lo` in for-range ───────────────────────
+    //
+    // Threads the source-level start bound `lo` through env-struct
+    // field 0 so the worker can recover the real iteration value
+    // `k = lo + worker_local_index`. Lifts the slice-3b/3b.1/3b.2 gate
+    // that rejected any for-range whose start wasn't `0` / absent.
+    // While-shape continues to require zero init (`let mut k: T = 0`);
+    // a sibling slice could extend it.
+
+    #[test]
+    fn test_ir_reduction_for_range_non_zero_lo_slice3b3() {
+        // Variable lo so the parent's `end - lo` doesn't constant-fold
+        // away — pins the named `iter.total` sub instruction. Variable-K
+        // also bypasses the slice-3b.5 cost-model gate so the lowering
+        // fires regardless of K.
+        let src = r#"
+fn main() {
+    let lo: i64 = 5i64;
+    let mut sum: i64 = 0i64;
+    for k in lo..1000i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "expected a karac_par_reduce call site for non-zero lo; got:\n{ir}"
+        );
+        // Pin the env-struct shape — lo lives at field 0 even when
+        // there are no source-level captures, so the env name appears
+        // in the IR (lo_val.is_some() forces env_ctx_ptr to be non-null).
+        assert!(
+            ir.contains("__reduce_env"),
+            "expected an env-struct alloca (lo threading needs ctx); got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__reduce_lo"),
+            "expected lo unpack/insert symbol in worker fn; got:\n{ir}"
+        );
+        // Worker fn shifts chunk-local start/end by lo.
+        assert!(
+            ir.contains("start.shift") && ir.contains("end.shift"),
+            "expected worker to shift both raw_start and raw_end by lo; got:\n{ir}"
+        );
+        // Parent computes `iter_total = end - lo`. Named instruction
+        // present because at least one operand is a runtime value.
+        assert!(
+            ir.contains("iter.total"),
+            "expected parent to compute iter_total = end - lo; got:\n{ir}"
+        );
+    }
+
+    /// Multi-worker E2E: non-zero literal lo with K = 100_000 iters,
+    /// guaranteed to dispatch chunks to multiple workers. Σ over the
+    /// shifted range pins correctness through the lo-shift path in the
+    /// worker.
+    #[test]
+    fn test_e2e_reduction_for_range_non_zero_lo_multi_worker_slice3b3() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    for k in 5i64..100005i64 {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [5, 100005) = Σ k for k in [0, 100005)
+        //   - Σ k for k in [0, 5)
+        // = 100004 * 100005 / 2 - 4 * 5 / 2
+        // = 5000450010 - 10
+        // = 5000450000
+        assert_eq!(out.trim(), "5000450000");
+    }
+
+    /// Variable-lo E2E (lo + hi both runtime bindings): bypasses the
+    /// const-eval cost gate so the lowering fires for any K. Pins that
+    /// captures of `lo`-as-runtime-value flow through the env-struct
+    /// correctly — `lo` lands at field 0 and is added to the worker's
+    /// chunk-local start/end, no separate identifier capture needed.
+    #[test]
+    fn test_e2e_reduction_for_range_variable_lo_slice3b3() {
+        let src = r#"
+fn main() {
+    let lo: i64 = 10i64;
+    let hi: i64 = 1010i64;
+    let mut sum: i64 = 0i64;
+    for k in lo..hi {
+        sum = sum + k;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ k for k in [10, 1010) = (1009 * 1010 / 2) - (9 * 10 / 2)
+        // = 509545 - 45 = 509500
+        assert_eq!(out.trim(), "509500");
+    }
+
+    /// Non-Add op + non-zero lo: pins the (op, type, lo) matrix corner
+    /// where multiple slice-3b.x generalizations interact. Mul reduction
+    /// over [3, 10) = 3 * 4 * 5 * 6 * 7 * 8 * 9 = 181440. Cost-gate
+    /// bypass via variable lo so the lowering fires despite low K.
+    #[test]
+    fn test_e2e_reduction_mul_non_zero_lo_slice3b3() {
+        let src = r#"
+fn main() {
+    let lo: i64 = 3i64;
+    let mut prod: i64 = 1i64;
+    for k in lo..10i64 {
+        prod = prod * k;
+    }
+    println(prod);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "181440");
+    }
 }

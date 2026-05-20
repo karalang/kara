@@ -13,9 +13,10 @@
 //!
 //! ## v1 supported shape
 //!
-//! - Source loop: `for k in 0..hi { ... }` (slice 3b) and
-//!   `while k < hi { ...; k = k + 1; }` (slice 3b.4). Non-zero `lo`
-//!   is still rejected — lands in 3b.3.
+//! - Source loop: `for k in lo..hi { ... }` for any `lo` expression of
+//!   the accumulator type (slice 3b + 3b.3), and `while k < hi { ...;
+//!   k = k + 1; }` with `let mut k: T = 0` (slice 3b.4 — while-shape
+//!   still requires zero init).
 //! - Op: all five recognized reduction ops — `+`, `*`, `|`, `&`, `^`
 //!   (slice 3b.1).
 //! - Accumulator type: any integer width — i8/i16/i32/i64 (and the
@@ -116,10 +117,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // par_reduce dispatch overhead (Box alloc + queue push + Condvar
         // wake/wait + N-way combine) would dominate the actual loop
         // work — sequential codegen wins by ~µs to ~ms. Variable-K
-        // loops bypass the gate (in practice they're typically large,
-        // like the kata-7 bench's `k_iters = 50_000_000`); a runtime-
-        // side dynamic gate is a follow-up.
-        if let Some(k) = const_eval_iter_count(&shape.end_expr) {
+        // loops (including variable-lo loops) bypass the gate (in
+        // practice they're typically large, like the kata-7 bench's
+        // `k_iters = 50_000_000`); a runtime-side dynamic gate is a
+        // follow-up.
+        if let Some(k) = const_eval_iter_count(&shape.end_expr, shape.lo_expr.as_ref()) {
             let per_iter = estimate_body_cost_units(&shape.body);
             let total = k.saturating_mul(per_iter);
             if total < REDUCE_DISPATCH_THRESHOLD_UNITS {
@@ -127,9 +129,12 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
-        // Compile the end bound in the parent context. This is `iter_total`
-        // for the runtime; we widen below to i64 (the descriptor's
-        // `iter_total` field width) before storing in the descriptor.
+        // Compile the end bound (and `lo`, if present) in the parent
+        // context. `iter_total = end - lo` is what the runtime sees;
+        // it's widened to i64 below for the descriptor's `iter_total`
+        // field. `lo` itself is threaded into the worker through env-
+        // struct field 0 (slice 3b.3) so the worker can shift its
+        // chunk-local index back to the source-level `k`.
         let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
 
         // The source-level loop variable's type is unified with the
@@ -145,6 +150,27 @@ impl<'ctx> super::Codegen<'ctx> {
         if end_val.get_type() != acc_int_ty {
             return Ok(None);
         }
+
+        // Compile `lo` once in the parent (if present) and compute
+        // `iter_total = end - lo`. Both operands are `acc_int_ty`; the
+        // type check above guarantees `end_val`'s type, and the source
+        // typechecker's range-unification rule guarantees `lo`'s type
+        // matches `end`'s (same belt-and-suspenders gate fires if the
+        // typed AST somehow violates it).
+        let (iter_total_val, lo_val) = match &shape.lo_expr {
+            None => (end_val, None),
+            Some(lo_expr) => {
+                let lo_val = self.compile_expr(lo_expr)?.into_int_value();
+                if lo_val.get_type() != acc_int_ty {
+                    return Ok(None);
+                }
+                let iter_total = self
+                    .builder
+                    .build_int_sub(end_val, lo_val, "iter.total")
+                    .unwrap();
+                (iter_total, Some(lo_val))
+            }
+        };
 
         // Synthesize the per-(op, type) helper functions.
         let init_fn = self.emit_reduce_init_fn(reduction.op, acc_int_ty);
@@ -164,10 +190,19 @@ impl<'ctx> super::Codegen<'ctx> {
             &shape.loop_var,
             &shape.body,
             &captures,
+            lo_val.is_some(),
         )?;
 
         self.emit_reduce_call(
-            init_fn, worker_fn, combine_fn, end_val, acc_slot, acc_int_ty, &reduction, &captures,
+            init_fn,
+            worker_fn,
+            combine_fn,
+            iter_total_val,
+            acc_slot,
+            acc_int_ty,
+            &reduction,
+            &captures,
+            lo_val,
         )?;
 
         Ok(Some(()))
@@ -206,21 +241,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     return None;
                 };
                 let end_expr = end.as_ref()?;
-                // v1 requires `lo == 0` so the worker's chunk-local index
-                // doubles as the source-level `k`. Non-zero starts land in
-                // 3b.3 by threading the offset through ctx and adding it
-                // at use sites.
-                let lo_is_zero = match start {
-                    None => true,
-                    Some(s) => matches!(s.kind, ExprKind::Integer(0, _)),
+                // Slice 3b.3: any `lo` expression of the accumulator
+                // type is supported by adding it to the worker's chunk-
+                // local index. `None` / `Integer(0)` normalize to
+                // `lo_expr = None` (no shift math — the worker's local
+                // index already matches the source-level k).
+                let lo_expr = match start.as_deref() {
+                    None => None,
+                    Some(s) if matches!(s.kind, ExprKind::Integer(0, _)) => None,
+                    Some(s) => Some(s.clone()),
                 };
-                if !lo_is_zero {
-                    return None;
-                }
                 Some(LoopShape {
                     loop_var: loop_var.clone(),
                     end_expr: (**end_expr).clone(),
                     body: body.clone(),
+                    lo_expr,
                 })
             }
             ExprKind::While {
@@ -258,6 +293,11 @@ impl<'ctx> super::Codegen<'ctx> {
                     loop_var,
                     end_expr,
                     body: stripped_body,
+                    // While-shape continues to require literal-zero
+                    // init (preceding_stmt_inits_to_zero gates above);
+                    // non-zero init for the while-shape would land in a
+                    // future slice that mirrors 3b.3 for the while path.
+                    lo_expr: None,
                 })
             }
             _ => None,
@@ -423,6 +463,7 @@ impl<'ctx> super::Codegen<'ctx> {
         loop_var_name: &str,
         body: &Block,
         captures: &[String],
+        has_lo: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
         let worker_id = self.par_counter;
         self.par_counter += 1;
@@ -458,16 +499,29 @@ impl<'ctx> super::Codegen<'ctx> {
         let entry = self.context.append_basic_block(worker_fn, "entry");
         self.builder.position_at_end(entry);
 
-        // Unpack captures from the env-struct pointed to by ctx into
-        // fresh local allocas, rebinding `self.variables` so the body
-        // resolves capture reads to the worker's local copy.
-        let env_struct_ty: Option<StructType<'ctx>> = if captures.is_empty() {
+        // Build the env-struct type. Layout (slice 3b.3):
+        //   - If `has_lo`: field 0 is `lo: acc_int_ty`, then captures.
+        //   - Otherwise: just captures (current shape from 3b/3b.1/3b.2).
+        // env-struct is present (env_ctx_ptr != null) iff `has_lo` or
+        // there's at least one capture — both conditions need the same
+        // unpack channel.
+        let env_struct_ty: Option<StructType<'ctx>> = if !has_lo && captures.is_empty() {
             None
         } else {
-            let field_tys: Vec<BasicTypeEnum<'ctx>> =
-                captures.iter().map(|n| saved_vars[n].ty).collect();
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            if has_lo {
+                field_tys.push(acc_int_ty.into());
+            }
+            for n in captures {
+                field_tys.push(saved_vars[n].ty);
+            }
             Some(self.context.struct_type(&field_tys, false))
         };
+
+        // `lo_in_worker` holds the worker-local copy of the source-level
+        // start bound — added to raw_start/raw_end below to recover the
+        // source-level k. `None` when `has_lo` is false (no shift math).
+        let mut lo_in_worker: Option<IntValue<'ctx>> = None;
 
         if let Some(env_ty) = env_struct_ty {
             let ctx_ptr = worker_fn.get_nth_param(3).unwrap().into_pointer_value();
@@ -476,11 +530,26 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_load::<BasicTypeEnum<'ctx>>(env_ty.into(), ctx_ptr, "__reduce_env_load")
                 .unwrap()
                 .into_struct_value();
+            // Field 0 holds `lo` when present. Extract as a plain
+            // IntValue — no alloca needed; it's only read twice (in the
+            // start/end shift below) and never written.
+            let capture_field_base = if has_lo {
+                let lo_field = self
+                    .builder
+                    .build_extract_value(env_val, 0, "__reduce_lo")
+                    .unwrap()
+                    .into_int_value();
+                lo_in_worker = Some(lo_field);
+                1
+            } else {
+                0
+            };
             for (i, var_name) in captures.iter().enumerate() {
                 let cap_ty = saved_vars[var_name].ty;
+                let field_idx = (capture_field_base + i) as u32;
                 let field_val = self
                     .builder
-                    .build_extract_value(env_val, i as u32, var_name)
+                    .build_extract_value(env_val, field_idx, var_name)
                     .unwrap();
                 let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
                 self.builder.build_store(alloca, field_val).unwrap();
@@ -538,6 +607,25 @@ impl<'ctx> super::Codegen<'ctx> {
             (s, e)
         } else {
             (raw_start, raw_end)
+        };
+        // Slice 3b.3: shift the chunk-local indices by the source-level
+        // start bound so the body's `k` reads observe the right values.
+        // For `for k in 5..15`: iter_total = 10, worker sees raw 0..10,
+        // shifted by lo=5 → 5..15. For `lo == 0` (the common case), no
+        // shift math at all — `lo_in_worker` is None.
+        let (start_val, end_val) = match lo_in_worker {
+            Some(lo) => {
+                let s = self
+                    .builder
+                    .build_int_add(start_val, lo, "start.shift")
+                    .unwrap();
+                let e = self
+                    .builder
+                    .build_int_add(end_val, lo, "end.shift")
+                    .unwrap();
+                (s, e)
+            }
+            None => (start_val, end_val),
         };
         let k_alloca = self.create_entry_alloca(worker_fn, loop_var_name, acc_int_ty.into());
         self.builder.build_store(k_alloca, start_val).unwrap();
@@ -643,6 +731,7 @@ impl<'ctx> super::Codegen<'ctx> {
         acc_int_ty: IntType<'ctx>,
         _reduction: &LoopReduction,
         captures: &[String],
+        lo_val: Option<IntValue<'ctx>>,
     ) -> Result<(), String> {
         let parent_fn = self
             .current_fn
@@ -650,24 +739,47 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
 
-        // Build the env-struct in the parent frame and copy captures.
-        let env_ctx_ptr: PointerValue<'ctx> = if captures.is_empty() {
-            // Null ctx — the runtime passes it through to worker_fn
-            // unchanged, and the worker's capture-unpack code path is
-            // skipped because env_struct_ty was None at synthesis.
+        // Build the env-struct in the parent frame, populate it. Layout
+        // mirrors the worker fn's unpack order in `emit_reduce_worker_fn`:
+        //   - If `lo_val.is_some()`: field 0 is `lo: acc_int_ty`, then
+        //     captures.
+        //   - Otherwise: just captures.
+        // Null ctx is only safe when both lo is absent AND captures is
+        // empty — the runtime passes ctx through to worker_fn unchanged.
+        let env_ctx_ptr: PointerValue<'ctx> = if lo_val.is_none() && captures.is_empty() {
             ptr_ty.const_null()
         } else {
-            let field_tys: Vec<BasicTypeEnum<'ctx>> =
-                captures.iter().map(|n| self.variables[n].ty).collect();
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            if lo_val.is_some() {
+                field_tys.push(acc_int_ty.into());
+            }
+            for n in captures {
+                field_tys.push(self.variables[n].ty);
+            }
             let env_ty = self.context.struct_type(&field_tys, false);
             let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
             let mut env_agg = env_ty.get_undef();
+            let capture_base = if let Some(lo) = lo_val {
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, lo, 0, "__reduce_env_lo")
+                    .unwrap()
+                    .into_struct_value();
+                1
+            } else {
+                0
+            };
             for (i, name) in captures.iter().enumerate() {
                 let slot = self.variables[name];
                 let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
                 env_agg = self
                     .builder
-                    .build_insert_value(env_agg, val, i as u32, "__reduce_env_field")
+                    .build_insert_value(
+                        env_agg,
+                        val,
+                        (capture_base + i) as u32,
+                        "__reduce_env_field",
+                    )
                     .unwrap()
                     .into_struct_value();
             }
@@ -884,19 +996,38 @@ const ASSUMED_WORKER_COUNT: u64 = 8;
 const REDUCE_DISPATCH_THRESHOLD_UNITS: u64 =
     DISPATCH_OVERHEAD_PER_CALL_UNITS * ASSUMED_WORKER_COUNT;
 
-/// Try to const-evaluate the loop's end-bound expression to a literal
-/// iteration count. Returns `None` for any non-literal shape (Identifier,
-/// expression involving captures, etc.) so the cost-model gate
-/// conservatively assumes "large enough to parallelize." Pre- and post-
-/// lowering both leave integer literals untouched, so this is shape-
-/// agnostic across the pipeline.
-fn const_eval_iter_count(end_expr: &Expr) -> Option<u64> {
-    if let ExprKind::Integer(n, _) = end_expr.kind {
-        if n >= 0 {
-            return Some(n as u64);
-        }
+/// Try to const-evaluate the loop's iteration count = `end - lo` to a
+/// literal. Returns `None` for any non-literal shape on either bound
+/// (Identifier, expression involving captures, etc.) so the cost-model
+/// gate conservatively assumes "large enough to parallelize." Pre- and
+/// post-lowering both leave integer literals untouched, so this is
+/// shape-agnostic across the pipeline. `lo_expr = None` means "no lo
+/// in the source" (treated as 0 — the slice 3b / 3b.4 shape).
+fn const_eval_iter_count(end_expr: &Expr, lo_expr: Option<&Expr>) -> Option<u64> {
+    let end_lit = const_eval_int_literal(end_expr)?;
+    let lo_lit = match lo_expr {
+        Some(e) => const_eval_int_literal(e)?,
+        None => 0,
+    };
+    let count = end_lit.checked_sub(lo_lit)?;
+    if count >= 0 {
+        Some(count as u64)
+    } else {
+        None
     }
-    None
+}
+
+/// Pull a signed-int literal out of an Expr. Returns `None` for any non-
+/// literal shape — including negative literals that the parser already
+/// represents as a Unary{Neg, Integer(n)} rather than Integer(-n); v1's
+/// reduction range bounds rarely use negatives so the literal arm is
+/// sufficient. Pre- and post-lowering both leave Integer(n) untouched.
+fn const_eval_int_literal(expr: &Expr) -> Option<i64> {
+    if let ExprKind::Integer(n, _) = expr.kind {
+        Some(n)
+    } else {
+        None
+    }
 }
 
 /// Estimate the per-iter body cost in "1 unit ≈ 1 ns." Recursive walk of
@@ -1169,16 +1300,23 @@ fn estimate_expr_cost_units(expr: &Expr) -> u64 {
 }
 
 /// Canonical shape of a recognized reduction loop. Built by
-/// `extract_loop_shape` from either the `for k in 0..hi` shape (slice 3b)
-/// or the `while k < hi { ...; k = k + 1; }` shape (slice 3b.4) and
-/// consumed by the lowering path. `body` is the source body with the
-/// while-shape's terminal increment already stripped — so the worker fn
-/// synth treats both shapes identically and always emits its own back-
-/// edge `k += 1`.
+/// `extract_loop_shape` from either the `for k in lo..hi` shape
+/// (slices 3b + 3b.3) or the `while k < hi { ...; k = k + 1; }` shape
+/// (slice 3b.4) and consumed by the lowering path. `body` is the source
+/// body with the while-shape's terminal increment already stripped — so
+/// the worker fn synth treats both shapes identically and always emits
+/// its own back-edge `k += 1`. `lo_expr` is `None` when the source's
+/// start bound is absent or `Integer(0)` (the common case — no shift
+/// math at all in the worker); `Some(expr)` otherwise (slice 3b.3 — the
+/// expr is compiled in the parent, passed through env-struct field 0,
+/// and added to the worker's chunk-local start/end). The while-shape
+/// always sets `lo_expr = None` since its loop-var init is gated to
+/// literal 0 by `preceding_stmt_inits_to_zero`.
 struct LoopShape {
     loop_var: String,
     end_expr: Expr,
     body: Block,
+    lo_expr: Option<Expr>,
 }
 
 /// Match a less-than condition into `(loop_var_name, end_expr)`.
