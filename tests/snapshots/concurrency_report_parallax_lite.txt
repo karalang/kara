@@ -1,3 +1,5 @@
+function InMemoryMetrics.record (line 55):
+  reduction { op: +, accumulator: sum, line: 58 }
 function process_request (line 137):
   parallel_group {
     [138] record_a()  // writes(MetricsA)

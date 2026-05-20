@@ -1,7 +1,7 @@
 // tests/concurrency.rs
 
 use karac::concurrency::*;
-use karac::{concurrency_analyze, effectcheck, parse};
+use karac::{concurrency_analyze, effectcheck, lower, parse, resolve, typecheck};
 
 // ── Test Helpers ────────────────────────────────────────────────
 
@@ -17,6 +17,33 @@ fn analyze(source: &str) -> ConcurrencyAnalysis {
             .collect::<Vec<_>>()
             .join(", ")
     );
+    let effects = effectcheck(&parsed.program);
+    concurrency_analyze(&parsed.program, &effects)
+}
+
+/// Mirror of `analyze` that runs the typecheck + lowering passes
+/// before concurrency analysis. The CLI pipeline lowers primitive
+/// operators into trait-method calls before concurrencycheck runs
+/// (`src/lowering.rs`), so the reduction recognizer must handle the
+/// post-lowering `Call(Path([type, op_method]), [a, b])` shape as
+/// well as the parser-shape `Binary { op, left, right }`. Without
+/// this lowered-pipeline test, the kata-7 / Parallax CLI surface
+/// would silently regress while the parse-shape unit tests pass.
+fn analyze_lowered(source: &str) -> ConcurrencyAnalysis {
+    let mut parsed = parse(source);
+    assert!(
+        parsed.errors.is_empty(),
+        "Parse errors: {}",
+        parsed
+            .errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let resolved = resolve(&parsed.program);
+    let tc = typecheck(&parsed.program, &resolved);
+    lower(&mut parsed.program, &tc);
     let effects = effectcheck(&parsed.program);
     concurrency_analyze(&parsed.program, &effects)
 }
@@ -784,4 +811,286 @@ fn test_polymorphic_group_not_trivial() {
         !main_fc.parallel_groups[0].is_trivial,
         "group containing a polymorphic call must not be marked trivial"
     );
+}
+
+// ── Reduction recognition (auto-par slice 1, 2026-05-19) ───────
+//
+// Tests for the loop-reduction recognizer: each top-level `for` / `while` /
+// `loop` whose body's only loop-carried write follows `acc = acc <op> expr`
+// (or `acc op= expr`) for op ∈ {+, *, |, &, ^} is tagged with a
+// `LoopReduction`. Induction-shape writes (`i = i + const_lit`, `i +=
+// const_lit`) are folded alongside as loop-counter steps so explicit
+// `while` loops match without the reduction being broken by the counter.
+
+#[test]
+fn test_reduction_recognized_for_add_while_loop() {
+    // The kata-7 bench shape: `while k < K { sum = sum + ...; k = k + 1; }`.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                sum = sum + k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "expected one reduction, got {:?}",
+        main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert_eq!(r.accumulator, "sum");
+    assert_eq!(r.op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_compound_add() {
+    // `total += x` shape parses to CompoundAssign — must also be recognized.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut total: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                total += k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "total");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_mul_or_and_xor() {
+    // Sweep the four other ops in one program — one loop each, four
+    // recognized reductions, each tagged with its op.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut p: i64 = 1i64;
+            let mut a: i64 = 0i64;
+            while a < 5i64 {
+                p = p * a;
+                a = a + 1i64;
+            }
+            let mut o: i64 = 0i64;
+            let mut b: i64 = 0i64;
+            while b < 5i64 {
+                o = o | b;
+                b = b + 1i64;
+            }
+            let mut n: i64 = -1i64;
+            let mut c: i64 = 0i64;
+            while c < 5i64 {
+                n = n & c;
+                c = c + 1i64;
+            }
+            let mut x: i64 = 0i64;
+            let mut d: i64 = 0i64;
+            while d < 5i64 {
+                x = x ^ d;
+                d = d + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 4);
+    let by_acc: std::collections::HashMap<_, _> = main_fc
+        .loop_reductions
+        .iter()
+        .map(|r| (r.accumulator.clone(), r.op))
+        .collect();
+    assert_eq!(by_acc.get("p"), Some(&ReductionOp::Mul));
+    assert_eq!(by_acc.get("o"), Some(&ReductionOp::BitOr));
+    assert_eq!(by_acc.get("n"), Some(&ReductionOp::BitAnd));
+    assert_eq!(by_acc.get("x"), Some(&ReductionOp::BitXor));
+}
+
+#[test]
+fn test_reduction_commutative_rhs_acc_position() {
+    // `sum = k + sum` — accumulator on the right. Allow-list ops are
+    // commutative, so this shape is equally valid.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                sum = k + sum;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+}
+
+#[test]
+fn test_reduction_rejects_subtraction() {
+    // `acc -= x` is NOT associative (a - b - c ≠ a - (b - c)) and not in
+    // the allow-list. The classifier must reject the loop.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                acc = acc - k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "subtraction is not associative; should not be tagged as reduction"
+    );
+}
+
+#[test]
+fn test_reduction_rejects_division() {
+    // Division is neither associative nor commutative.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 100i64;
+            let mut k: i64 = 1i64;
+            while k < 5i64 {
+                acc /= k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(main_fc.loop_reductions.is_empty());
+}
+
+#[test]
+fn test_reduction_rejects_multiple_distinct_accumulators() {
+    // Two distinct accumulators in the same loop — slice 1 only handles
+    // single-accumulator reductions, so the loop is rejected entirely.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut a: i64 = 0i64;
+            let mut b: i64 = 1i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                a = a + k;
+                b = b * k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "two-accumulator loop should not match slice-1 recognition"
+    );
+}
+
+#[test]
+fn test_reduction_rejects_nested_inner_write() {
+    // An inner `if { acc = ... }` mutates a captured name from a nested
+    // block; slice 1 conservatively rejects.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                if k > 5i64 {
+                    acc = acc + k;
+                }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(main_fc.loop_reductions.is_empty());
+}
+
+#[test]
+fn test_reduction_recognized_for_loop() {
+    // `for k in 0..K { acc = acc + ... }` — no explicit induction, the
+    // for-binding is fresh per-iter. Body has a single loop-carried
+    // write; recognized cleanly.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 0i64;
+            for k in 0..100i64 {
+                acc = acc + k;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "acc");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_after_lowering() {
+    // CLI surface regression check (slice 1, 2026-05-19): the same
+    // shape as `test_reduction_recognized_for_add_while_loop` but run
+    // through resolve + typecheck + lower before concurrency. The
+    // lowering pass rewrites `sum + k` into a `Call(Path(["i64",
+    // "add"]), [sum, k])` shape that the recognizer must also match.
+    let analysis = analyze_lowered(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                sum = sum + k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "post-lowering Call shape must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_no_reduction_when_loop_has_no_accumulator() {
+    // A loop that only steps the counter — no accumulator, no reduction.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(main_fc.loop_reductions.is_empty());
 }

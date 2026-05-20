@@ -169,6 +169,76 @@ pub struct FunctionConcurrency {
     pub parallel_groups: Vec<ParallelGroup>,
     /// Total statements analyzed.
     pub total_statements: usize,
+    /// Top-level loops in the function body whose only loop-carried write
+    /// is a reduction over an outer-scope accumulator with an op in the
+    /// associative + commutative allow-list. Codegen consumes this list
+    /// to lower the loop as a fan-out + reduce: each worker processes a
+    /// contiguous slice of the iteration space into a per-thread partial,
+    /// then a final serial pass combines the partials with the same op.
+    /// See `docs/implementation_checklist/phase-7-codegen.md` — "Auto-par
+    /// reduction recognition" — for the policy and slicing plan.
+    pub loop_reductions: Vec<LoopReduction>,
+}
+
+/// An associative + commutative reduction operator recognized at v1.
+/// Int-only allow-list per the roadmap entry; float `+`/`*` are deferred
+/// to v1.x behind an `#[fp_reassoc]` opt-in because IEEE-754 addition is
+/// not associative and per-thread combine order would break determinism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReductionOp {
+    Add,
+    Mul,
+    BitOr,
+    BitAnd,
+    BitXor,
+}
+
+impl ReductionOp {
+    /// Source-level glyph for the op, used in `--concurrency-report`
+    /// output and in diagnostic messages.
+    pub fn symbol(&self) -> &'static str {
+        match self {
+            ReductionOp::Add => "+",
+            ReductionOp::Mul => "*",
+            ReductionOp::BitOr => "|",
+            ReductionOp::BitAnd => "&",
+            ReductionOp::BitXor => "^",
+        }
+    }
+
+    fn from_bin_op(op: &BinOp) -> Option<Self> {
+        match op {
+            BinOp::Add => Some(ReductionOp::Add),
+            BinOp::Mul => Some(ReductionOp::Mul),
+            BinOp::BitOr => Some(ReductionOp::BitOr),
+            BinOp::BitAnd => Some(ReductionOp::BitAnd),
+            BinOp::BitXor => Some(ReductionOp::BitXor),
+            _ => None,
+        }
+    }
+
+    fn from_compound_op(op: &CompoundOp) -> Option<Self> {
+        match op {
+            CompoundOp::Add => Some(ReductionOp::Add),
+            CompoundOp::Mul => Some(ReductionOp::Mul),
+            CompoundOp::BitOr => Some(ReductionOp::BitOr),
+            CompoundOp::BitAnd => Some(ReductionOp::BitAnd),
+            CompoundOp::BitXor => Some(ReductionOp::BitXor),
+            _ => None,
+        }
+    }
+}
+
+/// A loop body recognized as a reduction over a single accumulator.
+/// `stmt_index` identifies the top-level loop statement in the
+/// enclosing function's body; `loop_line` is the loop expression's
+/// 1-indexed source line, suitable for the report's user-facing text.
+#[derive(Debug, Clone)]
+pub struct LoopReduction {
+    pub accumulator: String,
+    pub op: ReductionOp,
+    pub stmt_index: usize,
+    pub loop_line: usize,
 }
 
 /// A set of statements that can safely run in parallel.
@@ -343,6 +413,7 @@ impl<'a> ConcurrencyChecker<'a> {
             return FunctionConcurrency {
                 parallel_groups: Vec::new(),
                 total_statements: 0,
+                loop_reductions: Vec::new(),
             };
         }
 
@@ -366,10 +437,170 @@ impl<'a> ConcurrencyChecker<'a> {
         // We group statements that have no edges between them.
         let parallel_groups = self.find_parallel_groups(&stmt_infos, &has_edge, total_statements);
 
+        // Step 4: Recognize reductions in top-level loops. Independent of
+        // the parallel-group / dependency machinery — a reduction loop
+        // has a loop-carried dependency that the parallel-group analysis
+        // correctly serializes, but the loop's iteration space can still
+        // be split across workers when the op is associative + commutative.
+        let loop_reductions = self.recognize_reductions(func);
+
         FunctionConcurrency {
             parallel_groups,
             total_statements,
+            loop_reductions,
         }
+    }
+
+    /// Walk top-level statements in `func.body`; for each loop expression
+    /// (`for` / `while` / `loop`), attempt to classify its body as a
+    /// reduction over a single outer-scope accumulator. The classifier
+    /// is intentionally conservative — anything outside the strict
+    /// `acc = acc <op> expr` / `acc op= expr` shape (with op in the
+    /// allow-list) returns no recognition. Codegen will re-validate the
+    /// shape against type information before emitting the fan-out.
+    fn recognize_reductions(&self, func: &Function) -> Vec<LoopReduction> {
+        let mut out = Vec::new();
+        for (idx, stmt) in func.body.stmts.iter().enumerate() {
+            let StmtKind::Expr(expr) = &stmt.kind else {
+                continue;
+            };
+            let body = match &expr.kind {
+                ExprKind::For { body, .. }
+                | ExprKind::While { body, .. }
+                | ExprKind::Loop { body, .. } => body,
+                _ => continue,
+            };
+            if let Some((accumulator, op)) = self.classify_loop_body(body) {
+                out.push(LoopReduction {
+                    accumulator,
+                    op,
+                    stmt_index: idx,
+                    loop_line: expr.span.line,
+                });
+            }
+        }
+        out
+    }
+
+    /// Classify a loop body as a reduction over a single outer-scope
+    /// accumulator. Returns `Some((name, op))` if every top-level
+    /// loop-carried write to an outer-scope name is reduction-shaped
+    /// against the same accumulator with the same op (with induction-
+    /// shape writes — `i = i + const_lit`, `i += const_lit` — allowed
+    /// alongside as loop-counter steps). Returns `None` for any other
+    /// shape: multiple distinct accumulators, mixed ops, non-reduction
+    /// writes, or writes nested inside `if`/`else`/inner-loop branches.
+    fn classify_loop_body(&self, body: &Block) -> Option<(String, ReductionOp)> {
+        // Names freshly introduced inside the loop body. Writes to these
+        // are body-scoped and not loop-carried.
+        let mut let_introduced: HashSet<String> = HashSet::new();
+        for stmt in &body.stmts {
+            match &stmt.kind {
+                StmtKind::Let { pattern, .. } | StmtKind::LetElse { pattern, .. } => {
+                    self.collect_pattern_bindings(pattern, &mut let_introduced);
+                }
+                StmtKind::LetUninit { name, .. } => {
+                    let_introduced.insert(name.clone());
+                }
+                _ => {}
+            }
+        }
+
+        let mut reduction: Option<(String, ReductionOp)> = None;
+        for stmt in &body.stmts {
+            match &stmt.kind {
+                StmtKind::Assign { target, value } => {
+                    let name = identifier_name(target)?;
+                    if let_introduced.contains(&name) {
+                        // Assign to a body-local name (re-bound after let).
+                        // Not loop-carried; ignored.
+                        continue;
+                    }
+                    // Induction shape is a strict subset of reduction shape
+                    // (`i = i + 1` matches the `+` reduction check too) — so
+                    // check induction first and short-circuit, otherwise an
+                    // explicit `while`-loop counter would be tagged as the
+                    // reduction accumulator and fight whichever real
+                    // accumulator the loop also writes to.
+                    if induction_step_via_assign(value, &name) {
+                        // i = i + const_lit — loop-counter step; ignored.
+                    } else if let Some(op) = reduction_binary_shape(value, &name) {
+                        match reduction {
+                            None => reduction = Some((name, op)),
+                            Some((ref existing_name, existing_op)) => {
+                                if existing_name != &name || existing_op != op {
+                                    return None;
+                                }
+                            }
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+                StmtKind::CompoundAssign { target, op, value } => {
+                    let name = identifier_name(target)?;
+                    if let_introduced.contains(&name) {
+                        continue;
+                    }
+                    let Some(red_op) = ReductionOp::from_compound_op(op) else {
+                        // Sub / Div / Mod / Shl / Shr — not in the
+                        // associative + commutative allow-list.
+                        return None;
+                    };
+                    // Mirror of the Assign-branch induction-first rule:
+                    // `i += 1` matches the `+` reduction shape, so check
+                    // for the counter-step shape first.
+                    if red_op == ReductionOp::Add && is_int_literal(value) {
+                        // i += const_lit — loop-counter step; ignored.
+                        continue;
+                    }
+                    match reduction {
+                        None => reduction = Some((name, red_op)),
+                        Some((ref existing_name, existing_op)) => {
+                            if existing_name != &name || existing_op != red_op {
+                                return None;
+                            }
+                        }
+                    }
+                }
+                StmtKind::Let { .. } | StmtKind::LetElse { .. } | StmtKind::LetUninit { .. } => {
+                    // Fresh body bindings; not loop-carried.
+                }
+                StmtKind::Expr(expr) => {
+                    // Any inner write to an outer-scope name (via nested
+                    // if/else or inner loop) breaks the simple-reduction
+                    // recognition; defer multi-write loops to a later slice.
+                    let mut inner_writes = HashSet::new();
+                    self.collect_expr_inner_writes(expr, &mut inner_writes);
+                    for w in &inner_writes {
+                        if !let_introduced.contains(w) {
+                            return None;
+                        }
+                    }
+                }
+                StmtKind::Defer { .. } | StmtKind::ErrDefer { .. } => {
+                    // Defers run at scope exit, not per-iteration; treat
+                    // conservatively as a rejection signal — a defer with
+                    // a captured-write reads its surrounding loop's
+                    // accumulator state in a way the fan-out / combine
+                    // model doesn't preserve.
+                    return None;
+                }
+            }
+        }
+
+        // Same audit on the block's trailing expression.
+        if let Some(e) = &body.final_expr {
+            let mut inner_writes = HashSet::new();
+            self.collect_expr_inner_writes(e, &mut inner_writes);
+            for w in &inner_writes {
+                if !let_introduced.contains(w) {
+                    return None;
+                }
+            }
+        }
+
+        reduction
     }
 
     /// Analyze a single statement to extract defines, reads, and effects.
@@ -1421,4 +1652,124 @@ impl<'a> ConcurrencyChecker<'a> {
             _ => None,
         }
     }
+}
+
+// ── Reduction recognition helpers ──────────────────────────────
+
+/// Pull the name out of a bare-identifier expression. Used by the
+/// reduction recognizer to reject any assignment whose target is a
+/// field access, index, or compound shape — those aren't a single
+/// scalar accumulator and the fan-out / combine lowering doesn't cover
+/// them at v1.
+fn identifier_name(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(name.clone()),
+        _ => None,
+    }
+}
+
+/// True if `expr` is an integer literal — used to recognize the loop-
+/// counter shape `i += 1` / `i = i + 1` and exclude it from the
+/// reduction accumulator count. Floats are intentionally rejected here:
+/// a float loop counter is unusual and the loop-counter excuse only
+/// applies to integer steps anyway.
+fn is_int_literal(expr: &Expr) -> bool {
+    matches!(expr.kind, ExprKind::Integer(_, _))
+}
+
+/// True if `value` has shape `acc + int_literal` for the named `acc` —
+/// the loop-counter step pattern in an explicit `while` loop. Folded
+/// alongside reduction-shape writes so kata-7-style benches (`while k <
+/// K { sum = sum + ...; k = k + 1; }`) classify cleanly without
+/// forcing the loop counter through the reduction allow-list.
+///
+/// Accepts both the pre-lowered `Binary` shape and the lowered
+/// `Call(Path([type, "add"]), [a, b])` shape (`src/lowering.rs`
+/// rewrites every primitive binop into a method-call dispatch before
+/// the CLI runs concurrencycheck — without the second arm, the
+/// recognizer fires only for the test pipeline that skips lowering).
+fn induction_step_via_assign(value: &Expr, acc_name: &str) -> bool {
+    match &value.kind {
+        ExprKind::Binary {
+            op: BinOp::Add,
+            left,
+            right,
+        } => is_acc_plus_int_literal(&left.kind, &right.kind, acc_name),
+        ExprKind::Call { callee, args } => {
+            match_lowered_op_call(callee, args, "add").is_some_and(|(left, right)| {
+                is_acc_plus_int_literal(&left.kind, &right.kind, acc_name)
+            })
+        }
+        _ => false,
+    }
+}
+
+fn is_acc_plus_int_literal(left: &ExprKind, right: &ExprKind, acc_name: &str) -> bool {
+    match (left, right) {
+        (ExprKind::Identifier(n), ExprKind::Integer(_, _))
+        | (ExprKind::Integer(_, _), ExprKind::Identifier(n)) => n == acc_name,
+        _ => false,
+    }
+}
+
+/// True if `value` has shape `acc <op> expr` or `expr <op> acc` for
+/// the named `acc` and `op` in the reduction allow-list — the right-
+/// hand side of `acc = acc <op> expr`. Returns the op kind on match.
+/// Commutativity is exploited at recognition: an allow-list op `+/*/|/&/^`
+/// is commutative, so the analyzer accepts `acc op expr` and `expr op
+/// acc` symmetrically. The right-hand `expr` is unconstrained — any
+/// shape that produces a value combinable with `acc` is fine; the
+/// codegen slice will type-gate.
+///
+/// Like `induction_step_via_assign`, this checks both the pre-lowered
+/// `Binary` and the lowered `Call(Path([type, op_method]), [a, b])`
+/// shapes — see that function's doc comment for context.
+fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
+    match &value.kind {
+        ExprKind::Binary { op, left, right } => {
+            let red_op = ReductionOp::from_bin_op(op)?;
+            acc_matches_either(&left.kind, &right.kind, acc_name).then_some(red_op)
+        }
+        ExprKind::Call { callee, args } => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 || args.len() != 2 {
+                return None;
+            }
+            let red_op = match segments[1].as_str() {
+                "add" => ReductionOp::Add,
+                "mul" => ReductionOp::Mul,
+                "bitor" => ReductionOp::BitOr,
+                "bitand" => ReductionOp::BitAnd,
+                "bitxor" => ReductionOp::BitXor,
+                _ => return None,
+            };
+            acc_matches_either(&args[0].value.kind, &args[1].value.kind, acc_name).then_some(red_op)
+        }
+        _ => None,
+    }
+}
+
+fn acc_matches_either(left: &ExprKind, right: &ExprKind, acc_name: &str) -> bool {
+    matches!(left, ExprKind::Identifier(n) if n == acc_name)
+        || matches!(right, ExprKind::Identifier(n) if n == acc_name)
+}
+
+/// Match `Call(Path([type, method_name]), [a, b])` and return the two
+/// arg expressions. Used by both `reduction_binary_shape` and
+/// `induction_step_via_assign` to peek at the operand positions of a
+/// post-lowering primitive op call.
+fn match_lowered_op_call<'a>(
+    callee: &Expr,
+    args: &'a [crate::ast::CallArg],
+    method_name: &str,
+) -> Option<(&'a Expr, &'a Expr)> {
+    let ExprKind::Path { segments, .. } = &callee.kind else {
+        return None;
+    };
+    if segments.len() != 2 || segments[1] != method_name || args.len() != 2 {
+        return None;
+    }
+    Some((&args[0].value, &args[1].value))
 }

@@ -102,13 +102,15 @@ fn render_function(
         return false;
     };
 
-    // Skip if no non-trivial groups — sequential functions are noise here.
+    // Skip if neither a non-trivial parallel group nor a recognized
+    // loop-reduction exists — sequential functions are noise here.
     let mut groups: Vec<&_> = decision
         .parallel_groups
         .iter()
         .filter(|g| !g.is_trivial)
         .collect();
-    if groups.is_empty() {
+    let reductions = &decision.loop_reductions;
+    if groups.is_empty() && reductions.is_empty() {
         return false;
     }
 
@@ -141,6 +143,20 @@ fn render_function(
         // `src/concurrency.rs`).
         out.push_str(&format!("    reason: {}\n", group.reason));
         out.push_str("  }\n");
+    }
+
+    // Reductions are reported alongside parallel groups so the user sees
+    // every opportunity the analyzer surfaced in one block. Stable
+    // ordering: by loop_line.
+    let mut sorted_reductions: Vec<&_> = reductions.iter().collect();
+    sorted_reductions.sort_by_key(|r| r.loop_line);
+    for red in sorted_reductions {
+        out.push_str(&format!(
+            "  reduction {{ op: {}, accumulator: {}, line: {} }}\n",
+            red.op.symbol(),
+            red.accumulator,
+            red.loop_line,
+        ));
     }
 
     true
@@ -360,6 +376,7 @@ mod tests {
                     captured_mutations: std::collections::HashSet::new(),
                 }],
                 total_statements: 2,
+                loop_reductions: Vec::new(),
             },
         );
         let analysis = ConcurrencyAnalysis {
