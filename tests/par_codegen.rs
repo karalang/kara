@@ -2891,6 +2891,234 @@ fn main() {
         );
     }
 
+    // ── Const-prop into par-reduce captured env ──────────────────────
+    //
+    // When a captured variable is initialized from a literal integer
+    // (`let n: i64 = 8i64;`) and is never reassigned before the loop,
+    // the worker fn should materialize it as an LLVM constant directly
+    // — not load it from the par-reduce env-struct. This lets LLVM see
+    // through subsequent uses (e.g. `k % n` where n is a power-of-two
+    // folds to an `and`-mask instead of a runtime `sdiv`/`msub`). The
+    // gap surfaced on the kata-8 atoi bench where the natural source
+    // `let n: i64 = 8i64; ... while k < K { idx = k % n; ... }` was
+    // ~9% slower than rewriting it as `idx = k % 8i64` purely because
+    // the descriptor boundary opaqued the constant. Tests pin:
+    //   1. Const-init capture: worker IR contains a `store i64 <lit>`
+    //      of the literal value (the per-worker alloca init) — i.e. the
+    //      constant *did* flow into the worker body.
+    //   2. Mut capture: worker IR still reads it from the env-struct
+    //      `extractvalue` chain (no const-prop unsoundly applied).
+    //   3. Mixed: both paths coexist in one reduction site.
+    //   4. E2E: const-prop doesn't change the sink for any of the above.
+    /// Slice the IR text down to the body of the first synthesized
+    /// `__karac_reduce_worker_*` fn so capture-related assertions don't
+    /// match the outer fn's own copies of the captured stores (main's
+    /// own `let n = 8` lowers to a `store i64 8, ptr %n` too — that
+    /// store is *not* the const-prop we're testing for). Returns the
+    /// substring from the worker fn's `define void @...worker_N(...) {`
+    /// header up through its closing `}`.
+    fn extract_first_reduce_worker_body(ir: &str) -> String {
+        // The worker fn's definition line — distinct from any *call* /
+        // *reference* to `@__karac_reduce_worker_` from main's
+        // descriptor setup.
+        let header_needle = "define void @__karac_reduce_worker_";
+        let header_start = ir
+            .find(header_needle)
+            .unwrap_or_else(|| panic!("no `{header_needle}` in IR:\n{ir}"));
+        let after_header = &ir[header_start..];
+        // The body is everything from the `{` opening this fn up to the
+        // matching `}`. LLVM IR fn bodies don't nest braces past the
+        // top level, so a balanced-brace walk just bumps a depth counter.
+        let body_open = after_header.find('{').expect("worker fn header has no `{`");
+        let mut depth: i32 = 0;
+        let mut end_off: Option<usize> = None;
+        for (i, ch) in after_header[body_open..].char_indices() {
+            match ch {
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end_off = Some(body_open + i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let end = end_off.expect("unbalanced braces in worker fn body");
+        after_header[..end].to_string()
+    }
+
+    #[test]
+    fn test_ir_reduction_const_int_capture_inlined_in_worker() {
+        // `let n = 8i64;` non-mut + literal init → const-prop kicks in.
+        // The worker fn should store `i64 8` into the worker-local `n`
+        // alloca rather than extract it from the env-struct.
+        let src = r#"
+fn main() {
+    let n: i64 = 8i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % n);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+
+        let worker = extract_first_reduce_worker_body(&ir);
+        // The const value 8 must be stored into the worker-local `n`
+        // alloca. The exact alloca name follows the source-level
+        // variable name, so look for `store i64 8, ptr %n` *inside the
+        // worker fn body* (not the outer fn's own let-init store).
+        assert!(
+            worker.contains("store i64 8, ptr %n"),
+            "expected const-init capture `n = 8` to be materialized as \
+             `store i64 8, ptr %n` in the worker fn body; worker:\n{worker}"
+        );
+        // With `n` const-propped out, the worker should not load from
+        // an env-struct (no extractvalue over a `__reduce_env_load`).
+        assert!(
+            !worker.contains("__reduce_env_load"),
+            "with the sole capture const-propped, no env-struct load \
+             should appear in the worker; worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_ir_reduction_mut_capture_stays_runtime() {
+        // `let mut n = 8i64;` mut → const-prop must not apply (could
+        // be reassigned). Worker should still read `n` from the env
+        // struct, no `store i64 8, ptr %n` literal in the worker body.
+        let src = r#"
+fn main() {
+    let mut n: i64 = 8i64;
+    n = 9i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % n);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+
+        let worker = extract_first_reduce_worker_body(&ir);
+        // No const-prop store of either initializer value inside the
+        // worker fn (the outer fn's let/assign stores must not bleed
+        // into this assertion — hence the extracted worker slice).
+        assert!(
+            !worker.contains("store i64 8, ptr %") && !worker.contains("store i64 9, ptr %"),
+            "mut capture must NOT be const-propped into the worker; worker:\n{worker}"
+        );
+        // The env-struct load path must be live for the runtime capture.
+        assert!(
+            worker.contains("__reduce_env_load"),
+            "expected env-struct load for the runtime capture in worker; worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_ir_reduction_mixed_const_and_runtime_captures() {
+        // `n` (const-init) + `factor` (mut, runtime) — the worker should
+        // store i64 8 for n AND load factor from the env-struct.
+        let src = r#"
+fn main() {
+    let n: i64 = 8i64;
+    let mut factor: i64 = 3i64;
+    factor = 5i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % n) * factor;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+
+        let worker = extract_first_reduce_worker_body(&ir);
+        assert!(
+            worker.contains("store i64 8, ptr %n"),
+            "expected const-init `n=8` to land as a constant store in the \
+             worker; worker:\n{worker}"
+        );
+        assert!(
+            worker.contains("__reduce_env_load"),
+            "expected env-struct load to be live for runtime `factor` \
+             capture in worker; worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_const_capture_sink_matches() {
+        // Const-prop must not change the program's output.
+        let src = r#"
+fn main() {
+    let n: i64 = 8i64;
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % n);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ (k % 8) for k in [0, 100000):
+        // 100000 / 8 = 12500 complete cycles, each summing 0+1+2+...+7 = 28.
+        // 12500 * 28 = 350000. No partial cycle since 100000 is a multiple of 8.
+        assert_eq!(out.trim(), "350000");
+    }
+
     #[test]
     fn test_ir_cost_gate_recursive_callee_terminates_via_depth_cap() {
         // Indirect recursion `a() -> b()`, `b() -> a()` — the inliner

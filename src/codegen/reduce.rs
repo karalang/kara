@@ -43,6 +43,7 @@ use crate::ast::{
     BinOp, Block, CompoundOp, Expr, ExprKind, Function, Item, PatternKind, Program, Stmt, StmtKind,
 };
 use crate::concurrency::{LoopReduction, ReductionOp};
+use crate::token::IntSuffix;
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
@@ -223,15 +224,27 @@ impl<'ctx> super::Codegen<'ctx> {
         // introduced inside the body itself. Filtered to live entries in
         // `self.variables` so module-level functions, struct names, etc.
         // (which `refs_in_block` doesn't distinguish) drop out cleanly.
+        //
+        // Partitioned into runtime captures (flow through the env-struct
+        // load in the worker) and const-int captures (materialized as
+        // LLVM constants directly in the worker body, so downstream uses
+        // like `k % const_pow2` fold to an `and`-mask). The const-prop
+        // path covers the common bench-shape `let n: i64 = 8i64;` →
+        // `idx = k % n` pattern; without it, LLVM can't see across the
+        // par-reduce runtime call boundary into the descriptor's ctx
+        // field and is forced to emit a runtime sdiv/msub per iter.
         let captures =
             self.collect_reduction_captures(&shape.body, &reduction.accumulator, &shape.loop_var);
+        let (runtime_captures, const_int_captures) =
+            self.partition_const_int_captures(&captures, parent_body, stmt_index);
 
         let worker_fn = self.emit_reduce_worker_fn(
             &reduction,
             acc_int_ty,
             &shape.loop_var,
             &shape.body,
-            &captures,
+            &runtime_captures,
+            &const_int_captures,
             lo_val.is_some(),
         )?;
 
@@ -243,7 +256,7 @@ impl<'ctx> super::Codegen<'ctx> {
             acc_slot,
             acc_int_ty,
             &reduction,
-            &captures,
+            &runtime_captures,
             lo_val,
             per_iter_cost,
         )?;
@@ -380,6 +393,37 @@ impl<'ctx> super::Codegen<'ctx> {
             .collect();
         out.sort();
         out
+    }
+
+    /// Partition the capture set into (runtime, const_int). A capture is
+    /// "const_int" when its defining `let` in `parent_body` is non-mut,
+    /// initializes from an integer literal, and isn't subsequently
+    /// reassigned before `stmt_index`. Const-int captures get materialized
+    /// directly into the worker fn as LLVM constants (so LLVM can fold
+    /// downstream `k % CONST_POW2` into an `and`-mask, etc.) instead of
+    /// flowing through the par-reduce env-struct load.
+    ///
+    /// Only handles top-level `let` statements in `parent_body` for v1 —
+    /// captures defined in nested blocks above the loop, or via `let mut`
+    /// + later assignment, stay on the runtime path. This is the common
+    /// case for bench-shape constants like `let n: i64 = 8i64;`.
+    fn partition_const_int_captures(
+        &self,
+        captures: &[String],
+        parent_body: &Block,
+        stmt_index: usize,
+    ) -> (Vec<String>, Vec<(String, i64, Option<IntSuffix>)>) {
+        let mut runtime = Vec::with_capacity(captures.len());
+        let mut consts = Vec::new();
+        for name in captures {
+            if let Some((value, sfx)) = find_top_level_const_int_init(parent_body, name, stmt_index)
+            {
+                consts.push((name.clone(), value, sfx));
+            } else {
+                runtime.push(name.clone());
+            }
+        }
+        (runtime, consts)
     }
 
     /// Synthesize `void init_slot(*mut u8 slot) { *(IntT*)slot = identity; }`
@@ -549,6 +593,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// body recursively doesn't leak loop frames, variable bindings, or
     /// cleanup actions back into the parent function.
     #[allow(clippy::result_large_err)]
+    #[allow(clippy::too_many_arguments)]
     fn emit_reduce_worker_fn(
         &mut self,
         reduction: &LoopReduction,
@@ -556,6 +601,7 @@ impl<'ctx> super::Codegen<'ctx> {
         loop_var_name: &str,
         body: &Block,
         captures: &[String],
+        const_int_captures: &[(String, i64, Option<IntSuffix>)],
         has_lo: bool,
     ) -> Result<FunctionValue<'ctx>, String> {
         let worker_id = self.par_counter;
@@ -657,6 +703,33 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.var_type_names
                         .insert(var_name.clone(), type_name.clone());
                 }
+            }
+        }
+
+        // Materialize const-int captures as LLVM constants stored into
+        // worker-local allocas. The store-of-const pattern (rather than
+        // a pure SSA constant) keeps the body's read path uniform with
+        // runtime captures — the body emits an ordinary `load` against
+        // `self.variables[name].ptr` either way, and LLVM's mem2reg +
+        // InstCombine collapse the alloca/store/load chain into the bare
+        // constant downstream. Const captures *do not* appear in the env
+        // struct (see emit_reduce_call's matching capture loop), so they
+        // cost zero in descriptor bandwidth.
+        for (var_name, value, sfx) in const_int_captures {
+            let cap_ty = saved_vars[var_name].ty;
+            let const_val = self.const_int_for_suffix(*value, *sfx);
+            let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
+            self.builder.build_store(alloca, const_val).unwrap();
+            self.variables.insert(
+                var_name.clone(),
+                VarSlot {
+                    ptr: alloca,
+                    ty: cap_ty,
+                },
+            );
+            if let Some(type_name) = saved_var_types.get(var_name) {
+                self.var_type_names
+                    .insert(var_name.clone(), type_name.clone());
             }
         }
 
@@ -1746,6 +1819,77 @@ fn preceding_stmt_init(parent_body: &Block, stmt_index: usize, loop_var: &str) -
         return None;
     }
     Some(value.clone())
+}
+
+/// Const-prop helper for `partition_const_int_captures`: if the parent
+/// body has a top-level `let <name>: <T> = <int-literal>;` (non-mut)
+/// stmt before `stmt_index`, and no later top-level stmt reassigns
+/// `<name>` before `stmt_index`, return the literal's value + suffix.
+///
+/// Conservative on purpose:
+/// - Top-level stmts only (skip lets nested inside if/for/while/match).
+///   Reductions land at top level, so the captured constant is almost
+///   always a top-level let.
+/// - Non-mut only. A `let mut n = 8; ...; n = 9;` would be unsound to
+///   const-prop. Easier than scanning for later writes.
+/// - Integer literal only. Bool/Float would extend cleanly but no kata
+///   exercises them through par-reduce captures yet.
+/// - Single-name binding patterns only — destructuring lets don't fit
+///   the "captured name" shape collect_reduction_captures returns.
+fn find_top_level_const_int_init(
+    parent_body: &Block,
+    name: &str,
+    stmt_index: usize,
+) -> Option<(i64, Option<IntSuffix>)> {
+    let mut found: Option<(i64, Option<IntSuffix>)> = None;
+    for (i, stmt) in parent_body.stmts.iter().enumerate() {
+        if i >= stmt_index {
+            break;
+        }
+        match &stmt.kind {
+            StmtKind::Let {
+                is_mut: false,
+                pattern,
+                value,
+                ..
+            } => {
+                let PatternKind::Binding(let_name) = &pattern.kind else {
+                    continue;
+                };
+                if let_name != name {
+                    continue;
+                }
+                let ExprKind::Integer(n, sfx) = &value.kind else {
+                    return None;
+                };
+                found = Some((*n, *sfx));
+            }
+            StmtKind::Let {
+                is_mut: true,
+                pattern,
+                ..
+            }
+            | StmtKind::LetElse { pattern, .. } => {
+                if let PatternKind::Binding(let_name) = &pattern.kind {
+                    if let_name == name {
+                        return None;
+                    }
+                }
+            }
+            StmtKind::LetUninit { name: let_name, .. } => {
+                if let_name == name {
+                    return None;
+                }
+            }
+            StmtKind::Assign { target, .. } | StmtKind::CompoundAssign { target, .. } => {
+                if is_named_identifier(target, name) {
+                    return None;
+                }
+            }
+            _ => {}
+        }
+    }
+    found
 }
 
 /// a `return` / `break` / `continue` reachable from any statement or
