@@ -3097,6 +3097,77 @@ fn main() {
         );
     }
 
+    // ── Loop-var non-negative hint for SCEV ──────────────────────────
+    //
+    // When the par-reduce worker's loop var starts at the chunk start
+    // (`lo_in_worker.is_none()`), the runtime passes start as usize
+    // — provably non-negative. Codegen emits a `llvm.assume(start >= 0)`
+    // at fn entry so SCEV can prove `k >= 0` throughout the loop. With
+    // that fact, InstCombine folds signed-mod / signed-div by positive
+    // power-of-two literals (`srem k, N` → `urem k, N` → `and k, N-1`).
+    // Surfaced on kata-8 atoi's `idx = k % 8` inner expression which
+    // was emitting the 4-instruction signed-mod chain on ARM64
+    // (negs/and/and/csneg) instead of a single `and`.
+    #[test]
+    fn test_ir_reduction_worker_assumes_loop_var_nonneg() {
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + k;
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        let worker = extract_first_reduce_worker_body(&ir);
+        assert!(
+            worker.contains("call void @llvm.assume"),
+            "expected llvm.assume at worker entry; worker:\n{worker}"
+        );
+        assert!(
+            worker.contains("k.start.nonneg"),
+            "expected the non-negative compare named `k.start.nonneg` \
+             (whose result feeds llvm.assume); worker:\n{worker}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_worker_nonneg_sink_matches() {
+        // The assume must not change program semantics — sink stays
+        // the same Σ formula for k in [0, K).
+        let src = r#"
+fn main() {
+    let mut sum: i64 = 0i64;
+    let mut k: i64 = 0i64;
+    while k < 100000i64 {
+        sum = sum + (k % 8i64);
+        k = k + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        // Σ (k % 8) for k in [0, 100000): 12500 cycles × 28 = 350000.
+        assert_eq!(out.trim(), "350000");
+    }
+
     #[test]
     fn test_e2e_reduction_const_capture_sink_matches() {
         // Const-prop must not change the program's output.

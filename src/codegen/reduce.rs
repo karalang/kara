@@ -45,6 +45,7 @@ use crate::ast::{
 use crate::concurrency::{LoopReduction, ReductionOp};
 use crate::token::IntSuffix;
 
+use inkwell::intrinsics::Intrinsic;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, IntType, StructType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 use inkwell::AddressSpace;
@@ -793,6 +794,42 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             None => (start_val, end_val),
         };
+        // Tell LLVM the loop variable stays non-negative for the whole
+        // worker. The runtime passes start/end as non-negative usize-
+        // sized values; when `lo_in_worker` is None, the worker-local
+        // start_val == raw chunk start >= 0, and the back-edge only ever
+        // adds 1, so SCEV can induct `k >= 0` across the loop. With that
+        // fact in hand, InstCombine folds signed-mod / signed-div by
+        // positive power-of-two literals (`srem k, 8` → `urem k, 8` →
+        // `and k, 7`) instead of emitting the four-instruction signed-
+        // mod sequence (`negs/and/and/csneg` on ARM64). Surfaced on the
+        // kata-8 atoi bench whose inner `idx = k % n` with `n=8` was
+        // hitting the signed sequence.
+        //
+        // Restricted to `lo_in_worker.is_none()` — for non-zero lo we
+        // don't have a compile-time guarantee that `lo + raw_start` is
+        // still non-negative (the kata's existing slice 3b.3 supports
+        // any lo, including negative). Generalizing is a follow-up:
+        // accept the assume when `lo_expr` proves >= 0 at codegen time.
+        if lo_in_worker.is_none() {
+            let assume_intrinsic = Intrinsic::find("llvm.assume").expect("llvm.assume must exist");
+            // Not overloaded, so empty param-types is correct.
+            let assume_fn = assume_intrinsic
+                .get_declaration(&self.module, &[])
+                .expect("llvm.assume declaration");
+            let nonneg = self
+                .builder
+                .build_int_compare(
+                    IntPredicate::SGE,
+                    start_val,
+                    acc_int_ty.const_zero(),
+                    "k.start.nonneg",
+                )
+                .unwrap();
+            self.builder
+                .build_call(assume_fn, &[nonneg.into()], "")
+                .unwrap();
+        }
         let k_alloca = self.create_entry_alloca(worker_fn, loop_var_name, acc_int_ty.into());
         self.builder.build_store(k_alloca, start_val).unwrap();
         self.variables.insert(
