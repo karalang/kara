@@ -50,6 +50,15 @@ pub enum Command {
         file: String,
         output: OutputMode,
         sequential: bool,
+        /// Optional `--manifest=<path>` override (tracker line 898).
+        /// When `Some`, the supplied `kara.toml` is loaded *as if* it
+        /// were discovered at the script's directory. Mutually
+        /// exclusive with `no_manifest`.
+        manifest_override: Option<String>,
+        /// `--no-manifest` (tracker line 898): skip manifest
+        /// discovery entirely and run stdlib-only. Mutually exclusive
+        /// with `manifest_override`.
+        no_manifest: bool,
         /// Build-wide lint level overrides set via `-A NAME` /
         /// `-W NAME` / `-D NAME` / `-F NAME` / `-D warnings`. Slice
         /// 4b polish. Threaded into [`Pipeline`] via
@@ -116,6 +125,13 @@ pub enum Command {
         /// `note:` so CI scripts pinning to the flag can already
         /// scaffold against the final name.
         no_proxy: bool,
+        /// `--target=<triple>`: override the active target triple for
+        /// `[target.<triple>.dependencies]` / `[target.<triple>.profile]`
+        /// overlay selection (tracker line 882). Single-file mode runs
+        /// no manifest-driven target merge, so the flag is accepted for
+        /// shape compatibility with project mode but does not affect
+        /// codegen today.
+        target: Option<String>,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -135,6 +151,12 @@ pub enum Command {
         enable_hot_swap: bool,
         /// `--no-proxy` — see `Build.no_proxy` above.
         no_proxy: bool,
+        /// `--target=<triple>`: active target triple for the build.
+        /// Drives `[target.<triple>.dependencies]` / `[target.<triple>.
+        /// profile]` overlay selection (tracker line 882). Precedence
+        /// is `--target=<triple>` > `[build].target` from the manifest
+        /// > `build_cache::host_target_triple()`.
+        target: Option<String>,
     },
     Query {
         kind: QueryKind,
@@ -407,8 +429,17 @@ pub fn execute(cmd: Command) {
             file,
             output,
             sequential,
+            manifest_override,
+            no_manifest,
             lint_overrides,
-        } => cmd_run(&file, output, sequential, lint_overrides),
+        } => cmd_run(
+            &file,
+            output,
+            sequential,
+            manifest_override.as_deref(),
+            no_manifest,
+            lint_overrides,
+        ),
         Command::RunExample {
             name,
             output,
@@ -429,6 +460,7 @@ pub fn execute(cmd: Command) {
             offline,
             enable_hot_swap,
             no_proxy,
+            target,
             lint_overrides,
         } => cmd_build(
             &file,
@@ -437,6 +469,7 @@ pub fn execute(cmd: Command) {
             offline,
             enable_hot_swap,
             no_proxy,
+            target.as_deref(),
             lint_overrides,
         ),
         Command::BuildProject {
@@ -444,7 +477,14 @@ pub fn execute(cmd: Command) {
             offline,
             enable_hot_swap,
             no_proxy,
-        } => cmd_build_project(output, offline, enable_hot_swap, no_proxy),
+            target,
+        } => cmd_build_project(
+            output,
+            offline,
+            enable_hot_swap,
+            no_proxy,
+            target.as_deref(),
+        ),
         Command::Query {
             kind,
             file,
@@ -3018,7 +3058,10 @@ fn cmd_run_example(
         list_available_examples();
         process::exit(1);
     };
-    cmd_run(&path, output, sequential, lint_overrides);
+    // `karac run --example NAME` runs an example file out of the
+    // examples/ directory; it has no `kara.toml`-style project root,
+    // so manifest discovery is intentionally skipped.
+    cmd_run(&path, output, sequential, None, true, lint_overrides);
 }
 
 fn list_available_examples() {
@@ -3036,10 +3079,86 @@ fn cmd_run(
     filename: &str,
     output: OutputMode,
     sequential: bool,
+    manifest_override: Option<&str>,
+    no_manifest: bool,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
+    // Mutual exclusion at the entry point — both flags together would
+    // be ambiguous (which wins?). Reject early so the operator gets a
+    // clear diagnostic rather than a silent precedence rule.
+    if manifest_override.is_some() && no_manifest {
+        eprintln!("error: --manifest and --no-manifest are mutually exclusive");
+        process::exit(1);
+    }
+
+    // Script-dir manifest discovery (tracker line 898). Unless
+    // `--no-manifest` is set, walk upward from the script's own
+    // directory looking for `kara.toml`. The discovered manifest's
+    // `[package].profile` becomes the pipeline's active profile so
+    // running a script that lives inside an embedded/kernel project
+    // honors the project's compile profile. A `karac-toolchain.toml`
+    // pin in the same ancestor chain is enforced here too.
+    let script_dir = std::path::Path::new(filename)
+        .parent()
+        .map(|p| {
+            if p.as_os_str().is_empty() {
+                std::path::PathBuf::from(".")
+            } else {
+                p.to_path_buf()
+            }
+        })
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+
+    let discovered_manifest: Option<manifest::Manifest> = if no_manifest {
+        None
+    } else if let Some(explicit) = manifest_override {
+        let path = std::path::PathBuf::from(explicit);
+        match std::fs::read_to_string(&path) {
+            Ok(src) => match manifest::parse_manifest(&path, &src) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    emit_manifest_error(&e, output);
+                    process::exit(1);
+                }
+            },
+            Err(e) => {
+                eprintln!(
+                    "error: cannot read `{}` for --manifest override: {}",
+                    path.display(),
+                    e
+                );
+                process::exit(1);
+            }
+        }
+    } else {
+        // Walk upward from the script's directory. Treat a missing
+        // manifest as "stdlib-only" — single-file scripts often run
+        // outside any project, and the pre-line-898 behavior was to
+        // not consult a manifest at all.
+        match manifest::discover_project_root(&script_dir) {
+            Some(root) => match manifest::load_from_root(&root) {
+                Ok(m) => Some(m),
+                Err(e) => {
+                    emit_manifest_error(&e, output);
+                    process::exit(1);
+                }
+            },
+            None => None,
+        }
+    };
+
+    // Toolchain pin enforcement (tracker line 892) runs from the
+    // script-dir ancestor chain. Skipped when --no-manifest is set
+    // (the operator explicitly opted out of project-level gating).
+    if !no_manifest && !enforce_toolchain_pin(&script_dir, output) {
+        process::exit(1);
+    }
+
     let source = read_source(filename);
     let mut pipeline = Pipeline::new(filename, &source).with_lint_overrides(lint_overrides);
+    if let Some(ref m) = discovered_manifest {
+        pipeline.profile = m.profile;
+    }
     pipeline.resolve();
 
     if pipeline.has_fatal_errors() {
@@ -3474,6 +3593,10 @@ fn cmd_check_profiles(
     }
 }
 
+// CLI dispatch helpers naturally land more flag-shaped arguments
+// than the clippy default; factoring them into a struct here would
+// just move the flag list rather than tighten it.
+#[allow(clippy::too_many_arguments)]
 fn cmd_build(
     filename: &str,
     output: OutputMode,
@@ -3481,13 +3604,15 @@ fn cmd_build(
     offline: bool,
     enable_hot_swap: bool,
     no_proxy: bool,
+    target: Option<&str>,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     // Single-file mode runs no dep resolution and reaches no network surface,
     // so `--offline` is silently accepted for ergonomic CLI consistency with
-    // project mode (operators script both via the same flag set). The flag
-    // becomes load-bearing in `cmd_build_project`.
+    // project mode (operators script both via the same flag set). Likewise
+    // `--target` has no manifest to apply against and is accepted-but-inert.
     let _ = offline;
+    let _ = target;
     emit_no_proxy_note(no_proxy);
     let _ = no_proxy;
     #[cfg(feature = "llvm")]
@@ -3749,7 +3874,13 @@ fn effect_set_to_display(
 /// (`E0223`), and runs cross-module name resolution per module
 /// (slice 5, `E0224` / `E0225`). Visibility enforcement and typechecking
 /// across modules arrive in slice 6+.
-fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, no_proxy: bool) {
+fn cmd_build_project(
+    output: OutputMode,
+    offline: bool,
+    enable_hot_swap: bool,
+    no_proxy: bool,
+    target: Option<&str>,
+) {
     // --offline implies --no-proxy at the contract level (vendor-only walk
     // can't talk to the proxy). Suppress the redundant no-proxy note when
     // both are set so the offline operator sees one clean status line.
@@ -3765,7 +3896,7 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, n
         }
     };
 
-    let (root, mf) = match manifest::load_from_cwd(&cwd) {
+    let (root, raw_manifest) = match manifest::load_from_cwd(&cwd) {
         Ok(ok) => ok,
         Err(e) => {
             emit_manifest_error(&e, output);
@@ -3773,12 +3904,37 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, n
         }
     };
 
+    // Toolchain pin (tracker line 892). When `karac-toolchain.toml`
+    // exists somewhere in the project's ancestor chain, the active
+    // compiler version must satisfy the declared constraint. Halts
+    // the build with a focused diagnostic on mismatch — no auto-
+    // switch (that's the karaup follow-up).
+    if !enforce_toolchain_pin(&root, output) {
+        process::exit(1);
+    }
+
+    // Resolve the active target triple for `[target.<triple>.*]` overlay
+    // selection (tracker line 882). Precedence: `--target=<triple>` >
+    // `[build].target` > host triple. Recorded as a single owned value
+    // so the overlay merge consumes a stable reference.
+    let active_target: String = target
+        .map(str::to_string)
+        .or_else(|| raw_manifest.build_default_target.clone())
+        .unwrap_or_else(crate::build_cache::host_target_triple);
+
+    // Merge `[target.<triple>].dependencies` / `[target.<triple>].profile`
+    // overlays onto the manifest before any downstream consumer reads it
+    // (dep resolution, profile gating, codegen). Always applied with the
+    // resolved active triple so the build sees one consistent view.
+    let mf = manifest::merge_target_overlay(&raw_manifest, Some(active_target.as_str()));
+
     // Phase-7 line 5 sub-item 3 — target gating. Hot-swap requires dynamic
     // symbol resolution at runtime, which embedded and kernel profiles
     // do not provide. Reject the combination before any work.
     // The wasm-target half of the entry's gating defers until a wasm
     // CompileProfile (or `--target=`) lands; no enum variant to gate
-    // against yet.
+    // against yet. Reads `mf.profile` post-overlay so a target-specific
+    // override is honored here.
     if enable_hot_swap
         && matches!(
             mf.profile,
@@ -3816,7 +3972,11 @@ fn cmd_build_project(output: OutputMode, offline: bool, enable_hot_swap: bool, n
     // surface as notices and the build continues. Skipped entirely when
     // the manifest declares no deps and no MSRV constraint — the common
     // single-package, no-dep case pays zero overhead.
-    if has_deps && !run_dep_resolution(&root, mf.clone(), output, offline_root) {
+    // Build mode: dev-dependencies are excluded from resolution
+    // (tracker line 884). The test runner re-invokes resolution with
+    // `include_dev_deps=true` so `[dev-dependencies]` surface only
+    // when actually compiling tests.
+    if has_deps && !run_dep_resolution(&root, mf.clone(), output, offline_root, false) {
         process::exit(1);
     }
 
@@ -4963,22 +5123,31 @@ fn emit_manifest_error(e: &manifest::ManifestError, output: OutputMode) {
 /// of the PubGrub-resolver entry (`docs/implementation_checklist/phase-5-
 /// diagnostics.md` line 813). Wiring point: `cmd_build_project` right
 /// after the manifest loads.
+///
+/// `include_dev_deps` activates the test-mode walk (line 884) — the root
+/// manifest's `[dev-dependencies]` participate in resolution. Off in
+/// build mode; on in test mode. Dev-deps do not propagate through
+/// transitive children regardless of the flag.
 fn run_dep_resolution(
     root: &std::path::Path,
     mf: crate::manifest::Manifest,
     output: OutputMode,
     offline_root: Option<&std::path::Path>,
+    include_dev_deps: bool,
 ) -> bool {
     let loader = crate::dep_graph::FsLoader;
-    let graph =
-        match crate::dep_graph::build_dep_graph_with_offline(root, mf, &loader, offline_root) {
-            Ok(g) => g,
-            Err(e) => {
-                let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
-                emit_dep_diagnostic(&diag, output, "error");
-                return false;
-            }
-        };
+    let options = crate::dep_graph::DepGraphOptions {
+        offline_root,
+        include_dev_deps,
+    };
+    let graph = match crate::dep_graph::build_dep_graph_with_options(root, mf, &loader, options) {
+        Ok(g) => g,
+        Err(e) => {
+            let diag = crate::dep_diagnostic::render_dep_graph_error(&e);
+            emit_dep_diagnostic(&diag, output, "error");
+            return false;
+        }
+    };
     let active = crate::dep_resolver::active_toolchain_version();
     match crate::dep_resolver::resolve_with_offline(&graph, &active, offline_root) {
         Ok(resolution) => {
@@ -5004,6 +5173,104 @@ fn run_dep_resolution(
             };
             emit_dep_diagnostic(&diag, output, severity);
             severity == "warning"
+        }
+    }
+}
+
+/// `karac-toolchain.toml` enforcement (tracker line 892). Returns
+/// `true` to continue with the build, `false` to halt. When the file
+/// is absent the function is a no-op. When present, the declared
+/// `version` constraint is intersected against the active compiler
+/// version; mismatch surfaces `E_TOOLCHAIN_VERSION_MISMATCH` with a
+/// `karaup` hint. Parse errors halt with the file-specific symbolic
+/// code so the operator hears about a malformed pin rather than
+/// silently building against an unintended toolchain.
+fn enforce_toolchain_pin(root: &std::path::Path, output: OutputMode) -> bool {
+    let load = crate::karac_toolchain::load_from_start(root);
+    let (path, spec) = match load {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return true,
+        Err(e) => {
+            emit_toolchain_load_error(&e, output);
+            return false;
+        }
+    };
+    let active = crate::dep_resolver::active_toolchain_version();
+    match crate::karac_toolchain::enforce(&spec, &path, &active) {
+        Ok(()) => true,
+        Err(mismatch) => {
+            emit_toolchain_mismatch(&mismatch, output);
+            false
+        }
+    }
+}
+
+/// Render a `karac_toolchain::ToolchainError` (parse / IO failure) into
+/// the active output mode. Symbolic code surfaces so downstream tooling
+/// can recognize the kind of failure without parsing the message.
+fn emit_toolchain_load_error(err: &crate::karac_toolchain::ToolchainError, output: OutputMode) {
+    let code = err.code();
+    let primary = err.to_string();
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[{code}]: {primary}");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"code\":{},\"message\":{}}}]}}",
+                json_string(code),
+                json_string(&primary),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "toolchain_pin_error",
+                &format!(
+                    "\"code\":{},\"message\":{}",
+                    json_string(code),
+                    json_string(&primary),
+                ),
+            );
+        }
+    }
+}
+
+/// Render a `karac_toolchain::ToolchainMismatch` diagnostic into the
+/// active output mode. The note documents the v1 limitation: karac
+/// today reads the pin but does not auto-switch — operators install
+/// the required toolchain via `karaup` (deferred) or manually.
+fn emit_toolchain_mismatch(
+    mismatch: &crate::karac_toolchain::ToolchainMismatch,
+    output: OutputMode,
+) {
+    let code = mismatch.code();
+    let primary = mismatch.message();
+    match output {
+        OutputMode::Text => {
+            eprintln!("error[{code}]: {primary}");
+            eprintln!("   = note: install a matching toolchain via `karaup install {}` (karaup ships post-v1)", mismatch.required);
+            eprintln!("   = help: or relax the `version` constraint in `karac-toolchain.toml` to admit the active toolchain");
+        }
+        OutputMode::Json => {
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{{\"severity\":\"error\",\"phase\":\"toolchain_pin\",\"code\":{},\"message\":{},\"required\":{},\"active\":{}}}]}}",
+                json_string(code),
+                json_string(&primary),
+                json_string(&mismatch.required.to_string()),
+                json_string(&mismatch.active.to_string()),
+            );
+        }
+        OutputMode::Jsonl => {
+            emit_jsonl_event(
+                "toolchain_pin_error",
+                &format!(
+                    "\"code\":{},\"message\":{},\"required\":{},\"active\":{}",
+                    json_string(code),
+                    json_string(&primary),
+                    json_string(&mismatch.required.to_string()),
+                    json_string(&mismatch.active.to_string()),
+                ),
+            );
         }
     }
 }
@@ -6365,6 +6632,70 @@ fn cmd_test(filter: Option<String>, all: bool) {
             process::exit(1);
         }
     };
+
+    // Toolchain pin (tracker line 892). Same enforcement as
+    // cmd_build_project — runs before walk so a failing toolchain
+    // gate halts before any test run_start lands in the stream.
+    if !enforce_toolchain_pin(&root, OutputMode::Jsonl) {
+        process::exit(1);
+    }
+
+    // Test-mode dep resolution (tracker line 884). Runs only when the
+    // manifest declares at least one dep entry (regular, dev, or
+    // workspace) — solo packages pay zero overhead. dev-dependencies
+    // participate here (the test-vs-build split) so a test_dep declared
+    // under `[dev-dependencies]` is resolved and recorded into the
+    // lockfile alongside the build-mode deps. Errors surface as a
+    // `dep_resolution_error` event and abort before any run_start.
+    let has_resolvable_deps =
+        !mf.dependencies.is_empty() || !mf.dev_dependencies.is_empty() || mf.kara_version.is_some();
+    if has_resolvable_deps {
+        let loader = crate::dep_graph::FsLoader;
+        let options = crate::dep_graph::DepGraphOptions {
+            offline_root: None,
+            include_dev_deps: true,
+        };
+        let graph_result =
+            crate::dep_graph::build_dep_graph_with_options(&root, mf.clone(), &loader, options);
+        match graph_result {
+            Ok(graph) => {
+                let active = crate::dep_resolver::active_toolchain_version();
+                match crate::dep_resolver::resolve(&graph, &active) {
+                    Ok(resolution) => {
+                        persist_lockfile(&root, &resolution, OutputMode::Jsonl);
+                    }
+                    Err(boxed) => {
+                        let code = boxed.code();
+                        // Registry/git unsupported downgrade to a note here too —
+                        // the test surface continues even when those v1.1.x
+                        // deps can't yet be fetched, matching the build flow.
+                        if !matches!(code, "E_REGISTRY_DEP_UNSUPPORTED" | "E_GIT_DEP_UNSUPPORTED") {
+                            emit_test_event(
+                                "dep_resolution_error",
+                                &format!(
+                                    "\"code\":{},\"message\":{}",
+                                    json_string(code),
+                                    json_string(&boxed.to_string()),
+                                ),
+                            );
+                            process::exit(1);
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                emit_test_event(
+                    "dep_resolution_error",
+                    &format!(
+                        "\"code\":{},\"message\":{}",
+                        json_string(e.code()),
+                        json_string(&e.to_string()),
+                    ),
+                );
+                process::exit(1);
+            }
+        }
+    }
 
     let walk_opts = WalkerOpts {
         include_tests: true,

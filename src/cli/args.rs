@@ -1,9 +1,8 @@
 //! Subcommand argument parsing.
 //!
 //! Houses `parse_args` (the top-level subcommand dispatcher),
-//! `parse_<subcmd>_command` per-subcommand helpers, `parse_file_args` /
-//! `parse_file_args_optional` (shared `--output=...` / `--sequential`
-//! recognizer), and `parse_profiles_arg` (the build profile flag).
+//! `parse_<subcmd>_command` per-subcommand helpers, and
+//! `parse_profiles_arg` (the build profile flag).
 
 use crate::scaffold::Template;
 use std::process;
@@ -38,13 +37,7 @@ pub fn parse_args(args: &[String]) -> Command {
             if args.iter().skip(2).any(|a| a == "--example") {
                 parse_run_example_command(args)
             } else {
-                let p = parse_file_args(args, 2);
-                Command::Run {
-                    file: p.file,
-                    output: p.output,
-                    sequential: p.sequential,
-                    lint_overrides: p.lint_overrides,
-                }
+                parse_run_command(args)
             }
         }
         "check" => parse_check_command(args),
@@ -72,15 +65,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "explain" => parse_explain_command(args),
         "catalog" => parse_catalog_command(args),
         // Bare file path: treat as `karac run <file>`
-        other if other.ends_with(".kara") => {
-            let p = parse_file_args(args, 1);
-            Command::Run {
-                file: p.file,
-                output: p.output,
-                sequential: p.sequential,
-                lint_overrides: p.lint_overrides,
-            }
-        }
+        other if other.ends_with(".kara") => parse_run_command_from(args, 1),
         other => {
             eprintln!("error: unknown command '{other}'");
             eprintln!("Run 'karac help' for usage.");
@@ -89,24 +74,21 @@ pub fn parse_args(args: &[String]) -> Command {
     }
 }
 
-struct ParsedFileArgs {
-    file: String,
-    output: OutputMode,
-    sequential: bool,
-    lint_overrides: crate::lints::CliLintOverrides,
+/// Parser for `karac run <file> [flags]`. Tracker line 898 adds
+/// `--manifest=<path>` and `--no-manifest` to the run subcommand;
+/// the helper preserves the existing `--output=` / `--sequential`
+/// / lint flag surface. Called from both the `"run"` arm and the
+/// bare-`<file>.kara` arm.
+fn parse_run_command(args: &[String]) -> Command {
+    parse_run_command_from(args, 2)
 }
 
-struct ParsedOptionalFileArgs {
-    file: Option<String>,
-    output: OutputMode,
-    sequential: bool,
-    lint_overrides: crate::lints::CliLintOverrides,
-}
-
-fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalFileArgs {
-    let mut file = None;
+fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
+    let mut file: Option<String> = None;
     let mut output = OutputMode::Text;
     let mut sequential = false;
+    let mut manifest_override: Option<String> = None;
+    let mut no_manifest = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = file_idx;
     while i < args.len() {
@@ -117,6 +99,26 @@ fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalF
             output = OutputMode::Jsonl;
         } else if arg == "--sequential" {
             sequential = true;
+        } else if let Some(rest) = arg.strip_prefix("--manifest=") {
+            if rest.trim().is_empty() {
+                eprintln!("error: --manifest requires a non-empty path value");
+                process::exit(1);
+            }
+            manifest_override = Some(rest.to_string());
+        } else if arg == "--manifest" {
+            if i + 1 >= args.len() {
+                eprintln!("error: --manifest requires a path argument");
+                process::exit(1);
+            }
+            let val = &args[i + 1];
+            if val.trim().is_empty() {
+                eprintln!("error: --manifest requires a non-empty path value");
+                process::exit(1);
+            }
+            manifest_override = Some(val.clone());
+            i += 1;
+        } else if arg == "--no-manifest" {
+            no_manifest = true;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -124,7 +126,7 @@ fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalF
             );
             process::exit(1);
         } else if try_consume_lint_flag(args, &mut i, &mut lint_overrides) {
-            // consumed; i already points at the last consumed arg
+            // consumed
         } else if arg.starts_with('-') {
             eprintln!("error: unknown flag '{arg}'");
             process::exit(1);
@@ -136,27 +138,21 @@ fn parse_file_args_optional(args: &[String], file_idx: usize) -> ParsedOptionalF
         }
         i += 1;
     }
-    ParsedOptionalFileArgs {
-        file,
+    if manifest_override.is_some() && no_manifest {
+        eprintln!("error: --manifest and --no-manifest are mutually exclusive");
+        process::exit(1);
+    }
+    let Some(f) = file else {
+        eprintln!("error: missing file argument");
+        process::exit(1);
+    };
+    Command::Run {
+        file: f,
         output,
         sequential,
+        manifest_override,
+        no_manifest,
         lint_overrides,
-    }
-}
-
-fn parse_file_args(args: &[String], file_idx: usize) -> ParsedFileArgs {
-    let p = parse_file_args_optional(args, file_idx);
-    match p.file {
-        Some(f) => ParsedFileArgs {
-            file: f,
-            output: p.output,
-            sequential: p.sequential,
-            lint_overrides: p.lint_overrides,
-        },
-        None => {
-            eprintln!("error: missing file argument");
-            process::exit(1);
-        }
     }
 }
 
@@ -220,6 +216,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut offline = false;
     let mut enable_hot_swap = false;
     let mut no_proxy = false;
+    let mut target: Option<String> = None;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -236,6 +233,31 @@ fn parse_build_command(args: &[String]) -> Command {
             enable_hot_swap = true;
         } else if arg == "--no-proxy" {
             no_proxy = true;
+        } else if let Some(rest) = arg.strip_prefix("--target=") {
+            // `--target=<triple>` selects the active target for
+            // `[target.<triple>.*]` overlay merge (tracker line 882).
+            // Empty value is rejected up front so a typo can't silently
+            // disable the overlay.
+            if rest.trim().is_empty() {
+                eprintln!("error: --target requires a non-empty target triple");
+                process::exit(1);
+            }
+            target = Some(rest.to_string());
+        } else if arg == "--target" {
+            // Space-separated form: `--target <triple>`. Mirrors how
+            // operators write the flag in shell scripts that prefer
+            // POSIX-style separation.
+            if i + 1 >= args.len() {
+                eprintln!("error: --target requires a target triple value");
+                process::exit(1);
+            }
+            let val = &args[i + 1];
+            if val.trim().is_empty() {
+                eprintln!("error: --target requires a non-empty target triple");
+                process::exit(1);
+            }
+            target = Some(val.clone());
+            i += 1;
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -263,6 +285,7 @@ fn parse_build_command(args: &[String]) -> Command {
             offline,
             enable_hot_swap,
             no_proxy,
+            target,
             lint_overrides,
         },
         None => Command::BuildProject {
@@ -270,6 +293,7 @@ fn parse_build_command(args: &[String]) -> Command {
             offline,
             enable_hot_swap,
             no_proxy,
+            target,
         },
     }
 }

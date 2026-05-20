@@ -131,6 +131,29 @@ pub struct Manifest {
     /// matching key here. Empty when the manifest carries no
     /// `[workspace]` table or no nested `dependencies` sub-table.
     pub workspace_dependencies: BTreeMap<String, DependencySpec>,
+    /// `[target.<triple>.dependencies]` — per-target dependency
+    /// overlays keyed by target triple. The build pipeline picks the
+    /// matching entry (if any) for the active target and merges it
+    /// onto `dependencies` before dep graph materialization. Empty
+    /// when no `[target.*.dependencies]` block is declared. See
+    /// `merge_target_overlay`.
+    pub target_dependencies: BTreeMap<String, BTreeMap<String, DependencySpec>>,
+    /// `[target.<triple>.dev-dependencies]` — per-target dev-dep
+    /// overlays, same merge contract as `target_dependencies` but
+    /// activated only under test-mode resolution (line 884).
+    pub target_dev_dependencies: BTreeMap<String, BTreeMap<String, DependencySpec>>,
+    /// `[target.<triple>.profile]` — per-target compile-profile
+    /// override. When the active target matches one of these keys,
+    /// the entry replaces `profile` for the build pipeline (extern-
+    /// site effect rules + stdlib layer gating follow the override).
+    /// Empty when no `[target.*.profile]` is declared.
+    pub target_profile_overrides: BTreeMap<String, CompileProfile>,
+    /// `[build].target` — default target triple for `karac build`
+    /// when `--target` isn't passed. `None` falls back to the host
+    /// triple (`build_cache::host_target_triple`). Captured at parse
+    /// time so the build pipeline reads it without re-walking the
+    /// TOML table.
+    pub build_default_target: Option<String>,
     pub warnings: Vec<ManifestWarning>,
 }
 
@@ -527,6 +550,9 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
     let dev_dependencies =
         parse_dependencies_table(path, &table, "dev-dependencies", &mut warnings)?;
     let workspace_dependencies = parse_workspace_dependencies(path, &table, &mut warnings)?;
+    let (target_dependencies, target_dev_dependencies, target_profile_overrides) =
+        parse_target_tables(path, &table, &mut warnings)?;
+    let build_default_target = parse_build_default_target(path, &table)?;
 
     // Stable order across package-key + dependency warnings — same sort key
     // (message string) used as before, but now applied after the full
@@ -543,6 +569,10 @@ pub fn parse_manifest(path: &Path, source: &str) -> Result<Manifest, ManifestErr
         dependencies,
         dev_dependencies,
         workspace_dependencies,
+        target_dependencies,
+        target_dev_dependencies,
+        target_profile_overrides,
+        build_default_target,
         warnings,
     })
 }
@@ -597,6 +627,219 @@ fn parse_workspace_dependencies(
         out.insert(name.clone(), spec);
     }
     Ok(out)
+}
+
+/// Type alias for the three per-triple maps `parse_target_tables`
+/// returns — `target -> dependencies`, `target -> dev-dependencies`,
+/// `target -> profile`. The alias keeps the function signature within
+/// clippy's `type_complexity` threshold without obscuring the shape
+/// (the field declarations on `Manifest` document the intent).
+type TargetTables = (
+    BTreeMap<String, BTreeMap<String, DependencySpec>>,
+    BTreeMap<String, BTreeMap<String, DependencySpec>>,
+    BTreeMap<String, CompileProfile>,
+);
+
+/// Parse the `[target.<triple>]` namespace into three stable-ordered maps:
+/// `target -> dependencies`, `target -> dev-dependencies`, and
+/// `target -> profile`. Recognized sub-keys inside each triple are
+/// `dependencies`, `dev-dependencies`, and `profile`; anything else soft-
+/// warns so typos surface without rejecting the build. Each sub-table is
+/// parsed with the same vocabulary as the top-level `[dependencies]` /
+/// `[dev-dependencies]` / `[package].profile` tables — the dispatch is
+/// purely "scope by target triple", not a new shape.
+fn parse_target_tables(
+    path: &Path,
+    table: &toml::Table,
+    warnings: &mut Vec<ManifestWarning>,
+) -> Result<TargetTables, ManifestError> {
+    let mut deps_per_target: BTreeMap<String, BTreeMap<String, DependencySpec>> = BTreeMap::new();
+    let mut dev_deps_per_target: BTreeMap<String, BTreeMap<String, DependencySpec>> =
+        BTreeMap::new();
+    let mut profile_per_target: BTreeMap<String, CompileProfile> = BTreeMap::new();
+
+    let Some(value) = table.get("target") else {
+        return Ok((deps_per_target, dev_deps_per_target, profile_per_target));
+    };
+    let target_table = value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "target".to_string(),
+            expected: "a table (e.g. `[target.\"x86_64-apple-darwin\"]`)",
+        })?;
+
+    for (triple, raw) in target_table {
+        let triple_table = raw
+            .as_table()
+            .ok_or_else(|| ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: format!("target.{triple}"),
+                expected: "a table (e.g. `[target.\"x86_64-apple-darwin\"]`)",
+            })?;
+
+        for key in triple_table.keys() {
+            if !matches!(
+                key.as_str(),
+                "dependencies" | "dev-dependencies" | "profile"
+            ) {
+                warnings.push(ManifestWarning {
+                    line: None,
+                    message: format!(
+                        "unknown key `[target.{triple}].{key}` — ignored in v1 (recognized: dependencies, dev-dependencies, profile)"
+                    ),
+                });
+            }
+        }
+
+        if let Some(deps_value) = triple_table.get("dependencies") {
+            let deps_inner =
+                deps_value
+                    .as_table()
+                    .ok_or_else(|| ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: format!("target.{triple}.dependencies"),
+                        expected: "a table (e.g. `[target.\"x86_64-apple-darwin\".dependencies]`)",
+                    })?;
+            let mut out = BTreeMap::new();
+            for (name, raw_dep) in deps_inner {
+                let spec =
+                    parse_dependency_value(path, "target.dependencies", name, raw_dep, warnings)?;
+                out.insert(name.clone(), spec);
+            }
+            if !out.is_empty() {
+                deps_per_target.insert(triple.clone(), out);
+            }
+        }
+
+        if let Some(dev_value) = triple_table.get("dev-dependencies") {
+            let dev_inner =
+                dev_value
+                    .as_table()
+                    .ok_or_else(|| ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: format!("target.{triple}.dev-dependencies"),
+                        expected:
+                            "a table (e.g. `[target.\"x86_64-apple-darwin\".dev-dependencies]`)",
+                    })?;
+            let mut out = BTreeMap::new();
+            for (name, raw_dep) in dev_inner {
+                let spec = parse_dependency_value(
+                    path,
+                    "target.dev-dependencies",
+                    name,
+                    raw_dep,
+                    warnings,
+                )?;
+                out.insert(name.clone(), spec);
+            }
+            if !out.is_empty() {
+                dev_deps_per_target.insert(triple.clone(), out);
+            }
+        }
+
+        if let Some(profile_value) = triple_table.get("profile") {
+            let s = match profile_value {
+                toml::Value::String(s) => s,
+                _ => {
+                    return Err(ManifestError::InvalidFieldType {
+                        path: path.to_path_buf(),
+                        key: format!("target.{triple}.profile"),
+                        expected: "a string (\"default\", \"embedded\", or \"kernel\")",
+                    });
+                }
+            };
+            let parsed = CompileProfile::parse(s.as_str()).ok_or_else(|| {
+                ManifestError::InvalidFieldType {
+                    path: path.to_path_buf(),
+                    key: format!("target.{triple}.profile"),
+                    expected: "one of \"default\", \"embedded\", or \"kernel\"",
+                }
+            })?;
+            profile_per_target.insert(triple.clone(), parsed);
+        }
+    }
+
+    Ok((deps_per_target, dev_deps_per_target, profile_per_target))
+}
+
+/// Parse `[build].target` — the default target triple for `karac build`
+/// when `--target` isn't passed. Wrong-type / empty values are hard
+/// errors (typos shouldn't silently disable the default); absent is
+/// the common case. Other `[build]` keys remain ignored — the v1
+/// vocabulary is intentionally narrow until a follow-up entry widens it.
+fn parse_build_default_target(
+    path: &Path,
+    table: &toml::Table,
+) -> Result<Option<String>, ManifestError> {
+    let Some(build_value) = table.get("build") else {
+        return Ok(None);
+    };
+    let build_table = build_value
+        .as_table()
+        .ok_or_else(|| ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build".to_string(),
+            expected: "a table (e.g. `[build]`)",
+        })?;
+    let Some(target_value) = build_table.get("target") else {
+        return Ok(None);
+    };
+    let s = match target_value {
+        toml::Value::String(s) => s,
+        _ => {
+            return Err(ManifestError::InvalidFieldType {
+                path: path.to_path_buf(),
+                key: "build.target".to_string(),
+                expected: "a string target triple (e.g. \"x86_64-apple-darwin\")",
+            });
+        }
+    };
+    if s.trim().is_empty() {
+        return Err(ManifestError::InvalidFieldType {
+            path: path.to_path_buf(),
+            key: "build.target".to_string(),
+            expected: "a non-empty target triple string",
+        });
+    }
+    Ok(Some(s.clone()))
+}
+
+/// Merge `[target.<triple>]` overlays onto a manifest for the given
+/// active target. Returns a copy of `manifest` with:
+///
+/// - `dependencies` extended by `target_dependencies[triple]`
+/// - `dev_dependencies` extended by `target_dev_dependencies[triple]`
+/// - `profile` overridden by `target_profile_overrides[triple]` (if set)
+///
+/// A dep that appears in both the base table and the per-target overlay
+/// is replaced by the overlay entry — the target-specific spec wins, on
+/// the same "more specific = later, wins" principle Cargo uses. Profile
+/// overlay is wholesale replacement (the override is itself the new
+/// profile).
+///
+/// `active_target = None` is a no-op — the same manifest is returned
+/// unchanged. Callers that want the host triple as a fallback should
+/// supply it explicitly (e.g. `build_cache::host_target_triple()`).
+pub fn merge_target_overlay(manifest: &Manifest, active_target: Option<&str>) -> Manifest {
+    let mut merged = manifest.clone();
+    let Some(triple) = active_target else {
+        return merged;
+    };
+    if let Some(overlay) = manifest.target_dependencies.get(triple) {
+        for (name, spec) in overlay {
+            merged.dependencies.insert(name.clone(), spec.clone());
+        }
+    }
+    if let Some(overlay) = manifest.target_dev_dependencies.get(triple) {
+        for (name, spec) in overlay {
+            merged.dev_dependencies.insert(name.clone(), spec.clone());
+        }
+    }
+    if let Some(override_profile) = manifest.target_profile_overrides.get(triple) {
+        merged.profile = *override_profile;
+    }
+    merged
 }
 
 /// Parse `[dependencies]` or `[dev-dependencies]` into a stable-ordered map.
@@ -899,10 +1142,11 @@ target = "x86_64-linux"
 "#;
         let m = parse_manifest(&p(), src).unwrap();
         assert_eq!(m.name, "hello");
-        // `[dependencies]` and `[dev-dependencies]` are now structurally
-        // captured (slice 1 of the PubGrub resolver) — well-formed entries
-        // emit no warnings. Unknown sections like `[build]` remain silent.
+        // `[dependencies]`, `[dev-dependencies]` are structurally captured
+        // and `[build].target` is captured as build_default_target (line
+        // 882) — well-formed entries emit no warnings.
         assert!(m.warnings.is_empty());
+        assert_eq!(m.build_default_target.as_deref(), Some("x86_64-linux"));
     }
 
     #[test]
@@ -1827,5 +2071,298 @@ kara-version = "1.0"
             "kara-version should not produce unknown-key warning; got: {:?}",
             m.warnings
         );
+    }
+
+    // ── line 882: [target.X.dependencies] / [target.X.profile] ───
+
+    #[test]
+    fn target_dependencies_parse_into_per_triple_map() {
+        let src = r#"[package]
+name = "hello"
+
+[target."x86_64-apple-darwin".dependencies]
+http = "1.0"
+
+[target."aarch64-unknown-linux-gnu".dependencies]
+http = "2.0"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.dependencies.is_empty());
+        assert!(m.warnings.is_empty());
+        let mac = m.target_dependencies.get("x86_64-apple-darwin").unwrap();
+        assert_eq!(
+            mac.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req("1.0")
+            })
+        );
+        let lin = m
+            .target_dependencies
+            .get("aarch64-unknown-linux-gnu")
+            .unwrap();
+        assert_eq!(
+            lin.get("http"),
+            Some(&DependencySpec::Registry {
+                version: req("2.0")
+            })
+        );
+    }
+
+    #[test]
+    fn target_dev_dependencies_parse_into_per_triple_map() {
+        let src = r#"[package]
+name = "hello"
+
+[target."x86_64-apple-darwin".dev-dependencies]
+proptest = "0.4"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert!(m.dev_dependencies.is_empty());
+        let mac = m
+            .target_dev_dependencies
+            .get("x86_64-apple-darwin")
+            .unwrap();
+        assert_eq!(
+            mac.get("proptest"),
+            Some(&DependencySpec::Registry {
+                version: req("0.4")
+            })
+        );
+    }
+
+    #[test]
+    fn target_profile_override_parses_to_compile_profile() {
+        // `profile` is a string key inside the per-triple table — pin
+        // both supported values (`embedded` and `kernel`) so a future
+        // refactor that drops a profile from the parser surfaces here.
+        let src = r#"[package]
+name = "hello"
+profile = "default"
+
+[target."thumbv7em-none-eabi"]
+profile = "embedded"
+
+[target."x86_64-apple-darwin"]
+profile = "kernel"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.profile, CompileProfile::Default);
+        assert_eq!(
+            m.target_profile_overrides.get("thumbv7em-none-eabi"),
+            Some(&CompileProfile::Embedded)
+        );
+        assert_eq!(
+            m.target_profile_overrides.get("x86_64-apple-darwin"),
+            Some(&CompileProfile::Kernel)
+        );
+    }
+
+    #[test]
+    fn target_unknown_inner_key_soft_warns() {
+        let src = r#"[package]
+name = "hello"
+
+[target."x86_64-apple-darwin"]
+opt-level = 3
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.warnings.len(), 1);
+        assert!(
+            m.warnings[0].message.contains("target.x86_64-apple-darwin"),
+            "warning should name the triple; got: {}",
+            m.warnings[0].message
+        );
+        assert!(m.warnings[0].message.contains("opt-level"));
+    }
+
+    #[test]
+    fn target_invalid_profile_value_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[target."x86_64-apple-darwin"]
+profile = "high-speed"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => {
+                assert_eq!(key, "target.x86_64-apple-darwin.profile");
+            }
+            other => panic!("expected InvalidFieldType, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn target_invalid_dependency_shape_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[target."x86_64-apple-darwin".dependencies]
+http = 42
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        assert!(matches!(err, ManifestError::InvalidDependencySpec { .. }));
+    }
+
+    #[test]
+    fn target_section_must_be_table_when_not_a_triple() {
+        // `[target]` value at the manifest root must be a table — a
+        // scalar surfaces as the generic InvalidFieldType. Top-level
+        // keys must come before any [table] section in TOML, so the
+        // pre-table position is the only way to write this shape.
+        let src = r#"target = 42
+
+[package]
+name = "hello"
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "target"),
+            other => panic!("expected InvalidFieldType on `target`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_default_target_captured_from_build_section() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+target = "x86_64-apple-darwin"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(
+            m.build_default_target.as_deref(),
+            Some("x86_64-apple-darwin")
+        );
+    }
+
+    #[test]
+    fn build_default_target_absent_is_none() {
+        let src = r#"[package]
+name = "hello"
+"#;
+        let m = parse_manifest(&p(), src).unwrap();
+        assert_eq!(m.build_default_target, None);
+    }
+
+    #[test]
+    fn build_default_target_wrong_type_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+target = 42
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "build.target"),
+            other => panic!("expected InvalidFieldType on `build.target`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_default_target_empty_string_is_hard_error() {
+        let src = r#"[package]
+name = "hello"
+
+[build]
+target = "   "
+"#;
+        let err = parse_manifest(&p(), src).unwrap_err();
+        match err {
+            ManifestError::InvalidFieldType { key, .. } => assert_eq!(key, "build.target"),
+            other => panic!("expected InvalidFieldType on `build.target`, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn merge_target_overlay_extends_dependencies() {
+        let mut m = parse_manifest(
+            &p(),
+            r#"[package]
+name = "hello"
+
+[dependencies]
+core = "1.0"
+
+[target."x86_64-apple-darwin".dependencies]
+mac-only = "0.1"
+"#,
+        )
+        .unwrap();
+        // Without overlay, dependencies has core but not mac-only.
+        assert_eq!(m.dependencies.len(), 1);
+        assert!(m.dependencies.contains_key("core"));
+
+        // Active = Linux: no overlay activates.
+        let linux = merge_target_overlay(&m, Some("x86_64-unknown-linux-gnu"));
+        assert_eq!(linux.dependencies.len(), 1);
+        assert!(!linux.dependencies.contains_key("mac-only"));
+
+        // Active = mac: overlay merges.
+        let mac = merge_target_overlay(&m, Some("x86_64-apple-darwin"));
+        assert_eq!(mac.dependencies.len(), 2);
+        assert!(mac.dependencies.contains_key("mac-only"));
+        assert!(mac.dependencies.contains_key("core"));
+
+        // None active triple is a no-op.
+        let none = merge_target_overlay(&m, None);
+        assert_eq!(none.dependencies.len(), 1);
+
+        // Confirm the base manifest is untouched (merge returns a copy).
+        m.dependencies.insert("touched".into(), registry_dep("0.1"));
+        let after = merge_target_overlay(&m, Some("x86_64-apple-darwin"));
+        assert!(after.dependencies.contains_key("touched"));
+    }
+
+    #[test]
+    fn merge_target_overlay_overrides_profile() {
+        let m = parse_manifest(
+            &p(),
+            r#"[package]
+name = "hello"
+profile = "default"
+
+[target."thumbv7em-none-eabi"]
+profile = "embedded"
+"#,
+        )
+        .unwrap();
+        assert_eq!(m.profile, CompileProfile::Default);
+        let active = merge_target_overlay(&m, Some("thumbv7em-none-eabi"));
+        assert_eq!(active.profile, CompileProfile::Embedded);
+        // Non-matching triple leaves the default profile intact.
+        let other = merge_target_overlay(&m, Some("x86_64-apple-darwin"));
+        assert_eq!(other.profile, CompileProfile::Default);
+    }
+
+    #[test]
+    fn merge_target_overlay_overlay_dep_replaces_base() {
+        // Same name in base + overlay → overlay entry wins (most-specific).
+        let m = parse_manifest(
+            &p(),
+            r#"[package]
+name = "hello"
+
+[dependencies]
+http = "1.0"
+
+[target."x86_64-apple-darwin".dependencies]
+http = "2.0"
+"#,
+        )
+        .unwrap();
+        let mac = merge_target_overlay(&m, Some("x86_64-apple-darwin"));
+        let DependencySpec::Registry { version: vr } = mac.dependencies.get("http").unwrap() else {
+            panic!("expected Registry");
+        };
+        // ^2.0 matches 2.x but not 1.x — pins the overlay won.
+        assert!(vr.matches(&semver::Version::parse("2.1.0").unwrap()));
+        assert!(!vr.matches(&semver::Version::parse("1.9.0").unwrap()));
+    }
+
+    fn registry_dep(s: &str) -> DependencySpec {
+        DependencySpec::Registry { version: req(s) }
     }
 }

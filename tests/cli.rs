@@ -85,6 +85,9 @@ fn test_subcommand_help_build() {
     assert!(stdout.contains("--offline"));
     assert!(stdout.contains("OFFLINE:"));
     assert!(stdout.contains("E_OFFLINE_NO_VENDOR_DIR"));
+    // Tracker line 882 — --target + TARGETS section documented.
+    assert!(stdout.contains("--target=<triple>"));
+    assert!(stdout.contains("TARGETS:"));
 }
 
 #[test]
@@ -1984,6 +1987,117 @@ fn test_test_requires_subcommand_help_documents_all_flag() {
     assert!(
         stdout.contains("KARA_RESOURCE_"),
         "test --help should document the env-var probe; got:\n{stdout}",
+    );
+}
+
+// ── tracker line 884: dev-deps in test mode, not build mode ─────
+
+#[test]
+fn test_build_skips_dev_dependencies_from_resolution() {
+    // Build mode must NOT resolve [dev-dependencies]. A dev-dep pointing
+    // at a non-existent directory would surface E_PATH_DEP_NOT_FOUND if
+    // it participated; the build succeeds, proving the exclusion.
+    let tmp = scratch_project("build-skips-dev-deps");
+    write(
+        &tmp.join("kara.toml"),
+        r#"[package]
+name = "demo"
+
+[dev-dependencies]
+missing-test-helper = { path = "libs/missing-test-helper" }
+"#,
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "build mode must ignore [dev-dependencies]; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_PATH_DEP_NOT_FOUND"),
+        "dev-dep path miss must not surface in build mode; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_test_resolves_dev_dependencies() {
+    // Test mode must resolve [dev-dependencies]. Declaring a dev-dep with
+    // a bad path triggers E_PATH_DEP_NOT_FOUND during test resolution,
+    // proving the dev-deps walk is gated on the test mode flag.
+    let tmp = scratch_project("test-resolves-dev-deps");
+    write(
+        &tmp.join("kara.toml"),
+        r#"[package]
+name = "demo"
+
+[dev-dependencies]
+missing-test-helper = { path = "libs/missing-test-helper" }
+"#,
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "test mode must fail when a dev-dep path is missing; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("E_PATH_DEP_NOT_FOUND") || stdout.contains("dep_resolution_error"),
+        "expected dev-dep resolution to surface a focused error; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_test_writes_dev_dep_into_lockfile() {
+    // Test mode resolution should record the dev-dep into kara.lock so
+    // the test pipeline (when it consumes deps) has a deterministic
+    // entry. Build mode resolution does not run for solo projects with
+    // only dev-deps, so the lockfile is the durable artifact pin.
+    let tmp = scratch_project("test-dev-dep-lockfile");
+    std::fs::create_dir_all(tmp.join("libs/test-helper/src")).unwrap();
+    write(
+        &tmp.join("kara.toml"),
+        r#"[package]
+name = "demo"
+
+[dev-dependencies]
+test-helper = { path = "libs/test-helper" }
+"#,
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("libs/test-helper/kara.toml"),
+        "[package]\nname = \"test-helper\"\n",
+    );
+    write(
+        &tmp.join("libs/test-helper/src/lib.kara"),
+        "fn helper() {}\n",
+    );
+
+    // Build first to confirm the lockfile is NOT created (no regular deps).
+    let out_build = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let lock_after_build = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    assert!(
+        out_build.status.success(),
+        "build with only dev-deps must succeed",
+    );
+    assert!(
+        !lock_after_build.contains("test-helper"),
+        "build mode lockfile must not record dev-deps; got: {lock_after_build}",
+    );
+
+    // Test mode should rewrite the lockfile with the dev-dep included.
+    let _ = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let lock_after_test = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        lock_after_test.contains("test-helper"),
+        "test mode lockfile must include dev-deps; got: {lock_after_test}",
     );
 }
 
@@ -5351,6 +5465,528 @@ name = "solo"
     assert!(
         !stderr.contains("--no-proxy active"),
         "the no-proxy note should be suppressed under --offline; got: {stderr}",
+    );
+}
+
+// ── tracker line 898: karac run script-dir manifest discovery ────
+
+fn run_dir_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-rundir-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_run_script_walks_from_script_dir_not_cwd() {
+    // The script lives in tmp/proj/foo.kara; karac-toolchain.toml lives
+    // in tmp/proj/. Run karac from tmp/ (NOT proj/) — discovery must
+    // still find the pin via the script-dir walk.
+    let tmp = run_dir_tempdir("walks-from-script");
+    let proj = tmp.join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(proj.join("foo.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(proj.join("karac-toolchain.toml"), "version = \">=99.0\"\n").unwrap();
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "proj/foo.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "run should honor pin discovered via script-dir walk; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("E_TOOLCHAIN_VERSION_MISMATCH"),
+        "expected toolchain mismatch surfaced via script-dir walk; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_run_no_manifest_skips_discovery() {
+    // Same setup as the previous test, but with --no-manifest, the
+    // pin must be ignored and the script runs.
+    let tmp = run_dir_tempdir("no-manifest");
+    let proj = tmp.join("proj");
+    std::fs::create_dir_all(&proj).unwrap();
+    std::fs::write(proj.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(proj.join("foo.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(proj.join("karac-toolchain.toml"), "version = \">=99.0\"\n").unwrap();
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "--no-manifest", "proj/foo.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "--no-manifest must skip pin enforcement; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_TOOLCHAIN_VERSION_MISMATCH"),
+        "pin must not fire under --no-manifest; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_run_manifest_override_loads_explicit_file() {
+    // --manifest=<path> loads the supplied manifest. A manifest with
+    // an invalid kara-version constraint must surface during parse,
+    // proving the override is consulted.
+    let tmp = run_dir_tempdir("manifest-override");
+    std::fs::write(tmp.join("foo.kara"), "fn main() {}\n").unwrap();
+    let bad_manifest = tmp.join("custom.toml");
+    // Wrong-type kara-version is a hard parse error in manifest.rs.
+    std::fs::write(
+        &bad_manifest,
+        "[package]\nname = \"demo\"\nkara-version = 42\n",
+    )
+    .unwrap();
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args([
+            "run",
+            "--manifest",
+            bad_manifest.to_str().unwrap(),
+            "foo.kara",
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "manifest-override should surface manifest parse error; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("kara-version"),
+        "expected the manifest parse error to name kara-version; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_run_manifest_and_no_manifest_are_mutually_exclusive() {
+    let out = karac_bin()
+        .args(["run", "--manifest=x.toml", "--no-manifest", "foo.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success());
+    assert!(
+        stderr.contains("mutually exclusive"),
+        "expected mutually-exclusive diagnostic; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_run_script_outside_project_runs_stdlib_only() {
+    // Script lives in an isolated tempdir with no ancestor manifest.
+    // Run should succeed silently — no manifest-related output.
+    let tmp = run_dir_tempdir("no-ancestor-manifest");
+    std::fs::write(tmp.join("foo.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["run", "foo.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "stdlib-only script outside any project should run; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_run_subcommand_help_documents_manifest_flags() {
+    let out = karac_bin().args(["run", "--help"]).output().unwrap();
+    assert!(out.status.success());
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("--manifest=<path>"));
+    assert!(stdout.contains("--no-manifest"));
+    assert!(stdout.contains("MANIFEST DISCOVERY:"));
+}
+
+// ── tracker line 892: karac-toolchain.toml reader ───────────────
+
+fn toolchain_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-toolchain-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_toolchain_pin_matches_active_succeeds() {
+    // karac's active version is 0.1.0 (CARGO_PKG_VERSION). A wildcard
+    // pin must match — the build succeeds.
+    let tmp = toolchain_tempdir("matches");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(tmp.join("karac-toolchain.toml"), "version = \"*\"\n").unwrap();
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "wildcard pin should match active toolchain; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("E_TOOLCHAIN_"),
+        "no toolchain error expected; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_toolchain_pin_mismatch_halts_build() {
+    // Pin requires version 99.x which can't possibly match 0.1.0.
+    // Build halts with E_TOOLCHAIN_VERSION_MISMATCH and a karaup hint.
+    let tmp = toolchain_tempdir("mismatch");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(tmp.join("karac-toolchain.toml"), "version = \">=99.0\"\n").unwrap();
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "pin should halt build on mismatch; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_VERSION_MISMATCH]"),
+        "expected the version-mismatch diagnostic; got: {stderr}",
+    );
+    assert!(
+        stderr.contains("karaup install"),
+        "diagnostic should hint at karaup; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_toolchain_pin_missing_version_field_is_hard_error() {
+    let tmp = toolchain_tempdir("missing-version");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("karac-toolchain.toml"),
+        "targets = [\"x86_64-apple-darwin\"]\n",
+    )
+    .unwrap();
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "missing-version pin should halt; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_MISSING_VERSION]"),
+        "expected missing-version diagnostic; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_toolchain_pin_absent_file_is_noop() {
+    // No karac-toolchain.toml — build proceeds without comment.
+    let tmp = toolchain_tempdir("absent");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(tmp.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    let out = karac_bin().current_dir(&tmp).arg("build").output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "no pin file → build succeeds silently; stderr={stderr}",
+    );
+    assert!(
+        !stderr.contains("toolchain"),
+        "no toolchain-related output expected; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_toolchain_pin_in_ancestor_is_honored() {
+    // The pin lives one directory up — discovery should walk into it.
+    let tmp = toolchain_tempdir("ancestor");
+    let proj = tmp.join("subproject");
+    std::fs::create_dir_all(proj.join("src")).unwrap();
+    std::fs::write(proj.join("kara.toml"), "[package]\nname = \"demo\"\n").unwrap();
+    std::fs::write(proj.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(tmp.join("karac-toolchain.toml"), "version = \">=99.0\"\n").unwrap();
+    let out = karac_bin()
+        .current_dir(&proj)
+        .arg("build")
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        !out.status.success(),
+        "ancestor pin should still gate the build; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("error[E_TOOLCHAIN_VERSION_MISMATCH]"),
+        "expected ancestor-pin to surface the mismatch; got: {stderr}",
+    );
+}
+
+// ── karac build --target — [target.X.*] overlay merge ───────────────
+
+fn target_tempdir(slug: &str) -> std::path::PathBuf {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-cli-target-{slug}-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    tmp
+}
+
+#[test]
+fn test_build_target_flag_activates_overlay_dep() {
+    // The base manifest declares no deps; `[target.X.dependencies]` adds
+    // a path-dep keyed on a specific triple. Building with --target=X
+    // must walk the overlay dep; without the flag, the overlay is inert
+    // and the build is a solo project.
+    let tmp = target_tempdir("overlay-activates");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/mac-only/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[target."x86_64-apple-darwin".dependencies]
+mac-only = { path = "libs/mac-only" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/mac-only/kara.toml"),
+        r#"[package]
+name = "mac-only"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/mac-only/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    // With --target=x86_64-apple-darwin, the overlay activates — the
+    // lockfile must mention the mac-only entry.
+    let out = karac_bin()
+        .args(["build", "--target=x86_64-apple-darwin"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lock_with_target = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    assert!(
+        out.status.success(),
+        "build with --target=mac should succeed; stderr={stderr}",
+    );
+    assert!(
+        lock_with_target.contains("mac-only"),
+        "lockfile must include mac-only under active target; got: {lock_with_target}",
+    );
+    let _ = std::fs::remove_file(tmp.join("kara.lock"));
+
+    // With --target=x86_64-unknown-linux-gnu, the overlay does not
+    // activate, the manifest declares no base deps, so no dep
+    // resolution runs and no lockfile is produced.
+    let out2 = karac_bin()
+        .args(["build", "--target=x86_64-unknown-linux-gnu"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr2 = String::from_utf8_lossy(&out2.stderr);
+    let lock_after_other = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out2.status.success(),
+        "build with --target=linux should succeed (no deps to resolve); stderr={stderr2}",
+    );
+    assert!(
+        !lock_after_other.contains("mac-only"),
+        "lockfile must NOT include mac-only under inactive target; got: {lock_after_other}",
+    );
+}
+
+#[test]
+fn test_build_target_space_separated_form_parses() {
+    // The `--target <triple>` (space) form must parse identically to
+    // `--target=<triple>` (equals). Pins both surface shapes.
+    let tmp = target_tempdir("space-separated");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "solo"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--target", "x86_64-apple-darwin"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "space-separated --target should parse; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_build_target_empty_value_diagnostic() {
+    // Empty triple value (`--target=`) must error up front so a typo
+    // can't silently fall back to the host triple.
+    let out = karac_bin().args(["build", "--target="]).output().unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "empty --target value must fail; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("--target requires a non-empty target triple"),
+        "expected the empty-triple diagnostic; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_build_target_from_manifest_build_section() {
+    // With no --target flag, `[build].target` from the manifest selects
+    // the active triple. Pins that the manifest fallback is honored.
+    let tmp = target_tempdir("build-default");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/mac-only/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[build]
+target = "x86_64-apple-darwin"
+
+[target."x86_64-apple-darwin".dependencies]
+mac-only = { path = "libs/mac-only" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/mac-only/kara.toml"),
+        r#"[package]
+name = "mac-only"
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/mac-only/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lock = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "build with [build].target = ... should succeed; stderr={stderr}",
+    );
+    assert!(
+        lock.contains("mac-only"),
+        "lockfile must include the manifest-default-target overlay; got: {lock}",
+    );
+}
+
+#[test]
+fn test_build_target_flag_overrides_manifest_default() {
+    // --target on the CLI must beat `[build].target` in the manifest.
+    // Set them to different triples; only one overlay should activate.
+    let tmp = target_tempdir("cli-overrides-manifest");
+    std::fs::create_dir_all(tmp.join("src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/mac-only/src")).unwrap();
+    std::fs::create_dir_all(tmp.join("libs/linux-only/src")).unwrap();
+    std::fs::write(
+        tmp.join("kara.toml"),
+        r#"[package]
+name = "root-pkg"
+
+[build]
+target = "x86_64-apple-darwin"
+
+[target."x86_64-apple-darwin".dependencies]
+mac-only = { path = "libs/mac-only" }
+
+[target."x86_64-unknown-linux-gnu".dependencies]
+linux-only = { path = "libs/linux-only" }
+"#,
+    )
+    .unwrap();
+    std::fs::write(tmp.join("src/main.kara"), "fn main() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/mac-only/kara.toml"),
+        "[package]\nname = \"mac-only\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/mac-only/src/lib.kara"), "fn dummy() {}\n").unwrap();
+    std::fs::write(
+        tmp.join("libs/linux-only/kara.toml"),
+        "[package]\nname = \"linux-only\"\n",
+    )
+    .unwrap();
+    std::fs::write(tmp.join("libs/linux-only/src/lib.kara"), "fn dummy() {}\n").unwrap();
+
+    let out = karac_bin()
+        .args(["build", "--target=x86_64-unknown-linux-gnu"])
+        .current_dir(&tmp)
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let lock = std::fs::read_to_string(tmp.join("kara.lock")).unwrap_or_default();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "build with CLI-override target should succeed; stderr={stderr}",
+    );
+    assert!(
+        lock.contains("linux-only"),
+        "lockfile must include CLI-target overlay (linux-only); got: {lock}",
+    );
+    assert!(
+        !lock.contains("mac-only"),
+        "lockfile must NOT include the manifest-default-target overlay (mac-only); got: {lock}",
     );
 }
 

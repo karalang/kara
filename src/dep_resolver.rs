@@ -478,6 +478,10 @@ mod tests {
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
             workspace_dependencies: BTreeMap::new(),
+            target_dependencies: BTreeMap::new(),
+            target_dev_dependencies: BTreeMap::new(),
+            target_profile_overrides: BTreeMap::new(),
+            build_default_target: None,
             warnings: Vec::new(),
         }
     }

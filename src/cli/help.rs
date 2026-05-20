@@ -111,11 +111,29 @@ USAGE:
     karac <file.kara>                  (shorthand)
 
 OPTIONS:
-    --example NAME     Run examples/<NAME>.kara (or examples/<NAME>/src/main.kara)
-    --output=json      Structured JSON output on stdout
-    --output=jsonl     Streaming JSONL output on stdout
-    --sequential       Disable parallel execution in `par` blocks
-    -h, --help         Print this message"
+    --example NAME      Run examples/<NAME>.kara (or examples/<NAME>/src/main.kara)
+    --output=json       Structured JSON output on stdout
+    --output=jsonl      Streaming JSONL output on stdout
+    --sequential        Disable parallel execution in `par` blocks
+    --manifest=<path>   Override manifest discovery — load the supplied
+                        kara.toml instead of walking upward from the
+                        script's directory. Mutually exclusive with
+                        --no-manifest. Accepts the space-separated
+                        `--manifest <path>` form too.
+    --no-manifest       Skip manifest discovery entirely (run stdlib-
+                        only, ignore any enclosing project's
+                        [package].profile and karac-toolchain.toml pin).
+                        Mutually exclusive with --manifest.
+    -h, --help          Print this message
+
+MANIFEST DISCOVERY:
+    By default, `karac run path/to/foo.kara` walks upward from
+    `dirname(path/to/foo.kara)` looking for kara.toml — the script is
+    treated as belonging to the project containing it. The project's
+    [package].profile becomes the pipeline's active profile, and any
+    karac-toolchain.toml pin along the ancestor chain is enforced.
+    Scripts outside any project (no kara.toml found anywhere in the
+    ancestor chain) run stdlib-only without comment."
         }
         "check" => {
             "\
@@ -179,7 +197,28 @@ OPTIONS:
                             `./vendor/` from the current resolution.
                             Implies --no-proxy (the redundant note is
                             suppressed). See the OFFLINE section below.
+    --target=<triple>       Active target triple for the build. Selects
+                            which `[target.<triple>.*]` overlay merges
+                            onto the manifest (dependencies, dev-
+                            dependencies, profile). Precedence:
+                            --target=<triple> > [build].target from the
+                            manifest > host triple. Accepts the space-
+                            separated form `--target <triple>` too.
+                            Single-file mode accepts the flag for shape
+                            compatibility but it has no manifest to
+                            apply against. See the TARGETS section.
     -h, --help              Print this message
+
+TARGETS:
+    `--target=<triple>` selects the active target triple for overlay
+    merge. Any `[target.\"<triple>\".dependencies]`,
+    `[target.\"<triple>\".dev-dependencies]`, and
+    `[target.\"<triple>\".profile]` table that matches the active
+    triple is merged into the corresponding base table before dep
+    resolution. Overlay entries with the same name as a base entry
+    win (most-specific = later). With no `--target=` flag and no
+    `[build].target` in the manifest, the host triple is used
+    (matching `karac cache key` defaults).
 
 OFFLINE:
     `--offline` redirects every transitive `path` dependency to

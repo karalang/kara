@@ -204,32 +204,62 @@ pub fn build_dep_graph(
     root_manifest: Manifest,
     loader: &dyn ManifestLoader,
 ) -> Result<DepGraph, DepGraphError> {
-    build_dep_graph_with_offline(root_dir, root_manifest, loader, None)
+    build_dep_graph_with_options(root_dir, root_manifest, loader, DepGraphOptions::default())
 }
 
 /// Offline-aware variant of [`build_dep_graph`]. When `offline_root` is
 /// `Some(vendor_root)`, every transitive `DependencySpec::Path` is resolved
 /// as `vendor_root.join(dep_name)` instead of the manifest-declared relative
-/// path — so the walk consults only the vendored copies populated by
-/// `karac vendor` (tracker line 876). A missing vendor entry surfaces
-/// `E_OFFLINE_VENDOR_ENTRY_MISSING` instead of the generic
-/// `E_PATH_DEP_NOT_FOUND` so the operator hint points at `karac vendor`,
-/// not "fix the manifest path". The root manifest itself is unaffected by
-/// the redirection; only its transitive path-dep targets are rewritten.
+/// path. Retained for compatibility with the line-880 offline slice; new
+/// callers should prefer `build_dep_graph_with_options`.
 pub fn build_dep_graph_with_offline(
     root_dir: &Path,
     root_manifest: Manifest,
     loader: &dyn ManifestLoader,
     offline_root: Option<&Path>,
 ) -> Result<DepGraph, DepGraphError> {
+    build_dep_graph_with_options(
+        root_dir,
+        root_manifest,
+        loader,
+        DepGraphOptions {
+            offline_root,
+            include_dev_deps: false,
+        },
+    )
+}
+
+/// Optional knobs for [`build_dep_graph_with_options`]. New axes
+/// land here so the entry-point shape can grow without bumping the
+/// positional arg count past readability.
+///
+/// - `offline_root`: when `Some(vendor_root)`, every transitive
+///   `DependencySpec::Path` is resolved as `vendor_root.join(dep_name)`
+///   instead of the manifest-declared relative path (line 880).
+/// - `include_dev_deps`: when `true`, the root manifest's
+///   `[dev-dependencies]` participate in the walk alongside
+///   `[dependencies]`. Transitive manifests' dev-deps are **not**
+///   walked — Cargo's dev-deps-don't-propagate rule applies. Drives
+///   the line-884 build-vs-test split: build mode passes `false`,
+///   test mode passes `true`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DepGraphOptions<'a> {
+    pub offline_root: Option<&'a Path>,
+    pub include_dev_deps: bool,
+}
+
+/// Options-driven entry point. The two thin wrappers above
+/// (`build_dep_graph`, `build_dep_graph_with_offline`) delegate here.
+pub fn build_dep_graph_with_options(
+    root_dir: &Path,
+    root_manifest: Manifest,
+    loader: &dyn ManifestLoader,
+    options: DepGraphOptions<'_>,
+) -> Result<DepGraph, DepGraphError> {
     let root_canonical = canonicalize_or_self(root_dir);
     let mut manifests = BTreeMap::new();
     let mut derived_deps = BTreeMap::new();
 
-    // DFS visit state: `visiting` is the in-flight stack (used to detect
-    // back-edges into a node currently being expanded); `visited` is the
-    // completed set (no need to revisit). Order of stack visits drives the
-    // cycle-chain output.
     let mut visiting_stack: Vec<PathBuf> = Vec::new();
     let mut visiting_set: HashSet<PathBuf> = HashSet::new();
     let mut visited: HashSet<PathBuf> = HashSet::new();
@@ -241,7 +271,9 @@ pub fn build_dep_graph_with_offline(
         root_manifest,
         loader,
         &workspace_deps,
-        offline_root,
+        options.offline_root,
+        options.include_dev_deps,
+        true,
         &mut manifests,
         &mut derived_deps,
         &mut visiting_stack,
@@ -263,6 +295,8 @@ fn visit(
     loader: &dyn ManifestLoader,
     workspace_deps: &BTreeMap<String, DependencySpec>,
     offline_root: Option<&Path>,
+    include_dev_deps: bool,
+    is_root: bool,
     manifests: &mut BTreeMap<PathBuf, Manifest>,
     derived_deps: &mut BTreeMap<PathBuf, BTreeMap<String, DependencySpec>>,
     visiting_stack: &mut Vec<PathBuf>,
@@ -274,10 +308,22 @@ fn visit(
 
     // Derive the manifest's effective dependencies — every `Workspace`
     // entry replaced with the corresponding entry from `workspace_deps`.
+    // Dev-deps participate only at the root and only when explicitly
+    // requested by the caller (test-mode resolution, tracker line 884).
+    // Cargo's "dev-deps don't propagate" rule: a transitive dep's own
+    // dev-deps never affect the parent build, even in test mode.
     let mut derived = BTreeMap::new();
     for (name, spec) in &manifest_doc.dependencies {
         let resolved = deref_workspace(dir, name, spec, workspace_deps)?;
         derived.insert(name.clone(), resolved);
+    }
+    if is_root && include_dev_deps {
+        for (name, spec) in &manifest_doc.dev_dependencies {
+            // A name appearing in both base and dev tables is unusual but
+            // allowed — the dev entry wins, matching Cargo's behavior.
+            let resolved = deref_workspace(dir, name, spec, workspace_deps)?;
+            derived.insert(name.clone(), resolved);
+        }
     }
     derived_deps.insert(dir.to_path_buf(), derived.clone());
     manifests.insert(dir.to_path_buf(), manifest_doc);
@@ -346,6 +392,10 @@ fn visit(
             loader,
             workspace_deps,
             offline_root,
+            include_dev_deps,
+            // Transitive children are never the root — dev-deps stop
+            // propagating here even if the root opted them in.
+            false,
             manifests,
             derived_deps,
             visiting_stack,
@@ -428,6 +478,24 @@ mod tests {
         }
     }
 
+    /// Convenience wrapper: build the graph with `include_dev_deps`
+    /// activated. Used by the line-884 tests below.
+    fn build_test_mode_graph(
+        root_dir: &Path,
+        root_manifest: Manifest,
+        loader: &dyn ManifestLoader,
+    ) -> Result<DepGraph, DepGraphError> {
+        build_dep_graph_with_options(
+            root_dir,
+            root_manifest,
+            loader,
+            DepGraphOptions {
+                offline_root: None,
+                include_dev_deps: true,
+            },
+        )
+    }
+
     fn empty_manifest(name: &str) -> Manifest {
         Manifest {
             name: name.to_string(),
@@ -438,6 +506,10 @@ mod tests {
             dependencies: BTreeMap::new(),
             dev_dependencies: BTreeMap::new(),
             workspace_dependencies: BTreeMap::new(),
+            target_dependencies: BTreeMap::new(),
+            target_dev_dependencies: BTreeMap::new(),
+            target_profile_overrides: BTreeMap::new(),
+            build_default_target: None,
             warnings: Vec::new(),
         }
     }
@@ -811,5 +883,97 @@ mod tests {
         assert!(graph
             .manifests
             .contains_key(&PathBuf::from("/root/vendor/grandchild")));
+    }
+
+    // ── line 884: dev-deps excluded from non-test builds ─────────
+
+    #[test]
+    fn dev_deps_excluded_from_build_mode_walk() {
+        // Build mode: include_dev_deps=false (default). The root's
+        // dev_dependencies must NOT appear in derived_deps and the
+        // dev-dep's manifest must NOT be loaded.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("real".into(), path_dep("libs/real"));
+        root.dev_dependencies
+            .insert("test-only".into(), path_dep("libs/test-only"));
+        let real = empty_manifest("real");
+        let test_only = empty_manifest("test-only");
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/root/libs/real"), real),
+                (PathBuf::from("/root/libs/test-only"), test_only),
+            ]),
+        };
+        let graph = build_dep_graph(&PathBuf::from("/root"), root, &loader).expect("graph");
+        let derived = &graph.derived_deps[&PathBuf::from("/root")];
+        assert!(derived.contains_key("real"));
+        assert!(
+            !derived.contains_key("test-only"),
+            "dev-deps must be excluded from build mode; got: {derived:?}",
+        );
+        assert!(!graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/libs/test-only")));
+    }
+
+    #[test]
+    fn dev_deps_included_in_test_mode_walk() {
+        // Test mode: include_dev_deps=true. The root's dev_dependencies
+        // appear in derived_deps and the dev-dep's manifest IS loaded.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("real".into(), path_dep("libs/real"));
+        root.dev_dependencies
+            .insert("test-only".into(), path_dep("libs/test-only"));
+        let real = empty_manifest("real");
+        let test_only = empty_manifest("test-only");
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/root/libs/real"), real),
+                (PathBuf::from("/root/libs/test-only"), test_only),
+            ]),
+        };
+        let graph = build_test_mode_graph(&PathBuf::from("/root"), root, &loader).expect("graph");
+        let derived = &graph.derived_deps[&PathBuf::from("/root")];
+        assert!(derived.contains_key("real"));
+        assert!(derived.contains_key("test-only"));
+        assert!(graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/libs/test-only")));
+    }
+
+    #[test]
+    fn transitive_dev_deps_do_not_propagate_even_in_test_mode() {
+        // Cargo's "dev-deps don't propagate" rule: a transitive child's
+        // dev_dependencies must never participate in the parent build,
+        // even when the parent opted into include_dev_deps.
+        let mut root = empty_manifest("root");
+        root.dependencies
+            .insert("child".into(), path_dep("libs/child"));
+        let mut child = empty_manifest("child");
+        child
+            .dev_dependencies
+            .insert("child-test-only".into(), path_dep("../child-test-only"));
+        let child_test_only = empty_manifest("child-test-only");
+        let loader = MemLoader {
+            manifests: BTreeMap::from([
+                (PathBuf::from("/root/libs/child"), child),
+                (PathBuf::from("/root/libs/child-test-only"), child_test_only),
+            ]),
+        };
+        let graph = build_test_mode_graph(&PathBuf::from("/root"), root, &loader).expect("graph");
+        // child appears (root's regular dep) but child-test-only does not
+        // (transitive dev-dep never propagates).
+        assert!(graph
+            .manifests
+            .contains_key(&PathBuf::from("/root/libs/child")));
+        assert!(
+            !graph
+                .manifests
+                .contains_key(&PathBuf::from("/root/libs/child-test-only")),
+            "transitive dev-deps must NOT load even in test mode; manifests: {:?}",
+            graph.manifests.keys().collect::<Vec<_>>(),
+        );
     }
 }
