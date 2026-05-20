@@ -1094,3 +1094,219 @@ fn test_no_reduction_when_loop_has_no_accumulator() {
     let main_fc = get_function(&analysis, "main");
     assert!(main_fc.loop_reductions.is_empty());
 }
+
+// ── Min/Max recognition (combined slice, 2026-05-20) ────────────────
+// Both direct-call (`m = i64.min(m, x)`) and conditional-assign
+// (`if x < m { m = x; }`) shapes are recognized as Min/Max reductions
+// over a single accumulator. The kata-153 linear_scan bench is the
+// validation workload — its `find_min`'s `if x < m { m = x; }` inner
+// loop drives the conditional-assign branch.
+
+#[test]
+fn test_reduction_recognized_for_conditional_min() {
+    // The kata-153 shape: `if x < m { m = x; }` inside an inner loop.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut m: i64 = 1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if x < m {
+                    m = x;
+                }
+                i = i + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "expected one Min reduction, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "m");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Min);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_max() {
+    // Mirror of the Min shape: `if x > m { m = x; }`.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut m: i64 = -1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if x > m {
+                    m = x;
+                }
+                i = i + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "m");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Max);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_minmax_commutative() {
+    // Commutative form: `if m > x { m = x; }` is Min, `if m < x { m = x; }` is Max.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut lo: i64 = 1000i64;
+            let mut hi: i64 = -1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if lo > x {
+                    lo = x;
+                }
+                i = i + 1i64;
+            }
+            let mut j: i64 = 0i64;
+            while j < 100i64 {
+                let y: i64 = j * 7i64;
+                if hi < y {
+                    hi = y;
+                }
+                j = j + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 2);
+    let by_acc: std::collections::HashMap<_, _> = main_fc
+        .loop_reductions
+        .iter()
+        .map(|r| (r.accumulator.clone(), r.op))
+        .collect();
+    assert_eq!(by_acc.get("lo"), Some(&ReductionOp::Min));
+    assert_eq!(by_acc.get("hi"), Some(&ReductionOp::Max));
+}
+
+#[test]
+fn test_reduction_rejects_conditional_with_else_branch() {
+    // `if x < m { m = x; } else { m = x + 1; }` is not a clean Min step
+    // — the else branch also writes the accumulator, recognition rejects.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut m: i64 = 1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if x < m {
+                    m = x;
+                } else {
+                    m = x + 1i64;
+                }
+                i = i + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "if-with-else should not be Min-recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_conditional_when_cond_unrelated_to_value() {
+    // `if y < z { m = x; }` — cond compares y/z but assigns x to m.
+    // Doesn't fit the `value < acc` Min shape; no recognition.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut m: i64 = 0i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                let y: i64 = i * 11i64;
+                let z: i64 = i * 13i64;
+                if y < z {
+                    m = x;
+                }
+                i = i + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(main_fc.loop_reductions.is_empty());
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_min_after_lowering() {
+    // End-to-end through the lowering pipeline — the cond's `<` becomes
+    // a `Call(Path(["i64", "lt"]), [a, b])` shape; recognition handles both.
+    let analysis = analyze_lowered(
+        r#"
+        fn main() {
+            let mut m: i64 = 1000i64;
+            let mut i: i64 = 0i64;
+            while i < 100i64 {
+                let x: i64 = i * 7i64;
+                if x < m {
+                    m = x;
+                }
+                i = i + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "post-lowering Call(lt) shape must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "m");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Min);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_min_for_range_after_lowering() {
+    // kata-153 find_min shape: `for i in 1..n { let x = nums[i]; if x < m { m = x; } }`.
+    // Same conditional-assign pattern as the while form, but inside an
+    // impl-level free function with a Slice parameter and the for-range
+    // loop construct. Validates the analyzer recognizes the kata's
+    // actual shape end-to-end through the CLI pipeline.
+    let analysis = analyze_lowered(
+        r#"
+        fn find_min(nums: Slice[i64]) -> i64 {
+            let n = nums.len();
+            let mut m = nums[0];
+            for i in 1..n {
+                let x = nums[i];
+                if x < m {
+                    m = x;
+                }
+            }
+            m
+        }
+        fn main() { }
+        "#,
+    );
+    let find_min_fc = get_function(&analysis, "find_min");
+    assert_eq!(
+        find_min_fc.loop_reductions.len(),
+        1,
+        "expected one Min reduction on `m`, got {:?}",
+        find_min_fc.loop_reductions
+    );
+    assert_eq!(find_min_fc.loop_reductions[0].accumulator, "m");
+    assert_eq!(find_min_fc.loop_reductions[0].op, ReductionOp::Min);
+}

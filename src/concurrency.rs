@@ -191,6 +191,8 @@ pub enum ReductionOp {
     BitOr,
     BitAnd,
     BitXor,
+    Min,
+    Max,
 }
 
 impl ReductionOp {
@@ -203,6 +205,8 @@ impl ReductionOp {
             ReductionOp::BitOr => "|",
             ReductionOp::BitAnd => "&",
             ReductionOp::BitXor => "^",
+            ReductionOp::Min => "min",
+            ReductionOp::Max => "max",
         }
     }
 
@@ -567,9 +571,30 @@ impl<'a> ConcurrencyChecker<'a> {
                     // Fresh body bindings; not loop-carried.
                 }
                 StmtKind::Expr(expr) => {
-                    // Any inner write to an outer-scope name (via nested
-                    // if/else or inner loop) breaks the simple-reduction
-                    // recognition; defer multi-write loops to a later slice.
+                    // First: try the conditional-assign Min/Max desugar —
+                    // `if x < acc { acc = x; }` and friends shape a
+                    // recognized reduction step even though the inner-write
+                    // check below would otherwise reject any if-stmt that
+                    // writes an outer-scope name.
+                    if let Some((name, op)) = conditional_minmax_shape(expr) {
+                        if let_introduced.contains(&name) {
+                            // Body-local accumulator; ignore.
+                            continue;
+                        }
+                        match reduction {
+                            None => reduction = Some((name, op)),
+                            Some((ref existing_name, existing_op)) => {
+                                if existing_name != &name || existing_op != op {
+                                    return None;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                    // Else: any inner write to an outer-scope name (via
+                    // nested if/else or inner loop) breaks the simple-
+                    // reduction recognition; defer multi-write loops to a
+                    // later slice.
                     let mut inner_writes = HashSet::new();
                     self.collect_expr_inner_writes(expr, &mut inner_writes);
                     for w in &inner_writes {
@@ -589,13 +614,31 @@ impl<'a> ConcurrencyChecker<'a> {
             }
         }
 
-        // Same audit on the block's trailing expression.
+        // Same audit on the block's trailing expression. A loop body that
+        // ends with `if x < acc { acc = x; }` (no trailing semicolon)
+        // parses the if as `final_expr` rather than `Stmt::Expr`; the
+        // conditional-assign recognizer must fire here too or the kata-153
+        // shape (`for i in 1..n { let x = nums[i]; if x < m { m = x; } }`)
+        // silently falls back to sequential.
         if let Some(e) = &body.final_expr {
-            let mut inner_writes = HashSet::new();
-            self.collect_expr_inner_writes(e, &mut inner_writes);
-            for w in &inner_writes {
-                if !let_introduced.contains(w) {
-                    return None;
+            if let Some((name, op)) = conditional_minmax_shape(e) {
+                if !let_introduced.contains(&name) {
+                    match reduction {
+                        None => reduction = Some((name, op)),
+                        Some((ref existing_name, existing_op)) => {
+                            if existing_name != &name || existing_op != op {
+                                return None;
+                            }
+                        }
+                    }
+                }
+            } else {
+                let mut inner_writes = HashSet::new();
+                self.collect_expr_inner_writes(e, &mut inner_writes);
+                for w in &inner_writes {
+                    if !let_introduced.contains(w) {
+                        return None;
+                    }
                 }
             }
         }
@@ -1743,6 +1786,8 @@ fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
                 "bitor" => ReductionOp::BitOr,
                 "bitand" => ReductionOp::BitAnd,
                 "bitxor" => ReductionOp::BitXor,
+                "min" => ReductionOp::Min,
+                "max" => ReductionOp::Max,
                 _ => return None,
             };
             acc_matches_either(&args[0].value.kind, &args[1].value.kind, acc_name).then_some(red_op)
@@ -1754,6 +1799,95 @@ fn reduction_binary_shape(value: &Expr, acc_name: &str) -> Option<ReductionOp> {
 fn acc_matches_either(left: &ExprKind, right: &ExprKind, acc_name: &str) -> bool {
     matches!(left, ExprKind::Identifier(n) if n == acc_name)
         || matches!(right, ExprKind::Identifier(n) if n == acc_name)
+}
+
+/// Recognize a conditional-assign Min/Max reduction:
+/// `if x < acc { acc = x; }` → Min, `if x > acc { acc = x; }` → Max
+/// (with symmetric `acc > x` → Min and `acc < x` → Max accepted too).
+///
+/// Returns `Some((acc_name, op))` when the if-stmt shapes a Min/Max
+/// reduction step against a single accumulator. The recognizer is
+/// conservative — extends to richer assignment-RHS expressions in a
+/// follow-up if a workload surfaces the shape:
+/// - else-less if only (no `else` / `else-if` arms),
+/// - body is exactly one statement, an `Assign` to an identifier target,
+/// - assignment value is a single identifier (matches the kata-153
+///   `let x = ...; if x < m { m = x; }` desugar pattern; richer RHS
+///   like `if a[i] < m { m = a[i]; }` is not supported at v1),
+/// - condition is `Binary(Lt | Gt)` (or the lowered `Call(Path([T, "lt"|"gt"]), [a, b])`)
+///   with both operands as identifiers, one matching the assignment
+///   target and the other matching the assignment value.
+fn conditional_minmax_shape(expr: &Expr) -> Option<(String, ReductionOp)> {
+    let ExprKind::If {
+        condition,
+        then_block,
+        else_branch,
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if else_branch.is_some() {
+        return None;
+    }
+    if then_block.stmts.len() != 1 || then_block.final_expr.is_some() {
+        return None;
+    }
+    let StmtKind::Assign { target, value } = &then_block.stmts[0].kind else {
+        return None;
+    };
+    let acc_name = identifier_name(target)?;
+    let ExprKind::Identifier(value_name) = &value.kind else {
+        return None;
+    };
+    let (cmp_op, left, right) = match &condition.kind {
+        ExprKind::Binary { op, left, right } => (op.clone(), left.as_ref(), right.as_ref()),
+        ExprKind::Call { callee, args } if args.len() == 2 => {
+            let ExprKind::Path { segments, .. } = &callee.kind else {
+                return None;
+            };
+            if segments.len() != 2 {
+                return None;
+            }
+            let op = match segments[1].as_str() {
+                "lt" => BinOp::Lt,
+                "gt" => BinOp::Gt,
+                _ => return None,
+            };
+            (op, &args[0].value, &args[1].value)
+        }
+        _ => return None,
+    };
+    let ExprKind::Identifier(l_name) = &left.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(r_name) = &right.kind else {
+        return None;
+    };
+    // `value < acc` → Min (new value is smaller, picked into acc).
+    // `acc > value` → Min (commutative re-arrangement).
+    // `value > acc` → Max, `acc < value` → Max (mirror).
+    let red_op = match cmp_op {
+        BinOp::Lt => {
+            if l_name == value_name && r_name == &acc_name {
+                ReductionOp::Min
+            } else if l_name == &acc_name && r_name == value_name {
+                ReductionOp::Max
+            } else {
+                return None;
+            }
+        }
+        BinOp::Gt => {
+            if l_name == value_name && r_name == &acc_name {
+                ReductionOp::Max
+            } else if l_name == &acc_name && r_name == value_name {
+                ReductionOp::Min
+            } else {
+                return None;
+            }
+        }
+        _ => return None,
+    };
+    Some((acc_name, red_op))
 }
 
 /// Match `Call(Path([type, method_name]), [a, b])` and return the two

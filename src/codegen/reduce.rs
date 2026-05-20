@@ -434,13 +434,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(int_ty, src_ptr, "s")
             .unwrap()
             .into_int_value();
-        let folded = match op {
-            ReductionOp::Add => self.builder.build_int_add(d, s, "sum").unwrap(),
-            ReductionOp::Mul => self.builder.build_int_mul(d, s, "prod").unwrap(),
-            ReductionOp::BitOr => self.builder.build_or(d, s, "or").unwrap(),
-            ReductionOp::BitAnd => self.builder.build_and(d, s, "and").unwrap(),
-            ReductionOp::BitXor => self.builder.build_xor(d, s, "xor").unwrap(),
-        };
+        let folded = self.emit_reduce_combine_inst(op, d, s);
         self.builder.build_store(dst_ptr, folded).unwrap();
         self.builder.build_return(None).unwrap();
 
@@ -448,6 +442,50 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         f
+    }
+
+    /// Emit the combine instruction for two `IntValue`s under `op`. Shared
+    /// between the combine fn body (per-pair fold) and `emit_reduce_call`'s
+    /// post-call fold that folds the parent's pre-existing accumulator
+    /// value with the par_reduce result. Keeping the per-op selection in
+    /// one helper means a future op addition only updates one match.
+    ///
+    /// For Min/Max, emits `icmp slt`/`icmp sgt` + `select` — `-O2`'s
+    /// InstCombine lifts the idiom to `llvm.smin.iN` / `llvm.smax.iN`
+    /// intrinsics at the backend.
+    fn emit_reduce_combine_inst(
+        &self,
+        op: ReductionOp,
+        d: IntValue<'ctx>,
+        s: IntValue<'ctx>,
+    ) -> IntValue<'ctx> {
+        match op {
+            ReductionOp::Add => self.builder.build_int_add(d, s, "sum").unwrap(),
+            ReductionOp::Mul => self.builder.build_int_mul(d, s, "prod").unwrap(),
+            ReductionOp::BitOr => self.builder.build_or(d, s, "or").unwrap(),
+            ReductionOp::BitAnd => self.builder.build_and(d, s, "and").unwrap(),
+            ReductionOp::BitXor => self.builder.build_xor(d, s, "xor").unwrap(),
+            ReductionOp::Min => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, d, s, "min.cmp")
+                    .unwrap();
+                self.builder
+                    .build_select(cmp, d, s, "min")
+                    .unwrap()
+                    .into_int_value()
+            }
+            ReductionOp::Max => {
+                let cmp = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, d, s, "max.cmp")
+                    .unwrap();
+                self.builder
+                    .build_select(cmp, d, s, "max")
+                    .unwrap()
+                    .into_int_value()
+            }
+        }
     }
 
     /// Synthesize the per-call worker fn. Each call emits a fresh function
@@ -751,7 +789,7 @@ impl<'ctx> super::Codegen<'ctx> {
         iter_total: IntValue<'ctx>,
         acc_slot: VarSlot<'ctx>,
         acc_int_ty: IntType<'ctx>,
-        _reduction: &LoopReduction,
+        reduction: &LoopReduction,
         captures: &[String],
         lo_val: Option<IntValue<'ctx>>,
         per_iter_cost_units: u64,
@@ -932,14 +970,29 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
 
-        // Load the reduced value and store into the source-level
-        // accumulator's alloca. Subsequent reads of the source-level
-        // accumulator (`println(sum)`) see the reduced value.
+        // Load the reduced value, fold it with the parent's pre-existing
+        // accumulator value via the op's combine, then store back. The
+        // fold is the load-bearing step for Min/Max correctness: kata-153
+        // shapes the loop as `let mut m = nums[0]; for i in 1..n {
+        // if nums[i] < m { m = nums[i]; }}` — m starts at the first
+        // element, not at i64::MAX, so without folding the parent's
+        // initial value the parallel version would drop nums[0] from
+        // consideration. The fold also generalizes Add correctly when
+        // the user writes `let mut sum = 100; for k... sum += k`
+        // (initial value != identity) — without the fold, the 100 was
+        // silently dropped in the prior codegen.
         let reduced = self
             .builder
             .build_load(acc_int_ty, out_slot, "reduced")
-            .unwrap();
-        self.builder.build_store(acc_slot.ptr, reduced).unwrap();
+            .unwrap()
+            .into_int_value();
+        let parent_initial = self
+            .builder
+            .build_load(acc_int_ty, acc_slot.ptr, "acc.initial")
+            .unwrap()
+            .into_int_value();
+        let final_value = self.emit_reduce_combine_inst(reduction.op, parent_initial, reduced);
+        self.builder.build_store(acc_slot.ptr, final_value).unwrap();
 
         Ok(())
     }
@@ -964,6 +1017,8 @@ fn reduce_op_short_name(op: ReductionOp) -> &'static str {
         ReductionOp::BitOr => "bitor",
         ReductionOp::BitAnd => "bitand",
         ReductionOp::BitXor => "bitxor",
+        ReductionOp::Min => "min",
+        ReductionOp::Max => "max",
     }
 }
 
@@ -984,12 +1039,50 @@ fn reduce_helper_name(role: &str, op: ReductionOp, int_ty: IntType<'_>) -> Strin
 /// LLVM uses two's-complement for all int types, so `const_all_ones` for
 /// `BitAnd` is correct for both signed (-1) and unsigned (`TYPE_MAX`)
 /// source-level types.
+///
+/// Min / Max identities are signed-T::MAX and signed-T::MIN respectively
+/// — the analyzer's call-form and conditional-assign recognition (slice:
+/// Min/Max combined, 2026-05-20) fires only against signed source types
+/// today, so the identity values match the source-level convention. An
+/// unsigned variant requires threading a signedness bit through
+/// `ReductionOp` and is deferred until a workload surfaces it.
 fn reduce_identity<'ctx>(op: ReductionOp, int_ty: IntType<'ctx>) -> IntValue<'ctx> {
     match op {
         ReductionOp::Add | ReductionOp::BitOr | ReductionOp::BitXor => int_ty.const_zero(),
         ReductionOp::Mul => int_ty.const_int(1, false),
         ReductionOp::BitAnd => int_ty.const_all_ones(),
+        ReductionOp::Min => signed_int_max(int_ty),
+        ReductionOp::Max => signed_int_min(int_ty),
     }
+}
+
+/// Signed `T::MAX` constant for `int_ty` — `(1 << (bit_width - 1)) - 1`.
+/// 64-bit special-case avoids the shift overflow that `1u64 << 64` would
+/// trip on platforms where the shift amount is undefined for the full
+/// width.
+fn signed_int_max<'ctx>(int_ty: IntType<'ctx>) -> IntValue<'ctx> {
+    let bit_width = int_ty.get_bit_width();
+    let value = if bit_width >= 64 {
+        i64::MAX as u64
+    } else {
+        (1u64 << (bit_width - 1)) - 1
+    };
+    int_ty.const_int(value, true)
+}
+
+/// Signed `T::MIN` constant for `int_ty` — `1 << (bit_width - 1)` (the
+/// sign-bit-only two's-complement encoding). `const_int` takes a `u64`
+/// payload and reinterprets the low `bit_width` bits according to the
+/// `sign_extend` flag — passing the bit pattern with `true` produces
+/// the correct negative value at every supported width.
+fn signed_int_min<'ctx>(int_ty: IntType<'ctx>) -> IntValue<'ctx> {
+    let bit_width = int_ty.get_bit_width();
+    let value = if bit_width >= 64 {
+        1u64 << 63
+    } else {
+        1u64 << (bit_width - 1)
+    };
+    int_ty.const_int(value, true)
 }
 
 // ── Cost-model gate (slice 3b.5, 2026-05-20) ──────────────────────────

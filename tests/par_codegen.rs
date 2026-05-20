@@ -2461,4 +2461,206 @@ fn main() {
         // = 5003650666 - 666 = 5003650000
         assert_eq!(out.trim(), "5003650000");
     }
+
+    // ── Slice: Min/Max combined (2026-05-20) ─────────────────────────
+    //
+    // Min/Max recognition + codegen lowering — analyzer detects both the
+    // direct call form (`acc = T.min(acc, x)`) and the conditional-assign
+    // form (`if x < acc { acc = x; }`); codegen emits identity via
+    // `signed_int_max`/`signed_int_min` (i64::MAX / i64::MIN at the
+    // accumulator's int type) and combine via `icmp slt`+`select` for
+    // Min, `icmp sgt`+`select` for Max. Validation workload:
+    // kara-katas/leetcode/101-200/153-find-minimum-in-rotated-sorted-array.
+
+    #[test]
+    fn test_ir_reduction_min_conditional_assign() {
+        // Conditional-assign Min shape — variable-K loop bypasses the
+        // cost-model gate, so the helper-symbol emission path is
+        // exercised regardless of K. IR pins:
+        //   - `__karac_reduce_init_min_i64` (identity = i64::MAX)
+        //   - `__karac_reduce_combine_min_i64`
+        //   - `icmp slt` + `select` inside the combine body
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut m: i64 = 1000i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = i * 7i64;
+        if x < m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_min_i64"),
+            "expected Min+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_min_i64"),
+            "expected Min+i64 combine helper; got:\n{ir}"
+        );
+        // The combine body uses `icmp slt` + `select` — pin both so a
+        // future refactor to e.g. `llvm.smin.i64` intrinsics flags the
+        // change explicitly. The InstCombine pass at `-O2` lifts the
+        // select+icmp idiom to the intrinsic at the backend layer, but
+        // we emit the source-of-truth IR at the karac layer.
+        assert!(
+            ir.contains("icmp slt"),
+            "expected icmp slt in Min combine; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("%min ="),
+            "expected select named %min in combine; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_reduction_max_conditional_assign() {
+        // Mirror of the Min IR test for Max: identity = i64::MIN,
+        // combine = `icmp sgt` + `select`.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100i64;
+    let mut m: i64 = -1000i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = i * 7i64;
+        if x > m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("@__karac_reduce_init_max_i64"),
+            "expected Max+i64 init helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("@__karac_reduce_combine_max_i64"),
+            "expected Max+i64 combine helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("icmp sgt"),
+            "expected icmp sgt in Max combine; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("%max ="),
+            "expected select named %max in combine; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_reduction_min_conditional_assign_multi_worker() {
+        // K = 100_000 forces multi-chunk dispatch. The series
+        // `(i * 7 + 11) % 977` for i in [0, 100_000) hits its minimum at
+        // many points; the actual minimum value over the range is 0
+        // (when `(7i + 11) % 977 == 0`, e.g. i = 138: 7*138 + 11 = 977).
+        // Identity = i64::MAX, so any worker chunk with zero matching
+        // i values still combines correctly via the icmp+select fold.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut m: i64 = 1000000i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = (i * 7i64 + 11i64) % 977i64;
+        if x < m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "0");
+    }
+
+    #[test]
+    fn test_e2e_reduction_max_conditional_assign_multi_worker() {
+        // Mirror of the Min E2E for Max. Series `(i * 7 + 11) % 977`
+        // for i in [0, 100_000) hits 976 at multiple i values; identity
+        // = i64::MIN ensures empty-chunk workers don't poison the fold.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut m: i64 = -1000000i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = (i * 7i64 + 11i64) % 977i64;
+        if x > m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "976");
+    }
+
+    #[test]
+    fn test_e2e_reduction_min_initial_value_preserved_when_no_smaller() {
+        // Edge case: the initial accumulator value is smaller than any
+        // loop value. Worker partials all start at identity = i64::MAX,
+        // none gets updated (because every `x` is >= initial m). The
+        // final combine fold reduces partials to identity, then the
+        // par_reduce caller's final-combine step folds that with the
+        // parent's initial m — producing m unchanged. Pins that the
+        // initial-value-preservation path works end-to-end.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 1000i64;
+    let mut m: i64 = -999999i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let x: i64 = i + 1i64;
+        if x < m {
+            m = x;
+        }
+        i = i + 1i64;
+    }
+    println(m);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "-999999");
+    }
 }
