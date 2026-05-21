@@ -691,6 +691,13 @@ impl Pipeline {
             // can consume per-call effect-variable resolutions
             // (slice 8y consumer).
             self.parsed.program.call_effect_subs = build_call_effect_subs_table(effects);
+            // Slice 8y: mark callees whose declared effects are
+            // purely `Polymorphic` (no static fixed portion). Codegen
+            // uses this set together with `call_effect_subs` to gate
+            // the per-mono caller-side state-machine intercept per
+            // call site.
+            self.parsed.program.callee_purely_polymorphic_effects =
+                build_callee_purely_polymorphic_effects_set(effects);
         }
         // Now that `callee_network_yield_effect` is populated, walk each
         // network-boundary function body and enumerate its yield points.
@@ -1021,6 +1028,34 @@ pub fn build_call_effect_subs_table(
         table.insert((span_key.0, span_key.1), inner);
     }
     table
+}
+
+/// Phase 6 line 26 slice 8y: build the set of callee names whose
+/// declared effects are `DeclaredEffects::Polymorphic` only — purely
+/// `with E` (or `with _`) with no static fixed portion. Codegen uses
+/// this set to identify callees for which `call_effect_subs` is the
+/// sole authoritative source of "does this call resolve to a
+/// network-yield effect", as opposed to `PolymorphicWithFixed` or
+/// `Explicit` callees whose static portion may already carry
+/// `sends(Network)` / `receives(Network)` and therefore must always
+/// flow through the state-machine transform regardless of `E`
+/// resolution.
+///
+/// Mirrors `build_callee_network_yield_effect_table`'s sourcing of
+/// `declared_effects`; inferred effects on private fns are never
+/// `Polymorphic` (`DeclaredEffects::Polymorphic` is set only via an
+/// explicit `with E` / `with _` annotation), so they are excluded by
+/// construction.
+pub fn build_callee_purely_polymorphic_effects_set(
+    effects: &EffectCheckResult,
+) -> std::collections::HashSet<String> {
+    let mut set = std::collections::HashSet::new();
+    for (name, decl) in &effects.declared_effects {
+        if matches!(decl, DeclaredEffects::Polymorphic) {
+            set.insert(name.clone());
+        }
+    }
+    set
 }
 
 /// Build the per-callee "is network-boundary" side-table from an

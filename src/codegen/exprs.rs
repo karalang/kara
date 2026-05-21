@@ -210,7 +210,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let val = self.compile_expr(operand)?;
                 self.compile_unaryop(op, val)
             }
-            ExprKind::Call { callee, args } => self.compile_call(callee, args),
+            ExprKind::Call { callee, args } => self.compile_call(callee, args, &expr.span),
             ExprKind::If {
                 condition,
                 then_block,

@@ -14113,7 +14113,8 @@ fn main() {
     /// program state it would in the cli path.
     fn ir_for_with_state_struct_layouts(src: &str) -> String {
         use karac::cli::{
-            build_callee_network_yield_effect_table, build_state_struct_layouts,
+            build_call_effect_subs_table, build_callee_network_yield_effect_table,
+            build_callee_purely_polymorphic_effects_set, build_state_struct_layouts,
             build_yield_points_table,
         };
         use karac::codegen::compile_to_ir;
@@ -14151,6 +14152,15 @@ fn main() {
             &method_types,
             &pattern_binding_types,
         );
+        // Slice 8aa/8ab/8y inputs: per-call effect-variable
+        // substitutions and the purely-polymorphic-callee marker set.
+        // Empty for the legacy fixtures (no `with E` callees) so
+        // `compile_generic_call`'s slice 8y gate degrades to the
+        // pre-8y conservative default (state-machine intercept fires
+        // for every state_struct_layouts member).
+        parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
+        parsed.program.callee_purely_polymorphic_effects =
+            build_callee_purely_polymorphic_effects_set(&effects);
         compile_to_ir(&parsed.program, None, None).expect("codegen failed")
     }
 
@@ -18832,6 +18842,176 @@ fn main() {
             e.iter().any(|k| k.verb == "reads" && k.resource == "Db"),
             "E must bind to a set containing reads(Db); got: {:?}",
             e
+        );
+    }
+
+    // ── Phase 6 line 26 slice 8y: caller-side state-machine intercept gating ──
+    //
+    // Slice 8y adds a per-call-site decision on whether the per-mono
+    // state-machine helpers (emitted by slice 8v Phase 2) actually
+    // fire at a generic call site or whether the call lowers to a
+    // direct mango-keyed call instead. The decision draws from two
+    // tables populated by slices 8aa/8ab/8y at the cli pipeline
+    // boundary:
+    //   - `Program.call_effect_subs[(call.span.offset, call.span.length)]`
+    //     binds each `with E` effect-variable name to the resolved
+    //     effect set at this call (from the closure args' effects).
+    //   - `Program.callee_purely_polymorphic_effects` records the
+    //     set of callees whose declared effects are
+    //     `DeclaredEffects::Polymorphic` only (purely `with E` /
+    //     `with _`, no static fixed portion). For these callees the
+    //     decision-making consults `call_effect_subs` alone; for
+    //     `Explicit` / `PolymorphicWithFixed` callees the static
+    //     portion may include network-yield verbs regardless of `E`
+    //     resolution, so the intercept stays unconditional.
+    //
+    // The four tests below cover the side-table population +
+    // intercept-presence regression coverage:
+    //   1. Purely-polymorphic callee with body yields is in the
+    //      marker set.
+    //   2. `PolymorphicWithFixed` callee with body yields is NOT in
+    //      the marker set (fixed effects might include
+    //      `sends(Network)`; conservative keep).
+    //   3. `Explicit` (non-polymorphic) callee is NOT in the marker
+    //      set.
+    //   4. Existing slice 8v Phase 2 fixture — a non-polymorphic-effect
+    //      callee (no `with` clause at all) whose body yields — still
+    //      takes the state-machine intercept path, demonstrating the
+    //      slice 8y change is a strict no-op for callees outside the
+    //      marker set.
+
+    #[test]
+    fn test_slice_8y_purely_polymorphic_callee_in_marker_set() {
+        // `op[T, with E]` declared with `with E` only (no fixed
+        // effects) lands in `callee_purely_polymorphic_effects` so
+        // codegen knows `call_effect_subs[span][E]` is authoritative
+        // for the per-call network-yield classification.
+        use karac::cli::build_callee_purely_polymorphic_effects_set;
+        let src = "effect resource Network;
+                   pub fn fetch() with sends(Network) receives(Network) {}
+                   fn op[T, with E](cb: Fn() with E) with E { cb(); }
+                   fn caller() { op(|| fetch()); }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            typed.method_callee_types.clone(),
+            typed.call_type_subs.clone(),
+        );
+        let set = build_callee_purely_polymorphic_effects_set(&effects);
+        assert!(
+            set.contains("op"),
+            "op (purely polymorphic `with E`) must be in the marker set: {:?}",
+            set
+        );
+        assert!(
+            !set.contains("fetch"),
+            "fetch (Explicit) must NOT be in the marker set: {:?}",
+            set
+        );
+    }
+
+    #[test]
+    fn test_slice_8y_polymorphic_with_fixed_callee_excluded() {
+        // `op` with `with reads(Db) E` is `PolymorphicWithFixed` —
+        // its fixed portion may carry network-yield verbs at any
+        // future call site, so codegen must conservatively keep the
+        // state-machine intercept. The marker set excludes it.
+        use karac::cli::build_callee_purely_polymorphic_effects_set;
+        let src = "effect resource Db;
+                   fn write_log() with reads(Db) {}
+                   pub fn op[T, with E](cb: Fn() with E) with reads(Db) E { write_log(); cb(); }
+                   fn caller() { op(|| write_log()); }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            typed.method_callee_types.clone(),
+            typed.call_type_subs.clone(),
+        );
+        let set = build_callee_purely_polymorphic_effects_set(&effects);
+        assert!(
+            !set.contains("op"),
+            "op (PolymorphicWithFixed) must NOT be in the marker set: {:?}",
+            set
+        );
+    }
+
+    #[test]
+    fn test_slice_8y_explicit_callee_excluded_from_marker_set() {
+        // A callee with a concrete `Explicit` effect set never lands
+        // in the marker set — slice 8y's optimization is only sound
+        // for callees whose entire effect surface comes from `with E`
+        // resolution.
+        use karac::cli::build_callee_purely_polymorphic_effects_set;
+        let src = "effect resource Network;
+                   pub fn fetch() with sends(Network) receives(Network) {}
+                   fn driver[T](item: T) { fetch(); }
+                   fn caller() { driver(42i64); }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            typed.method_callee_types.clone(),
+            typed.call_type_subs.clone(),
+        );
+        let set = build_callee_purely_polymorphic_effects_set(&effects);
+        assert!(
+            !set.contains("driver"),
+            "driver (inferred Explicit via body) must NOT be in the marker set: {:?}",
+            set
+        );
+        assert!(
+            !set.contains("fetch"),
+            "fetch (declared Explicit) must NOT be in the marker set: {:?}",
+            set
+        );
+    }
+
+    #[test]
+    fn test_slice_8y_non_polymorphic_callee_still_takes_intercept_path() {
+        // Regression coverage: the slice 8v Phase 2 fixture's
+        // `driver` fn is non-polymorphic (no `with` clause, effects
+        // inferred to `Explicit({sends(Network), receives(Network)})`
+        // from the body's `fetch()` call). Slice 8y's gate must
+        // return `true` (state-machine path) for it — the caller
+        // body must still contain the intercept's signature
+        // instructions (state-struct constructor call + poll loop +
+        // free). A regression that broke this gate would erroneously
+        // turn `driver(42)` into a direct call that bypasses the
+        // event-loop integration.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: T) { fetch(); }
+             fn caller() { driver(42i64); }",
+        );
+        let caller_body = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller_body.contains("call ptr @\"__kara_state_new_driver$i64\"()"),
+            "non-polymorphic callee must still take the state-machine intercept:\n{caller_body}"
+        );
+        assert!(
+            caller_body.contains("kara.poll_loop:"),
+            "non-polymorphic callee must still emit the poll-loop block:\n{caller_body}"
         );
     }
 

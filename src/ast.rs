@@ -115,6 +115,16 @@ pub struct EffectKey {
     pub resource: String,
 }
 
+/// Phase 6 line 26 slice 8y: set of callee names whose declared
+/// effects are `DeclaredEffects::Polymorphic` only — purely `with E`
+/// (or `with _`) with no static fixed portion. Used by codegen's
+/// per-mono state-machine gating to decide whether
+/// `CallEffectSubsTable` alone is authoritative for the call's
+/// resolved-effect classification. See
+/// `Program.callee_purely_polymorphic_effects` for the full
+/// rationale.
+pub type CalleePurelyPolymorphicEffectsSet = std::collections::HashSet<String>;
+
 /// One yield-point entry within a network-boundary function: the call site
 /// where execution suspends pending I/O readiness, paired with the
 /// resolved callee key (`Identifier(name) → name`, two-segment
@@ -340,6 +350,24 @@ pub struct Program {
     /// effects include any network-yield verb. See `CallEffectSubsTable`
     /// type docs for the encoding rationale.
     pub call_effect_subs: CallEffectSubsTable,
+    /// Set by the cli pipeline after effectcheck (slice 8y); empty
+    /// otherwise. Names of callees whose declared effects are
+    /// `DeclaredEffects::Polymorphic` only — purely `with E` (or
+    /// `with _`) with no static fixed portion. For these callees the
+    /// `callee_network_yield_effect` table flags them conservatively
+    /// as network-yield candidates (any monomorphization MIGHT bind
+    /// `E` to `sends(Network)` / `receives(Network)`), so the
+    /// state-machine transform fires for every call site by default.
+    /// When this set contains the callee's name AND
+    /// `call_effect_subs[span]` resolves every `E` binding to a
+    /// non-network effect set, the per-mono caller-side state-machine
+    /// intercept can be skipped in favor of a direct call (slice 8y
+    /// optimization). `PolymorphicWithFixed` callees are intentionally
+    /// NOT in this set — their fixed portion may carry static
+    /// network-yield effects (`with sends(Network) + E`), so codegen
+    /// must conservatively keep the intercept for every call site of
+    /// those.
+    pub callee_purely_polymorphic_effects: CalleePurelyPolymorphicEffectsSet,
 }
 
 mod exprs;

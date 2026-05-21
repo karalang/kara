@@ -69,6 +69,7 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         callee: &Expr,
         args: &[CallArg],
+        call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         // Cooperative cancel check before each call inside a par-branch.
         // No-op when not inside a par branch. Narrowed against the
@@ -113,7 +114,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 );
                 if is_literal_index && self.generic_fns.contains_key(name) {
                     let explicit_args = vec![GenericArg::Const((**index).clone())];
-                    return self.compile_generic_call(name, args, Some(&explicit_args));
+                    return self.compile_generic_call(name, args, Some(&explicit_args), call_span);
                 }
             }
         }
@@ -191,7 +192,12 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Check if this is a call to a generic function (monomorphize on demand)
         if self.generic_fns.contains_key(&name) {
-            return self.compile_generic_call(&name, args, explicit_generic_args.as_deref());
+            return self.compile_generic_call(
+                &name,
+                args,
+                explicit_generic_args.as_deref(),
+                call_span,
+            );
         }
 
         // Check if this is an indirect call through a closure variable.

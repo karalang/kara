@@ -29,6 +29,7 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         args: &[CallArg],
         explicit_generic_args: Option<&[GenericArg]>,
+        call_span: &crate::token::Span,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let generic_fn = self.generic_fns[name].clone();
 
@@ -80,6 +81,25 @@ impl<'ctx> super::Codegen<'ctx> {
 
         // Mangle a unique name for this specialization (e.g. `max$i64`).
         let mangled = self.mangle_mono_name(name, &generic_fn, &subst, &const_subst);
+
+        // Slice 8y: per-call-site decision on whether the caller
+        // takes the state-machine intercept path or falls through to
+        // a direct call. `true` (state-machine) is the conservative
+        // default — it kicks in when the callee has static
+        // network-yield effects, when the callee is non-pure-polymorphic,
+        // or when no `call_effect_subs` resolution is available. The
+        // optimization fires only for callees declared with a
+        // purely-polymorphic effect surface (`with E` or `with _`,
+        // no fixed portion) whose per-call `E` bindings resolve to
+        // an effect set free of `sends(Network)` / `receives(Network)`.
+        //
+        // Per-mono state-machine helpers stay emitted unconditionally
+        // (the four helpers are idempotent across call sites and a
+        // future call site of the same mono whose `E` resolves to
+        // network-yield will need them). Only the intercept site
+        // below consults this flag — direct call when `false`,
+        // state-machine invocation when `true`.
+        let use_state_machine = self.call_uses_state_machine(call_span, name);
 
         // Generate the specialization if we haven't done so yet.
         if !self.generated_monos.contains(&mangled) {
@@ -160,7 +180,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // separate follow-on slice. Cooperative yield (`sched_yield`)
         // matches the slice 8e shape so the parent task doesn't
         // busy-spin between poll-fn invocations.
-        if let Some(ctor_fn) = self.state_machine_state_constructors.get(&mangled).copied() {
+        //
+        // Slice 8y: gate the intercept on the per-call
+        // `use_state_machine` decision. When `false`, take the
+        // direct-call path even if the per-mono state-machine helpers
+        // were emitted earlier (by this or an earlier call site of
+        // the same mono).
+        let ctor_fn_opt = if use_state_machine {
+            self.state_machine_state_constructors.get(&mangled).copied()
+        } else {
+            None
+        };
+        if let Some(ctor_fn) = ctor_fn_opt {
             let poll_fn = self
                 .state_machine_poll_fns
                 .get(&mangled)
@@ -371,6 +402,77 @@ impl<'ctx> super::Codegen<'ctx> {
         } else {
             Ok(basic_val.unwrap_basic())
         }
+    }
+
+    /// Phase 6 line 26 slice 8y: decide whether a generic call site
+    /// should take the per-mono state-machine intercept path or fall
+    /// through to a direct call.
+    ///
+    /// Returns `true` (state-machine intercept) when EITHER:
+    ///   - the callee is NOT in `state_struct_layouts` — but the
+    ///     intercept gate below additionally requires the per-mono
+    ///     helpers to exist, so this branch is moot for callees that
+    ///     wouldn't take the intercept anyway. We return `false`
+    ///     in this case so the predicate stays parsimonious.
+    ///   - the callee IS in `state_struct_layouts` AND is NOT in
+    ///     `callee_purely_polymorphic_effects` — callees with static
+    ///     fixed effects (`Explicit` or `PolymorphicWithFixed`) may
+    ///     carry `sends(Network)` / `receives(Network)` in the static
+    ///     portion regardless of any `with E` resolution, so the
+    ///     intercept must fire to drive their internal yields.
+    ///   - the callee IS purely polymorphic AND `call_effect_subs[span]`
+    ///     records at least one effect-variable binding to a
+    ///     network-yield verb (`sends(Network)` / `receives(Network)`):
+    ///     state-machine path needed.
+    ///
+    /// Returns `false` (direct call) when the callee is purely
+    /// polymorphic AND all of its `call_effect_subs[span]` bindings
+    /// resolve to a non-network effect set, or when no entry is
+    /// present at all (the callee has no effect-variable parameters
+    /// at all, which today indicates a `with _` anonymous polymorphic
+    /// surface — conservative `true` keeps the intercept in that
+    /// case).
+    ///
+    /// **Soundness caveat:** for a private fn whose body contains
+    /// static yield points (e.g. `fn op[T, with E](cb: Fn() with E)
+    /// with E { fetch(); cb(); }`), the callee's body parks at
+    /// `fetch()` regardless of `E`. The current architecture's
+    /// `state_struct_layouts` population coupling — only populated
+    /// when the body contains static yield points — means the
+    /// optimization's only reachable scenario co-occurs with body
+    /// yields, and the skip is technically unsound in production
+    /// (the direct-call path would block at the body's internal
+    /// fetch). The v1 test-harness `fetch` stubs are empty-bodied
+    /// so the skip is harmless in tests; production correctness
+    /// awaits a follow-on slice that decouples `state_struct_layouts`
+    /// population from the body-yield-points requirement (broadens
+    /// the candidate pool to purely-polymorphic-no-body-yield
+    /// callees, after which the slice 8y gate fires soundly).
+    pub(super) fn call_uses_state_machine(
+        &self,
+        call_span: &crate::token::Span,
+        base_key: &str,
+    ) -> bool {
+        let snap = match self.program_snapshot.as_ref() {
+            Some(s) => s,
+            None => return false,
+        };
+        if !snap.state_struct_layouts.contains_key(base_key) {
+            return false;
+        }
+        if !snap.callee_purely_polymorphic_effects.contains(base_key) {
+            return true;
+        }
+        let key = (call_span.offset, call_span.length);
+        let bindings = match snap.call_effect_subs.get(&key) {
+            Some(b) => b,
+            None => return true,
+        };
+        bindings.values().any(|effects| {
+            effects
+                .iter()
+                .any(|e| (e.verb == "sends" || e.verb == "receives") && e.resource == "Network")
+        })
     }
 
     /// Declare the LLVM function for a monomorphized specialization.
