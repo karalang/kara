@@ -2817,6 +2817,94 @@ fn main() {
         assert_eq!(out.trim(), "-999999");
     }
 
+    // ── Slice: conditional accumulator-update reduction (2026-05-20) ──
+    //
+    // The analyzer-side recognition tests in `tests/concurrency.rs` cover
+    // shape acceptance. These e2e tests pin the codegen path: an outer
+    // reduction shaped `if cond { acc = acc + delta; }` must fan out via
+    // `karac_par_reduce`, each worker accumulating into a private slot,
+    // final combine folding back into the parent's `sum`. The sink must
+    // match the serial computation — since `+` is associative+commutative,
+    // combine order doesn't matter.
+
+    #[test]
+    fn test_e2e_reduction_conditional_acc_update_assign_matches_serial() {
+        // Count of i in [0, 99999] where i % 3 == 0:
+        // 0, 3, 6, ..., 99999 → (99999/3)+1 = 33334.
+        // The body has no Index/FieldAccess so the memory-bound gate
+        // doesn't fire; K=100_000 × ~5 per-iter ops clears the cost gate,
+        // so par_reduce dispatches.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let cond: bool = (i % 3i64) == 0i64;
+        if cond {
+            sum = sum + 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "33334");
+    }
+
+    #[test]
+    fn test_e2e_reduction_conditional_acc_update_compound_matches_serial() {
+        // CompoundAssign variant: `sum += 1i64` inside the if-arm.
+        // Same workload shape, same expected count (33334).
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let cond: bool = (i % 3i64) == 0i64;
+        if cond {
+            sum += 1i64;
+        }
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "33334");
+    }
+
+    #[test]
+    fn test_e2e_reduction_conditional_acc_update_with_variable_delta() {
+        // The delta side can be a non-literal expression as long as it
+        // doesn't reference the accumulator. Sum of `i*2` over i in [0,
+        // 99999] where i is even:
+        //   i = 0, 2, 4, ..., 99998 (50000 even values)
+        //   delta_sum = sum(i * 2) for i in {0, 2, ..., 99998}
+        //             = 2 * sum(0, 2, 4, ..., 99998)
+        //             = 2 * 2 * sum(0, 1, 2, ..., 49999)
+        //             = 4 * (49999 * 50000 / 2) = 4_999_900_000
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let is_even: bool = (i % 2i64) == 0i64;
+        if is_even {
+            sum = sum + (i * 2i64);
+        }
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "4999900000");
+    }
+
     // ── Slice: cost-gate function-call body cost (2026-05-20) ────────
     //
     // Codegen's cost-model gate used to treat every function/method call
