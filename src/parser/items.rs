@@ -177,6 +177,10 @@ impl super::Parser {
                 let def = self.parse_type_alias(attributes, is_pub, is_private)?;
                 Some(Item::TypeAlias(def))
             }
+            Token::Let => {
+                self.reject_top_level_let();
+                None
+            }
             _ => {
                 if !attributes.is_empty() || is_pub || is_private {
                     self.error("Expected item declaration after attributes/pub/private");
@@ -1432,6 +1436,39 @@ impl super::Parser {
     /// We consume tokens through the trailing semicolon (or stop at the next
     /// item-starting token, whichever comes first) so a misplaced `mod`
     /// declaration does not poison the rest of the file.
+    fn reject_top_level_let(&mut self) {
+        // `let` is statement-only in Kāra; module-level constants use
+        // `const`. The parser used to silently fall through the item
+        // dispatch on `Token::Let`, leaving the declaration unregistered
+        // and producing a confusing downstream `undefined name` diagnostic
+        // at the reference site rather than the declaration site. The
+        // explicit arm + did-you-mean hint here keeps the error close to
+        // the actual mistake.
+        let start = self.current_span();
+        self.advance(); // consume `let`
+                        // Skip the rest of the spurious let-binding so error recovery
+                        // resumes cleanly on the next item. We tolerate the typical
+                        // `let NAME[: TYPE] = EXPR;` shape; if the user wrote something
+                        // else, the outer `synchronize_to_item` pass will catch the
+                        // next item-starting token.
+        while !self.is_at_end()
+            && !matches!(
+                self.peek_token(),
+                Token::Semicolon | Token::Fn | Token::Const | Token::Pub | Token::Private
+            )
+        {
+            self.advance();
+        }
+        let _ = self.eat(&Token::Semicolon);
+        let span = self.span_from(&start);
+        self.errors.push(ParseError {
+            message: "`let` is statement-only in Kāra; use `const NAME: T = ...;` for \
+                      module-level constants. See `docs/design.md § Constants`."
+                .to_string(),
+            span,
+        });
+    }
+
     fn reject_mod_decl(&mut self) {
         let start = self.current_span();
         self.advance(); // consume `mod`

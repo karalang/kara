@@ -1508,6 +1508,35 @@ fn test_mod_decl_rejection_recovers_for_following_items() {
 }
 
 #[test]
+fn test_top_level_let_rejected_with_did_you_mean_const() {
+    // `let` is statement-only; module-level constants use `const`. The
+    // parser used to silently drop top-level `let` items, leaving the
+    // confusing diagnostic to fire at the resolve stage as `undefined
+    // name`. The explicit arm + did-you-mean hint keeps the error close
+    // to the actual declaration site. Originally surfaced writing
+    // `kara-katas/leetcode/65-valid-number/valid.kara` (2026-05-20).
+    let (_, errors) = parse_with_errors("let MIN_FLOOR: i64 = 1;");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("`let` is statement-only")
+                && e.message.contains("use `const NAME")),
+        "expected did-you-mean-const diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_top_level_let_rejection_recovers_for_following_items() {
+    // After rejecting the spurious `let`, the parser must resync so the
+    // following function still parses. Expect exactly one parse error
+    // (the let-rejection) and a fully-formed function.
+    let (prog, errors) = parse_with_errors("let MIN_FLOOR: i64 = 1; fn main() { }");
+    assert_eq!(errors.len(), 1, "got {:?}", errors);
+    assert!(matches!(prog.items.last(), Some(Item::Function(f)) if f.name == "main"));
+}
+
+#[test]
 fn test_use_decl() {
     let prog = parse_ok("use std.collections.HashMap;");
     if let Item::UseDecl(u) = &prog.items[0] {

@@ -6,8 +6,8 @@
 //
 // Design gaps found while authoring this example are documented at the bottom.
 
-let MIN_FLOOR: i64 = 1;
-let MAX_FLOOR: i64 = 10;
+const MIN_FLOOR: i64 = 1;
+const MAX_FLOOR: i64 = 10;
 
 // Three-valued direction: Idle is the initial / quiescent state.
 // Falls into the Up sweep in next_stop so the first request biases upward.
