@@ -31,6 +31,12 @@ Without this, the E2E tests (including all `tests/memory_sanitizer.rs` cases) sk
 
 ## Branch management
 
+**All dev work in karac-rust happens in an isolated worktree, not on the primary `main` checkout.** Every implementation slice — feature, fix, refactor, even single-line bug fixes — starts with `EnterWorktree` (which honors `.claude/settings.local.json`'s `worktree.baseRef: "head"`, so the new worktree picks up local-but-unpushed `main` commits). Commit inside the worktree, then `git rebase main` from the worktree and `git merge --ff-only <branch>` from the primary to integrate. Direct commits to `main` from the primary checkout are reserved for pure recovery operations (the `update-ref` failure-mode dance below) — never for normal feature/fix work, even if "it's just two lines."
+
+Why mandatory rather than judgment-call: the primary worktree's role is review, cross-referencing, and integration. Mixing in-progress work there contaminates `git status`, blocks parallel slices, and skips the rebase-loud-fail signal that catches stale fork-points (the same signal that prevents the silent-rewind footgun in failure mode 2 below). Worktree isolation makes "what's on main" and "what I'm currently doing" structurally separate, which is what every other rule in this section relies on.
+
+The kara-katas repo is a different story — it's a content repo, not the compiler, and direct commits to its `main` are fine.
+
 **Always update `main` via `git merge --ff-only` from the primary worktree.** Cross-worktree `git update-ref refs/heads/main <source-tip>` bypasses git's "checked-out branch can't be ff'd" safety net and has two known failure modes — both have hit this repo:
 
 1. **Stale primary worktree.** The primary worktree's index and working tree don't refresh after the ref moves; subsequent `git status` there renders the just-landed commit as "uncommitted changes" (the inverse diff of what was shipped). Recovery: `git stash push` clears the false diff in one step. Detailed reproduction in the user's memory at `reference_update_ref_stale_primary_worktree`.
