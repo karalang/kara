@@ -1,0 +1,22 @@
+// Synthetic front-end stress program — PLACEHOLDER.
+//
+// The real synthetic will be ~10K LOC of generics-heavy / effect-heavy /
+// trait-heavy code designed to exercise the typechecker, effectchecker,
+// ownership analyzer, and monomorphizer at scale — where the front-end
+// cost surface lives and where algorithmic katas systematically under-sample.
+//
+// Shape sketch (filled in during implementation):
+//   - Many small public functions with declared effects (effectchecker stress)
+//   - Many generic functions with trait bounds (monomorphization stress)
+//   - Many shared structs with layout blocks (codegen stress)
+//   - Mixed ownership modes across function boundaries (ownership stress)
+//   - Realistic call graph (no contrived "one function per file" pessimization)
+//
+// Target size: 10K LOC, comparable to a mid-sized backend service.
+// Compare against synthetic.rs for the rustc -O baseline.
+//
+// Implementation tracked in docs/roadmap.md § Phase 8.5 Track 5.
+
+fn main() {
+    println("synthetic stress program — to be implemented")
+}

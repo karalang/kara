@@ -1,0 +1,4 @@
+{
+  "_comment": "Placeholder baseline. Populated by the main-merge workflow once bench.sh runs against a stabilized corpus. Schema mirrors hyperfine --export-json: { results: [{ command, mean, stddev, ... }] }. Each PR-trigger run compares its latest.json against this file; threshold is 30% over baseline at v1, tightening to <=5% as data accumulates.",
+  "results": []
+}
