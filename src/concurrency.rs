@@ -591,6 +591,28 @@ impl<'a> ConcurrencyChecker<'a> {
                         }
                         continue;
                     }
+                    // Next: conditional accumulator-update shape —
+                    // `if cond { acc = acc + delta; }` (and the OP=
+                    // form). Semantically equivalent to
+                    // `acc = acc + (if cond { delta } else { 0 })`,
+                    // so reducible under the same associative+commutative
+                    // op as the unconditional form. The condition must
+                    // not read the accumulator (order-dependent), which
+                    // the helper verifies.
+                    if let Some((name, op)) = self.conditional_acc_update_shape(expr) {
+                        if let_introduced.contains(&name) {
+                            continue;
+                        }
+                        match reduction {
+                            None => reduction = Some((name, op)),
+                            Some((ref existing_name, existing_op)) => {
+                                if existing_name != &name || existing_op != op {
+                                    return None;
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     // Else: any inner write to an outer-scope name (via
                     // nested if/else or inner loop) breaks the simple-
                     // reduction recognition; defer multi-write loops to a
@@ -632,6 +654,17 @@ impl<'a> ConcurrencyChecker<'a> {
                         }
                     }
                 }
+            } else if let Some((name, op)) = self.conditional_acc_update_shape(e) {
+                if !let_introduced.contains(&name) {
+                    match reduction {
+                        None => reduction = Some((name, op)),
+                        Some((ref existing_name, existing_op)) => {
+                            if existing_name != &name || existing_op != op {
+                                return None;
+                            }
+                        }
+                    }
+                }
             } else {
                 let mut inner_writes = HashSet::new();
                 self.collect_expr_inner_writes(e, &mut inner_writes);
@@ -644,6 +677,100 @@ impl<'a> ConcurrencyChecker<'a> {
         }
 
         reduction
+    }
+
+    /// Recognize the conditional-accumulator-update shape:
+    ///
+    ///   if cond { acc = acc + delta; }
+    ///   if cond { acc OP= delta; }
+    ///   if cond { acc = acc + delta; } else { /* empty */ }
+    ///
+    /// Returns `Some((acc_name, op))` when the inner statement is the
+    /// reduction-update shape for an outer-scope accumulator. The
+    /// transformation that justifies recognizing this as a reduction is:
+    ///
+    ///   if cond { acc = acc + delta; }
+    ///   ≡
+    ///   acc = acc + (if cond { delta } else { 0 })
+    ///
+    /// The two forms have identical per-iteration contributions for any
+    /// associative + commutative op with a known identity (`0` for `+`,
+    /// `1` for `*`, etc.) — which is the slice-1 allow-list — so the
+    /// par-reduce lowering can fan the iteration space across cores
+    /// without changing the final value.
+    ///
+    /// Constraints checked:
+    /// - `else` branch is absent OR contains no statements / no final expr.
+    /// - The then-block has exactly one statement and no trailing expr.
+    /// - The inner statement matches the same reduction-step shape
+    ///   `reduction_binary_shape` accepts (or a recognized CompoundAssign
+    ///   with an allow-listed op, excluding the `+= const_lit` induction
+    ///   shape since *that* shape is the unconditional loop counter, not
+    ///   a per-iter delta that meaningfully varies).
+    /// - The condition expression does NOT read the accumulator —
+    ///   otherwise the per-iter decision depends on accumulator state
+    ///   produced by earlier iterations, which is order-dependent and
+    ///   not preserved by the fan-out / combine model.
+    fn conditional_acc_update_shape(&self, expr: &Expr) -> Option<(String, ReductionOp)> {
+        let ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        // Reject any else that does work. An explicit empty `else { }`
+        // would parse as an If/Block with no stmts and no final_expr —
+        // that's fine. Anything else taints the shape.
+        if let Some(else_expr) = else_branch {
+            let ExprKind::Block(b) = &else_expr.kind else {
+                return None;
+            };
+            if !b.stmts.is_empty() || b.final_expr.is_some() {
+                return None;
+            }
+        }
+        if then_block.stmts.len() != 1 || then_block.final_expr.is_some() {
+            return None;
+        }
+        let (acc_name, op) = match &then_block.stmts[0].kind {
+            StmtKind::Assign { target, value } => {
+                let name = identifier_name(target)?;
+                let op = reduction_binary_shape(value, &name)?;
+                (name, op)
+            }
+            StmtKind::CompoundAssign { target, op, value } => {
+                let name = identifier_name(target)?;
+                let red_op = ReductionOp::from_compound_op(op)?;
+                // For `+`: bail on the `acc += const_lit` shape. That's
+                // the induction-step pattern (loop counter), not a real
+                // accumulator-update; under a conditional wrap it has
+                // no meaningful "per-iter delta varies" property and the
+                // induction-first rule applied unconditionally elsewhere
+                // would otherwise classify it inconsistently. Other
+                // CompoundAssign shapes (acc += expr, acc *= expr,
+                // acc |= expr, etc.) with a non-literal RHS pass through.
+                if red_op == ReductionOp::Add && is_int_literal(value) {
+                    // Still recognized as the count-of-truthy shape —
+                    // `if cond { acc += 1 }` is the canonical "count
+                    // iterations where cond holds" reduction, equivalent
+                    // to `acc = acc + (if cond { 1 } else { 0 })`. The
+                    // induction-first guard only fires in the
+                    // unconditional case where we'd be looking at a real
+                    // loop counter.
+                }
+                (name, red_op)
+            }
+            _ => return None,
+        };
+        // Final guard: condition must not reference the accumulator.
+        let mut cond_reads: HashSet<String> = HashSet::new();
+        self.collect_expr_reads(condition, &mut cond_reads);
+        if cond_reads.contains(&acc_name) {
+            return None;
+        }
+        Some((acc_name, op))
     }
 
     /// Analyze a single statement to extract defines, reads, and effects.

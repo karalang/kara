@@ -1006,9 +1006,16 @@ fn test_reduction_rejects_multiple_distinct_accumulators() {
 }
 
 #[test]
-fn test_reduction_rejects_nested_inner_write() {
-    // An inner `if { acc = ... }` mutates a captured name from a nested
-    // block; slice 1 conservatively rejects.
+fn test_reduction_recognized_for_nested_conditional_acc_update() {
+    // An inner `if cond { acc = acc + k; }` was conservatively rejected
+    // under slice 1. After the 2026-05-20 conditional-acc-update slice
+    // landed (see [`conditional_acc_update_shape`] in src/concurrency.rs),
+    // this shape is recognized: it's semantically equivalent to
+    // `acc = acc + (if cond { k } else { 0 })`, the per-iter contribution
+    // is order-independent, and `cond` here (`k > 5i64`) doesn't read the
+    // accumulator. The "if { acc = ... } rejected" conservative-default
+    // tests survive in the rejects-when-cond-reads-acc / rejects-with-
+    // nonempty-else / rejects-with-extra-stmt-in-then siblings below.
     let analysis = analyze(
         r#"
         fn main() {
@@ -1024,7 +1031,9 @@ fn test_reduction_rejects_nested_inner_write() {
         "#,
     );
     let main_fc = get_function(&analysis, "main");
-    assert!(main_fc.loop_reductions.is_empty());
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "acc");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
 }
 
 #[test]
@@ -1309,6 +1318,196 @@ fn test_reduction_recognized_for_conditional_min_for_range_after_lowering() {
     );
     assert_eq!(find_min_fc.loop_reductions[0].accumulator, "m");
     assert_eq!(find_min_fc.loop_reductions[0].op, ReductionOp::Min);
+}
+
+// ── Conditional accumulator-update recognition (slice: conditional-acc-update, 2026-05-20) ──
+// `if cond { acc = acc + delta; }` (and `if cond { acc OP= delta; }`)
+// is semantically equivalent to `acc = acc + (if cond { delta } else { 0 })`
+// for any associative+commutative op with a known identity, so the
+// pattern is a reduction step. Surfaced by kata-65 bench (count of
+// truthy `is_number(...)` results); pre-fix the analyzer reported
+// `<no parallelization opportunities detected>` and the workload ran
+// single-threaded (User ≈ wall, no parallelism).
+
+#[test]
+fn test_reduction_recognized_for_conditional_acc_update_assign() {
+    // The kata-65 bench shape: `if cond { sum = sum + 1i64; }`.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { sum = sum + 1i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "expected one reduction, got {:?}",
+        main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert_eq!(r.accumulator, "sum");
+    assert_eq!(r.op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_acc_update_compound() {
+    // CompoundAssign form: `if cond { sum += 1i64; }`. The unconditional
+    // `acc += const_lit` is reserved as the loop-counter shape; under
+    // a conditional wrap the matcher recognizes it as the "count of
+    // truthy iterations" reduction.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { sum += 1i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_acc_update_with_empty_else() {
+    // `if cond { acc = acc + 1 } else { }` — explicit empty else parses
+    // as an If with else_branch = Some(Block{stmts:[], final_expr:None})
+    // and is semantically identical to the no-else form.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { sum = sum + 1i64; } else { }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_acc_update_mul() {
+    // Non-Add op variant — `if cond { p = p * 2i64; }` over a Mul accumulator.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut p: i64 = 1i64;
+            let mut k: i64 = 0i64;
+            while k < 10i64 {
+                let cond: bool = k > 2i64;
+                if cond { p = p * 2i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "p");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Mul);
+}
+
+#[test]
+fn test_reduction_rejects_conditional_acc_update_when_cond_reads_acc() {
+    // `if sum > 100 { sum = sum + 1 }` — the condition reads the
+    // accumulator, so the per-iter decision depends on accumulator
+    // state from earlier iterations. Not order-independent; reject.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                if sum > 100i64 { sum = sum + 1i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "cond reading acc must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_conditional_acc_update_with_nonempty_else() {
+    // `if cond { sum = sum + 1 } else { sum = sum + 2 }` — both arms
+    // write the accumulator. Even though they're both add-shaped, the
+    // current slice scope rejects any else that does work. A future
+    // slice could generalize to two-arm reduction, but that's a separate
+    // recognizer pass with its own test coverage.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { sum = sum + 1i64; } else { sum = sum + 2i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "non-empty else must not be recognized at this slice scope, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_conditional_acc_update_with_extra_stmt_in_then() {
+    // Then-block has two stmts — not the single-stmt shape the
+    // recognizer accepts. The trailing `let local = ...` doesn't
+    // touch the accumulator but the shape constraint still rejects.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond {
+                    sum = sum + 1i64;
+                    let _local: i64 = k * 2i64;
+                }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "multi-stmt then-block must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
 }
 
 // ── Nested-binary chain recognition (slice: chain recognizer, 2026-05-20) ──
