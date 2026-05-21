@@ -18595,6 +18595,130 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ae: method-call state-machine intercept ref/slice ──
+    //
+    // Slice 8ad closed the non-generic free-fn intercept's
+    // ref/slice gap; slice 8ae closes the identical gap in the
+    // method-call state-machine intercept (`src/codegen/method_call.rs`).
+    // Two surfaces: (1) method args with `ref T` / `mut Slice[T]`
+    // shapes, (2) `ref self` / `mut ref self` receivers. Both
+    // dispatch through `fn_param_ref` / `fn_param_slice_elem` keyed
+    // on the impl-method's dotted name (e.g. `"Container.run"`) —
+    // populated by `declare_function` against the synthesized impl-
+    // method function whose `params[0]` is self after
+    // `make_impl_method_function` promotes `SelfParam` into a real
+    // `Param`. So `ref_flags[0]` covers self, `ref_flags[1..]`
+    // covers method args.
+    //
+    // Note: these tests use a distinct `Container` struct name (not
+    // `Hub`) to avoid confusion with pre-existing `shared struct
+    // Hub` tests elsewhere in this file.
+
+    #[test]
+    fn test_slice_8ae_method_ref_vec_arg_stores_data_ptr() {
+        // `impl Container { fn run(self, items: ref Vec[i64]) {
+        // fetch(); } }` — the state-struct field for `items` (param
+        // idx 1, state-struct field 2) must be ptr. The caller's
+        // `h.run(v)` stores the data ptr (via `get_data_ptr("v")`)
+        // into field 2, NOT the loaded Vec struct.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Container { count: i64 }
+             impl Container {
+                 fn run(self, items: ref Vec[i64]) { fetch(); }
+             }
+             fn caller() {
+                 let h = Container { count: 0 };
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 h.run(v);
+             }",
+        );
+        // State-struct field 2 (items, after tag at 0 and self at
+        // 1) is ptr-shaped.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.Container.run = type {"))
+            .unwrap_or_else(|| panic!("no state struct for Container.run in IR:\n{ir}"));
+        assert!(
+            state_line.contains("ptr"),
+            "ref Vec[i64] method-arg field must contain ptr:\n{state_line}"
+        );
+        // Caller stores a ptr at the kara.arg0.field_ptr GEP.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store ptr %v, ptr %kara.arg0.field_ptr"),
+            "intercept must store data ptr (not loaded Vec value) into method's ref-arg field:\n{caller}"
+        );
+        // Regression guard: no Vec struct stored at the field.
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into method's ref-arg field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8ae_method_mut_slice_arg_synthesizes_header() {
+        // `impl Container { fn run(self, items: mut Slice[i64]) {
+        // fetch(); } }` — the state-struct field for `items` is the
+        // slice struct. The caller's `h.run(mut v)` synthesizes the
+        // slice header from the Vec source via `coerce_to_slice`
+        // and stores it.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Container { count: i64 }
+             impl Container {
+                 fn run(self, items: mut Slice[i64]) { fetch(); }
+             }
+             fn caller() {
+                 let h = Container { count: 0 };
+                 let mut v: Vec[i64] = Vec.new();
+                 v.push(1);
+                 h.run(mut v);
+             }",
+        );
+        // Caller stores the synthesized slice header.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store { ptr, i64 }") && caller.contains("ptr %kara.arg0.field_ptr"),
+            "intercept must store synthesized slice header for mut Slice[i64] method arg:\n{caller}"
+        );
+        // Regression guard: no Vec struct stored at the field.
+        assert!(
+            !caller.contains("store { ptr, i64, i64 } %v, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store { ptr, i64, i64 } %v1, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded Vec struct into method's mut Slice field:\n{caller}"
+        );
+    }
+
+    #[test]
+    fn test_slice_8ae_method_owned_args_unchanged() {
+        // Regression guard: owned-value method args still store
+        // loaded values. `impl Container { fn run(self, n: i64) {
+        // fetch(); } }` — caller `h.run(42)` emits `store i64 42,
+        // ptr %kara.arg0.field_ptr`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Container { count: i64 }
+             impl Container {
+                 fn run(self, n: i64) { fetch(); }
+             }
+             fn caller() {
+                 let h = Container { count: 0 };
+                 h.run(42);
+             }",
+        );
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store i64 42, ptr %kara.arg0.field_ptr"),
+            "owned method arg must store the loaded value (regression guard):\n{caller}"
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`

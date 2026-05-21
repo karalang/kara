@@ -68,9 +68,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     .get_insert_block()
                     .and_then(|bb| bb.get_parent())
                     .expect("compile_method_call inside a function context");
-                // Compile the receiver into an SSA value. Mirrors
-                // slice 8f's arg-store handling, just for `self`.
-                let recv_val = self.compile_expr(object)?;
+                // Slice 8ae: consult the method's ref / slice tables
+                // so `self` and method args dispatch by mode (ref →
+                // data ptr; mut Slice → coerce_to_slice; owned →
+                // loaded value), mirroring slice 8z (per-mono
+                // intercept in `compile_generic_call`) and slice 8ad
+                // (non-generic free-fn intercept in `compile_call`).
+                // Without this, a method whose param is `ref T` /
+                // `mut Slice[T]` would store the wrong-shape value
+                // into the ptr- or Slice-struct-shaped state-struct
+                // field. `fn_param_ref` / `fn_param_slice_elem` are
+                // keyed on the impl-method's dotted name (e.g.
+                // `"Hub.run"`) — populated by `declare_function`
+                // against the synthesized impl-method function whose
+                // `params[0]` is self after `make_impl_method_function`
+                // promotes the `SelfParam` into a real `Param`. So
+                // `ref_flags[0]` covers `ref self` / `mut ref self`;
+                // `ref_flags[1..]` covers method args at param indices
+                // 1..K.
+                let ref_flags = self.fn_param_ref.get(key).cloned().unwrap_or_default();
+                let slice_elems = self
+                    .fn_param_slice_elem
+                    .get(key)
+                    .cloned()
+                    .unwrap_or_default();
+
                 // Allocate the state struct via the constructor.
                 let state_call = self
                     .builder
@@ -82,17 +104,39 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_pointer_value();
                 // Store the receiver into state struct field 1 (self
                 // is at layout position 0 → state struct field 1
-                // after the i32 tag at field 0).
+                // after the i32 tag at field 0). Dispatch by self's
+                // declared mode: `ref self` / `mut ref self` route
+                // through `get_data_ptr` for Identifier receivers (or
+                // materialize an rvalue temp); plain `self` stores
+                // the loaded value as before.
                 let self_field_ptr = self
                     .builder
                     .build_struct_gep(state_struct, state_ptr, 1, "kara.self.field_ptr")
                     .expect("GEP state struct field 1 for self");
+                let self_is_ref = ref_flags.first().copied().unwrap_or(false);
+                let self_to_store: BasicValueEnum<'ctx> = if self_is_ref {
+                    if let ExprKind::Identifier(var_name) = &object.kind {
+                        if let Some(ptr) = self.get_data_ptr(var_name) {
+                            ptr.into()
+                        } else {
+                            let val = self.compile_expr(object)?;
+                            self.materialize_rvalue_for_ref_arg(val, usize::MAX)
+                        }
+                    } else {
+                        let val = self.compile_expr(object)?;
+                        self.materialize_rvalue_for_ref_arg(val, usize::MAX)
+                    }
+                } else {
+                    self.compile_expr(object)?
+                };
                 self.builder
-                    .build_store(self_field_ptr, recv_val)
+                    .build_store(self_field_ptr, self_to_store)
                     .expect("store self into state struct field 1");
-                // Method args follow at fields 2..K.
+                // Method args follow at fields 2..K. ref_flags /
+                // slice_elems param indices are offset by 1 (self at
+                // index 0, so method arg `i` is at param index
+                // `i + 1`).
                 for (i, arg) in args.iter().enumerate() {
-                    let arg_val = self.compile_expr(&arg.value)?;
                     let field_idx = (i + 2) as u32;
                     let field_ptr = self
                         .builder
@@ -103,8 +147,34 @@ impl<'ctx> super::Codegen<'ctx> {
                             &format!("kara.arg{i}.field_ptr"),
                         )
                         .expect("GEP state struct field for method arg");
+
+                    let param_idx = i + 1;
+                    let is_ref = ref_flags.get(param_idx).copied().unwrap_or(false);
+                    let slice_elem = slice_elems.get(param_idx).copied().flatten();
+
+                    let to_store: BasicValueEnum<'ctx> = if is_ref {
+                        if let ExprKind::Identifier(var_name) = &arg.value.kind {
+                            if let Some(ptr) = self.get_data_ptr(var_name) {
+                                ptr.into()
+                            } else {
+                                let val = self.compile_expr(&arg.value)?;
+                                self.materialize_rvalue_for_ref_arg(val, i)
+                            }
+                        } else {
+                            let val = self.compile_expr(&arg.value)?;
+                            self.materialize_rvalue_for_ref_arg(val, i)
+                        }
+                    } else if let Some(elem_ty) = slice_elem {
+                        match self.coerce_to_slice(&arg.value, elem_ty)? {
+                            Some(slice_val) => slice_val,
+                            None => self.compile_expr(&arg.value)?,
+                        }
+                    } else {
+                        self.compile_expr(&arg.value)?
+                    };
+
                     self.builder
-                        .build_store(field_ptr, arg_val)
+                        .build_store(field_ptr, to_store)
                         .expect("store method arg into state struct field");
                 }
                 // Poll loop + cooperative yield + done + free — same
