@@ -599,6 +599,15 @@ impl<'a> EffectChecker<'a> {
             self.fn_uses_with_underscore.insert(key);
         }
 
+        // Seed the verb contributed by `R.method(...)` for every
+        // `effect resource R: Trait` declaration. The verb is derived
+        // from the trait method's receiver mode (design.md § Resource
+        // call desugaring): `mut ref self` / owned `self` → writes(R),
+        // `ref self` → reads(R). Without this, the inference walker
+        // sees `Audit.log(msg)` as a call to the unknown key
+        // `"Audit.log"` and contributes no effect.
+        self.seed_resource_trait_dispatch_effects(&builtin_span);
+
         // Phase A: Collect declarations
         self.collect_transparent_effects();
         self.expand_effect_groups();

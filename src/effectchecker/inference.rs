@@ -21,6 +21,71 @@ use crate::token::Span;
 use super::{tarjan_scc, DeclaredEffects, Effect, EffectOrigin, EffectSet};
 
 impl<'a> super::EffectChecker<'a> {
+    /// Seed `inferred_effects` for the synthetic `Resource.method` keys
+    /// produced by `R.method(...)` call sites. For each
+    /// `effect resource R: Trait` declaration, walk `Trait`'s methods
+    /// and contribute the verb implied by the method's receiver mode:
+    /// `mut ref self` / owned `self` → `writes(R)`, `ref self` →
+    /// `reads(R)`. Methods with no `self` receiver are skipped — those
+    /// are associated functions and don't go through the per-task
+    /// provider stack at runtime, so they carry no inherent resource
+    /// verb. Supertrait methods are intentionally not walked here; the
+    /// typechecker handles dispatch through supertraits but the bug
+    /// repro that motivated this seed (and the v1 surface) only
+    /// exercises the direct provider trait.
+    pub(crate) fn seed_resource_trait_dispatch_effects(&mut self, builtin_span: &Span) {
+        // Collect (trait_name → Vec<(method_name, SelfParam)>) once so
+        // each resource that names that trait can reuse the lookup.
+        let mut trait_methods: HashMap<String, Vec<(String, SelfParam)>> = HashMap::new();
+        for item in &self.program.items {
+            let t = match item {
+                Item::TraitDef(t) => t,
+                _ => continue,
+            };
+            for ti in &t.items {
+                let m = match ti {
+                    TraitItem::Method(m) => m,
+                    TraitItem::AssocType(_) => continue,
+                };
+                if let Some(ref sp) = m.self_param {
+                    trait_methods
+                        .entry(t.name.clone())
+                        .or_default()
+                        .push((m.name.clone(), sp.clone()));
+                }
+            }
+        }
+
+        for item in &self.program.items {
+            let r = match item {
+                Item::EffectResource(r) => r,
+                _ => continue,
+            };
+            let Some(ref trait_name) = r.provider_trait else {
+                continue;
+            };
+            let Some(methods) = trait_methods.get(trait_name) else {
+                continue;
+            };
+            for (method_name, self_param) in methods {
+                let verb = match self_param {
+                    SelfParam::Ref => EffectVerbKind::Reads,
+                    SelfParam::MutRef | SelfParam::Owned => EffectVerbKind::Writes,
+                };
+                let key = format!("{}.{}", r.name, method_name);
+                let mut set = EffectSet::new();
+                set.add(
+                    Effect {
+                        verb,
+                        resource: r.name.clone(),
+                    },
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                self.inferred_effects.insert(key, set);
+            }
+        }
+    }
+
     // ── Phase B: Inference ──────────────────────────────────────
 
     pub(crate) fn infer_effects(&mut self) {

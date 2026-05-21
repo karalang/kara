@@ -5968,3 +5968,118 @@ fn test_slice_8aa_call_effect_subs_records_multiple_call_sites() {
         result.call_effect_subs
     );
 }
+
+// ── Resource-trait dispatch effect inference ───────────────────────
+//
+// `R.method(...)` where `R` is an `effect resource R: Trait`
+// dispatches at runtime through the provider stack. The effect
+// inference walker contributes the verb implied by `Trait.method`'s
+// receiver mode to the caller's inferred set:
+//   `mut ref self` / owned `self` → writes(R)
+//   `ref self`                    → reads(R)
+
+#[test]
+fn test_resource_trait_dispatch_infers_writes_from_mut_ref_self() {
+    let result = effectcheck_ok(
+        "pub trait Logger { fn log(mut ref self, msg: String); }\n\
+         pub effect resource Audit: Logger;\n\
+         pub struct InMemoryLogger { entries: Vec[String] }\n\
+         impl InMemoryLogger { pub fn new() -> InMemoryLogger { InMemoryLogger { entries: Vec.new() } } }\n\
+         impl Logger for InMemoryLogger { fn log(mut ref self, msg: String) { self.entries.push(msg); } }\n\
+         fn record_event(msg: String) { Audit.log(msg); }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("record_event")
+        .expect("record_event must be in inferred_effects");
+    assert!(
+        inferred.effects.iter().any(
+            |e| matches!(e.effect.verb, EffectVerbKind::Writes) && e.effect.resource == "Audit"
+        ),
+        "expected writes(Audit) in record_event's inferred set; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_resource_trait_dispatch_infers_reads_from_ref_self() {
+    let result = effectcheck_ok(
+        "pub trait Reader { fn last(ref self) -> String; }\n\
+         pub effect resource Audit: Reader;\n\
+         pub struct InMemoryReader { last: String }\n\
+         impl Reader for InMemoryReader { fn last(ref self) -> String { self.last } }\n\
+         fn peek() -> String { Audit.last() }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("peek")
+        .expect("peek must be in inferred_effects");
+    assert!(
+        inferred
+            .effects
+            .iter()
+            .any(|e| matches!(e.effect.verb, EffectVerbKind::Reads) && e.effect.resource == "Audit"),
+        "expected reads(Audit) in peek's inferred set; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_wrong_resource_on_resource_trait_dispatch_diagnosed() {
+    // `record_event` calls `Audit.log` (writes(Audit)) but declares
+    // the wrong resource (`writes(Wrong)`). The body's actual
+    // writes(Audit) is missing from the declaration →
+    // MissingEffectDeclaration. The mirror diagnostic
+    // (OverDeclaredEffect on the unused writes(Wrong)) does not fire
+    // under the current architecture: `collect_function_info` seeds
+    // inferred_effects from declared, so declared effects are always
+    // present in the inferred set at verification time. This is the
+    // same trade-off documented in
+    // `test_public_over_declaration_detected`. The
+    // Missing-on-the-actual-call-site diagnostic is the load-bearing
+    // one for catching a programmer who declared the wrong resource.
+    let errors = effectcheck_errors(
+        "pub trait Logger { fn log(mut ref self, msg: String); }\n\
+         pub effect resource Audit: Logger;\n\
+         pub effect resource Wrong: Logger;\n\
+         pub struct InMemoryLogger { entries: Vec[String] }\n\
+         impl Logger for InMemoryLogger { fn log(mut ref self, msg: String) { self.entries.push(msg); } }\n\
+         pub fn record_event(msg: String) writes(Wrong) { Audit.log(msg); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(Audit)")),
+        "expected MissingEffectDeclaration mentioning writes(Audit); got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_missing_resource_effect_under_declared_policy_diagnosed() {
+    // The default `Declared` policy requires every `pub fn` to list
+    // its effects; calling `Audit.log` without declaring writes(Audit)
+    // fires `MissingEffectDeclaration`.
+    let errors = effectcheck_errors(
+        "pub trait Logger { fn log(mut ref self, msg: String); }\n\
+         pub effect resource Audit: Logger;\n\
+         pub struct InMemoryLogger { entries: Vec[String] }\n\
+         impl Logger for InMemoryLogger { fn log(mut ref self, msg: String) { self.entries.push(msg); } }\n\
+         pub fn record_event(msg: String) { Audit.log(msg); }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(Audit)")),
+        "expected MissingEffectDeclaration mentioning writes(Audit); got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
