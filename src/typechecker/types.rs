@@ -824,9 +824,20 @@ pub(super) fn is_subtype(super_ty: &Type, sub_ty: &Type) -> bool {
         // arg, field init, let RHS) and the ownership checker handles the
         // borrow-not-consume semantics via the slot's declared mode. The
         // reverse (`ref T` → owned `T`) requires explicit deref and is not
-        // accepted here; the `MutRef` sub-case is also excluded so owned-to-
-        // mut-ref still needs the explicit `mut` call-site marker.
+        // accepted here.
         (Type::Ref(inner), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
+            is_subtype(inner, sub)
+        }
+        // Owned-to-mut-ref coercion (slice 8ag): a `mut ref T` slot
+        // accepts an owned `T` source at call boundaries. The `mut`
+        // marker is enforced separately by `check_call_site_marker`;
+        // is_subtype / types_compatible are type-level only, mirroring
+        // the existing `mut Slice[T]` ↔ owned `Vec[T]` / `Array[T, N]`
+        // coercion pattern in `types_compatible`. The `Ref` exclusion
+        // blocks `ref T → mut ref T` (loss-of-mutability would be
+        // wrong); the identity `MutRef → MutRef` case is handled by
+        // the dedicated arm above.
+        (Type::MutRef(inner), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
             is_subtype(inner, sub)
         }
         _ => types_compatible(super_ty, sub_ty),
@@ -1020,6 +1031,16 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
         }
         (Type::Ref(a), Type::Ref(b)) => types_compatible(a, b),
         (Type::MutRef(a), Type::MutRef(b)) => types_compatible(a, b),
+        // Owned-to-mut-ref coercion (slice 8ag): a `mut ref T` slot
+        // accepts an owned source at call boundaries. The `mut` marker
+        // is enforced separately by `check_call_site_marker`;
+        // types_compatible is type-level only, mirroring the existing
+        // `mut Slice[T]` ↔ owned `Vec[T]` / `Array[T, N]` coercion
+        // pattern below. The `Ref`/`MutRef` exclusion blocks the cross-
+        // mutability case (`ref T` → `mut ref T`).
+        (Type::MutRef(a), sub) if !matches!(sub, Type::Ref(_) | Type::MutRef(_)) => {
+            types_compatible(a, sub)
+        }
         // Raw pointers — sibling to the `Ref`/`MutRef` arms above.
         // Constness is part of the shape; cross-constness compatibility
         // is the user's responsibility (the strict-provenance APIs at

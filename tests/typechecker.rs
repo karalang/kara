@@ -17931,3 +17931,97 @@ fn non_type_mismatch_diagnostics_leave_expected_got_unset() {
     );
     assert!(wrong_args.got.is_none());
 }
+
+// ── Phase 6 line 26 slice 8ag: mut-ref call-arg unification with mut marker ──
+//
+// Pre-slice-8ag, `is_subtype` / `types_compatible` had no
+// owned-source → `mut ref T` coercion arm — only the corresponding
+// `mut Slice[T]` coercion existed. Both shapes participate in the
+// same call-boundary contract (owned source + `mut` marker → mutable
+// borrow at the callee), so the asymmetry was a bug: the typechecker
+// rejected `driver(mut v)` for *every* `mut ref T` slot, including
+// the non-generic `mut ref Vec[i64]` (the `set_at` e2e test passed
+// only because `run_program` doesn't gate on type errors).
+//
+// Slice 8ag adds the `MutRef` arms to `is_subtype` /
+// `types_compatible` and `unify_types`, mirroring the existing
+// `Slice{mutable:true}` coercion pattern. The `mut` call-site marker
+// is enforced separately by `check_call_site_marker`, so missing or
+// extraneous markers still fire `MissingMutMarker` /
+// `InvalidMutMarker`. The new `unify_types` arm binds the inner
+// type-param against the owned source so generic resolution pins `T`
+// (e.g. `driver[T](item: mut ref T)` called with an owned `i64`
+// solves `T = i64`).
+
+#[test]
+fn test_slice_8ag_mut_ref_typeparam_accepts_owned_with_marker() {
+    typecheck_ok(
+        "fn driver[T](item: mut ref T) { }
+         fn caller() {
+             let mut n: i64 = 7;
+             driver(mut n);
+         }",
+    );
+}
+
+#[test]
+fn test_slice_8ag_mut_ref_concrete_accepts_owned_with_marker() {
+    typecheck_ok(
+        "fn driver(item: mut ref Vec[i64]) { }
+         fn caller() {
+             let mut v: Vec[i64] = Vec.new();
+             driver(mut v);
+         }",
+    );
+}
+
+#[test]
+fn test_slice_8ag_mut_ref_owned_without_marker_still_errors() {
+    // Marker enforcement stays — type-level acceptance does not
+    // weaken `check_call_site_marker`'s MissingMutMarker emission.
+    let errs = typecheck_errors(
+        "fn driver(item: mut ref Vec[i64]) { }
+         fn caller() {
+             let mut v: Vec[i64] = Vec.new();
+             driver(v);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::MissingMutMarker),
+        "missing-marker on owned-source → mut ref param must still fire: {errs:?}"
+    );
+}
+
+#[test]
+fn test_slice_8ag_mut_ref_typeparam_marker_still_required() {
+    let errs = typecheck_errors(
+        "fn driver[T](item: mut ref T) { }
+         fn caller() {
+             let mut n: i64 = 7;
+             driver(n);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.kind == TypeErrorKind::MissingMutMarker),
+        "missing-marker on owned-source → mut ref T param must still fire: {errs:?}"
+    );
+}
+
+#[test]
+fn test_slice_8ag_mut_ref_rejects_ref_source() {
+    // `ref T` → `mut ref T` is a loss-of-mutability cross — the
+    // type-level coercion's `Ref`/`MutRef` exclusion must keep this
+    // path rejecting.
+    let errs = typecheck_errors(
+        "fn driver(item: mut ref Vec[i64]) { }
+         fn caller(v: ref Vec[i64]) {
+             driver(mut v);
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "ref Vec[i64] → mut ref Vec[i64] must still be rejected"
+    );
+}

@@ -687,6 +687,18 @@ pub(super) fn unify_types(
         (Type::Ref(x), Type::Ref(y))
         | (Type::MutRef(x), Type::MutRef(y))
         | (Type::Weak(x), Type::Weak(y)) => unify_types(x, y, substitutions, const_substitutions),
+        // Owned-to-mut-ref coercion at call boundaries (slice 8ag): when
+        // the slot is `mut ref T` and the source is an owned `T`, bind
+        // the inner type-param against the owned source so generic
+        // resolution pins `T`. Mirrors the type-level coercion arm in
+        // `is_subtype` / `types_compatible`; the `mut` call-site marker
+        // is enforced separately by `check_call_site_marker`. The
+        // `Ref`/`MutRef`/`Weak` exclusion preserves the identity arms
+        // above (already handled by direct matches) and rejects the
+        // loss-of-mutability cross.
+        (Type::MutRef(x), y) if !matches!(y, Type::Ref(_) | Type::MutRef(_) | Type::Weak(_)) => {
+            unify_types(x, y, substitutions, const_substitutions)
+        }
         // Raw pointers — `*const T` / `*mut T` per design.md § Raw
         // pointers. Mutability is part of the shape; `*const T` does
         // *not* unify with `*mut T` (slot constness asymmetry — the

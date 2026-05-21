@@ -18476,6 +18476,60 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ag: re-enabled mut ref T per-mono intercept ─
+    //
+    // Carved out of slice 8af 2026-05-20 by the typechecker probe that
+    // surfaced the missing owned-to-mut-ref coercion arm. With slice
+    // 8ag's typechecker fix landed (`is_subtype` / `types_compatible`
+    // / `unify_types` accept owned source against `mut ref T` at call
+    // boundaries, marker enforcement stays at `check_call_site_marker`),
+    // the codegen-side dispatch is now reachable end-to-end. The
+    // dispatch itself is unchanged — slice 8z's `declare_mono_function`
+    // already handles `TypeKind::MutRef(_)` symmetrically with
+    // `TypeKind::Ref(_)`; this test exercises the previously-blocked
+    // verification gap.
+
+    #[test]
+    fn test_slice_8ag_per_mono_mut_ref_typeparam_stores_ptr() {
+        // `fn driver[T](item: mut ref T) { fetch(); }` with `T = i64`.
+        // The state-struct field for `item` lowers to `ptr` (MutRef
+        // mirrors Ref's lowering at the layout level — both are
+        // pointer-shaped in the captured-local state struct). The
+        // caller's per-mono intercept must store the address-of the
+        // owned source binding rather than the loaded i64 value.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver[T](item: mut ref T) { fetch(); }
+             fn caller() {
+                 let mut n: i64 = 7;
+                 driver(mut n);
+             }",
+        );
+        // State-struct field is ptr-shaped.
+        let state_line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver"))
+            .unwrap_or_else(|| panic!("no state struct in IR:\n{ir}"));
+        assert!(
+            state_line.contains("ptr"),
+            "mut ref T field must lower to ptr in state struct:\n{state_line}"
+        );
+        // Caller stores a ptr into the state-struct field — the
+        // address of `n`, not the loaded i64 value. Regression guard
+        // against `store i64 %v, ptr %kara.arg0.field_ptr`.
+        let caller = extract_fn_ir(&ir, "caller");
+        assert!(
+            caller.contains("store ptr") && caller.contains("ptr %kara.arg0.field_ptr"),
+            "intercept must store ptr (address-of source) into mut ref T field:\n{caller}"
+        );
+        assert!(
+            !caller.contains("store i64 7, ptr %kara.arg0.field_ptr")
+                && !caller.contains("store i64 %n, ptr %kara.arg0.field_ptr"),
+            "intercept must NOT store loaded i64 value into mut ref T field:\n{caller}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8ad: non-generic state-machine intercept ref/slice ──
     //
     // Slice 8z closed the per-mono intercept (`compile_generic_call`)
