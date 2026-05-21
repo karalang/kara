@@ -650,7 +650,13 @@ fn test_effect_variable_in_generics() {
     if let Item::Function(f) = &prog.items[0] {
         let gp = f.generic_params.as_ref().unwrap();
         assert_eq!(gp.params.len(), 2);
-        assert_eq!(gp.effect_params, vec!["E"]);
+        assert_eq!(
+            gp.effect_params
+                .iter()
+                .map(|ep| ep.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["E"],
+        );
         // The effect clause must produce Variable("E"), not Group("E").
         let effects = f.effects.as_ref().expect("should have effect clause");
         assert_eq!(effects.items.len(), 1);
@@ -676,7 +682,13 @@ fn test_multiple_effect_variables_comma_separated() {
     if let Item::Function(f) = &prog.items[0] {
         let gp = f.generic_params.as_ref().unwrap();
         assert_eq!(gp.params.len(), 3, "expected 3 type params (T, U, V)");
-        assert_eq!(gp.effect_params, vec!["E1", "E2"]);
+        assert_eq!(
+            gp.effect_params
+                .iter()
+                .map(|ep| ep.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["E1", "E2"],
+        );
         let effects = f.effects.as_ref().expect("should have effect clause");
         assert_eq!(effects.items.len(), 2);
         for (i, name) in ["E1", "E2"].iter().enumerate() {
@@ -697,7 +709,160 @@ fn test_multiple_effect_variables_each_with_keyword() {
     if let Item::Function(f) = &prog.items[0] {
         let gp = f.generic_params.as_ref().unwrap();
         assert!(gp.params.is_empty());
-        assert_eq!(gp.effect_params, vec!["E", "F"]);
+        assert_eq!(
+            gp.effect_params
+                .iter()
+                .map(|ep| ep.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["E", "F"],
+        );
+    }
+}
+
+// ── Phase 6 line 26 slice 8ac: `E: Effect` bound syntax ───────────
+//
+// Parser-side acceptance of design.md line 736's type-param-style
+// effect-parameter declaration. `E: Effect` is structurally
+// equivalent to the positional `with E` spelling — the parser
+// classifies the generic-param as an effect-param when the first
+// bound on the param's bound list is the bare `Effect` trait
+// (single-segment path, no generic args). Bounds beyond the leading
+// `Effect` are stored on the AST for future granularity but ignored
+// in v1; multi-bound effect-params (`E: Effect + UserExtension`) and
+// constraint bounds (`E: no writes(R)`, design.md line 3150) remain
+// reserved syntax.
+
+#[test]
+fn test_slice_8ac_effect_bound_form_parses() {
+    let prog = parse_ok(
+        "fn map[T, E: Effect](f: Fn(T) -> T with E, items: Vec[T]) -> Vec[T] with E { todo() }",
+    );
+    if let Item::Function(f) = &prog.items[0] {
+        let gp = f.generic_params.as_ref().unwrap();
+        assert_eq!(gp.params.len(), 1, "expected 1 type param (T)");
+        assert_eq!(gp.params[0].name, "T");
+        assert_eq!(
+            gp.effect_params.len(),
+            1,
+            "expected E reclassified into effect_params",
+        );
+        let ep = &gp.effect_params[0];
+        assert_eq!(ep.name, "E");
+        assert_eq!(ep.bounds.len(), 1, "expected single `Effect` bound");
+        assert_eq!(ep.bounds[0].path, vec!["Effect".to_string()]);
+        assert!(
+            ep.bounds[0].generic_args.is_none(),
+            "v1 `Effect` bound takes no generic args",
+        );
+        // The `with E` in the effect clause must still resolve as
+        // a Variable, identical to the positional spelling.
+        let effects = f.effects.as_ref().expect("should have effect clause");
+        assert!(matches!(&effects.items[0], EffectItem::Variable(v) if v == "E"));
+    } else {
+        panic!("expected Function item");
+    }
+}
+
+#[test]
+fn test_slice_8ac_effect_bound_equivalent_to_with_keyword() {
+    // `[T, E: Effect]` and `[T, with E]` produce the same effect_params
+    // shape modulo the bound marker. Same param count, same name, same
+    // downstream effect-clause Variable resolution.
+    let bounded = parse_ok("fn f[T, E: Effect](x: T) with E { todo() }");
+    let positional = parse_ok("fn f[T, with E](x: T) with E { todo() }");
+    let bounded_fn = match &bounded.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected Function"),
+    };
+    let positional_fn = match &positional.items[0] {
+        Item::Function(f) => f,
+        _ => panic!("expected Function"),
+    };
+    let bgp = bounded_fn.generic_params.as_ref().unwrap();
+    let pgp = positional_fn.generic_params.as_ref().unwrap();
+    assert_eq!(bgp.params.len(), pgp.params.len());
+    assert_eq!(bgp.effect_params.len(), pgp.effect_params.len());
+    assert_eq!(bgp.effect_params[0].name, pgp.effect_params[0].name);
+    // The bounded form preserves the marker; positional has no bounds.
+    assert_eq!(bgp.effect_params[0].bounds.len(), 1);
+    assert!(pgp.effect_params[0].bounds.is_empty());
+}
+
+#[test]
+fn test_slice_8ac_effect_bound_can_appear_alongside_with() {
+    // The bounded form can appear before the sticky `with` block —
+    // both collection paths feed into the same `effect_params` list.
+    let prog = parse_ok(
+        "fn pipeline[T, E: Effect, with F](            f: Fn(T) -> T with E,            g: Fn(T) -> T with F,        ) -> T with E F { todo() }",
+    );
+    if let Item::Function(f) = &prog.items[0] {
+        let gp = f.generic_params.as_ref().unwrap();
+        assert_eq!(gp.params.len(), 1, "expected 1 type param (T)");
+        let names: Vec<&str> = gp.effect_params.iter().map(|ep| ep.name.as_str()).collect();
+        assert_eq!(names, vec!["E", "F"]);
+        // E carries the `Effect` bound, F is positional.
+        assert_eq!(gp.effect_params[0].bounds.len(), 1);
+        assert!(gp.effect_params[1].bounds.is_empty());
+    } else {
+        panic!("expected Function");
+    }
+}
+
+#[test]
+fn test_slice_8ac_effect_bound_preserves_extra_bounds() {
+    // `E: Effect + Foo` — the parser classifies E as an effect-param
+    // (first bound is `Effect`) and preserves the extra bound on the
+    // AST node. v1 doesn't enforce extensions; downstream phases see
+    // the bound list verbatim.
+    let prog = parse_ok("fn handle[E: Effect + Foo](cb: Fn() with E) with E { todo() }");
+    if let Item::Function(f) = &prog.items[0] {
+        let gp = f.generic_params.as_ref().unwrap();
+        assert_eq!(gp.effect_params.len(), 1);
+        let ep = &gp.effect_params[0];
+        assert_eq!(ep.name, "E");
+        assert_eq!(ep.bounds.len(), 2);
+        assert_eq!(ep.bounds[0].path, vec!["Effect".to_string()]);
+        assert_eq!(ep.bounds[1].path, vec!["Foo".to_string()]);
+    } else {
+        panic!("expected Function");
+    }
+}
+
+#[test]
+fn test_slice_8ac_non_effect_bound_stays_type_param() {
+    // `T: Ord` — `Ord` isn't the magic `Effect` marker, so T remains
+    // a regular type-parameter (bounded). Confirms the classification
+    // is keyed on the structural `Effect` marker, not on every bounded
+    // generic-param.
+    let prog = parse_ok("fn sort[T: Ord](items: Vec[T]) -> Vec[T] { todo() }");
+    if let Item::Function(f) = &prog.items[0] {
+        let gp = f.generic_params.as_ref().unwrap();
+        assert_eq!(gp.params.len(), 1);
+        assert_eq!(gp.params[0].name, "T");
+        assert_eq!(gp.params[0].bounds.len(), 1);
+        assert_eq!(gp.params[0].bounds[0].path, vec!["Ord".to_string()]);
+        assert!(gp.effect_params.is_empty(), "no effect-params expected");
+    } else {
+        panic!("expected Function");
+    }
+}
+
+#[test]
+fn test_slice_8ac_effect_bound_with_generic_args_stays_type_param() {
+    // `T: Effect[Args]` — `Effect[args]` is reserved syntax for future
+    // granularity (design.md line 3150). The parser only reclassifies
+    // when the path is the bare `Effect` (no generic args), so this
+    // shape stays in the type-param arm. Future slices may extend
+    // recognition.
+    let prog = parse_ok("fn handle[T: Effect[i64]](cb: Fn() -> T) -> T { todo() }");
+    if let Item::Function(f) = &prog.items[0] {
+        let gp = f.generic_params.as_ref().unwrap();
+        assert_eq!(gp.params.len(), 1, "T stays as type-param");
+        assert!(gp.effect_params.is_empty());
+        assert_eq!(gp.params[0].bounds.len(), 1);
+        assert!(gp.params[0].bounds[0].generic_args.is_some());
+    } else {
+        panic!("expected Function");
     }
 }
 

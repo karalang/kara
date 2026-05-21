@@ -211,7 +211,7 @@ impl super::Parser {
         let generic_params = self.parse_optional_generic_params();
         let effect_vars: Vec<String> = generic_params
             .as_ref()
-            .map(|gp| gp.effect_params.clone())
+            .map(|gp| gp.effect_params.iter().map(|ep| ep.name.clone()).collect())
             .unwrap_or_default();
         self.effect_var_stack.push(effect_vars.clone());
 

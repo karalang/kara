@@ -310,7 +310,7 @@ impl<'a> super::EffectChecker<'a> {
             let declared: HashSet<String> = f
                 .generic_params
                 .as_ref()
-                .map(|gp| gp.effect_params.iter().cloned().collect())
+                .map(|gp| gp.effect_params.iter().map(|ep| ep.name.clone()).collect())
                 .unwrap_or_default();
             if declared.is_empty() {
                 return HashMap::new();

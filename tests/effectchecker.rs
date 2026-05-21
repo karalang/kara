@@ -1928,6 +1928,46 @@ fn test_effect_variable_makes_function_polymorphic() {
     effectcheck_ok("pub fn identity[T, with E](f: Fn(T) -> T with E, x: T) -> T with E { f(x) }");
 }
 
+// ── Phase 6 line 26 slice 8ac: `E: Effect` bound-form equivalence ─
+//
+// The bounded form `[T, E: Effect]` from design.md line 736 should
+// behave identically to the positional `[T, with E]` form at the
+// effect-checker layer — same polymorphic classification, same
+// per-call var-binding resolution, same diagnostic surface. Slice
+// 8ac is parser/AST only; these tests pin the no-regression
+// equivalence so downstream phases pick up the new shape without
+// further changes.
+
+#[test]
+fn test_slice_8ac_bound_form_polymorphic_classification() {
+    // Identical to test_effect_variable_makes_function_polymorphic
+    // but using the `E: Effect` bound spelling. Must pass without
+    // E0404 / undefined-group / public-effects-missing diagnostics.
+    effectcheck_ok(
+        "pub fn identity[T, E: Effect](f: Fn(T) -> T with E, x: T) -> T with E { f(x) }",
+    );
+}
+
+#[test]
+fn test_slice_8ac_bound_form_polymorphic_round_trip_with_closure() {
+    // Compound polymorphism end-to-end with the bound-form spelling.
+    // A closure with concrete effects binds `E` at the call site;
+    // the inferred caller effects must include the closure's effects.
+    let source = "        resource Db
+        fn touch_db() with reads(Db) { todo() }
+        pub fn pipeline[T, E: Effect](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }
+        fn caller() with reads(Db) { pipeline(42, |y| { touch_db(); y }); }
+        fn todo() -> i64 { 0 }
+    ";
+    effectcheck_ok(source);
+}
+
+#[test]
+fn test_slice_8ac_bound_form_apply_no_diagnostics() {
+    // The bound-form variant of test_polymorphic_returning_with_E_does_not_emit_missing_effects.
+    effectcheck_ok("pub fn apply[T, E: Effect](f: Fn(T) -> T with E, x: T) -> T with E { f(x) }");
+}
+
 // ── Round 10.1: end-to-end compound type+effect polymorphism ────
 //
 // With round 10.1's two-pass arg inference, a generic `[T, with E]`

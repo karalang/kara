@@ -1533,6 +1533,57 @@ fn test_impl_with_type_params_only_accepted() {
     );
 }
 
+// ── Phase 6 line 26 slice 8ac: `E: Effect` resolver acceptance ────
+//
+// The bound-form spelling `[T, E: Effect]` (design.md line 736) must
+// resolve identically to the positional `[T, with E]` form. These
+// tests pin the no-regression resolver acceptance — the parser does
+// the classification, so the resolver sees an EffectParam either way.
+
+#[test]
+fn test_slice_8ac_effect_bound_form_resolves_ok() {
+    resolve_ok(
+        "pub fn map[T, U, E: Effect](items: Vec[T], f: Fn(T) -> U with E) -> Vec[U] with E { todo() }\n\
+         fn todo() -> Vec[i64] { Vec.new() }",
+    );
+}
+
+#[test]
+fn test_slice_8ac_effect_bound_form_on_impl_still_rejected() {
+    // The impl-level effect-variable rejection (slice 4) applies to both
+    // spellings — the bound form does not bypass the rule. The diagnostic
+    // should still name `E` and point at the `with _` workaround.
+    let errors = resolve_errors(
+        "trait Sink { fn drain(ref self); }\n\
+         struct LogSink { name: String }\n\
+         impl[E: Effect] Sink for LogSink {\n\
+             fn drain(ref self) {}\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
+        )),
+        "expected ImplLevelEffectVarNotAllowed for bound-form impl, got: {:?}",
+        errors
+    );
+    let err = errors
+        .iter()
+        .find(|e| {
+            matches!(
+                e.kind,
+                karac::resolver::ResolveErrorKind::ImplLevelEffectVarNotAllowed
+            )
+        })
+        .unwrap();
+    assert!(
+        err.message.contains("`E`"),
+        "diagnostic should name `E` even for the bound-form spelling, got: {}",
+        err.message
+    );
+}
+
 // ── `providers { }` block resource-name resolution ───────────────
 
 #[test]

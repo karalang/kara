@@ -29,12 +29,19 @@ impl super::Parser {
         self.expect(&Token::LeftBracket)?;
 
         let mut params = Vec::new();
-        let mut effect_params = Vec::new();
+        let mut effect_params: Vec<EffectParam> = Vec::new();
         // Per design.md (line 4858): type params come first, then `with`
         // introduces effect-variable params. Once we've seen `with`, every
         // subsequent comma-separated identifier is an effect variable —
         // both the `[with E, F]` and `[with E, with F]` spellings are
-        // accepted.
+        // accepted. Phase 6 slice 8ac (design.md line 736) adds the
+        // type-param-style `E: Effect` form: a generic-param with a
+        // leading `Effect`-bound is reclassified into `effect_params`
+        // and may appear at any position in the list (not gated on the
+        // sticky `with` mode). The two spellings are equivalent —
+        // `[T, E: Effect]` and `[T, with E]` produce the same AST shape
+        // modulo the `bounds: vec![Effect]` marker, which downstream
+        // phases can consult for future granularity.
         let mut in_effect_params = false;
         loop {
             if self.check(&Token::RightBracket) {
@@ -46,8 +53,13 @@ impl super::Parser {
                 in_effect_params = true;
             }
             if in_effect_params {
+                let ep_start = self.current_span();
                 let name = self.expect_identifier()?;
-                effect_params.push(name);
+                effect_params.push(EffectParam {
+                    name,
+                    bounds: Vec::new(),
+                    span: self.span_from(&ep_start),
+                });
                 if !self.eat(&Token::Comma) {
                     break;
                 }
@@ -97,13 +109,36 @@ impl super::Parser {
                         }
                     }
                 }
-                params.push(GenericParam {
-                    name,
-                    bounds,
-                    is_const: false,
-                    const_type: None,
-                    span: self.span_from(&pstart),
-                });
+                // Slice 8ac (phase 6 line 26): a bound list whose first
+                // entry is the bare `Effect` trait reclassifies the
+                // generic-param into an effect-parameter. The check is
+                // purely structural — `Effect` is a built-in marker
+                // recognised at parse time, not resolved through scope;
+                // `Effect[args]` and multi-segment paths fall through
+                // to the type-param arm. Bounds beyond the leading
+                // `Effect` (e.g. `Effect + Foo`) are preserved on the
+                // AST node for future granularity (design.md line 3150
+                // reserves `with E: no writes(R)`-style constraints for
+                // Phase 7); v1 ignores them at the effect-checker layer.
+                let is_effect_bounded = bounds
+                    .first()
+                    .map(|b| b.path.len() == 1 && b.path[0] == "Effect" && b.generic_args.is_none())
+                    .unwrap_or(false);
+                if is_effect_bounded {
+                    effect_params.push(EffectParam {
+                        name,
+                        bounds,
+                        span: self.span_from(&pstart),
+                    });
+                } else {
+                    params.push(GenericParam {
+                        name,
+                        bounds,
+                        is_const: false,
+                        const_type: None,
+                        span: self.span_from(&pstart),
+                    });
+                }
             }
             if !self.eat(&Token::Comma) {
                 break;

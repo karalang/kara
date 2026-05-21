@@ -49,7 +49,7 @@ pub struct AttrArg {
 #[derive(Debug, Clone)]
 pub struct GenericParams {
     pub params: Vec<GenericParam>,
-    pub effect_params: Vec<String>,
+    pub effect_params: Vec<EffectParam>,
     pub span: Span,
 }
 
@@ -59,6 +59,23 @@ pub struct GenericParam {
     pub bounds: Vec<TraitBound>,
     pub is_const: bool,
     pub const_type: Option<TypeExpr>,
+    pub span: Span,
+}
+
+/// An effect-parameter generic, e.g. `with E` (positional, bounds empty)
+/// or `E: Effect` (slice 8ac trait-bound form, bounds carries the single
+/// `Effect` marker). `Effect` is a built-in trait name recognised
+/// structurally by the parser; classification of `E: Effect` as an
+/// effect-bounded param happens at parse time when the first bound's
+/// single-segment path is exactly `Effect`. Multi-bound effect-params
+/// (`E: Effect + UserExtension`) and granular constraint bounds
+/// (`E: no writes(R)`, design.md line 3150) remain reserved syntax —
+/// the parser stores any extras for future use but only the leading
+/// `Effect` marker is acted on in v1.
+#[derive(Debug, Clone)]
+pub struct EffectParam {
+    pub name: String,
+    pub bounds: Vec<TraitBound>,
     pub span: Span,
 }
 

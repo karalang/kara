@@ -38,8 +38,25 @@ impl super::Formatter {
                 self.write_str(", ");
             }
             first = false;
-            self.write_str("effect ");
-            self.write_ident(ep);
+            // Slice 8ac: effect-params declared via `E: Effect` carry
+            // their bound list; positional `with E` has empty bounds.
+            // The formatter emits the canonical `effect E` form for
+            // the legacy spelling and `E: <bounds>` for the bounded
+            // spelling.
+            if ep.bounds.is_empty() {
+                self.write_str("effect ");
+                self.write_ident(&ep.name);
+            } else {
+                self.write_ident(&ep.name);
+                self.write_str(": ");
+                for (i, b) in ep.bounds.iter().enumerate() {
+                    if i > 0 {
+                        self.write_str(" + ");
+                    }
+                    self.write_path(&b.path);
+                    self.format_generic_args_opt(&b.generic_args);
+                }
+            }
         }
         self.write_str("]");
     }

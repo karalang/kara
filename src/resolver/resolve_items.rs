@@ -318,7 +318,7 @@ impl<'a> super::Resolver<'a> {
         let var_list = generics
             .effect_params
             .iter()
-            .map(|n| format!("`{}`", n))
+            .map(|ep| format!("`{}`", ep.name))
             .collect::<Vec<_>>()
             .join(", ");
         self.errors.push(ResolveError {

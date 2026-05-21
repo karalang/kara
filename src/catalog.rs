@@ -716,9 +716,18 @@ fn render_generics_json(gp: &Option<GenericParams>) -> String {
     for ep in &gp.effect_params {
         let mut s = String::new();
         s.push('{');
-        write_kv(&mut s, "name", &json_string(ep));
+        write_kv(&mut s, "name", &json_string(&ep.name));
         s.push(',');
         write_kv(&mut s, "effect", "true");
+        if !ep.bounds.is_empty() {
+            s.push(',');
+            let bounds: Vec<String> = ep
+                .bounds
+                .iter()
+                .map(|b| json_string(&render_trait_bound(b)))
+                .collect();
+            write_kv(&mut s, "bounds", &format!("[{}]", bounds.join(",")));
+        }
         s.push('}');
         entries.push(s);
     }
