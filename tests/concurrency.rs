@@ -1454,12 +1454,13 @@ fn test_reduction_rejects_conditional_acc_update_when_cond_reads_acc() {
 }
 
 #[test]
-fn test_reduction_rejects_conditional_acc_update_with_nonempty_else() {
-    // `if cond { sum = sum + 1 } else { sum = sum + 2 }` — both arms
-    // write the accumulator. Even though they're both add-shaped, the
-    // current slice scope rejects any else that does work. A future
-    // slice could generalize to two-arm reduction, but that's a separate
-    // recognizer pass with its own test coverage.
+fn test_reduction_recognized_for_two_arm_acc_update_same_op() {
+    // 2026-05-20 slice extension: `if cond { acc = acc + a } else { acc
+    // = acc + b }` is semantically equivalent to `acc = acc + (if cond
+    // { a } else { b })` and recognizable as a `+` reduction. The
+    // matcher accepts when both arms target the same accumulator with
+    // the same op; mixed accumulators or mixed ops are rejected
+    // (see siblings below).
     let analysis = analyze(
         r#"
         fn main() {
@@ -1474,9 +1475,118 @@ fn test_reduction_rejects_conditional_acc_update_with_nonempty_else() {
         "#,
     );
     let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "two-arm same-acc same-op must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert_eq!(r.accumulator, "sum");
+    assert_eq!(r.op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_two_arm_acc_update_compound() {
+    // CompoundAssign in both arms with different deltas — same shape as
+    // the canonical "hit/miss tally" workload (e.g., `if hit { right +=
+    // 1 } else { right += 0 }` — though if both arms had identical
+    // deltas the unconditional form would be simpler).
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut tally: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let hit: bool = (k % 3i64) == 0i64;
+                if hit { tally += 3i64; } else { tally += 1i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "tally");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_recognized_for_two_arm_acc_update_with_variable_deltas() {
+    // Both arms have non-literal delta expressions. The
+    // `reduction_binary_shape` machinery still requires acc to appear
+    // exactly once on each RHS, so non-acc operands are acc-free by
+    // construction — both arms recognize as `+`-step contributions.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut sum: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let even: bool = (k % 2i64) == 0i64;
+                if even { sum = sum + (k * 2i64); } else { sum = sum + k; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "sum");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Add);
+}
+
+#[test]
+fn test_reduction_rejects_two_arm_acc_update_with_different_accumulators() {
+    // `if cond { a = a + 1 } else { b = b + 1 }` — different
+    // accumulators per branch. Each arm IS a valid 1-arm shape on its
+    // own, but the if-block as a whole writes two distinct names and
+    // doesn't fit the single-accumulator fan-out model.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut a: i64 = 0i64;
+            let mut b: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { a = a + 1i64; } else { b = b + 1i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
     assert!(
         main_fc.loop_reductions.is_empty(),
-        "non-empty else must not be recognized at this slice scope, got {:?}",
+        "mixed-accumulator two-arm must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_two_arm_acc_update_with_mixed_ops() {
+    // `if cond { acc = acc + 1 } else { acc = acc * 2 }` — same acc,
+    // but different ops. The fan-out + combine model commutes only
+    // within a single op, so the contribution-as-`+` and contribution-
+    // as-`*` forms can't be unified into one reduction.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut acc: i64 = 1i64;
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                let cond: bool = k > 5i64;
+                if cond { acc = acc + 1i64; } else { acc = acc * 2i64; }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "mixed-op two-arm must not be recognized, got {:?}",
         main_fc.loop_reductions
     );
 }

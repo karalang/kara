@@ -681,36 +681,42 @@ impl<'a> ConcurrencyChecker<'a> {
 
     /// Recognize the conditional-accumulator-update shape:
     ///
-    ///   if cond { acc = acc + delta; }
-    ///   if cond { acc OP= delta; }
-    ///   if cond { acc = acc + delta; } else { /* empty */ }
+    ///   if cond { acc = acc + delta; }                              (1-arm)
+    ///   if cond { acc OP= delta; }                                  (1-arm CompoundAssign)
+    ///   if cond { acc = acc + delta; } else { /* empty */ }         (1-arm + empty else)
+    ///   if cond { acc = acc + a; } else { acc = acc + b; }          (2-arm — added 2026-05-20)
+    ///   if cond { acc OP= a; }     else { acc OP= b; }              (2-arm CompoundAssign)
     ///
-    /// Returns `Some((acc_name, op))` when the inner statement is the
-    /// reduction-update shape for an outer-scope accumulator. The
-    /// transformation that justifies recognizing this as a reduction is:
+    /// Returns `Some((acc_name, op))` when both arms (or the single
+    /// then-arm with absent/empty else) update the same outer-scope
+    /// accumulator with the same op. The transformation that justifies
+    /// recognizing this as a reduction is:
     ///
-    ///   if cond { acc = acc + delta; }
-    ///   ≡
-    ///   acc = acc + (if cond { delta } else { 0 })
+    ///   1-arm: if cond { acc = acc + d }      ≡  acc = acc + (if cond { d } else { 0 })
+    ///   2-arm: if cond { acc = acc + a }
+    ///          else     { acc = acc + b }     ≡  acc = acc + (if cond { a } else { b })
     ///
-    /// The two forms have identical per-iteration contributions for any
-    /// associative + commutative op with a known identity (`0` for `+`,
-    /// `1` for `*`, etc.) — which is the slice-1 allow-list — so the
-    /// par-reduce lowering can fan the iteration space across cores
-    /// without changing the final value.
+    /// In both cases the per-iteration contribution is order-independent
+    /// for any associative+commutative op with a known identity, so the
+    /// par-reduce fan-out + combine model preserves the final value.
     ///
     /// Constraints checked:
-    /// - `else` branch is absent OR contains no statements / no final expr.
-    /// - The then-block has exactly one statement and no trailing expr.
-    /// - The inner statement matches the same reduction-step shape
-    ///   `reduction_binary_shape` accepts (or a recognized CompoundAssign
-    ///   with an allow-listed op, excluding the `+= const_lit` induction
-    ///   shape since *that* shape is the unconditional loop counter, not
-    ///   a per-iter delta that meaningfully varies).
+    /// - The then-block is exactly one statement of the recognized
+    ///   accumulator-update shape (Assign with `reduction_binary_shape`
+    ///   match, or CompoundAssign with an allow-listed op).
+    /// - The else-branch, if present, is either empty (1-arm shape) or
+    ///   exactly one statement of the same update shape, writing the
+    ///   *same* accumulator name with the *same* op (mixed ops like
+    ///   `if c { acc += 1 } else { acc *= 2 }` are rejected — combine
+    ///   ordering only commutes within one op).
     /// - The condition expression does NOT read the accumulator —
     ///   otherwise the per-iter decision depends on accumulator state
     ///   produced by earlier iterations, which is order-dependent and
-    ///   not preserved by the fan-out / combine model.
+    ///   not preserved by the fan-out / combine model. Delta expressions
+    ///   are guarded transitively via `reduction_binary_shape` (which
+    ///   requires acc to appear exactly once on the RHS, so the
+    ///   non-acc operand is acc-free by construction) and via the
+    ///   CompoundAssign arm's no-self-reference assumption.
     fn conditional_acc_update_shape(&self, expr: &Expr) -> Option<(String, ReductionOp)> {
         let ExprKind::If {
             condition,
@@ -720,50 +726,28 @@ impl<'a> ConcurrencyChecker<'a> {
         else {
             return None;
         };
-        // Reject any else that does work. An explicit empty `else { }`
-        // would parse as an If/Block with no stmts and no final_expr —
-        // that's fine. Anything else taints the shape.
+        // The then-block must be exactly one accumulator-update stmt.
+        let (acc_name, op) = single_stmt_block_as_acc_update(then_block)?;
+        // The else-branch, when present, may be empty (1-arm shape) or a
+        // single matching update for the same (acc, op).
         if let Some(else_expr) = else_branch {
             let ExprKind::Block(b) = &else_expr.kind else {
                 return None;
             };
-            if !b.stmts.is_empty() || b.final_expr.is_some() {
+            if b.final_expr.is_some() {
                 return None;
             }
-        }
-        if then_block.stmts.len() != 1 || then_block.final_expr.is_some() {
-            return None;
-        }
-        let (acc_name, op) = match &then_block.stmts[0].kind {
-            StmtKind::Assign { target, value } => {
-                let name = identifier_name(target)?;
-                let op = reduction_binary_shape(value, &name)?;
-                (name, op)
-            }
-            StmtKind::CompoundAssign { target, op, value } => {
-                let name = identifier_name(target)?;
-                let red_op = ReductionOp::from_compound_op(op)?;
-                // For `+`: bail on the `acc += const_lit` shape. That's
-                // the induction-step pattern (loop counter), not a real
-                // accumulator-update; under a conditional wrap it has
-                // no meaningful "per-iter delta varies" property and the
-                // induction-first rule applied unconditionally elsewhere
-                // would otherwise classify it inconsistently. Other
-                // CompoundAssign shapes (acc += expr, acc *= expr,
-                // acc |= expr, etc.) with a non-literal RHS pass through.
-                if red_op == ReductionOp::Add && is_int_literal(value) {
-                    // Still recognized as the count-of-truthy shape —
-                    // `if cond { acc += 1 }` is the canonical "count
-                    // iterations where cond holds" reduction, equivalent
-                    // to `acc = acc + (if cond { 1 } else { 0 })`. The
-                    // induction-first guard only fires in the
-                    // unconditional case where we'd be looking at a real
-                    // loop counter.
+            match b.stmts.len() {
+                0 => { /* empty else — 1-arm shape with explicit empty else */ }
+                1 => {
+                    let (else_acc, else_op) = single_stmt_as_acc_update(&b.stmts[0])?;
+                    if else_acc != acc_name || else_op != op {
+                        return None;
+                    }
                 }
-                (name, red_op)
+                _ => return None,
             }
-            _ => return None,
-        };
+        }
         // Final guard: condition must not reference the accumulator.
         let mut cond_reads: HashSet<String> = HashSet::new();
         self.collect_expr_reads(condition, &mut cond_reads);
@@ -2131,4 +2115,40 @@ fn match_lowered_op_call<'a>(
         return None;
     }
     Some((&args[0].value, &args[1].value))
+}
+
+/// Classify a single statement as a recognized accumulator update for a
+/// reduction step: `acc = acc <op> EXPR` (Assign), `acc OP= EXPR`
+/// (CompoundAssign), or chain shapes accepted by `reduction_binary_shape`.
+/// Returns `Some((acc_name, op))` on a match; `None` otherwise.
+///
+/// Shared by both arms of `conditional_acc_update_shape` so the 2-arm
+/// case can re-classify the else-arm with the same rules. The
+/// unconditional `acc += const_lit` induction-step shape is
+/// special-cased upstream in `classify_loop_body`'s CompoundAssign arm
+/// (treated as the loop counter); under a conditional wrap the same
+/// syntactic shape means "count of truthy iterations" and is a
+/// legitimate reduction, so we do not bail here.
+fn single_stmt_as_acc_update(stmt: &Stmt) -> Option<(String, ReductionOp)> {
+    match &stmt.kind {
+        StmtKind::Assign { target, value } => {
+            let name = identifier_name(target)?;
+            let op = reduction_binary_shape(value, &name)?;
+            Some((name, op))
+        }
+        StmtKind::CompoundAssign { target, op, .. } => {
+            let name = identifier_name(target)?;
+            ReductionOp::from_compound_op(op).map(|red_op| (name, red_op))
+        }
+        _ => None,
+    }
+}
+
+/// Same as [`single_stmt_as_acc_update`] but wrapping a `Block` that
+/// must contain exactly one statement and no trailing expression.
+fn single_stmt_block_as_acc_update(block: &Block) -> Option<(String, ReductionOp)> {
+    if block.stmts.len() != 1 || block.final_expr.is_some() {
+        return None;
+    }
+    single_stmt_as_acc_update(&block.stmts[0])
 }

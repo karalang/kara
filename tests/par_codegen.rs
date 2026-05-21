@@ -2905,6 +2905,50 @@ fn main() {
         assert_eq!(out.trim(), "4999900000");
     }
 
+    #[test]
+    fn test_e2e_reduction_two_arm_acc_update_matches_serial() {
+        // 2026-05-20 follow-on: two-arm shape where both arms write the
+        // same accumulator with the same op but different deltas.
+        // Workload: for i in [0, 100_000), add 3 when i%3==0 else add 1.
+        // Count of i where i%3==0 in [0, 100_000) is 33334 (0, 3, ..., 99999).
+        //   3 * 33334 + 1 * (100000 - 33334) = 100002 + 66666 = 166668.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let hit: bool = (i % 3i64) == 0i64;
+        if hit { sum = sum + 3i64; } else { sum = sum + 1i64; }
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "166668");
+    }
+
+    #[test]
+    fn test_e2e_reduction_two_arm_acc_update_compound_matches_serial() {
+        // CompoundAssign in both arms. Same expected sink as above.
+        let src = r#"
+fn main() {
+    let k_iters: i64 = 100000i64;
+    let mut sum: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < k_iters {
+        let hit: bool = (i % 3i64) == 0i64;
+        if hit { sum += 3i64; } else { sum += 1i64; }
+        i = i + 1i64;
+    }
+    println(sum);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        assert_eq!(out.trim(), "166668");
+    }
+
     // ── Slice: cost-gate function-call body cost (2026-05-20) ────────
     //
     // Codegen's cost-model gate used to treat every function/method call
