@@ -2330,6 +2330,42 @@ pub unsafe extern "C" fn karac_runtime_http_request_method(
     (*request).method
 }
 
+/// Read the request body's raw byte pointer. The body is not
+/// null-terminated; pair this with `karac_runtime_http_request_body_len`
+/// to read the full buffer. Returned pointer is owned by the runtime
+/// and valid only for the duration of the current handler invocation.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_body_ptr(
+    request: *const KaracHttpRequest,
+) -> *const u8 {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    (*request).body_ptr
+}
+
+/// Read the request body length in bytes. Returns `0` for the empty
+/// body. Pair with `karac_runtime_http_request_body_ptr`.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_body_len(
+    request: *const KaracHttpRequest,
+) -> usize {
+    if request.is_null() {
+        return 0;
+    }
+    (*request).body_len
+}
+
 /// Synchronously serve HTTP/1.1 traffic on `addr_cstr` until a fatal
 /// error breaks the accept loop. The Kāra-side handler is invoked
 /// through `tokio::task::block_in_place` per request so it can do

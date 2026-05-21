@@ -595,6 +595,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_request_string_method(&name, method);
                 }
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                    && method == "body"
+                {
+                    let name = name.clone();
+                    return self.compile_request_body(&name);
+                }
             }
         }
 

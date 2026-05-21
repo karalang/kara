@@ -48,7 +48,8 @@ impl<'a> super::Interpreter<'a> {
             // — the interpreter doesn't run a real HTTP server, so there's
             // no real path/method to surface. Pinned by
             // `tests/interpreter.rs::test_server_serve_handler_request_path_returns_owned_string`.
-            "path" | "method" if matches!(&obj, Value::Struct { name, .. } if name == "Request") => {
+            "path" | "method" | "body" if matches!(&obj, Value::Struct { name, .. } if name == "Request") =>
+            {
                 return Some(Value::String(String::new()));
             }
             // ── Response / HttpError method dispatch ──────────────────────────

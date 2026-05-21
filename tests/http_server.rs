@@ -562,8 +562,7 @@ mod http_server_tests {
 
     /// `Request.method()` round-trips end-to-end: the user handler reads
     /// the HTTP method verb and returns it as the response body. Pins
-    /// the `method()` arm. (POST is not exercised in v1; the GET smoke
-    /// shape is the only verb covered.)
+    /// the `method()` arm.
     #[test]
     fn test_server_serve_handler_reads_method() {
         let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -587,6 +586,164 @@ mod http_server_tests {
             body.trim(),
             "GET",
             "expected response body to be `GET`; got: {body:?}"
+        );
+    }
+
+    /// POST variant of `http_get` — issues `POST <path>` with a
+    /// `Content-Length`-framed body. Returns `(status, body)`.
+    fn http_post(port: u16, path: &str, body: &str) -> Result<(u16, String), String> {
+        let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("connect failed: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+        let req = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("read failed: {e}"))?;
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut parts = text.split("\r\n\r\n");
+        let head = parts.next().unwrap_or("");
+        let resp_body = parts.collect::<Vec<_>>().join("\r\n\r\n");
+        let first = head.lines().next().ok_or("empty response")?;
+        let mut tokens = first.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+        Ok((status, resp_body))
+    }
+
+    /// POST variant of `run_handler_smoke`. Compiles `src`, runs it,
+    /// POSTs `body` to `request_path`, returns `(status, response_body)`.
+    /// Soft-skips when the runtime library isn't built.
+    fn run_handler_smoke_post(src: &str, request_path: &str, body: &str) -> Option<(u16, String)> {
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_post_run_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+        let started = Instant::now();
+        let mut last_err: Option<String> = None;
+        let mut response: Option<(u16, String)> = None;
+        for _ in 0..10 {
+            match http_post(port, request_path, body) {
+                Ok(r) => {
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        match response {
+            Some(r) => Some(r),
+            None => panic!(
+                "POST {request_path} against 127.0.0.1:{port} never succeeded; \
+                 last error: {:?}",
+                last_err
+            ),
+        }
+    }
+
+    /// Slice 1 (2026-05-21): `Request.body()` round-trips end-to-end.
+    /// The handler reads the POST body and echoes it as the response
+    /// body. Pins the `body()` arm of the Request method dispatch in
+    /// both the codegen path (`compile_request_body`) and the runtime
+    /// externs (`karac_runtime_http_request_body_ptr/_len`).
+    #[test]
+    fn test_server_serve_handler_reads_body() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.body() }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let payload = "{\"hello\":\"world\"}";
+        let Some((status, body)) = run_handler_smoke_post(src, "/echo", payload) else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, payload,
+            "expected response body to echo POST body; got: {body:?}"
+        );
+    }
+
+    /// Slice 1 (2026-05-21): `Request.body()` returns an empty String
+    /// when the request carries no body (GET smoke shape). Pins the
+    /// `body_len == 0` branch of `compile_request_body` and the
+    /// null-pointer-on-empty branch of `karac_runtime_http_request_body_ptr`.
+    #[test]
+    fn test_server_serve_handler_empty_body_for_get() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let b = req.body();
+                Response { status: 200, body: b }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/") else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "",
+            "expected empty response body for GET with no payload; got: {body:?}"
         );
     }
 }

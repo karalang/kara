@@ -1298,6 +1298,23 @@ impl<'ctx> Codegen<'ctx> {
             request_method_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_http_request_body_ptr` returns the raw byte
+        // pointer (not null-terminated); paired with
+        // `karac_runtime_http_request_body_len`, the Kāra-side
+        // `Request.body()` allocates a fresh String per call so the
+        // resulting value owns its buffer beyond the request lifetime.
+        let request_body_ptr_type = ptr_type.fn_type(&[ptr_type.into()], false);
+        let _karac_runtime_http_request_body_ptr_fn = module.add_function(
+            "karac_runtime_http_request_body_ptr",
+            request_body_ptr_type,
+            Some(Linkage::External),
+        );
+        let request_body_len_type = context.i64_type().fn_type(&[ptr_type.into()], false);
+        let _karac_runtime_http_request_body_len_fn = module.add_function(
+            "karac_runtime_http_request_body_len",
+            request_body_len_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

@@ -396,4 +396,124 @@ impl<'ctx> super::Codegen<'ctx> {
             .into();
         Ok(str_val)
     }
+
+    /// Compile `req.body()` for a `Request`-typed local. The body is not
+    /// null-terminated — pair `karac_runtime_http_request_body_ptr` with
+    /// `karac_runtime_http_request_body_len`, malloc + memcpy the bytes
+    /// into a fresh Kāra `String` `{ data, len, cap }`. Mirrors the tail
+    /// of `compile_request_string_method` but skips the `strlen` step
+    /// (the runtime gives us the length directly).
+    pub(super) fn compile_request_body(
+        &mut self,
+        var_name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+
+        let req_ptr = self
+            .builder
+            .build_load(slot.ty, slot.ptr, &format!("{var_name}.req.body.load"))
+            .unwrap()
+            .into_pointer_value();
+
+        let body_ptr_fn = self
+            .module
+            .get_function("karac_runtime_http_request_body_ptr")
+            .expect("karac_runtime_http_request_body_ptr declared in Codegen::new");
+        let body_len_fn = self
+            .module
+            .get_function("karac_runtime_http_request_body_len")
+            .expect("karac_runtime_http_request_body_len declared in Codegen::new");
+
+        let src_ptr = self
+            .builder
+            .build_call(body_ptr_fn, &[req_ptr.into()], "req.body.src")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let len_i64 = self
+            .builder
+            .build_call(body_len_fn, &[req_ptr.into()], "req.body.len")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let zero = i64_ty.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                len_i64,
+                zero,
+                "req.body.is_empty",
+            )
+            .unwrap();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Request method called outside fn".to_string())?;
+        let alloc_bb = self.context.append_basic_block(fn_val, "req.body.alloc");
+        let empty_bb = self.context.append_basic_block(fn_val, "req.body.empty");
+        let cont_bb = self.context.append_basic_block(fn_val, "req.body.cont");
+
+        let buf_slot = self.create_entry_alloca(fn_val, "req.body.buf", ptr_ty.into());
+
+        self.builder
+            .build_conditional_branch(is_zero, empty_bb, alloc_bb)
+            .unwrap();
+
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(buf_slot, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(alloc_bb);
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[len_i64.into()], "req.body.buf.alloc")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(buf, 1, src_ptr, 1, len_i64)
+            .unwrap();
+        self.builder.build_store(buf_slot, buf).unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, buf_slot, "req.body.data")
+            .unwrap()
+            .into_pointer_value();
+        let str_ty = self.vec_struct_type();
+        let mut str_val: BasicValueEnum<'ctx> = str_ty.get_undef().into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), data, 0, "req.body.data.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), len_i64, 1, "req.body.len.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), len_i64, 2, "req.body.cap.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        Ok(str_val)
+    }
 }

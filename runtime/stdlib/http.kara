@@ -90,17 +90,17 @@ effect resource Network;
 struct Server { }
 
 // `Request` is the translated form of an inbound hyper request. v1's
-// surface ships `path()` + `method()` (F3) — both round-trip through
-// FFI helpers on the runtime's `KaracHttpRequest` C struct and return
-// a fresh owned `String` per call (F2: re-allocates per call rather
-// than borrowing into the runtime-owned struct, which is dropped after
-// the handler returns). `body()`, `query()`, `header()`, `headers()`
-// are deferred to follow-ups.
+// surface ships `path()` + `method()` + `body()` — all round-trip
+// through FFI helpers on the runtime's `KaracHttpRequest` C struct and
+// return a fresh owned `String` per call (F2: re-allocates per call
+// rather than borrowing into the runtime-owned struct, which is
+// dropped after the handler returns). `query()`, `header()`,
+// `headers()` are deferred to follow-ups.
 //
 // At codegen, `Request` lowers to an opaque pointer wrapping the
 // runtime's `*const KaracHttpRequest` (mirrors `Map[K, V]`'s opaque-
 // ptr precedent). User code never sees the raw pointer — it interacts
-// only through the `path()` / `method()` methods below.
+// only through the `path()` / `method()` / `body()` methods below.
 struct Request { }
 
 impl Request {
@@ -115,6 +115,15 @@ impl Request {
     // `String`. Same lifetime contract as `path()`.
     #[compiler_builtin]
     fn method(ref self) -> String { "" }
+
+    // Return the request body as an owned `String`. The body is not
+    // null-terminated at the FFI boundary — the runtime supplies a
+    // raw byte pointer + explicit length, and this method allocates a
+    // fresh String per call so the resulting value outlives the
+    // request struct. Returns an empty String for `Content-Length: 0`
+    // requests (including GET).
+    #[compiler_builtin]
+    fn body(ref self) -> String { "" }
 }
 
 impl Server {
