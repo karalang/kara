@@ -5855,3 +5855,116 @@ fn profile_slice3_absent_attribute_silent() {
     // when the function clearly allocates.
     profile_compat_ok("pub fn make_vec() -> Vec[i64] with allocates(Heap) { Vec.new() }");
 }
+
+// ── Phase 6 line 26 slice 8aa: call_effect_subs side-table ───────────────
+//
+// `compute_call_var_bindings` already resolves named effect variables
+// at each call site by unioning effects across Fn-arg slot positions
+// that reference the variable. Slice 8aa persists those bindings into
+// `EffectCheckResult.call_effect_subs`, keyed by call-expression span,
+// so slice 8ab (entry 35) can forward them to codegen and slice 8y
+// (entry 32) can gate state-machine emission on the resolved
+// per-call effect set.
+
+#[test]
+fn test_slice_8aa_call_effect_subs_populated_for_polymorphic_effect_call() {
+    // `op[T, with E]` called with a closure that reads(Db) should
+    // record `E → {reads(Db)}` in `call_effect_subs` keyed on the
+    // `op(...)` call span. Mirrors
+    // `test_compound_polymorphism_end_to_end_effect_propagation`'s
+    // shape — uses the full pipeline so the typechecker's
+    // `call_type_subs` and `method_callee_types` are threaded
+    // through, matching the production path the codegen consumer
+    // (slice 8ab → 8y) will exercise.
+    let source = "effect resource Db;\n\
+                  pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
+                  pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
+                  pub fn main() with reads(Db) {\n\
+                      let _ = op(42, |y| touch_db(y));\n\
+                  }";
+    let result = effectcheck_full_pipeline(source);
+    assert!(
+        !result.call_effect_subs.is_empty(),
+        "call_effect_subs must record at least one binding for the op(...) call"
+    );
+    // There should be exactly one entry — the `op(42, |y| ...)` call
+    // site. Inner map binds the single effect variable `E` to a set
+    // containing the `reads(Db)` effect.
+    let (_, bindings) = result
+        .call_effect_subs
+        .iter()
+        .next()
+        .expect("at least one call-site binding");
+    let e_binding = bindings
+        .get("E")
+        .expect("effect variable E must be bound at the op(...) call");
+    assert!(
+        e_binding
+            .iter()
+            .any(|e| matches!(e.verb, EffectVerbKind::Reads) && e.resource == "Db"),
+        "E must be bound to a set containing reads(Db); got: {:?}",
+        e_binding
+    );
+}
+
+#[test]
+fn test_slice_8aa_call_effect_subs_empty_when_no_polymorphic_callee() {
+    // A program with no polymorphic-effect callees should leave
+    // `call_effect_subs` empty. Pins the "absence means no
+    // polymorphic-effect to resolve" semantic that slice 8ab + 8y
+    // consumers rely on.
+    let result = effectcheck_ok(
+        "pub fn add(x: i64, y: i64) -> i64 { x + y }\n\
+         pub fn main() { let _ = add(1, 2); }",
+    );
+    assert!(
+        result.call_effect_subs.is_empty(),
+        "non-polymorphic-effect program must not populate call_effect_subs; got: {:?}",
+        result.call_effect_subs
+    );
+}
+
+#[test]
+fn test_slice_8aa_call_effect_subs_records_multiple_call_sites() {
+    // Two distinct call sites to the same polymorphic-effect callee
+    // bind E to (potentially) different concrete effect sets. The
+    // table records both entries keyed by their respective call
+    // spans — confirming the per-call-site granularity needed for
+    // slice 8y's per-call gating.
+    let source = "effect resource Db;\n\
+                  pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
+                  pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
+                  pub fn pure_id(x: i64) -> i64 { x }\n\
+                  pub fn main() with reads(Db) {\n\
+                      let _ = op(42, |y| touch_db(y));\n\
+                      let _ = op(7, |y| pure_id(y));\n\
+                  }";
+    let result = effectcheck_full_pipeline(source);
+    assert_eq!(
+        result.call_effect_subs.len(),
+        2,
+        "expected 2 call-site bindings (one per op call), got {}: {:?}",
+        result.call_effect_subs.len(),
+        result.call_effect_subs
+    );
+    // One binding should carry reads(Db); the other should be empty
+    // (pure closure body) — both are valid resolutions of `E` and
+    // both must be recorded.
+    let mut saw_reads_db = false;
+    let mut saw_empty = false;
+    for bindings in result.call_effect_subs.values() {
+        let e = bindings.get("E").expect("E must be bound at each op call");
+        if e.iter()
+            .any(|x| matches!(x.verb, EffectVerbKind::Reads) && x.resource == "Db")
+        {
+            saw_reads_db = true;
+        } else if e.is_empty() {
+            saw_empty = true;
+        }
+    }
+    assert!(
+        saw_reads_db && saw_empty,
+        "expected one call to bind E→{{reads(Db)}} and one to bind E→{{}}; got: {:?}",
+        result.call_effect_subs
+    );
+}

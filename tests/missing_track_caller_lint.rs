@@ -173,6 +173,7 @@ fn empty_effects() -> EffectCheckResult {
         public_effects_policy: PublicEffectsPolicy::Declared,
         errors: Vec::new(),
         queries: Vec::new(),
+        call_effect_subs: HashMap::new(),
     }
 }
 

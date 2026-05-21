@@ -108,6 +108,19 @@ impl<'a> super::EffectChecker<'a> {
         // Round 9's unification check separately diagnoses disagreement
         // between positions.
         let var_bindings = self.compute_call_var_bindings(callee_name, args);
+        // Phase 6 line 26 slice 8aa: persist the per-call-site
+        // effect-variable substitutions into `call_effect_subs` so
+        // slice 8ab can forward them to codegen (and slice 8y can
+        // gate state-machine emission on whether the resolved
+        // effects include any network-yield verb). Only record when
+        // the callee has effect variables (`compute_call_var_bindings`
+        // returns an empty map for non-polymorphic callees) — the
+        // absence of an entry signals "no polymorphic-effect to
+        // resolve" downstream, distinct from "resolved to ⊥".
+        if !var_bindings.is_empty() {
+            self.call_effect_subs
+                .insert(SpanKey::from_span(call_span), var_bindings.clone());
+        }
         // Look up type-parameter substitutions for this call (Round 10.3
         // step 7). Empty when the callee is non-generic or the typechecker
         // didn't run with `with_call_type_subs` wired in.

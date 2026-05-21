@@ -246,6 +246,29 @@ pub struct EffectCheckResult {
     /// Empty in v1; future catalogue entries originating from the
     /// effect checker push `CompilerQuery` values here.
     pub queries: Vec<crate::queries::CompilerQuery>,
+    /// Phase 6 line 26 slice 8aa: per-call-site effect-variable
+    /// substitutions, the sibling of `TypeCheckResult.call_type_subs`.
+    /// Maps a call-expression span to (effect-variable name → concrete
+    /// `Effect` set), recording how each `with E` named effect
+    /// variable resolved at the call site. The bindings are computed
+    /// by `compute_call_var_bindings`: for each effect-variable `E`,
+    /// the binding is the union of effects supplied at every Fn-slot
+    /// parameter position that references `E` in the callee's
+    /// signature. When `E` has no Fn-slot references (e.g.
+    /// `fn op[T, with E](item: T) with E` with no closure args), the
+    /// resolved set is empty (`⊥`) — semantically correct because
+    /// the callee has no path to produce concrete effects through
+    /// `E`. The Kāra effect model is callee-effects-flow-UP (not
+    /// caller-context-flows-DOWN), so the caller's `with` clause is
+    /// NOT broadcast into `E`. Slice 8ab (entry 35) threads this
+    /// table from `EffectCheckResult` through `src/cli.rs` to
+    /// codegen; slice 8y (entry 32) consumes it to gate
+    /// state-machine emission on whether the resolved per-call
+    /// effects include any network-yield verb. Empty entries are
+    /// omitted (a call site without any `with E` bindings has no
+    /// table entry); consumers default to "no constraints" when the
+    /// lookup misses.
+    pub call_effect_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
 }
 
 // ── Effect Checker ──────────────────────────────────────────────
@@ -313,6 +336,14 @@ pub struct EffectChecker<'a> {
     /// when a generic call's effect-subtyping check fails. Empty when
     /// constructed via the unparameterised `new` family.
     pub(crate) call_type_subs: HashMap<SpanKey, HashMap<String, String>>,
+    /// Phase 6 line 26 slice 8aa: per-call-site effect-variable
+    /// substitutions, populated by `check_call_args_subtyping` from
+    /// the existing `compute_call_var_bindings` output. Exposed via
+    /// `EffectCheckResult.call_effect_subs` for downstream consumption
+    /// (slice 8ab → codegen → slice 8y). See the
+    /// `EffectCheckResult.call_effect_subs` doc-comment for the
+    /// binding-model rationale.
+    pub(crate) call_effect_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
     pub(crate) errors: Vec<EffectError>,
 }
 
@@ -348,6 +379,7 @@ impl<'a> EffectChecker<'a> {
             fn_effect_var_positions: HashMap::new(),
             method_callee_types: HashMap::new(),
             call_type_subs: HashMap::new(),
+            call_effect_subs: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -599,6 +631,7 @@ impl<'a> EffectChecker<'a> {
             public_effects_policy: self.public_effects_policy,
             errors: self.errors,
             queries: Vec::new(),
+            call_effect_subs: self.call_effect_subs,
         }
     }
 
