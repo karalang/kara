@@ -1384,7 +1384,7 @@ impl<'a> Interpreter<'a> {
                 try_write_or_panic(rc, &label).insert(0, val);
                 Value::Unit
             }
-            "pop_back" => {
+            "pop" | "pop_back" => {
                 let popped = try_write_or_panic(rc, &label).pop();
                 option_value_from(popped)
             }

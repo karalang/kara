@@ -185,6 +185,78 @@ fn test_vec_deque_pop_empty_returns_none() {
     assert_eq!(out, "None\nNone\n");
 }
 
+// `Vec[T].pop()` — the bare form, alias for `pop_back`. Both the
+// typechecker (`src/typechecker/expr_method_call.rs:1156`) and codegen
+// (`src/codegen/vec_method.rs:300` collapses `pop | pop_back |
+// pop_front` into one arm) already supported it; the interpreter
+// dispatch arm was missing, so `karac run` panicked with
+// "method 'pop' not found on type 'unknown'". Surfaced by
+// kara-katas/leetcode/71-simplify-path which wanted stack-style
+// push/pop on a `Vec[i64]`.
+#[test]
+fn test_vec_pop_returns_some_then_none_on_drain() {
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[i64] = Vec.new();
+            v.push(10);
+            v.push(20);
+            v.push(30);
+            let a = v.pop();
+            let b = v.pop();
+            let c = v.pop();
+            let d = v.pop();
+            println(a);
+            println(b);
+            println(c);
+            println(d);
+            println(v.len());
+        }
+    "#);
+    assert_eq!(out, "Some(30)\nSome(20)\nSome(10)\nNone\n0\n");
+}
+
+#[test]
+fn test_vec_pop_string_elements() {
+    // Non-Copy element type flows through the same dispatch — pins the
+    // generic shape against future regressions where the arm might
+    // accidentally specialize to numerics.
+    let out = run(r#"
+        fn main() {
+            let mut v: Vec[String] = Vec.new();
+            v.push("a");
+            v.push("b");
+            println(v.pop());
+            println(v.pop());
+            println(v.pop());
+        }
+    "#);
+    assert_eq!(out, "Some(b)\nSome(a)\nNone\n");
+}
+
+#[test]
+fn test_vec_pop_used_as_stack_for_simplify_path_shape() {
+    // Mirrors the kata-katas/leetcode/71-simplify-path stack discipline:
+    // push components, pop on `'..'`, skip on `'.'`, never underflow.
+    // Tests that the `pop` arm interacts cleanly with the surrounding
+    // push/len control flow the kata exercises.
+    let out = run(r#"
+        fn main() {
+            let mut stack: Vec[i64] = Vec.new();
+            stack.push(1);
+            stack.push(2);
+            stack.push(3);
+            let _ = stack.pop();
+            stack.push(4);
+            let _ = stack.pop();
+            let _ = stack.pop();
+            println(stack.len());
+            println(stack.pop());
+            println(stack.pop());
+        }
+    "#);
+    assert_eq!(out, "1\nSome(1)\nNone\n");
+}
+
 #[test]
 fn test_vec_deque_iter_yields_in_front_to_back_order() {
     // `iter()` must yield items front-to-back. The runtime is

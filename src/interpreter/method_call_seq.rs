@@ -204,7 +204,13 @@ impl<'a> super::Interpreter<'a> {
             //    also reach these arms; valid Kāra source guards via
             //    receiver type. Routed through helpers to keep
             //    `eval_method_call`'s debug-mode stack frame compact.
-            "push_back" | "push_front" | "pop_back" | "pop_front" => {
+            //
+            //    `pop` is an alias for `pop_back` (Vec[T]'s stack-style
+            //    pop), matching the codegen path in
+            //    `src/codegen/vec_method.rs:300` which collapses
+            //    `pop | pop_back | pop_front` into one arm and picks
+            //    front-vs-back by name.
+            "push_back" | "push_front" | "pop" | "pop_back" | "pop_front" => {
                 if matches!(&obj, Value::Array(_)) {
                     return Some(self.eval_vec_deque_method(method, &obj, object, args));
                 }
