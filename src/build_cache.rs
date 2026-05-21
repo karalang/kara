@@ -573,6 +573,15 @@ fn toml_string(s: &str) -> String {
 mod tests {
     use super::*;
 
+    /// Serializes tests that mutate the process-wide `CACHE_ROOT_ENV_VAR`.
+    /// Without this, the env-var tests race under cargo's default parallel
+    /// execution — each test's `set_var` can land between its sibling's
+    /// `set_var` and read, corrupting either assertion. Acquire with
+    /// `unwrap_or_else(|e| e.into_inner())` so a panicked test (poisoned
+    /// mutex) doesn't cascade-fail every following test; the prev/restore
+    /// dance inside each test keeps the env clean on the way out.
+    static CACHE_ROOT_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     fn sample_key() -> CacheKey {
         CacheKey {
             compiler_version: "0.1.0".to_string(),
@@ -681,12 +690,14 @@ mod tests {
 
     #[test]
     fn default_cache_root_honors_env_override() {
+        let _g = CACHE_ROOT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         // Save + restore so tests don't cross-contaminate.
         let prev = std::env::var(CACHE_ROOT_ENV_VAR).ok();
-        // SAFETY: tests are single-threaded per-process under
-        // `cargo test --test-threads=1`-equivalent serialization is
-        // not enforced here, but the env var we set is unique to this
-        // test and we restore on the way out.
+        // SAFETY: parallel mutation of the process env var is serialized by
+        // CACHE_ROOT_ENV_LOCK above; the prev/restore pair below keeps the
+        // env clean for any sibling that runs next.
         unsafe {
             std::env::set_var(CACHE_ROOT_ENV_VAR, "/tmp/karac_cache_override");
         }
@@ -702,7 +713,12 @@ mod tests {
 
     #[test]
     fn default_cache_root_ignores_whitespace_only_override() {
+        let _g = CACHE_ROOT_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let prev = std::env::var(CACHE_ROOT_ENV_VAR).ok();
+        // SAFETY: see sibling test — CACHE_ROOT_ENV_LOCK serializes the
+        // mutation.
         unsafe {
             std::env::set_var(CACHE_ROOT_ENV_VAR, "   ");
         }
