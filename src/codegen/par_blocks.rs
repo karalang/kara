@@ -18,6 +18,16 @@ use inkwell::AddressSpace;
 
 use super::state::{CleanupAction, ResultSlot, ReturnSlot, VarSlot};
 
+/// Slice 1b (Phase 7 — Par codegen: cancellation and error
+/// propagation, 2026-05-20) return type for `emit_par_run`. First
+/// element is the return-slot map (slice A); second is the parent-
+/// allocated Result-slot array pointer + struct type, `Some` only
+/// when at least one branch is Result-typed.
+type ParRunResult<'ctx> = (
+    HashMap<String, BasicValueEnum<'ctx>>,
+    Option<(PointerValue<'ctx>, StructType<'ctx>)>,
+);
+
 impl<'ctx> super::Codegen<'ctx> {
     /// Slice 1a (Phase 7 — Par codegen: cancellation and error
     /// propagation, 2026-05-18). Recognise a par-block branch whose
@@ -192,8 +202,12 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointer through the per-branch env struct, and each branch
         // fn writes its slot's value before returning. The barrier
         // inside `karac_par_run` guarantees all writes are visible by
-        // the time the runtime call returns.
-        let slot_values =
+        // the time the runtime call returns. Slice 1b: emit_par_run
+        // additionally returns the parent-allocated Result-slot array
+        // pointer (and the Result struct type) when any branch is
+        // Result-typed; we walk those slots in step 7 below to
+        // short-circuit the par-block's value on the first Err.
+        let (slot_values, result_slots_info) =
             self.emit_par_run(&block.stmts, &block.span, &return_slots, &result_slots)?;
 
         // Step 6 — Bind each loaded slot value as a fresh local in the
@@ -237,18 +251,196 @@ impl<'ctx> super::Codegen<'ctx> {
         // statement-form par-blocks (`par { side_effect_a();
         // side_effect_b(); }`).
         //
-        // Slice 1a (Phase 7 — Par codegen: cancellation and error
-        // propagation, 2026-05-18) intentionally does **not** override
-        // the join expression with an errored slot's value here — the
-        // parent-side Err-as-par-block-value surface is slice 1b.
-        // Slice 1a's observable effect is the in-IR cancel-flag store
-        // on a branch that produces Err, which sibling branches' next
-        // cooperative-cancel check picks up.
-        if let Some(expr) = &block.final_expr {
-            self.compile_expr(expr)
-        } else {
-            Ok(self.context.i64_type().const_int(0, false).into())
+        // Slice 1b (Phase 7 — Par codegen: cancellation and error
+        // propagation, 2026-05-20). When any branch is Result-typed
+        // *and* the par-block has a join expression, walk the parent-
+        // allocated `__par_result_slots` array in branch-index order
+        // (slot.array_index is assigned in source-statement order in
+        // `compile_par_block` step 4). For each slot: load its tag
+        // (Result field 0; Err == 0 per `seed_builtin_enum_layouts`)
+        // and branch on Err to a per-slot "err found" block that
+        // loads the full Result value and jumps to the par-block exit
+        // BB. When every slot is Ok, fall through to a `compile_join`
+        // BB that evaluates the user's join expression. All paths
+        // phi-merge at the exit BB, so the par-block's value is the
+        // first errored slot's Result if any branch errored, else
+        // the join expression's value. The phi type is the shared
+        // Result struct (`{ i64, i64 }`); the join expression is
+        // assumed to evaluate to a value of that same LLVM type — when
+        // slice 2 wires Result inference through the typechecker, the
+        // type-mismatch case ("Result-typed slot but non-Result join")
+        // becomes a typecheck-time error. Today the IR-shape check
+        // happens at phi-construction time and panics; an explicit
+        // diagnostic is slice 2's concern.
+        //
+        // Skip the err-walk machinery when there are no Result slots
+        // OR no join expression — for either, slice 1a's behavior is
+        // already correct (slot-write + Err-triggers-cancel cascades
+        // to siblings, no phi value to surface).
+        let has_result_slots = result_slots_info.is_some() && block.final_expr.is_some();
+        if !has_result_slots {
+            return if let Some(expr) = &block.final_expr {
+                self.compile_expr(expr)
+            } else {
+                Ok(self.context.i64_type().const_int(0, false).into())
+            };
         }
+
+        let (slots_ptr, result_st) = result_slots_info.expect("has_result_slots gates on Some(_)");
+        let join_expr = block
+            .final_expr
+            .as_ref()
+            .expect("has_result_slots gates on Some(_)");
+        let parent_fn = self.current_fn.expect("par-block must be inside a fn");
+        let i64_t = self.context.i64_type();
+        let zero_i64 = i64_t.const_zero();
+
+        // Order the result_slots walk by branch_index (source order).
+        // `result_slots` is built by iterating `block.stmts` in order
+        // above, so branch_index is already ascending — sort defensively
+        // in case a future refactor reorders the slot list.
+        let mut walk_order: Vec<&ResultSlot> = result_slots.iter().collect();
+        walk_order.sort_by_key(|s| s.branch_index);
+
+        // Allocate the BB skeleton: one `check` BB per slot, one
+        // `err_found` BB per slot, the `compile_join` BB, and the
+        // `exit` BB that hosts the phi. Allocate them up-front so the
+        // forward branches (`check_i` → `next_check`/`compile_join`)
+        // can target real blocks.
+        let check_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = (0..walk_order.len())
+            .map(|i| {
+                self.context
+                    .append_basic_block(parent_fn, &format!("__par_err_check_{i}"))
+            })
+            .collect();
+        let err_found_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = (0..walk_order.len())
+            .map(|i| {
+                self.context
+                    .append_basic_block(parent_fn, &format!("__par_err_found_{i}"))
+            })
+            .collect();
+        let join_bb = self
+            .context
+            .append_basic_block(parent_fn, "__par_compile_join");
+        let exit_bb = self
+            .context
+            .append_basic_block(parent_fn, "__par_block_exit");
+
+        // Jump from the current BB (where step 6's let-bindings just
+        // landed) into the first check.
+        self.builder
+            .build_unconditional_branch(check_bbs[0])
+            .unwrap();
+
+        // Per-slot phi entries: (full Result value loaded in
+        // err_found_<i>, err_found_<i> BB) — these feed the exit phi
+        // alongside the join expression's value.
+        let mut phi_incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
+            Vec::with_capacity(walk_order.len() + 1);
+
+        // GEP element type for the dense [N x Result_struct_ty] array.
+        // Length is irrelevant to GEP element-typing (LLVM uses the
+        // pointer element type, not the array length); use 0 as a
+        // placeholder consistent with the branch-fn slot-write site.
+        let arr_ty = result_st.array_type(0);
+
+        for (i, slot) in walk_order.iter().enumerate() {
+            self.builder.position_at_end(check_bbs[i]);
+            let arr_idx = i64_t.const_int(slot.array_index as u64, false);
+            let slot_ptr = unsafe {
+                self.builder
+                    .build_in_bounds_gep(
+                        arr_ty,
+                        slots_ptr,
+                        &[zero_i64, arr_idx],
+                        &format!("__par_err_walk_slot_{}_ptr", slot.binding_name),
+                    )
+                    .unwrap()
+            };
+            // Load only the tag (field 0 of the Result struct) — we
+            // don't need the full value here, just the discriminant.
+            // The full value is loaded inside `err_found_<i>` below
+            // and only on the err path, keeping the Ok path lean.
+            let tag_ptr = self
+                .builder
+                .build_struct_gep(
+                    result_st,
+                    slot_ptr,
+                    0,
+                    &format!("__par_err_walk_slot_{}_tag_ptr", slot.binding_name),
+                )
+                .unwrap();
+            let tag = self
+                .builder
+                .build_load(
+                    i64_t,
+                    tag_ptr,
+                    &format!("__par_err_walk_slot_{}_tag", slot.binding_name),
+                )
+                .unwrap()
+                .into_int_value();
+            let is_err = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::EQ,
+                    tag,
+                    zero_i64,
+                    &format!("__par_err_walk_slot_{}_is_err", slot.binding_name),
+                )
+                .unwrap();
+            // Next destination on Ok: next check, or compile_join if
+            // this is the last slot.
+            let next_bb = if i + 1 < walk_order.len() {
+                check_bbs[i + 1]
+            } else {
+                join_bb
+            };
+            self.builder
+                .build_conditional_branch(is_err, err_found_bbs[i], next_bb)
+                .unwrap();
+
+            // err_found_<i>: load the full Result value and br to
+            // exit. Phi feeds the loaded value at the exit.
+            self.builder.position_at_end(err_found_bbs[i]);
+            let full_val = self
+                .builder
+                .build_load(
+                    result_st,
+                    slot_ptr,
+                    &format!("__par_err_walk_slot_{}_val", slot.binding_name),
+                )
+                .unwrap();
+            self.builder.build_unconditional_branch(exit_bb).unwrap();
+            phi_incoming.push((full_val, err_found_bbs[i]));
+        }
+
+        // compile_join BB: evaluate the user's join expression. The
+        // builder's insertion block may advance through nested control
+        // flow during `compile_expr`; capture the *final* block and
+        // its produced value, then branch to exit.
+        self.builder.position_at_end(join_bb);
+        let join_val = self.compile_expr(join_expr)?;
+        let join_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+        phi_incoming.push((join_val, join_end_bb));
+
+        // Exit BB: phi-merge all incoming Result values. The phi's
+        // type matches the shared Result struct layout (`{ i64, i64 }`)
+        // — the join expression must produce a value of the same LLVM
+        // type. A future typechecker pass (slice 2) will enforce this
+        // at the source-language level; today, mismatches surface as
+        // LLVM-level verification failures from inkwell.
+        self.builder.position_at_end(exit_bb);
+        let phi = self
+            .builder
+            .build_phi(result_st, "__par_block_value")
+            .unwrap();
+        let incoming_refs: Vec<(&dyn inkwell::values::BasicValue<'ctx>, _)> = phi_incoming
+            .iter()
+            .map(|(v, bb)| (v as &dyn inkwell::values::BasicValue<'ctx>, *bb))
+            .collect();
+        phi.add_incoming(&incoming_refs);
+        Ok(phi.as_basic_value())
     }
 
     /// Lower a list of statements to a `karac_par_run` runtime dispatch.
@@ -280,6 +472,17 @@ impl<'ctx> super::Codegen<'ctx> {
     /// scope. Empty `return_slots` reduces to slice 2's behavior:
     /// no return-struct alloca, no slot field on the env-struct, no
     /// loads after the runtime call.
+    ///
+    /// **Slice 1b (Phase 7 — Par codegen: cancellation and error
+    /// propagation, 2026-05-20).** The second tuple element returned is
+    /// the `(slots_array_ptr, Result_struct_ty)` pair for the parent-
+    /// allocated `__par_result_slots` array — `Some` when `result_slots`
+    /// is non-empty, `None` otherwise. `compile_par_block` uses it to
+    /// walk the slots in branch-index order after `karac_par_run`
+    /// returns and phi-merge the first Err it finds against the join
+    /// expression's value. The auto-par dispatch site in
+    /// `compile_function_body` always passes an empty `result_slots`
+    /// list and discards this tuple element.
     #[allow(clippy::result_large_err)]
     pub(super) fn emit_par_run(
         &mut self,
@@ -287,14 +490,14 @@ impl<'ctx> super::Codegen<'ctx> {
         span: &Span,
         return_slots: &[ReturnSlot<'ctx>],
         result_slots: &[ResultSlot],
-    ) -> Result<HashMap<String, BasicValueEnum<'ctx>>, String> {
+    ) -> Result<ParRunResult<'ctx>, String> {
         // Zero statements: nothing to do. Single statement: no parallelism
         // needed — compile in place to avoid the runtime call overhead.
         // The slot map is populated by reading each slot's binding from
         // `self.variables` after `compile_stmt` runs, so the caller's
         // outside-of-group reads still resolve.
         if stmts.is_empty() {
-            return Ok(HashMap::new());
+            return Ok((HashMap::new(), None));
         }
         if stmts.len() == 1 {
             self.compile_stmt(&stmts[0])?;
@@ -308,7 +511,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     map.insert(slot.binding_name.clone(), v);
                 }
             }
-            return Ok(map);
+            return Ok((map, None));
         }
 
         // 1. Collect the union of captured variables across all branch statements.
@@ -576,7 +779,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 slot_values.insert(slot.binding_name.clone(), val);
             }
         }
-        Ok(slot_values)
+        // Slice 1b: surface the parent-side result-slot array pointer +
+        // Result struct type so `compile_par_block` can walk the slots
+        // after the runtime barrier and short-circuit the par-block's
+        // value on the first Err. Empty `result_slots` → no array was
+        // allocated above, so the second tuple element is `None`.
+        let result_slots_info = match (result_slot_struct_ty, result_slots.is_empty()) {
+            (Some(rty), false) => Some((result_slots_alloca, rty)),
+            _ => None,
+        };
+        Ok((slot_values, result_slots_info))
     }
 
     /// Generate the branch function for a single par-block statement.

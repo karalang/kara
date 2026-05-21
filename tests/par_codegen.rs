@@ -580,6 +580,159 @@ fn main() {
         }
     }
 
+    /// Slice 1b (Phase 7 — Par codegen: cancellation and error
+    /// propagation, 2026-05-20). A par-block with Result-typed
+    /// branches AND a join expression emits a parent-side err-walk
+    /// that loads each slot's tag in branch-index order, branches on
+    /// Err to a per-slot found block, and phi-merges the first errored
+    /// slot's Result against the join expression's value at the
+    /// par-block exit. Pins the new IR shape: per-slot check + found
+    /// labels, the compile-join label, the exit label, and the phi
+    /// instruction with `__par_block_value` as its SSA name.
+    #[test]
+    fn test_ir_par_block_result_typed_join_emits_err_walk_and_phi() {
+        let ir = ir_for(
+            r#"
+fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = maybe_ok(10_i64);
+        let r2: Result[i64, i64] = maybe_ok(20_i64);
+        Ok(0_i64)
+    };
+}
+"#,
+        );
+        // (a) Per-slot check + err-found BBs — two branches, two
+        // pairs of labels.
+        assert!(
+            ir.contains("__par_err_check_0:"),
+            "expected __par_err_check_0 label; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_err_check_1:"),
+            "expected __par_err_check_1 label; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_err_found_0:"),
+            "expected __par_err_found_0 label; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_err_found_1:"),
+            "expected __par_err_found_1 label; IR:\n{ir}"
+        );
+        // (b) Compile-join and exit BBs.
+        assert!(
+            ir.contains("__par_compile_join:"),
+            "expected __par_compile_join label; IR:\n{ir}"
+        );
+        assert!(
+            ir.contains("__par_block_exit:"),
+            "expected __par_block_exit label; IR:\n{ir}"
+        );
+        // (c) Phi at exit, named `__par_block_value`, typed as the
+        // Result struct `{ i64, i64 }`. Three incoming entries — two
+        // err-found + one compile_join.
+        assert!(
+            ir.contains("__par_block_value = phi"),
+            "expected __par_block_value phi instruction; IR:\n{ir}"
+        );
+
+        // (d) Negative side: a Result-typed-branch par-block WITHOUT a
+        // join expression should not emit the err-walk / phi — slice
+        // 1a's behavior is preserved (par-block evaluates to unit).
+        let no_join_ir = ir_for(
+            r#"
+fn maybe_ok() -> Result[i64, i64] { Ok(42_i64) }
+fn main() {
+    par {
+        let r1: Result[i64, i64] = maybe_ok();
+        let r2: Result[i64, i64] = maybe_ok();
+    }
+}
+"#,
+        );
+        assert!(
+            !no_join_ir.contains("__par_err_check_"),
+            "no-join par-block should not emit err-walk BBs; IR:\n{no_join_ir}"
+        );
+        assert!(
+            !no_join_ir.contains("__par_block_value = phi"),
+            "no-join par-block should not emit the exit phi; IR:\n{no_join_ir}"
+        );
+    }
+
+    /// Slice 1b (2026-05-20). E2E: when every par-block branch's
+    /// Result-typed let-binding is Ok, the par-block evaluates to the
+    /// join expression's value. The err-walk loads each tag, every
+    /// comparison fails (tag == 1 for Ok), and control falls through
+    /// to `__par_compile_join` whose `Ok(7_i64)` is what the phi
+    /// surfaces at exit. Confirms the Ok-only path doesn't accidentally
+    /// short-circuit to a slot's Result.
+    #[test]
+    fn test_e2e_par_block_result_ok_only_returns_join_expression() {
+        let out = run_program(
+            r#"
+fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = maybe_ok(10_i64);
+        let r2: Result[i64, i64] = maybe_ok(20_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "7",
+                "Ok-only par-block should surface the join expression's Ok value; \
+                 got {out:?}"
+            );
+        }
+    }
+
+    /// Slice 1b (2026-05-20). E2E: when one of the par-block branches
+    /// returns Err, the par-block surfaces that Err *instead of* the
+    /// join expression's value. The err-walk's slot-0 / slot-1 check
+    /// finds the errored slot, jumps into `__par_err_found_<i>`, and
+    /// the phi at exit picks the slot's loaded Result rather than
+    /// `Ok(7_i64)` from the join. Pin: the printed value must match
+    /// the Err payload (`99`), not the join expression's payload (`7`).
+    #[test]
+    fn test_e2e_par_block_result_single_err_overrides_join() {
+        let out = run_program(
+            r#"
+fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
+fn maybe_err(v: i64) -> Result[i64, i64] { Err(v) }
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = maybe_ok(10_i64);
+        let r2: Result[i64, i64] = maybe_err(99_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "99",
+                "single-Err par-block should surface the slot's Err value, \
+                 not the join expression's Ok; got {out:?}"
+            );
+        }
+    }
+
     #[test]
     fn test_e2e_par_both_branches_run() {
         let out = run_program(
