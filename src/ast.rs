@@ -81,6 +81,40 @@ pub type CalleeEffectfulTable = std::collections::HashMap<String, bool>;
 /// monomorphized effect set when deciding to apply.
 pub type CalleeNetworkYieldEffectTable = std::collections::HashMap<String, bool>;
 
+/// Side-table mirroring `EffectCheckResult.call_effect_subs` (slice 8aa).
+/// Maps a call-expression's `(offset, length)` span key to a per-call-site
+/// effect-variable substitution: each entry binds an effect-variable name
+/// (the `E` in `with E`) to the set of `(verb, resource)` effects resolved
+/// by `compute_call_var_bindings` at that call site. Empty inner set
+/// indicates `E` resolved to ⊥ (no effect-bearing Fn-arg slots); absence of
+/// an outer entry indicates the call site has no polymorphic-effect
+/// callee. Slice 8ab (entry 35) populates this from the effectchecker's
+/// `call_effect_subs` field; slice 8y (entry 32) consumes it to gate
+/// state-machine emission on whether the resolved per-call effects
+/// include any network-yield verb.
+///
+/// Encoded as a plain `(usize, usize)` key pair (offset + length) so the
+/// table stays inkwell-free, matching `MethodCalleeTypesTable`'s
+/// discipline (codegen containment invariant). Inner `EffectKey` carries
+/// the verb's discriminant index + resource name so it round-trips
+/// through codegen without dragging the `Effect` struct's lifetime
+/// parameters.
+pub type CallEffectSubsTable =
+    std::collections::HashMap<(usize, usize), std::collections::HashMap<String, Vec<EffectKey>>>;
+
+/// Plain-data encoding of an `Effect` for cross-phase tables. Mirrors
+/// `karac::effectchecker::Effect` but omits the lifetime / `TracedEffect`
+/// wrapper so it can be cloned into AST-side tables without dragging
+/// effect-checker internals into the codegen layer.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct EffectKey {
+    /// Effect verb's display name (`"reads"`, `"writes"`, `"sends"`,
+    /// `"receives"`, `"allocates"`, `"panics"`, `"blocks"`, `"suspends"`).
+    pub verb: String,
+    /// Resource name (`""` for execution verbs that take no resource).
+    pub resource: String,
+}
+
 /// One yield-point entry within a network-boundary function: the call site
 /// where execution suspends pending I/O readiness, paired with the
 /// resolved callee key (`Identifier(name) → name`, two-segment
@@ -299,6 +333,13 @@ pub struct Program {
     /// to apply the ref-binding shim at match-arm leaf bindings under a
     /// `ref` / `mut ref` scrutinee. Empty entries mean owned bindings.
     pub pattern_binding_borrow_modes: PatternBindingBorrowModesTable,
+    /// Set by the cli pipeline after effectcheck (slice 8ab); empty
+    /// otherwise. Per-call-site effect-variable substitutions for
+    /// `with E`-bearing callees. Slice 8y consumes this to gate
+    /// per-mono state-machine emission on whether the resolved per-call
+    /// effects include any network-yield verb. See `CallEffectSubsTable`
+    /// type docs for the encoding rationale.
+    pub call_effect_subs: CallEffectSubsTable,
 }
 
 mod exprs;

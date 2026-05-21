@@ -686,6 +686,11 @@ impl Pipeline {
             self.parsed.program.callee_effectful = build_callee_effectful_table(effects);
             self.parsed.program.callee_network_yield_effect =
                 build_callee_network_yield_effect_table(effects);
+            // Slice 8ab: forward the effect-checker's
+            // `call_effect_subs` into the AST-level table so codegen
+            // can consume per-call effect-variable resolutions
+            // (slice 8y consumer).
+            self.parsed.program.call_effect_subs = build_call_effect_subs_table(effects);
         }
         // Now that `callee_network_yield_effect` is populated, walk each
         // network-boundary function body and enumerate its yield points.
@@ -972,6 +977,48 @@ fn build_callee_effectful_table(
             .entry(name.clone())
             .and_modify(|v| *v = *v || effectful)
             .or_insert(effectful);
+    }
+    table
+}
+
+/// Phase 6 line 26 slice 8ab: convert the effect-checker's
+/// `call_effect_subs` (keyed by `SpanKey` with internal `Effect`
+/// values) into the AST-level `CallEffectSubsTable` (keyed by
+/// `(offset, length)` with plain-data `EffectKey` values) so codegen
+/// can read it without taking a dependency on the effectchecker's
+/// `Effect` struct. Each entry's verb is rendered via a local
+/// `verb_to_name` mirror of the effectchecker's diagnostic rendering;
+/// resource names round-trip unchanged.
+pub fn build_call_effect_subs_table(
+    effects: &EffectCheckResult,
+) -> crate::ast::CallEffectSubsTable {
+    fn verb_to_name(verb: &EffectVerbKind) -> String {
+        match verb {
+            EffectVerbKind::Reads => "reads".to_string(),
+            EffectVerbKind::Writes => "writes".to_string(),
+            EffectVerbKind::Sends => "sends".to_string(),
+            EffectVerbKind::Receives => "receives".to_string(),
+            EffectVerbKind::Allocates => "allocates".to_string(),
+            EffectVerbKind::Panics => "panics".to_string(),
+            EffectVerbKind::Blocks => "blocks".to_string(),
+            EffectVerbKind::Suspends => "suspends".to_string(),
+            EffectVerbKind::UserDefined(name) => name.clone(),
+        }
+    }
+    let mut table = crate::ast::CallEffectSubsTable::new();
+    for (span_key, bindings) in &effects.call_effect_subs {
+        let mut inner = std::collections::HashMap::new();
+        for (var_name, effect_set) in bindings {
+            let keys: Vec<crate::ast::EffectKey> = effect_set
+                .iter()
+                .map(|e| crate::ast::EffectKey {
+                    verb: verb_to_name(&e.verb),
+                    resource: e.resource.clone(),
+                })
+                .collect();
+            inner.insert(var_name.clone(), keys);
+        }
+        table.insert((span_key.0, span_key.1), inner);
     }
     table
 }

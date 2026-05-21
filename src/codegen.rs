@@ -583,6 +583,16 @@ pub(super) struct Codegen<'ctx> {
     /// `compile_method_call` apply the same narrowing that `compile_call`
     /// applies to free-function and `Type.assoc` calls.
     pub(crate) method_callee_types: HashMap<(usize, usize), String>,
+    /// Phase 6 line 26 slice 8ab: per-call-site effect-variable
+    /// substitutions, snapshotted from `Program.call_effect_subs`
+    /// (which `cli.rs::Pipeline` populates from
+    /// `EffectCheckResult.call_effect_subs` via
+    /// `build_call_effect_subs_table`). Slice 8y (entry 32) reads
+    /// this in `compile_generic_call` to gate per-mono state-machine
+    /// emission on whether the resolved per-call effects include any
+    /// network-yield verb. Empty when effectcheck didn't run or no
+    /// polymorphic-effect callees exist.
+    pub(crate) call_effect_subs: crate::ast::CallEffectSubsTable,
     /// Per-`unwrap`/`expect`/`is_*` MethodCall → inner `TypeExpr` side-
     /// table — populated from `Program.method_unwrap_inner_types` (set by
     /// the lowering pass from `TypeCheckResult.method_unwrap_inner_types`).
@@ -1550,6 +1560,7 @@ impl<'ctx> Codegen<'ctx> {
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
             method_callee_types: HashMap::new(),
+            call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
@@ -1857,6 +1868,13 @@ impl<'ctx> Codegen<'ctx> {
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
         self.method_callee_types = program.method_callee_types.clone();
+
+        // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
+        // variable substitution table. Slice 8y (entry 32) reads
+        // this in `compile_generic_call` to gate per-mono state-
+        // machine emission on whether the resolved per-call effects
+        // include any network-yield verb.
+        self.call_effect_subs = program.call_effect_subs.clone();
 
         // Side-table set by `lowering::lower_program`: each
         // `unwrap`/`expect`/`is_*` MethodCall on `Option[T]` or `Result[T, E]`

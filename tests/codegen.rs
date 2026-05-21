@@ -18719,6 +18719,68 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ab: call_effect_subs reaches Program ─────
+    //
+    // Slice 8aa populated `EffectCheckResult.call_effect_subs`. Slice 8ab
+    // threads that table forward through `cli.rs::Pipeline` into
+    // `Program.call_effect_subs` so codegen (and slice 8y) can read
+    // per-call effect-variable resolutions. The codegen pipeline used
+    // by `ir_for_with_state_struct_layouts` doesn't currently invoke
+    // the cli pipeline, so the table arrives through the helper's
+    // build call instead — verify the table reaches the program here
+    // by running the full pipeline manually.
+
+    #[test]
+    fn test_slice_8ab_call_effect_subs_reaches_program() {
+        // `op[T, with E]` called with a closure that reads(Db) — after
+        // running the full pipeline, `parsed.program.call_effect_subs`
+        // must record one entry binding `E` to a set containing
+        // `reads(Db)`. This is the AST-level table consumed by codegen.
+        use karac::cli::build_call_effect_subs_table;
+        let src = "effect resource Db;\n\
+                   pub fn op[T, with E](x: T, cb: Fn(T) -> T with E) -> T with E { cb(x) }\n\
+                   pub fn touch_db(x: i64) -> i64 with reads(Db) { x }\n\
+                   pub fn main() with reads(Db) {\n\
+                       let _ = op(42, |y| touch_db(y));\n\
+                   }";
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "type: {:?}", typed.errors);
+        let method_types = typed.method_callee_types.clone();
+        let call_type_subs = typed.call_type_subs.clone();
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck_with_typecheck_data(
+            &parsed.program,
+            karac::effectchecker::PublicEffectsPolicy::default(),
+            karac::manifest::CompileProfile::Default,
+            method_types.clone(),
+            call_type_subs,
+        );
+        // Slice 8ab's table-builder converts the effectchecker's
+        // `Effect` set into plain `EffectKey` values.
+        parsed.program.call_effect_subs = build_call_effect_subs_table(&effects);
+        assert!(
+            !parsed.program.call_effect_subs.is_empty(),
+            "Program.call_effect_subs must record at least one binding for the op(...) call"
+        );
+        let (_, bindings) = parsed
+            .program
+            .call_effect_subs
+            .iter()
+            .next()
+            .expect("at least one binding");
+        let e = bindings
+            .get("E")
+            .expect("E must be bound at the op(...) call");
+        assert!(
+            e.iter().any(|k| k.verb == "reads" && k.resource == "Db"),
+            "E must bind to a set containing reads(Db); got: {:?}",
+            e
+        );
+    }
+
     // ── `ref T` arg from a non-place rvalue ──────────────────────
     //
     // Pre-fix, `compile_call` only handled the `ExprKind::Identifier`
