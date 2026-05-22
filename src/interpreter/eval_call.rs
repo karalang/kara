@@ -322,6 +322,55 @@ impl<'a> super::Interpreter<'a> {
                     };
                     return eval_stats_fn(&path_str, &xs, span);
                 }
+                // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]`.
+                // UTF-8-validating String constructor. Error variant mapping
+                // follows Rust's `std::str::Utf8Error::error_len()` shape:
+                // `None` means the byte stream is a truncated multi-byte
+                // sequence (`IncompleteSequence`); `Some(_)` means the byte
+                // at `valid_up_to` is an invalid lead/continuation byte
+                // (`InvalidByte`). The `Other(String)` variant exists for
+                // forward-compatibility with future failure modes — none
+                // are produced by this path today.
+                "String.from_utf8" => {
+                    let bytes: Vec<u8> = if let Some(arg) = args.first() {
+                        match self.eval_expr_inner(&arg.value) {
+                            Value::Array(rc) => rc
+                                .read()
+                                .unwrap()
+                                .iter()
+                                .map(|v| match v {
+                                    Value::Int(i) => *i as u8,
+                                    _ => 0,
+                                })
+                                .collect(),
+                            _ => Vec::new(),
+                        }
+                    } else {
+                        Vec::new()
+                    };
+                    return match std::str::from_utf8(&bytes) {
+                        Ok(s) => Value::EnumVariant {
+                            enum_name: "Result".to_string(),
+                            variant: "Ok".to_string(),
+                            data: EnumData::Tuple(vec![Value::String(s.to_string())]),
+                        },
+                        Err(e) => {
+                            let variant = match e.error_len() {
+                                None => "IncompleteSequence",
+                                Some(_) => "InvalidByte",
+                            };
+                            Value::EnumVariant {
+                                enum_name: "Result".to_string(),
+                                variant: "Err".to_string(),
+                                data: EnumData::Tuple(vec![Value::EnumVariant {
+                                    enum_name: "Utf8Error".to_string(),
+                                    variant: variant.to_string(),
+                                    data: EnumData::Unit,
+                                }]),
+                            }
+                        }
+                    };
+                }
                 "Base64.encode" | "Base64.encode_url_safe" | "Hex.encode" | "Hex.encode_upper" => {
                     let bytes: Vec<u8> = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {

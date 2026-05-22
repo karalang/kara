@@ -504,6 +504,42 @@ impl<'a> super::TypeChecker<'a> {
         };
         self.env.functions.insert("env.set".to_string(), set_sig);
 
+        // `String.from_utf8(bytes: Vec[u8]) -> Result[String, Utf8Error]` —
+        // UTF-8-validating String constructor. Path-keyed sibling of
+        // `env.var` above. The peer `Utf8Error` enum is declared in
+        // `runtime/stdlib/utf8_error.kara` (prelude); the interpreter
+        // dispatch lives at `eval_call.rs` parallel to `Url.decode` /
+        // `Base64.decode`. Codegen is deferred behind a cross-cutting
+        // Result-payload widening — Result's current 1-word payload area
+        // (see `seed_builtin_enum_layouts` in `src/codegen/declarations.rs`)
+        // can't hold a 3-word `String`; widening also requires updating
+        // `compile_question`'s payload-word propagation and Result-scope
+        // drop for nested Vec/String payloads.
+        let vec_u8 = Type::Named {
+            name: "Vec".to_string(),
+            args: vec![Type::UInt(UIntSize::U8)],
+        };
+        let result_str_utf8 = Type::Named {
+            name: "Result".to_string(),
+            args: vec![
+                Type::Str,
+                Type::Named {
+                    name: "Utf8Error".to_string(),
+                    args: vec![],
+                },
+            ],
+        };
+        let from_utf8_sig = FunctionSig {
+            generic_params: vec![],
+            param_names: vec![Some("bytes".to_string())],
+            params: vec![vec_u8],
+            return_type: result_str_utf8,
+            where_clause: None,
+        };
+        self.env
+            .functions
+            .insert("String.from_utf8".to_string(), from_utf8_sig);
+
         // Register process.exit in the function table
         self.env.functions.insert(
             "process.exit".to_string(),

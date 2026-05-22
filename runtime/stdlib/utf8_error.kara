@@ -1,0 +1,15 @@
+// runtime/stdlib/utf8_error.kara
+//
+// Error type returned by `String.from_utf8(bytes)`. Variant set mirrors
+// Rust's `std::str::Utf8Error` surface distilled to the two failure
+// modes a Kāra caller can act on (invalid byte at a known offset vs.
+// truncated sequence at end-of-buffer), plus a catch-all `Other`
+// matching the `IoError` shape for forward-compatibility. Peer file to
+// `io_error.kara` / `var_error.kara`; lives in the prelude so it does
+// not need an import.
+
+enum Utf8Error {
+    InvalidByte,
+    IncompleteSequence,
+    Other(String),
+}

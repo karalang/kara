@@ -9821,6 +9821,32 @@ fn test_url_decode_returns_result_str() {
     typecheck_ok(r#"fn f() -> Result[String, DecodeError] { Url.decode("hello%20world") }"#);
 }
 
+#[test]
+fn test_string_from_utf8_returns_result_string_utf8_error() {
+    typecheck_ok(r#"fn f(bs: Vec[u8]) -> Result[String, Utf8Error] { String.from_utf8(bs) }"#);
+}
+
+#[test]
+fn test_utf8_error_variants_exist() {
+    typecheck_ok(
+        "fn main() {
+             let a = Utf8Error.InvalidByte;
+             let b = Utf8Error.IncompleteSequence;
+             let c = Utf8Error.Other(\"boom\");
+         }",
+    );
+}
+
+#[test]
+fn test_string_from_utf8_wrong_arg_type_is_error() {
+    let errors = typecheck_errors(
+        "fn main() {
+             let r = String.from_utf8(42);
+         }",
+    );
+    assert!(!errors.is_empty());
+}
+
 // ── Iterator: `iter()` / `into_iter()` / `next()` (wip-list2 subtask 1) ──
 
 #[test]

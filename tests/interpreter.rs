@@ -5989,6 +5989,70 @@ fn test_url_decode_invalid_percent() {
     assert_eq!(output, "err\n");
 }
 
+#[test]
+fn test_string_from_utf8_valid_returns_ok() {
+    let output = run("fn main() {\n\
+             let mut bs: Vec[u8] = Vec.new();\n\
+             bs.push(72u8);\n\
+             bs.push(101u8);\n\
+             bs.push(108u8);\n\
+             bs.push(108u8);\n\
+             bs.push(111u8);\n\
+             match String.from_utf8(bs) {\n\
+                 Ok(s) => println(s),\n\
+                 Err(_) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "Hello\n");
+}
+
+#[test]
+fn test_string_from_utf8_invalid_byte_returns_err_invalid_byte() {
+    // 0xff is never a valid UTF-8 lead byte; Rust's `Utf8Error::error_len`
+    // returns `Some(1)` here, so the variant must be `InvalidByte`.
+    let output = run("fn main() {\n\
+             let mut bs: Vec[u8] = Vec.new();\n\
+             bs.push(255u8);\n\
+             match String.from_utf8(bs) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(Utf8Error.InvalidByte) => println(\"invalid_byte\"),\n\
+                 Err(Utf8Error.IncompleteSequence) => println(\"incomplete\"),\n\
+                 Err(Utf8Error.Other(_)) => println(\"other\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "invalid_byte\n");
+}
+
+#[test]
+fn test_string_from_utf8_incomplete_returns_err_incomplete_sequence() {
+    // 0xe2 starts a 3-byte sequence; on its own the stream is truncated.
+    // Rust's `Utf8Error::error_len` returns `None`, so the variant must
+    // be `IncompleteSequence`.
+    let output = run("fn main() {\n\
+             let mut bs: Vec[u8] = Vec.new();\n\
+             bs.push(226u8);\n\
+             match String.from_utf8(bs) {\n\
+                 Ok(_) => println(\"ok\"),\n\
+                 Err(Utf8Error.InvalidByte) => println(\"invalid_byte\"),\n\
+                 Err(Utf8Error.IncompleteSequence) => println(\"incomplete\"),\n\
+                 Err(Utf8Error.Other(_)) => println(\"other\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "incomplete\n");
+}
+
+#[test]
+fn test_string_from_utf8_empty_returns_ok_empty() {
+    let output = run("fn main() {\n\
+             let bs: Vec[u8] = Vec.new();\n\
+             match String.from_utf8(bs) {\n\
+                 Ok(s) => println(s.len()),\n\
+                 Err(_) => println(\"err\"),\n\
+             }\n\
+         }");
+    assert_eq!(output, "0\n");
+}
+
 // ── Set[T] ────────────────────────────────────────────────────────
 
 #[test]
