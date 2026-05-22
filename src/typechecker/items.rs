@@ -1119,12 +1119,14 @@ impl<'a> super::TypeChecker<'a> {
         self.check_assignable(&declared_ty, &value_ty, c.value.span.clone());
     }
 
-    /// Slice 4 of design.md § Module-Level Bindings (§1280-1297). Walks
-    /// the binding's initializer expression and rejects any sub-shape
-    /// that requires runtime evaluation, and rejects the bare `String`
-    /// declared type per §1297. Binding-type inference + the use-site
-    /// type-check are slice-5 work; this pass only enforces the
-    /// structural constant-init rule and the heap-type rejection.
+    /// Slice 4 + 5 of design.md § Module-Level Bindings (§1280-1297,
+    /// §1284). Walks the binding's initializer expression and rejects
+    /// any sub-shape that requires runtime evaluation (slice 4); when
+    /// the binding carries an explicit `: TYPE` annotation, checks the
+    /// initializer's type against it and rejects bare `String` per
+    /// §1297; when no annotation is present, infers the binding's type
+    /// from the initializer and stashes it in `env.constants` for
+    /// use-site resolution (slice 5).
     fn check_module_binding(&mut self, b: &ModuleBinding) {
         self.check_module_binding_init(&b.value, &b.name);
 
@@ -1142,8 +1144,115 @@ impl<'a> super::TypeChecker<'a> {
                     ty_expr.span.clone(),
                     TypeErrorKind::ModuleBindingHeapType,
                 );
+                return;
+            }
+            // §1284: at module scope, string literals have type
+            // `StringSlice` rather than the function-body default of
+            // `String`. The generic `check_expr` against a
+            // `StringSlice`-typed expected does not coerce a
+            // `StringLit` (which always infers as `String`), so a
+            // bare `let X: StringSlice = "lit";` would falsely
+            // mismatch. The literal-coercion carve-out is contained
+            // here: when the declared type is `StringSlice` and the
+            // init is structurally a bare string literal, accept
+            // without invoking the generic check. Composite forms
+            // (e.g. `[("a", "b"); 4]`) are slice-5-out-of-scope and
+            // continue to go through `check_expr` — the kata-level
+            // need is the bare-literal case.
+            if Self::module_binding_is_string_slice_named(&declared)
+                && matches!(b.value.kind, ExprKind::StringLit(_))
+            {
+                // Skip the check_expr — the literal coerces by §1284.
+            } else {
+                self.check_expr(&b.value, &declared);
+            }
+        } else {
+            // No annotation — infer from the initializer. The const-init
+            // walker above has already verified the value's shape, so any
+            // type the inferer returns is rooted in a permitted form.
+            let inferred = self.infer_expr(&b.value);
+            // §1297: a heap-allocated `String` cannot live at module
+            // scope. The §1284 sibling rule (string literals default to
+            // `StringSlice` at module scope) is not yet automatic —
+            // direct the programmer to the explicit annotation instead.
+            if matches!(inferred, Type::Str) {
+                self.type_error(
+                    format!(
+                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                         was inferred as 'String' which is heap-allocated; module \
+                         bindings live in the binary as constant data — annotate \
+                         the binding as `: StringSlice` for static string data",
+                        b.name,
+                    ),
+                    b.value.span.clone(),
+                    TypeErrorKind::ModuleBindingHeapType,
+                );
+                return;
+            }
+            if !matches!(inferred, Type::Error) {
+                self.env.constants.insert(b.name.clone(), inferred);
             }
         }
+    }
+
+    /// `Type::Named { name: "StringSlice", args: [] }` predicate used
+    /// by the §1284 literal-coercion carve-out in `check_module_binding`.
+    fn module_binding_is_string_slice_named(ty: &Type) -> bool {
+        matches!(ty, Type::Named { name, args } if name == "StringSlice" && args.is_empty())
+    }
+
+    /// Slice 5 of design.md § Module-Level Bindings. The assignment-LHS
+    /// mutability check for module-level `let` / `let mut`: when the
+    /// assignment target is an identifier that resolves to a
+    /// module-level binding (looked up by scanning `self.program.items`
+    /// — the resolver's symbol table classifies these as `Constant`-class
+    /// per slice 3, so this is the authoritative source for the
+    /// is_mut flag), an immutable binding rejects with
+    /// `E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING`. Mirrors the ownership
+    /// checker's local-binding `ReassignToImmutable` rule but lives at
+    /// the typechecker layer so use sites of module bindings are
+    /// caught regardless of whether the assignment ever reaches the
+    /// ownership pass (e.g. when earlier type errors cause the
+    /// pipeline to short-circuit).
+    pub(super) fn check_module_binding_assignment(&mut self, target: &Expr) {
+        let ExprKind::Identifier(name) = &target.kind else {
+            return;
+        };
+        // Local bindings shadow module bindings — if the name is in
+        // the local scope, the module-binding check doesn't fire.
+        if self.local_scope.lookup(name).is_some() {
+            return;
+        }
+        let mut decl_span: Option<Span> = None;
+        let mut is_mut = false;
+        let mut found = false;
+        for item in &self.program.items {
+            if let Item::ModuleBinding(b) = item {
+                if b.name == *name {
+                    found = true;
+                    is_mut = b.is_mut;
+                    decl_span = Some(b.span.clone());
+                    break;
+                }
+            }
+        }
+        if !found || is_mut {
+            return;
+        }
+        let decl_hint = match decl_span {
+            Some(s) => format!(" (declared at line {}:{})", s.line, s.column),
+            None => String::new(),
+        };
+        self.type_error(
+            format!(
+                "error[E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING]: cannot assign to \
+                 module-level binding '{}' — declared without `mut`{}. Change the \
+                 declaration to `let mut {}: ...` if mutation is required.",
+                name, decl_hint, name,
+            ),
+            target.span.clone(),
+            TypeErrorKind::ReassignToImmutableModuleBinding,
+        );
     }
 
     /// Recursive const-init structural walk for slice 4. Permits
@@ -1600,6 +1709,13 @@ impl<'a> super::TypeChecker<'a> {
                         );
                     }
                 }
+                // Slice 5 of design.md § Module-Level Bindings — reject
+                // assignment to a module-level immutable `let`. The
+                // ownership checker's local-binding mutability rule does
+                // not cover module bindings; this check runs at the
+                // typechecker layer so the error surfaces even if the
+                // pipeline never reaches the ownership pass.
+                self.check_module_binding_assignment(target);
                 // Flag the immediate LHS as a place expression so the
                 // union field-read gate (line 549 slice 2a) doesn't fire
                 // on `u.field = ...`. `infer_field_access` captures this

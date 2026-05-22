@@ -2428,6 +2428,8 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // §1297 heap-String rejection both surface here.
                 crate::typechecker::TypeErrorKind::ModuleBindingEffectfulInit => "E0250",
                 crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
+                // Slice 5 — assignment to a module-level immutable `let`.
+                crate::typechecker::TypeErrorKind::ReassignToImmutableModuleBinding => "E0252",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

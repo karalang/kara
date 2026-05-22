@@ -106,6 +106,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::MarkerTrait(t) => self.env_add_marker_trait(t),
                 Item::ImplBlock(i) => self.env_add_impl(i),
                 Item::ConstDecl(c) => self.env_add_const(c),
+                Item::ModuleBinding(b) => self.env_add_module_binding(b),
                 Item::TypeAlias(t) => self.env_add_type_alias(t),
                 Item::ExternFunction(e) => self.env_add_extern_function(e),
                 Item::ExternBlock(b) => {
@@ -1561,6 +1562,22 @@ impl<'a> super::TypeChecker<'a> {
     fn env_add_const(&mut self, c: &ConstDecl) {
         let ty = self.lower_type_expr(&c.ty, &[]);
         self.env.constants.insert(c.name.clone(), ty);
+    }
+
+    /// Slice 5 of design.md § Module-Level Bindings. Module bindings
+    /// participate in identifier resolution through the same
+    /// `env.constants` map that `Item::ConstDecl` populates (slice 3
+    /// already registered them in the resolver's Const-class
+    /// namespace). When the binding carries an explicit `: TYPE`
+    /// annotation the declared type lowers here; when it does not,
+    /// the inference is deferred to the pass-2 `check_module_binding`
+    /// step, which calls `infer_expr` on the value and inserts the
+    /// inferred type at that point.
+    fn env_add_module_binding(&mut self, b: &ModuleBinding) {
+        if let Some(ref ty_expr) = b.ty {
+            let ty = self.lower_type_expr(ty_expr, &[]);
+            self.env.constants.insert(b.name.clone(), ty);
+        }
     }
 
     fn env_add_trait(&mut self, t: &TraitDef) {

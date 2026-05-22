@@ -542,6 +542,13 @@ pub enum TypeErrorKind {
     /// segment. The fix-it directs the programmer to `StringSlice`.
     /// Code `E_MODULE_BINDING_HEAP_TYPE`.
     ModuleBindingHeapType,
+    /// Slice 5 of design.md § Module-Level Bindings — an assignment
+    /// target identifier resolves to a module-level `let` binding
+    /// (not `let mut`). Mirrors the ownership checker's local-binding
+    /// `ReassignToImmutable` rule, but at the typechecker layer so the
+    /// rule fires regardless of whether the pipeline reaches the
+    /// ownership pass. Code `E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING`.
+    ReassignToImmutableModuleBinding,
 }
 
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
@@ -612,7 +619,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::NonExhaustiveCrossPackagePattern
         | TypeErrorKind::MissingNonExhaustive
         | TypeErrorKind::ModuleBindingEffectfulInit
-        | TypeErrorKind::ModuleBindingHeapType => None,
+        | TypeErrorKind::ModuleBindingHeapType
+        | TypeErrorKind::ReassignToImmutableModuleBinding => None,
     }
 }
 

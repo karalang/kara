@@ -18356,3 +18356,162 @@ fn test_module_binding_interpolated_string_rejected() {
         .iter()
         .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
 }
+
+// ── Category: Module-Level let / let mut — Slice 5 ──────────────
+// Binding-type inference + mutability check (design.md §1280-1297).
+// See `docs/implementation_checklist/phase-8-stdlib-floor.md` mod-let
+// entry, slice 5.
+
+#[test]
+fn test_module_binding_inferred_int_usable_at_use_site() {
+    typecheck_ok(
+        "let MAX = 100;
+         fn main() {
+             let n: i64 = MAX;
+         }",
+    );
+}
+
+#[test]
+fn test_module_binding_inferred_bool_usable_at_use_site() {
+    typecheck_ok(
+        "let DEBUG = true;
+         fn main() {
+             let b: bool = DEBUG;
+         }",
+    );
+}
+
+#[test]
+fn test_module_binding_inferred_type_propagates_to_arithmetic() {
+    typecheck_ok(
+        "let MAX = 100;
+         fn main() {
+             let n: i64 = MAX + 1;
+         }",
+    );
+}
+
+#[test]
+fn test_module_binding_inferred_use_site_type_mismatch_rejected() {
+    // MAX is inferred as i64; using it where bool is expected
+    // surfaces a normal TypeMismatch from the use-site check, NOT a
+    // silent fall-through.
+    let errs = typecheck_errors(
+        "let MAX = 100;
+         fn main() {
+             let b: bool = MAX;
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::TypeMismatch)),
+        "expected TypeMismatch at the bool = i64 site, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_module_binding_inferred_cross_binding_reference_resolves() {
+    // Earlier-declared bindings are visible to later ones during
+    // inference (forward iteration order through `program.items`).
+    typecheck_ok(
+        "let BASE = 100;
+         let DOUBLED = BASE + BASE;
+         fn main() {
+             let n: i64 = DOUBLED;
+         }",
+    );
+}
+
+#[test]
+fn test_module_binding_inferred_heap_string_rejected_without_annotation() {
+    // Per §1284 + §1297: a bare string literal at module scope would
+    // infer as String (heap-allocated). Slice 5 directs the
+    // programmer to the explicit `: StringSlice` annotation.
+    let errs = typecheck_errors("let HOST = \"localhost\";");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingHeapType)),
+        "expected ModuleBindingHeapType, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_MODULE_BINDING_HEAP_TYPE")
+                && e.message.contains("StringSlice")),
+        "diagnostic should point at the StringSlice annotation fix-it",
+    );
+}
+
+#[test]
+fn test_module_binding_declared_type_mismatch_init_rejected() {
+    // With an explicit annotation, the init must be assignable.
+    let errs = typecheck_errors("let MAX: i64 = true;");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::TypeMismatch)),
+        "expected TypeMismatch on bool init for i64-declared binding",
+    );
+}
+
+#[test]
+fn test_module_binding_immutable_reassign_rejected() {
+    let errs = typecheck_errors(
+        "let MAX: i64 = 100;
+         fn bump() {
+             MAX = 1;
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ReassignToImmutableModuleBinding)),
+        "expected ReassignToImmutableModuleBinding, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        errs.iter().any(
+            |e| e.message.contains("E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING")
+                && e.message.contains("declared without `mut`")
+        ),
+        "diagnostic should name the code and reference `mut`",
+    );
+}
+
+#[test]
+fn test_module_binding_let_mut_reassign_ok() {
+    typecheck_ok(
+        "let mut COUNTER: i64 = 0;
+         fn bump() {
+             COUNTER = COUNTER + 1;
+         }",
+    );
+}
+
+#[test]
+fn test_module_binding_immutable_inferred_reassign_rejected() {
+    // Same rule when the binding's type was inferred rather than
+    // declared.
+    let errs = typecheck_errors(
+        "let MAX = 100;
+         fn bump() {
+             MAX = 1;
+         }",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ReassignToImmutableModuleBinding)),);
+}
+
+#[test]
+fn test_module_binding_immutable_read_at_use_site_does_not_fire_mutability_check() {
+    // Reading an immutable module binding must NOT trip the
+    // mutability check — only assignment to it does.
+    typecheck_ok(
+        "let MAX: i64 = 100;
+         fn read() -> i64 {
+             let local_value: i64 = MAX;
+             return local_value;
+         }",
+    );
+}
