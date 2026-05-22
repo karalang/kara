@@ -201,6 +201,7 @@ fn walk_item(item: &Item, filter: &AttributeQueryFilter, out: &mut Vec<Attribute
             }
         }
         Item::LayoutDef(l) => emit_attrs(&l.attributes, &format!("layout {}", l.name), filter, out),
+        Item::TestCase(t) => emit_attrs(&t.attributes, &format!("test {:?}", t.name), filter, out),
         // Effect / use / import / alias / independent decls carry no
         // attributes at the AST level today (slice 2 of item 36's
         // namespace-dispatch walker covers the same set of kinds).

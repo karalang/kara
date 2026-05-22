@@ -30,6 +30,17 @@ impl super::Parser {
         let mut final_expr = None;
 
         while !self.check(&Token::RightBrace) && !self.is_at_end() {
+            // `test "name" { … }` is a top-level item only. Catching it
+            // here — before falling into the statement / expression
+            // dispatch — replaces the generic two-tokens-without-operator
+            // parse error with a focused `E_TEST_BLOCK_NOT_TOP_LEVEL`,
+            // and lets us skip the misplaced case's body cleanly so
+            // surrounding statements still parse. See design.md §
+            // Testing and `Item::TestCase`.
+            if self.is_test_block_head() {
+                self.reject_test_block_in_body();
+                continue;
+            }
             // Try to parse a statement or final expression
             if self.is_statement_start() {
                 match self.parse_statement() {
@@ -236,6 +247,63 @@ impl super::Parser {
             self.peek_token(),
             Token::Let | Token::Defer | Token::ErrDefer
         )
+    }
+
+    /// `test "..." { … }` head — module-scope item shape encountered
+    /// inside a function body. Matches the same 3-token lookahead as
+    /// the dispatcher in `parse_item`, so the rejection path here
+    /// triggers exactly when the equivalent top-level form would
+    /// produce an `Item::TestCase`.
+    fn is_test_block_head(&self) -> bool {
+        let Token::Identifier { name, .. } = self.peek_token() else {
+            return false;
+        };
+        name == "test"
+            && matches!(self.peek_token_at(1), Token::StringLiteral(_))
+            && matches!(self.peek_token_at(2), Token::LeftBrace)
+    }
+
+    /// Emit `E_TEST_BLOCK_NOT_TOP_LEVEL` for a misplaced
+    /// `test "name" { body }` and consume through the matching `}`
+    /// so the enclosing block can keep parsing. The case body is
+    /// dropped — slice 1 deliberately doesn't try to "rescue" it,
+    /// since the misplacement signals either (a) a typo where the
+    /// programmer meant a free-standing `assert_eq` call or (b) a
+    /// case that was supposed to live at module scope; in both
+    /// situations preserving the body adds noise downstream.
+    fn reject_test_block_in_body(&mut self) {
+        let start = self.current_span();
+        // Consume `test`, the string literal, and `{`.
+        self.advance();
+        self.advance();
+        self.advance();
+        // Skip through to the matching `}` while balancing braces.
+        let mut depth: usize = 1;
+        while depth > 0 && !self.is_at_end() {
+            match self.peek_token() {
+                Token::LeftBrace => {
+                    depth += 1;
+                    self.advance();
+                }
+                Token::RightBrace => {
+                    depth -= 1;
+                    self.advance();
+                }
+                _ => {
+                    self.advance();
+                }
+            }
+        }
+        self.errors.push(super::ParseError {
+            message: "`test \"name\" { body }` declares a top-level test \
+                      case and may not appear inside a function body. \
+                      Move the case to module scope (any `_test.kara` \
+                      file) or, if you meant a runtime assertion, drop \
+                      the `test \"...\"` wrapper and call the assertion \
+                      directly. (`E_TEST_BLOCK_NOT_TOP_LEVEL`)"
+                .to_string(),
+            span: self.span_from(&start),
+        });
     }
 
     fn is_block_expr(&self, expr: &Expr) -> bool {

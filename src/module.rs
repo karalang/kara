@@ -769,7 +769,8 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
         | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
-        | Item::IndependentDecl(_) => false,
+        | Item::IndependentDecl(_)
+        | Item::TestCase(_) => false,
     })
 }
 

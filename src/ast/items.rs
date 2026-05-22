@@ -120,6 +120,17 @@ pub enum Item {
     ExternBlock(ExternBlock),
     TypeAlias(TypeAliasDef),
     DistinctType(DistinctTypeDef),
+    /// `test "case name" { body }` — top-level test-case declaration per
+    /// `design.md § Testing`. The string literal is the user-visible case
+    /// name (appears verbatim in `test_pass` / `test_fail` JSONL events
+    /// and matches `--filter`). The body is a regular block, evaluated
+    /// once by the test runner with `runtime_errors` / `pending_cf` /
+    /// `tracked_effects` reset to a clean slate. Visibility modifiers
+    /// (`pub` / `private`) are rejected at parse — test cases aren't
+    /// callables. Allowed at module scope only; the parser emits
+    /// `E_TEST_BLOCK_NOT_TOP_LEVEL` when the `test "..." { }` shape
+    /// appears inside a function body.
+    TestCase(TestCase),
 }
 
 // ── Functions ────────────────────────────────────────────────────
@@ -789,6 +800,33 @@ pub struct ModuleBinding {
     pub deprecation: Option<Deprecation>,
     /// See [`Function::lint_overrides`].
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+}
+
+// ── Test cases ───────────────────────────────────────────────────
+
+/// `test "case name" { body }` — see `Item::TestCase`.
+#[derive(Debug, Clone)]
+pub struct TestCase {
+    pub span: Span,
+    pub attributes: Vec<Attribute>,
+    /// Joined `///` doc-comment text preceding the case. Carried for
+    /// shape uniformity with other items; the test runner does not
+    /// surface it today.
+    pub doc_comment: Option<String>,
+    /// User-visible case name (the string literal between `test` and
+    /// `{`). Surfaced verbatim as the `test` field on every
+    /// `test_pass` / `test_fail` / `test_skip` JSONL event and
+    /// matched by `--filter`. Escape sequences inside the source
+    /// `"..."` literal are decoded by the lexer, so this string is
+    /// the post-escape form (e.g. `\"` in source becomes a literal
+    /// `"` here).
+    pub name: String,
+    /// Span of the string literal itself (excludes the surrounding
+    /// `test` keyword token and the `{` body opener). Used by the
+    /// diagnostic pass that points at the case-name when reporting
+    /// duplicate names or unprintable characters in the name.
+    pub name_span: Span,
+    pub body: Block,
 }
 
 // ── Alias & Independent ──────────────────────────────────────────

@@ -120,6 +120,11 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
             }
             visit_expr(&b.value, visit);
         }
+        Item::TestCase(t) => {
+            visit(&t.span);
+            visit(&t.name_span);
+            visit_block(&t.body, visit);
+        }
         Item::AliasDecl(a) => visit(&a.span),
         Item::IndependentDecl(i) => visit(&i.span),
         Item::ExternFunction(e) => {

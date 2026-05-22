@@ -282,7 +282,8 @@ impl<'a> super::TypeChecker<'a> {
                 | Item::LayoutDef(_)
                 | Item::AliasDecl(_)
                 | Item::IndependentDecl(_)
-                | Item::ModuleBinding(_) => {
+                | Item::ModuleBinding(_)
+                | Item::TestCase(_) => {
                     // Not yet exercised by baked stdlib source — broaden
                     // the match if a future stdlib file uses one of these
                     // item kinds.

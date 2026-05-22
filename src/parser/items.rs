@@ -181,6 +181,27 @@ impl super::Parser {
                 let decl = self.parse_module_binding(attributes, is_pub, is_private)?;
                 Some(Item::ModuleBinding(decl))
             }
+            // `test "name" { body }` — top-level test-case declaration
+            // per design.md § Testing. A 3-token lookahead pins the
+            // shape (`test` IDENT + string literal + `{`) so a bare
+            // `test` identifier in any other position keeps parsing
+            // as an expression / call / etc. — there is no `test`
+            // keyword token. See `Item::TestCase`.
+            Token::Identifier { ref name, .. }
+                if name == "test"
+                    && matches!(self.peek_token_at(1), Token::StringLiteral(_))
+                    && matches!(self.peek_token_at(2), Token::LeftBrace) =>
+            {
+                if is_pub || is_private {
+                    self.error(
+                        "test cases cannot have a visibility modifier — \
+                         `pub` / `private` are meaningless because test \
+                         cases are not callables",
+                    );
+                }
+                let case = self.parse_test_case(attributes)?;
+                Some(Item::TestCase(case))
+            }
             _ => {
                 if !attributes.is_empty() || is_pub || is_private {
                     self.error("Expected item declaration after attributes/pub/private");
@@ -1477,6 +1498,47 @@ impl super::Parser {
             value,
             deprecation,
             lint_overrides,
+        })
+    }
+
+    // ── Test cases ───────────────────────────────────────────────
+
+    /// Parse a `test "name" { body }` top-level declaration. The
+    /// 3-token lookahead at the dispatch site in `parse_item` has
+    /// already verified the shape; this method is only entered when
+    /// `test STRING_LITERAL {` is at the head of the stream, so the
+    /// branches below are infallible relative to that contract (the
+    /// `parse_block` call may still produce a parse error, which is
+    /// propagated normally).
+    pub(super) fn parse_test_case(&mut self, attributes: Vec<Attribute>) -> Option<TestCase> {
+        let start = self.current_span();
+        let doc_comment = self.take_pending_doc();
+        // Consume the `test` contextual identifier — dispatched here
+        // because the 3-token lookahead at the call site matched.
+        self.advance();
+        // Capture the case-name string literal + its span.
+        let name_span = self.current_span();
+        let name = match self.peek_token() {
+            Token::StringLiteral(s) => {
+                self.advance();
+                s
+            }
+            // Unreachable per the 3-token lookahead contract — guarded
+            // here so a future refactor of the dispatch site can't
+            // silently produce a malformed `TestCase`.
+            _ => {
+                self.error("expected case-name string literal after `test`");
+                return None;
+            }
+        };
+        let body = self.parse_block()?;
+        Some(TestCase {
+            span: self.span_from(&start),
+            attributes,
+            doc_comment,
+            name,
+            name_span,
+            body,
         })
     }
 

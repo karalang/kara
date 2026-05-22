@@ -336,6 +336,7 @@ fn visit_item(item: &Item, errors: &mut Vec<ResolveError>) {
         }
         Item::ConstDecl(c) => visit_attrs(&c.attributes, errors),
         Item::ModuleBinding(b) => visit_attrs(&b.attributes, errors),
+        Item::TestCase(t) => visit_attrs(&t.attributes, errors),
         Item::TypeAlias(t) => visit_attrs(&t.attributes, errors),
         Item::DistinctType(d) => visit_attrs(&d.attributes, errors),
         Item::ExternFunction(f) => visit_attrs(&f.attributes, errors),

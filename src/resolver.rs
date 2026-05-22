@@ -754,13 +754,15 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
             }
             // Enum variants surface through their parent enum; impl blocks
             // aren't top-level named items; non-`pub` imports stay internal;
-            // use / alias / independent / layout have no importable name.
+            // use / alias / independent / layout have no importable name;
+            // test cases are not callables and expose no cross-module name.
             Item::ImplBlock(_)
             | Item::LayoutDef(_)
             | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
-            | Item::IndependentDecl(_) => {}
+            | Item::IndependentDecl(_)
+            | Item::TestCase(_) => {}
         }
     }
     names

@@ -60,7 +60,15 @@ impl<'a> super::Resolver<'a> {
                     }
                 }
                 Item::DistinctType(d) => self.collect_distinct_type(d),
-                Item::LayoutDef(_) | Item::AliasDecl(_) | Item::IndependentDecl(_) => {}
+                // Test cases don't introduce any module-scope name —
+                // the case body is resolved when the test runner
+                // lowers `Item::TestCase` to a synthetic
+                // `Item::Function` (slice 3) and feeds that lowered
+                // program back through the resolver.
+                Item::LayoutDef(_)
+                | Item::AliasDecl(_)
+                | Item::IndependentDecl(_)
+                | Item::TestCase(_) => {}
             }
         }
     }

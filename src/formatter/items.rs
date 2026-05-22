@@ -61,6 +61,7 @@ impl super::Formatter {
             }
             Item::ConstDecl(c) => self.format_const(c),
             Item::ModuleBinding(b) => self.format_module_binding(b),
+            Item::TestCase(t) => self.format_test_case(t),
             Item::AliasDecl(a) => {
                 self.writeln(&format!(
                     "alias {} = {};",
@@ -720,6 +721,18 @@ impl super::Formatter {
         self.write_str(" = ");
         self.format_expr(&b.value);
         self.write_str(";\n");
+    }
+
+    // ── Test cases ──────────────────────────────────────────────
+
+    pub(super) fn format_test_case(&mut self, t: &TestCase) {
+        self.format_attributes(&t.attributes);
+        self.write_indent();
+        self.write_str("test ");
+        self.write_str(&super::escape_string(&t.name));
+        self.write_str(" ");
+        self.format_block(&t.body);
+        self.output.push('\n');
     }
 
     // ── Extern ──────────────────────────────────────────────────

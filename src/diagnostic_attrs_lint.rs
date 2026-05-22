@@ -185,6 +185,7 @@ fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
             }
         }
         Item::LayoutDef(l) => emit_off_target_for(&l.attributes, "layout block", &[], level, diags),
+        Item::TestCase(t) => emit_off_target_for(&t.attributes, "test case", &[], level, diags),
         // Effect / use / import / alias / independent decls carry no
         // attributes at the AST level (slice 2's namespace dispatch
         // walks the same set of kinds), so there is no surface for an

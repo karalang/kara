@@ -9728,3 +9728,101 @@ fn c_string_literal_parses_with_hex_escape() {
     };
     assert_eq!(bytes, &b"AB".to_vec());
 }
+
+// ── Test-case block syntax (design.md § Testing, slice 1) ────────
+
+#[test]
+fn test_case_block_empty_body() {
+    let prog = parse_ok("test \"empty\" {}");
+    assert_eq!(prog.items.len(), 1);
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase, got {:?}", prog.items[0]);
+    };
+    assert_eq!(t.name, "empty");
+    assert!(t.body.stmts.is_empty());
+    assert!(t.body.final_expr.is_none());
+}
+
+#[test]
+fn test_case_block_with_assertion_body() {
+    let prog = parse_ok("test \"two plus two\" {\n    assert_eq(2 + 2, 4);\n}");
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    assert_eq!(t.name, "two plus two");
+    assert_eq!(t.body.stmts.len(), 1);
+}
+
+#[test]
+fn test_case_block_name_decodes_escape_sequences() {
+    // The lexer decodes string escapes; the case name stored on the
+    // AST node is the post-decode form. Source `\"` ends up as a
+    // literal `"` in the name.
+    let prog = parse_ok("test \"with a \\\"quote\\\" inside\" {}");
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    assert_eq!(t.name, "with a \"quote\" inside");
+}
+
+#[test]
+fn test_case_block_attribute_is_attached() {
+    let prog = parse_ok("#[ignore]\ntest \"ignored\" {}");
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    assert_eq!(t.attributes.len(), 1);
+    assert!(t.attributes[0].is_bare("ignore"));
+}
+
+#[test]
+fn test_case_block_rejects_visibility_modifier() {
+    let (_, errors) = parse_with_errors("pub test \"x\" {}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("visibility modifier")),
+        "expected visibility-modifier rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_case_block_in_fn_body_emits_focused_diagnostic() {
+    let (_, errors) =
+        parse_with_errors("fn main() {\n    test \"nested\" {\n        let _ = 1;\n    }\n}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_TEST_BLOCK_NOT_TOP_LEVEL")),
+        "expected E_TEST_BLOCK_NOT_TOP_LEVEL, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_case_block_in_fn_body_recovers_for_trailing_statements() {
+    // The recovery path consumes the misplaced block through its
+    // matching `}`, so a subsequent statement at the same nesting
+    // depth still parses (no cascade errors).
+    let (_, errors) = parse_with_errors(
+        "fn main() {\n    test \"nested\" {\n        let _ = 1;\n    }\n    let y = 2;\n}",
+    );
+    // Exactly one diagnostic — the focused E_TEST_BLOCK_NOT_TOP_LEVEL.
+    // No follow-on "expected statement" / "unexpected token" cascade.
+    assert_eq!(errors.len(), 1, "got cascading errors: {:?}", errors);
+    assert!(errors[0].message.contains("E_TEST_BLOCK_NOT_TOP_LEVEL"));
+}
+
+#[test]
+fn bare_test_identifier_in_expression_position_keeps_parsing() {
+    // Without the (string-literal, `{`) suffix the `test` identifier
+    // stays a regular identifier — usable as a binding name, callable,
+    // etc. The 3-token lookahead is what gates the dispatch, so this
+    // path is unchanged from pre-slice behavior.
+    let prog = parse_ok("fn main() {\n    let test = 1;\n    let _ = test + 2;\n}");
+    let Item::Function(f) = &prog.items[0] else {
+        panic!("expected Function");
+    };
+    assert_eq!(f.body.stmts.len(), 2);
+}

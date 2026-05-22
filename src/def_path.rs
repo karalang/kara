@@ -205,11 +205,17 @@ pub fn collect_item_def_paths(program: &Program) -> HashMap<String, DefPath> {
             // declarations, not single-named items; the names in
             // `left`/`right` belong to whichever Function /
             // EffectResource introduced them.
+            // TestCase does not introduce a user-visible name — the
+            // case-name string is the JSONL event payload, not a
+            // resolvable identifier; the synthesized opaque function
+            // (slice 3) carries its own DefPath via the lowered
+            // Item::Function.
             Item::UseDecl(_)
             | Item::Import(_)
             | Item::ExternBlock(_)
             | Item::AliasDecl(_)
-            | Item::IndependentDecl(_) => {}
+            | Item::IndependentDecl(_)
+            | Item::TestCase(_) => {}
         }
     }
     out

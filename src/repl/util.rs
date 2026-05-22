@@ -752,12 +752,17 @@ pub(super) fn item_name(item: &crate::ast::Item) -> Option<&str> {
         // shadowable identifier. Treat as anonymous for shadow purposes.
         // `ExternBlock` groups N items under one trust-boundary header;
         // there is no single shadowable identifier — treat as anonymous.
+        // `TestCase` is anonymous from the shadowing perspective —
+        // multiple cases coexist by case-name string, and the runner
+        // mangles to opaque function ids (slice 3), so there is no
+        // user-shadowable identifier to surface here.
         Item::ImplBlock(_)
         | Item::UseDecl(_)
         | Item::Import(_)
         | Item::IndependentDecl(_)
         | Item::ExternBlock(_)
-        | Item::AliasDecl(_) => None,
+        | Item::AliasDecl(_)
+        | Item::TestCase(_) => None,
     }
 }
 
@@ -791,6 +796,7 @@ pub(super) fn item_span(item: &crate::ast::Item) -> &crate::token::Span {
         Item::Import(i) => &i.span,
         Item::IndependentDecl(d) => &d.span,
         Item::ExternBlock(b) => &b.span,
+        Item::TestCase(t) => &t.span,
     }
 }
 
