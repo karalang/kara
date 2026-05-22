@@ -6123,3 +6123,285 @@ fn test_missing_resource_effect_under_declared_policy_diagnosed() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Module-level `let mut` synthetic per-binding resources ────────
+//
+// Phase-8 mod-let slice 6 (design.md §1322 + §1330). Every
+// `let mut BINDING` at module scope implicitly declares a
+// project-internal `effect resource BINDING_resource` — reads of
+// the binding contribute `reads(BINDING_resource)` to the
+// enclosing function's inferred effect set; assignments contribute
+// `writes(BINDING_resource)`. Immutable `let` declares no
+// synthetic resource. `#[thread_local]` wraps the resource as
+// `ThreadLocal[BINDING_resource]` so each task holds a disjoint
+// instance (never conflicts with itself across tasks).
+
+fn inferred_has(set: &EffectSet, verb: EffectVerbKind, resource: &str) -> bool {
+    set.effects
+        .iter()
+        .any(|e| e.effect.verb == verb && e.effect.resource == resource)
+}
+
+#[test]
+fn test_modbind_let_mut_read_attributes_reads_synthetic_resource() {
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn current() -> i64 { COUNTER }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("current")
+        .expect("current must be in inferred_effects");
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource"),
+        "expected reads(COUNTER_resource) in current; got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        !inferred_has(inferred, EffectVerbKind::Writes, "COUNTER_resource"),
+        "did not expect writes(COUNTER_resource) for a pure read; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_write_attributes_writes_synthetic_resource() {
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = COUNTER + 1; }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("bump")
+        .expect("bump must be in inferred_effects");
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Writes, "COUNTER_resource"),
+        "expected writes(COUNTER_resource) in bump; got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource"),
+        "expected reads(COUNTER_resource) in bump (RHS reads COUNTER); got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_pure_assign_writes_only() {
+    // `COUNTER = 0;` is a write with no read on the RHS.
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn reset() { COUNTER = 0; }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("reset")
+        .expect("reset must be in inferred_effects");
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Writes, "COUNTER_resource"),
+        "expected writes(COUNTER_resource) in reset; got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        !inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource"),
+        "did not expect reads(COUNTER_resource) for pure assign with literal RHS; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_compound_assign_reads_and_writes() {
+    // `COUNTER += 1` is a load+store — both reads and writes the
+    // synthetic resource. Mirrors what codegen will emit (slice 9).
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER += 1; }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("bump")
+        .expect("bump must be in inferred_effects");
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource")
+            && inferred_has(inferred, EffectVerbKind::Writes, "COUNTER_resource"),
+        "expected both reads(COUNTER_resource) and writes(COUNTER_resource) for compound assign; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_immutable_emits_no_synthetic_resource() {
+    // Immutable `let` declares no synthetic resource — reading is
+    // free. The function reading MAX must carry no MAX_resource
+    // effect in its inferred set.
+    let result = effectcheck_ok(
+        "let MAX: i64 = 100;\n\
+         fn limit() -> i64 { MAX }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("limit")
+        .expect("limit must be in inferred_effects");
+    assert!(
+        !inferred_has(inferred, EffectVerbKind::Reads, "MAX_resource"),
+        "did not expect any MAX_resource effect for immutable let; got: {:?}",
+        inferred.effects
+    );
+    assert!(inferred.effects.is_empty(), "expected pure function");
+}
+
+#[test]
+fn test_modbind_let_mut_effect_propagates_through_callee() {
+    // A function that calls a writer inherits the synthetic
+    // `writes(COUNTER_resource)` via normal call-graph propagation
+    // — this is the load-bearing property that feeds conflict
+    // analysis (slice 7) and `pub fn` synthetic-resource
+    // detection (slice 8).
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = COUNTER + 1; }\n\
+         fn do_work() { bump(); }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("do_work")
+        .expect("do_work must be in inferred_effects");
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Writes, "COUNTER_resource"),
+        "expected writes(COUNTER_resource) in do_work via bump(); got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_local_shadow_suppresses_synthetic_effect() {
+    // A local binding of the same name shadows the module binding
+    // — the function should NOT carry the synthetic resource effect
+    // for the shadowed name. Module bindings are Const-class
+    // (SCREAMING_SNAKE_CASE); collisions with local lets are rare
+    // in practice but must still be handled.
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn local() -> i64 {\n\
+             let COUNTER: i64 = 5;\n\
+             COUNTER\n\
+         }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("local")
+        .expect("local must be in inferred_effects");
+    assert!(
+        !inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource"),
+        "did not expect reads(COUNTER_resource) when local shadow exists; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_thread_local_wraps_synthetic_resource() {
+    // `#[thread_local]` wraps the synthetic resource so each task
+    // holds a disjoint instance (design.md §1330). The resource
+    // string becomes `ThreadLocal[COUNTER_resource]`, which never
+    // conflicts with itself across tasks under the conflict
+    // analyzer (slice 7).
+    let result = effectcheck_ok(
+        "#[thread_local]\n\
+         let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = COUNTER + 1; }",
+    );
+    let inferred = result
+        .inferred_effects
+        .get("bump")
+        .expect("bump must be in inferred_effects");
+    assert!(
+        inferred_has(
+            inferred,
+            EffectVerbKind::Writes,
+            "ThreadLocal[COUNTER_resource]",
+        ),
+        "expected writes(ThreadLocal[COUNTER_resource]) for #[thread_local] binding; got: {:?}",
+        inferred.effects
+    );
+    assert!(
+        inferred_has(
+            inferred,
+            EffectVerbKind::Reads,
+            "ThreadLocal[COUNTER_resource]",
+        ),
+        "expected reads(ThreadLocal[COUNTER_resource]) for #[thread_local] binding's RHS read; got: {:?}",
+        inferred.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_reader_and_writer_distinct_functions() {
+    // Two functions touching the same binding — one reader, one
+    // writer — both carry the synthetic effect with the correct
+    // verb. This is the seed for the slice-7 par-block conflict
+    // rule: a `par { }` whose branches dispatch to one reader and
+    // one writer fires `reads` + `writes` conflict on the same
+    // resource.
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn read_counter() -> i64 { COUNTER }\n\
+         fn write_counter() { COUNTER = 1; }",
+    );
+    let reader = result.inferred_effects.get("read_counter").unwrap();
+    let writer = result.inferred_effects.get("write_counter").unwrap();
+    assert!(
+        inferred_has(reader, EffectVerbKind::Reads, "COUNTER_resource"),
+        "expected reads(COUNTER_resource) in read_counter; got: {:?}",
+        reader.effects
+    );
+    assert!(
+        inferred_has(writer, EffectVerbKind::Writes, "COUNTER_resource"),
+        "expected writes(COUNTER_resource) in write_counter; got: {:?}",
+        writer.effects
+    );
+}
+
+#[test]
+fn test_modbind_let_mut_two_distinct_bindings_get_separate_resources() {
+    // Per-binding granularity is load-bearing — two `let mut`s get
+    // two separate synthetic resources so mutations don't
+    // serialize against each other in conflict analysis.
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         let mut FLAG: bool = false;\n\
+         fn bump_counter() { COUNTER = 1; }\n\
+         fn set_flag() { FLAG = true; }",
+    );
+    let bc = result.inferred_effects.get("bump_counter").unwrap();
+    let sf = result.inferred_effects.get("set_flag").unwrap();
+    assert!(inferred_has(bc, EffectVerbKind::Writes, "COUNTER_resource"));
+    assert!(!inferred_has(bc, EffectVerbKind::Writes, "FLAG_resource"));
+    assert!(inferred_has(sf, EffectVerbKind::Writes, "FLAG_resource"));
+    assert!(!inferred_has(
+        sf,
+        EffectVerbKind::Writes,
+        "COUNTER_resource"
+    ));
+}
+
+#[test]
+fn test_modbind_let_mut_read_inside_loop_attributed() {
+    // The body walker must recurse through loop bodies — a read of
+    // a module binding inside a `for` is not free.
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn sum_loop() -> i64 {\n\
+             let mut total: i64 = 0;\n\
+             for _i in 0..10 {\n\
+                 total = total + COUNTER;\n\
+             }\n\
+             total\n\
+         }",
+    );
+    let inferred = result.inferred_effects.get("sum_loop").unwrap();
+    assert!(
+        inferred_has(inferred, EffectVerbKind::Reads, "COUNTER_resource"),
+        "expected reads(COUNTER_resource) for read inside for-loop; got: {:?}",
+        inferred.effects
+    );
+}

@@ -264,6 +264,23 @@ impl<'a> super::EffectChecker<'a> {
         graph
     }
 
+    /// Extract the names of bindings introduced by a function's
+    /// parameters (and `self`, if present) so the module-binding
+    /// synthetic-resource walker can treat them as shadowing — a
+    /// parameter named `COUNTER` (rare in practice — params are
+    /// almost always lowercase) takes precedence over a module-level
+    /// `let mut COUNTER`.
+    pub(crate) fn function_param_names(&self, func: &Function) -> Vec<String> {
+        let mut names = Vec::new();
+        if func.self_param.is_some() {
+            names.push("self".to_string());
+        }
+        for p in &func.params {
+            names.extend(p.pattern.binding_names());
+        }
+        names
+    }
+
     /// Walk a function body, find all calls, and add callee effects.
     /// Returns true if any new effects were added.
     pub(crate) fn infer_function_effects(&mut self, fn_name: &str, body: &Block) -> bool {
@@ -273,7 +290,22 @@ impl<'a> super::EffectChecker<'a> {
             .get(fn_name)
             .cloned()
             .unwrap_or(empty_bounds);
-        let calls = self.collect_calls_in_block(body, &bounds);
+        let mut calls = self.collect_calls_in_block(body, &bounds);
+        // Append synthetic per-binding-resource call entries
+        // (design.md §1322) — reads / writes of module-level `let mut`
+        // bindings flow through the same call-graph propagation by
+        // dispatching to seeded `__modbind_*` synthetic keys.
+        let param_names: Vec<String> = self
+            .function_bodies
+            .get(fn_name)
+            .map(|f| self.function_param_names(f))
+            .or_else(|| {
+                self.method_bodies
+                    .get(fn_name)
+                    .map(|f| self.function_param_names(f))
+            })
+            .unwrap_or_default();
+        calls.extend(self.collect_modbind_synth_calls_in_block(body, &param_names));
         let mut new_effects = Vec::new();
 
         for (callee_name, call_span) in &calls {

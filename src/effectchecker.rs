@@ -15,10 +15,13 @@ use std::collections::{HashMap, HashSet};
 mod bounds;
 mod extern_ffi;
 mod inference;
+mod modbind_synth;
 mod profile_compat;
 mod subtyping;
 mod verify;
 mod with_e;
+
+use modbind_synth::ModBindingInfo;
 
 // ── Configuration ───────────────────────────────────────────────
 
@@ -344,6 +347,13 @@ pub struct EffectChecker<'a> {
     /// `EffectCheckResult.call_effect_subs` doc-comment for the
     /// binding-model rationale.
     pub(crate) call_effect_subs: HashMap<SpanKey, HashMap<String, HashSet<Effect>>>,
+    /// Per `let mut` module binding: its synthetic resource name and
+    /// any modifying attributes. Populated once during `check()`
+    /// setup; consumed by the call-collection walker in
+    /// `modbind_synth.rs` to emit `__modbind_read.<NAME>` /
+    /// `__modbind_write.<NAME>` synthetic call entries at every
+    /// read/write site (design.md §1322 + §1330).
+    pub(crate) modbind_let_mut: HashMap<String, ModBindingInfo>,
     pub(crate) errors: Vec<EffectError>,
 }
 
@@ -380,6 +390,7 @@ impl<'a> EffectChecker<'a> {
             method_callee_types: HashMap::new(),
             call_type_subs: HashMap::new(),
             call_effect_subs: HashMap::new(),
+            modbind_let_mut: HashMap::new(),
             errors: Vec::new(),
         }
     }
@@ -607,6 +618,15 @@ impl<'a> EffectChecker<'a> {
         // sees `Audit.log(msg)` as a call to the unknown key
         // `"Audit.log"` and contributes no effect.
         self.seed_resource_trait_dispatch_effects(&builtin_span);
+
+        // Module-level `let mut` synthetic per-binding resources
+        // (design.md §1322). Collect the bindings, then seed
+        // `inferred_effects` with the `__modbind_read.<NAME>` /
+        // `__modbind_write.<NAME>` synthetic keys so the call-graph
+        // propagation pass picks up the synthetic effect at every
+        // read / write site emitted by the body walker.
+        self.collect_module_let_mut_bindings();
+        self.seed_modbind_synth_effects(&builtin_span);
 
         // Phase A: Collect declarations
         self.collect_transparent_effects();
