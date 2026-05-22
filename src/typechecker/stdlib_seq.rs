@@ -187,6 +187,35 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Bool
             }
+            "substring" => {
+                // substring(start: i64) -> String. Returns a fresh owned
+                // String of the receiver's bytes from byte offset `start`
+                // to the end. Out-of-range / negative starts saturate to
+                // an empty String (route-prefix-friendly).
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'substring' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Int(_) | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'substring' expects an integer start index, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Str
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name, silent otherwise (`len`, `contains`, `is_empty`,
             // … are runtime-only and not yet wired through the typechecker).
@@ -196,7 +225,14 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "String",
                 method,
-                &["bytes", "chars", "sorted", "sorted_by", "starts_with"],
+                &[
+                    "bytes",
+                    "chars",
+                    "sorted",
+                    "sorted_by",
+                    "starts_with",
+                    "substring",
+                ],
                 args,
                 span,
             ),

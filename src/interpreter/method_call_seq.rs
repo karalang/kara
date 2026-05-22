@@ -120,6 +120,23 @@ impl<'a> super::Interpreter<'a> {
                 }
                 return None;
             }
+            "substring" => {
+                // `String.substring(start: i64) -> String`. Returns a
+                // fresh owned String of the receiver's bytes from byte
+                // offset `start` to the end. Out-of-range / negative
+                // starts saturate to an empty String.
+                if let (Value::String(s), [arg]) = (&obj, args) {
+                    let start_val = self.eval_expr_inner(&arg.value);
+                    if let Value::Int(start) = start_val {
+                        let len = s.len() as i64;
+                        if start < 0 || start >= len {
+                            return Some(Value::String(String::new()));
+                        }
+                        return Some(Value::String(s[start as usize..].to_string()));
+                    }
+                }
+                return None;
+            }
             "as_slice" | "as_slice_mut" => {
                 // Slice 3 — produce a Value::Slice that shares the
                 // source's `Arc<RwLock<Vec<Value>>>` storage. Mutation

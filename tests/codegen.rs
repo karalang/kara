@@ -19410,4 +19410,55 @@ fn main() {
         .expect("compile + run failed");
         assert_eq!(output.trim(), "hit");
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // String.substring(start: i64) -> String — shipped 2026-05-21.
+    //
+    // Returns a fresh owned String of the receiver's bytes from byte
+    // offset `start` to the end. Out-of-range / negative starts
+    // saturate to an empty String. Codegen lives in `vec_method.rs`
+    // next to `starts_with` (String/Vec shared layout); the impl uses
+    // a conditional branch + malloc + memcpy + String aggregate.
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_string_substring_basic() {
+        // In-range / start-zero / out-of-range / negative / empty-receiver.
+        let output = run_program(
+            "fn main() {\n\
+                 let s: String = \"/todos/42\";\n\
+                 println(s.substring(7));\n\
+                 println(s.substring(0));\n\
+                 println(s.substring(100));\n\
+                 println(s.substring(-1));\n\
+                 let empty: String = \"\";\n\
+                 println(empty.substring(0));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n/todos/42\n\n\n\n");
+    }
+
+    #[test]
+    fn test_ir_string_substring_uses_malloc_and_memcpy() {
+        // Regression guard: the non-empty branch must allocate fresh
+        // and memcpy from the receiver. If a future refactor borrows
+        // the receiver's buffer instead, the resulting String would
+        // alias the receiver's storage and free-after-free at scope
+        // exit. Detect any obvious refactor by checking IR mentions
+        // the malloc call and the memcpy intrinsic.
+        let ir = ir_for(
+            "fn tail(s: String) -> String {\n\
+                 s.substring(3)\n\
+             }",
+        );
+        assert!(
+            ir.contains("call ptr @malloc") || ir.contains("call i8* @malloc"),
+            "String.substring should malloc a fresh buffer:\n{ir}"
+        );
+        assert!(
+            ir.contains("llvm.memcpy"),
+            "String.substring should memcpy from the receiver:\n{ir}"
+        );
+    }
 }

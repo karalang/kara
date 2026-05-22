@@ -9143,6 +9143,41 @@ fn test_string_starts_with_rejects_non_string_arg() {
 }
 
 #[test]
+fn test_string_substring_returns_string() {
+    let result = typecheck_ok(
+        r#"fn f() -> String {
+            let s = "/todos/42";
+            s.substring(7)
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
+fn test_string_substring_rejects_zero_args() {
+    let errors = typecheck_errors(r#"fn f() { let s = "x"; s.substring(); }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "Expected WrongNumberOfArgs for substring with no args, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_string_substring_rejects_non_int_arg() {
+    let errors = typecheck_errors(r#"fn f() { let s = "x"; s.substring("a"); }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "Expected TypeMismatch for substring with String arg, got: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_string_bytes_returns_slice_u8() {
     // `String.bytes()` returns the `Slice[u8]` view design.md §
     // Character type points programmers at for O(1) byte-positional

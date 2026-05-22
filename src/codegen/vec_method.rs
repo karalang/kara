@@ -148,6 +148,148 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
+            // `String.substring(start: i64) -> String`. Returns a fresh
+            // owned String of the receiver's bytes from byte offset
+            // `start` to the end. Out-of-range / negative starts
+            // saturate to an empty String (route-prefix-friendly).
+            //
+            // Implementation:
+            //   1. Load receiver `{data, len}`.
+            //   2. Evaluate `start`. If `start < 0 || start >= len`,
+            //      produce an empty String `{null, 0, 0}`.
+            //   3. Otherwise allocate `len - start` bytes via malloc,
+            //      memcpy from `data + start`, and assemble the result
+            //      String `{buf, len-start, len-start}`. cap == len so
+            //      the freshly-malloc'd buffer is freed at scope exit
+            //      (mirrors `compile_request_string_method`'s pattern).
+            "substring" => {
+                if args.is_empty() {
+                    return Err("String.substring requires a start index argument".to_string());
+                }
+                let str_ty = self.vec_struct_type();
+
+                // Receiver: load `{data, len}`.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "ss.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "ss.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "ss.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "ss.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Evaluate the start index (must be i64).
+                let start_val = self.compile_expr(&args[0].value)?;
+                let start = start_val.into_int_value();
+
+                // out_of_range = (start < 0) || (start >= len)
+                let zero64 = i64_t.const_zero();
+                let lt_zero = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, start, zero64, "ss.lt_zero")
+                    .unwrap();
+                let ge_len = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGE, start, recv_len, "ss.ge_len")
+                    .unwrap();
+                let out_of_range =
+                    self.builder.build_or(lt_zero, ge_len, "ss.oor").unwrap();
+
+                let fn_val = self.current_fn.unwrap();
+                let copy_bb = self.context.append_basic_block(fn_val, "ss.copy");
+                let empty_bb = self.context.append_basic_block(fn_val, "ss.empty");
+                let cont_bb = self.context.append_basic_block(fn_val, "ss.cont");
+
+                // Result slot for the assembled String aggregate.
+                let result_slot =
+                    self.create_entry_alloca(fn_val, "ss.result", str_ty.into());
+                self.builder
+                    .build_conditional_branch(out_of_range, empty_bb, copy_bb)
+                    .unwrap();
+
+                // Empty branch: store {null, 0, 0}.
+                self.builder.position_at_end(empty_bb);
+                let null = ptr_ty.const_null();
+                let mut empty_agg = str_ty.get_undef();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, null, 0, "ss.empty.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 1, "ss.empty.len")
+                    .unwrap()
+                    .into_struct_value();
+                empty_agg = self
+                    .builder
+                    .build_insert_value(empty_agg, zero64, 2, "ss.empty.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, empty_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                // Copy branch: malloc + memcpy from data+start.
+                self.builder.position_at_end(copy_bb);
+                let new_len = self
+                    .builder
+                    .build_int_nsw_sub(recv_len, start, "ss.new_len")
+                    .unwrap();
+                let buf = self
+                    .builder
+                    .build_call(self.malloc_fn, &[new_len.into()], "ss.buf")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // src = recv_data + start (byte-stride GEP via i8).
+                let src = unsafe {
+                    self.builder
+                        .build_gep(
+                            self.context.i8_type(),
+                            recv_data,
+                            &[start],
+                            "ss.src",
+                        )
+                        .unwrap()
+                };
+                self.builder.build_memcpy(buf, 1, src, 1, new_len).unwrap();
+                let mut copy_agg = str_ty.get_undef();
+                copy_agg = self
+                    .builder
+                    .build_insert_value(copy_agg, buf, 0, "ss.copy.ptr")
+                    .unwrap()
+                    .into_struct_value();
+                copy_agg = self
+                    .builder
+                    .build_insert_value(copy_agg, new_len, 1, "ss.copy.len")
+                    .unwrap()
+                    .into_struct_value();
+                copy_agg = self
+                    .builder
+                    .build_insert_value(copy_agg, new_len, 2, "ss.copy.cap")
+                    .unwrap()
+                    .into_struct_value();
+                self.builder.build_store(result_slot, copy_agg).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                self.builder.position_at_end(cont_bb);
+                let result = self
+                    .builder
+                    .build_load(str_ty, result_slot, "ss.load")
+                    .unwrap();
+                Ok(result)
+            }
             // VecDeque codegen alias: `push_back` is identical to Vec
             // `push` (append at index `len`); the VecDeque interpreter
             // ship at `4227e21` documented this front/back-shared

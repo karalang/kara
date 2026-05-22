@@ -6240,6 +6240,22 @@ fn test_string_starts_with_interpreter() {
 }
 
 #[test]
+fn test_string_substring_interpreter() {
+    // Mirrors `/tmp/kara-probes/substring_probe.kara`:
+    // in-range / start-zero / out-of-range / negative / empty-receiver.
+    let output = run(r#"fn main() {
+            let s: String = "/todos/42";
+            println(s.substring(7));
+            println(s.substring(0));
+            println(s.substring(100));
+            println(s.substring(-1));
+            let empty: String = "";
+            println(empty.substring(0));
+        }"#);
+    assert_eq!(output, "42\n/todos/42\n\n\n\n");
+}
+
+#[test]
 fn test_string_chars_with_map_char_as_key() {
     // Locks down the LeetCode #3 idiom — chars feeding a Map[char, i64]
     // last-index map. The sliding-window kata is the natural-pull that
