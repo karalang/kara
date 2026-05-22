@@ -424,6 +424,31 @@ impl<'ctx> super::Codegen<'ctx> {
         &mut self,
         segments: &[String],
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Module-binding field access (slice 10) — `let CFG: Foo = Foo {…};`
+        // followed by `CFG.field` parses as `Path(["CFG", "field"])`
+        // because the leading segment is Const-class. Load the binding
+        // through `try_load_module_binding`, then extract the named
+        // field via `var_type_names` + `struct_field_names`. Falls
+        // through to the enum unit-variant arm below when the leading
+        // segment is not a registered module binding.
+        if segments.len() == 2 && self.module_bindings.contains_key(&segments[0]) {
+            let binding_name = &segments[0];
+            let field = &segments[1];
+            if let Some(BasicValueEnum::StructValue(sv)) =
+                self.try_load_module_binding(binding_name)
+            {
+                let type_name = self.var_type_names.get(binding_name).cloned();
+                let field_idx = type_name.as_deref().and_then(|tn| {
+                    self.struct_field_names
+                        .get(tn)
+                        .and_then(|names| names.iter().position(|n| n == field))
+                        .map(|i| i as u32)
+                });
+                if let Some(idx) = field_idx {
+                    return Ok(self.builder.build_extract_value(sv, idx, field).unwrap());
+                }
+            }
+        }
         if segments.len() == 2 {
             let type_name = &segments[0];
             let variant_name = &segments[1];

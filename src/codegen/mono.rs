@@ -582,6 +582,10 @@ impl<'ctx> super::Codegen<'ctx> {
         self.current_fn = Some(fn_val);
         self.variables.clear();
         self.var_type_names.clear();
+        // Slice 10: reseed module-binding side-tables in monomorphised
+        // bodies too (same reason as the `compile_function` path —
+        // `var_type_names` is cleared per function).
+        self.reseed_module_binding_side_tables();
 
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);

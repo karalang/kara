@@ -172,6 +172,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.rc_fallback_heap_types.clear();
         self.scope_cleanup_actions.clear();
         self.scope_cleanup_actions.push(Vec::new());
+        // Slice 10: reseed module-binding side-tables after the per-fn
+        // clear. Module bindings live for the program's lifetime but
+        // the clear above wipes their `var_type_names` / `vec_elem_types`
+        // / etc. registrations — re-register from the persistent
+        // `module_bindings` snapshot so field-access / method-dispatch
+        // / index paths inside this function body see the binding's
+        // declared type.
+        self.reseed_module_binding_side_tables();
         // Clear cross-function staging slot. `last_fstr_acc` holds an
         // alloca-valued LLVM pointer scoped to a specific function body;
         // a stale value from a prior function's compilation must not

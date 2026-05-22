@@ -1,8 +1,8 @@
 //! Codegen lowering for module-level `let` / `let mut` bindings
 //! (design.md §1278-1330).
 //!
-//! Slice 9 of the phase-8 module-let work — emits one LLVM global
-//! per `Item::ModuleBinding`:
+//! Slices 9 + 10 of the phase-8 module-let work — emits one LLVM
+//! global per `Item::ModuleBinding`:
 //!
 //! - Immutable `let X: T = INIT` → `@X = internal constant T INIT`.
 //! - Mutable `let mut X: T = INIT` → `@X = internal global T INIT`.
@@ -15,17 +15,40 @@
 //! name resolves to a module binding so callers can short-circuit
 //! their existing local-variable / const / fn-pointer dispatch.
 //!
-//! Initializer surface (v1): the four primitive literal shapes
-//! (Integer / Float / Bool / Char / ByteLit), `StringLit` paired with
-//! a `StringSlice` declared type (or no annotation — defaults to
-//! StringSlice at module scope per §1284), and `Unary { Neg }`
-//! wrapping a primitive literal. Composite initializers
-//! (struct/enum/tuple literals, compiler-recognised special forms
-//! `LazyLock.new(...)` / `OnceLock.new()` / `Atomic.new(...)`, etc.)
-//! are deferred to slice 10's cross-coordination with the wrapper
-//! types. The typechecker (slice 4) already rejects any composite
-//! shape outside the permitted surface, so the codegen surface only
-//! needs to handle the shapes that reach it.
+//! Initializer surface (slice 9 + 10):
+//!
+//! - Scalar literals (Integer / Float / Bool / Char / ByteLit) and
+//!   `Unary { Neg, primitive }` over them (slice 9).
+//! - `StringLit` lowered as the `(ptr, len, cap=0)` `StringSlice`
+//!   shape — applies at the top-level binding type per the §1284
+//!   carve-out and at nested positions inside composites (the
+//!   typechecker accepts the literal in those positions; the
+//!   3-word layout matches both `String` and `StringSlice`, and
+//!   `cap=0` neutralises any scope-exit free) (slice 9 + 10).
+//! - Composite literals — tuple, fixed-size array (`[a, b, c]` and
+//!   `Array[a; n]` / bare `[v; n]` for a constant `n`), and struct
+//!   constructors (`Foo { … }` whose field values are each
+//!   themselves permitted forms) (slice 10).
+//! - Enum unit-variants via `EnumName.Variant` paths — tag-only
+//!   construction; payload variants are deferred to a follow-up
+//!   because their word-stream encoding requires builder ops that
+//!   const-init can't run (slice 10).
+//!
+//! Deferred (slice 10 documents the position):
+//!
+//! - Compiler-recognised special forms (`LazyLock.new(…)`,
+//!   `OnceLock.new()`, `OnceCell.new()`, `Atomic.new(LITERAL)`,
+//!   `Mutex.new(LITERAL)`) — wait on the wrapper-type entries (each
+//!   primitive's own codegen surface lands its const-init lowering).
+//! - Identifier references to other module bindings — would need a
+//!   forward-resolution pass that re-evaluates the referenced
+//!   binding's init AST as a constant in-place; LLVM can't
+//!   `load`-from-global as a constant initialiser.
+//! - Constant folding of binary / nil-coalesce / non-Neg unary ops
+//!   over permitted forms.
+//! - Enum payload-variant construction (requires the existing
+//!   builder-driven word-stream encoder from
+//!   `try_compile_enum_variant`).
 
 use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
@@ -36,7 +59,7 @@ use crate::ast::*;
 
 /// Per-module-binding codegen state. Keyed by source-level binding
 /// name in `Codegen::module_bindings`.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(crate) struct ModuleBindingInfo<'ctx> {
     /// The LLVM global pointer. Use `as_pointer_value()` for
     /// `build_load` / `build_store` operands.
@@ -50,6 +73,13 @@ pub(crate) struct ModuleBindingInfo<'ctx> {
     /// so future callers (e.g. `karac explain`) can introspect.
     #[allow(dead_code)]
     pub(crate) is_mut: bool,
+    /// The binding's declared `TypeExpr`, when present. Reseeded into
+    /// `var_type_names` / `vec_elem_types` / etc. at the start of
+    /// every function body (`compile_function` clears those side
+    /// tables per function), so field / index / method dispatch sees
+    /// the binding's type even though there's no local declaration
+    /// inside the function body.
+    pub(crate) declared_type: Option<TypeExpr>,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -65,11 +95,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 _ => continue,
             };
             let Some((llvm_ty, initializer)) = self.module_binding_init(b) else {
-                // Initializer shape not supported by slice-9 — skip
-                // emission. The typechecker rejects any shape outside
-                // the permitted surface earlier (§1280-1297); this
-                // arm only fires for forms slice 9 explicitly defers
-                // (compound literals, special-form constructors).
+                // Initializer shape not supported yet — skip emission.
+                // The typechecker rejects any shape outside the permitted
+                // surface earlier (§1280-1297); this arm only fires for
+                // forms slice 10 explicitly defers (special-form
+                // constructors that depend on unfilled wrapper-type
+                // codegen, identifier refs into other bindings, etc.).
                 continue;
             };
             let global = self.module.add_global(llvm_ty, None, &b.name);
@@ -86,8 +117,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     global,
                     llvm_ty,
                     is_mut: b.is_mut,
+                    declared_type: b.ty.clone(),
                 },
             );
+        }
+    }
+
+    /// Reseed `var_type_names` / `vec_elem_types` / etc. for every
+    /// module binding that carries a declared type. `compile_function`
+    /// clears those side tables on function entry; without this
+    /// helper the binding's user-type / collection metadata is
+    /// invisible inside function bodies (the field-access /
+    /// method-dispatch / index paths consult those tables and fall
+    /// through to a silent `i64 0` placeholder when the lookup
+    /// misses). Called from `compile_function` after the clear and
+    /// before the parameter-registration loop.
+    pub(crate) fn reseed_module_binding_side_tables(&mut self) {
+        let pairs: Vec<(String, TypeExpr)> = self
+            .module_bindings
+            .iter()
+            .filter_map(|(n, info)| info.declared_type.as_ref().map(|t| (n.clone(), t.clone())))
+            .collect();
+        for (name, te) in pairs {
+            self.register_var_from_type_expr(&name, &te);
         }
     }
 
@@ -131,7 +183,9 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Initializer path driven entirely by the value expression's
     /// shape. Covers the literal surface — Integer / Float / Bool /
     /// Char / Byte / StringLit (lowered as StringSlice when no
-    /// annotation directs otherwise) — plus `Unary { Neg, primitive }`.
+    /// annotation directs otherwise) — plus `Unary { Neg, primitive }`
+    /// and the slice-10 composite shapes (Tuple / ArrayLiteral /
+    /// RepeatLiteral / StructLiteral / enum unit-variant paths).
     fn modbind_init_from_value(
         &self,
         value: &Expr,
@@ -175,8 +229,155 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 _ => None,
             },
+            // ── Composite shapes (slice 10) ──────────────────────────
+            ExprKind::Tuple(items) => self.modbind_tuple_const(items),
+            ExprKind::ArrayLiteral(items) => self.modbind_array_const(items),
+            ExprKind::RepeatLiteral {
+                type_name,
+                value: elem,
+                count,
+            } => self.modbind_repeat_const(type_name.as_deref(), elem, count),
+            ExprKind::StructLiteral { path, fields, .. } => {
+                let name = path.last().map(|s| s.as_str()).unwrap_or("");
+                self.modbind_struct_const(name, fields)
+            }
+            ExprKind::Path { segments, .. } => self.modbind_enum_unit_variant_const(segments),
             _ => None,
         }
+    }
+
+    /// Tuple → anonymous LLVM struct constant. Each element is
+    /// lowered as its own constant; the outer struct's field types
+    /// follow the inferred per-element types (so a heterogeneous
+    /// tuple like `(0_i32, true)` keeps the `(i32, i1)` shape rather
+    /// than collapsing to `(i64, i64)`). Returns `None` if any
+    /// element falls outside the composite surface.
+    fn modbind_tuple_const(
+        &self,
+        items: &[Expr],
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(items.len());
+        let mut field_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
+        for it in items {
+            let (ty, val) = self.modbind_init_from_value(it)?;
+            field_tys.push(ty);
+            field_vals.push(val);
+        }
+        let struct_ty = self.context.struct_type(&field_tys, false);
+        let agg = self.context.const_struct(&field_vals, false);
+        Some((struct_ty.into(), agg.into()))
+    }
+
+    /// Fixed-size array literal `[a, b, c]` → LLVM array constant.
+    /// All elements must lower to the same LLVM type (enforced by
+    /// the typechecker before codegen runs). Empty literals are
+    /// rejected here because the element type is unknown without an
+    /// annotation — slice 9's declared-type path could be extended
+    /// later to handle empty `Array[T, 0]` via the annotation.
+    fn modbind_array_const(
+        &self,
+        items: &[Expr],
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        let first = items.first()?;
+        let (elem_ty, first_val) = self.modbind_init_from_value(first)?;
+        let mut vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(items.len());
+        vals.push(first_val);
+        for it in &items[1..] {
+            let (ty, val) = self.modbind_init_from_value(it)?;
+            if ty != elem_ty {
+                return None;
+            }
+            vals.push(val);
+        }
+        let arr_ty = array_type_of(elem_ty, items.len() as u32);
+        let arr = const_array_of(elem_ty, &vals)?;
+        Some((arr_ty, arr))
+    }
+
+    /// Repeat literal `[v; n]` (bare or `Array[v; n]`) → LLVM array
+    /// constant of length `n`, each element a copy of `v`'s constant.
+    /// `Vec[v; n]` is rejected by the typechecker before codegen
+    /// because it's heap-allocated.
+    fn modbind_repeat_const(
+        &self,
+        type_name: Option<&str>,
+        elem: &Expr,
+        count: &Expr,
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        match type_name {
+            None | Some("Array") => {}
+            _ => return None,
+        }
+        let n = match &count.kind {
+            ExprKind::Integer(n, _) if *n >= 0 => *n as u32,
+            _ => return None,
+        };
+        let (elem_ty, elem_val) = self.modbind_init_from_value(elem)?;
+        let arr_ty = array_type_of(elem_ty, n);
+        let vals: Vec<BasicValueEnum<'ctx>> = (0..n).map(|_| elem_val).collect();
+        let arr = const_array_of(elem_ty, &vals)?;
+        Some((arr_ty, arr))
+    }
+
+    /// Struct literal `Foo { a: v_a, b: v_b }` → LLVM named-struct
+    /// constant. Looks up `Foo` in `struct_types` for the LLVM type
+    /// and in `struct_field_names` for the declaration-order layout
+    /// so source-order field listing maps into LLVM-order slots.
+    /// `..spread` is not supported in const-init position (the
+    /// typechecker accepts it structurally but expanding the spread
+    /// at codegen would require resolving the spread expression to
+    /// a known struct constant; deferred).
+    fn modbind_struct_const(
+        &self,
+        name: &str,
+        fields: &[FieldInit],
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        let struct_ty = *self.struct_types.get(name)?;
+        let field_order = self.struct_field_names.get(name)?;
+        let mut values: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(field_order.len());
+        for fname in field_order {
+            let field = fields.iter().find(|f| &f.name == fname)?;
+            let (_ty, val) = self.modbind_init_from_value(&field.value)?;
+            values.push(val);
+        }
+        if values.len() != field_order.len() {
+            return None;
+        }
+        let agg = struct_ty.const_named_struct(&values);
+        Some((struct_ty.into(), agg.into()))
+    }
+
+    /// Enum unit-variant via `EnumName.Variant` path → enum layout's
+    /// LLVM struct constant with the tag at field 0 and the payload
+    /// area zero-initialised (unit variants have zero source-level
+    /// payload). Payload-bearing variants `EnumName.Variant(args…)`
+    /// arrive as `ExprKind::Call` and aren't handled here — see the
+    /// deferred-list in the module header.
+    fn modbind_enum_unit_variant_const(
+        &self,
+        segments: &[String],
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        if segments.len() != 2 {
+            return None;
+        }
+        let enum_name = &segments[0];
+        let variant_name = &segments[1];
+        let layout = self.enum_layouts.get(enum_name)?;
+        let tag = *layout.tags.get(variant_name)?;
+        let field_count = layout.field_counts.get(variant_name).copied().unwrap_or(0);
+        if field_count != 0 {
+            return None;
+        }
+        let i64_ty = self.context.i64_type();
+        let struct_ty = layout.llvm_type;
+        let field_tys = struct_ty.get_field_types();
+        let mut field_vals: Vec<BasicValueEnum<'ctx>> = Vec::with_capacity(field_tys.len());
+        field_vals.push(i64_ty.const_int(tag, false).into());
+        for ft in field_tys.iter().skip(1) {
+            field_vals.push(basic_zero_const(*ft)?);
+        }
+        let agg = struct_ty.const_named_struct(&field_vals);
+        Some((struct_ty.into(), agg.into()))
     }
 
     /// Materialise a constant `StringSlice` (the codegen-layer
@@ -262,4 +463,108 @@ fn is_string_slice_type(ty: &TypeExpr) -> bool {
             .unwrap_or(false),
         _ => false,
     }
+}
+
+/// Dispatch `BasicType::array_type(n)` over the `BasicTypeEnum`
+/// variants — inkwell exposes `array_type` per concrete type with
+/// no trait-level entry, so we match the variant manually.
+fn array_type_of(elem_ty: BasicTypeEnum<'_>, n: u32) -> BasicTypeEnum<'_> {
+    match elem_ty {
+        BasicTypeEnum::IntType(t) => t.array_type(n).into(),
+        BasicTypeEnum::FloatType(t) => t.array_type(n).into(),
+        BasicTypeEnum::PointerType(t) => t.array_type(n).into(),
+        BasicTypeEnum::StructType(t) => t.array_type(n).into(),
+        BasicTypeEnum::ArrayType(t) => t.array_type(n).into(),
+        BasicTypeEnum::VectorType(t) => t.array_type(n).into(),
+        BasicTypeEnum::ScalableVectorType(t) => t.array_type(n).into(),
+    }
+}
+
+/// Build a constant array from per-element constants of a known
+/// element type. Each element's enum variant must match `elem_ty`'s
+/// variant — the typechecker enforces a homogeneous element type
+/// upstream, but we re-check at the value level so a type-mismatch
+/// surfaces as a clean `None` rather than an LLVM panic.
+fn const_array_of<'ctx>(
+    elem_ty: BasicTypeEnum<'ctx>,
+    vals: &[BasicValueEnum<'ctx>],
+) -> Option<BasicValueEnum<'ctx>> {
+    match elem_ty {
+        BasicTypeEnum::IntType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::IntValue(iv) => Some(*iv),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::FloatType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::FloatValue(fv) => Some(*fv),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::StructType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::StructValue(sv) => Some(*sv),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::ArrayType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::ArrayValue(av) => Some(*av),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::PointerType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::PointerValue(pv) => Some(*pv),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::VectorType(t) => {
+            let v: Vec<_> = vals
+                .iter()
+                .map(|v| match v {
+                    BasicValueEnum::VectorValue(vv) => Some(*vv),
+                    _ => None,
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(t.const_array(&v).into())
+        }
+        BasicTypeEnum::ScalableVectorType(_) => None,
+    }
+}
+
+/// Zero constant for the given basic type. Used by the enum
+/// unit-variant builder to fill the post-tag payload words.
+/// Scalable vectors aren't part of the supported surface.
+fn basic_zero_const(ty: BasicTypeEnum<'_>) -> Option<BasicValueEnum<'_>> {
+    Some(match ty {
+        BasicTypeEnum::IntType(t) => t.const_zero().into(),
+        BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+        BasicTypeEnum::PointerType(t) => t.const_zero().into(),
+        BasicTypeEnum::StructType(t) => t.const_zero().into(),
+        BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+        BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+        BasicTypeEnum::ScalableVectorType(_) => return None,
+    })
 }

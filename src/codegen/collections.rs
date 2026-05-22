@@ -677,10 +677,16 @@ impl<'ctx> super::Codegen<'ctx> {
         let i64_t = self.context.i64_type();
 
         // Get a pointer to the array storage.
-        // Fast path: if the object is a local variable, use its alloca directly.
+        // Fast path: if the object is a local variable, use its alloca
+        // directly. Module-level `let X: Array[T, N] = […]` bindings
+        // (slice 10) have an LLVM global rather than an alloca, but the
+        // pointer + type carries the same role — we use the global's
+        // pointer and the binding's recorded llvm_ty for the GEP.
         let (arr_ptr, arr_ty) = if let ExprKind::Identifier(name) = &object.kind {
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 (slot.ptr, slot.ty)
+            } else if let Some(info) = self.module_bindings.get(name.as_str()) {
+                (info.global.as_pointer_value(), info.llvm_ty)
             } else {
                 return Err(format!("Undefined variable '{}' in index expression", name));
             }

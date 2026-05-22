@@ -20349,6 +20349,165 @@ fn main() {
         );
     }
 
+    // ── Slice 10: composite-initializer codegen (design.md §1280-1297) ─
+    //
+    // Module-level `let X: T = INIT;` where INIT is a struct literal,
+    // tuple literal, array literal, repeat literal, or enum
+    // unit-variant path. Each shape lowers to an LLVM constant
+    // initializer of the matching aggregate type. Field / index /
+    // method dispatch inside function bodies sees the binding via the
+    // reseeded `var_type_names` / `vec_elem_types` side tables — the
+    // reseed runs at the start of every function body so the binding's
+    // declared type is visible to the use-site dispatchers without
+    // being declared inside the function.
+
+    #[test]
+    fn test_e2e_modbind_struct_literal() {
+        // Struct literal init → `@DEFAULT_CFG = internal constant`
+        // with each field's constant value lowered into its slot.
+        // The Path-form access `DEFAULT_CFG.max` routes through the
+        // module-binding path-arm to a `load + extractvalue` against
+        // the global.
+        let output = run_program(
+            "struct Config { max: i64, count: i64 }\n\
+             let DEFAULT_CFG: Config = Config { max: 64, count: 7 };\n\
+             fn main() {\n\
+                 println(DEFAULT_CFG.max);\n\
+                 println(DEFAULT_CFG.count);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "64\n7\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_struct_literal_field_order_in_source() {
+        // Source-order != declaration-order — the codegen path must
+        // pivot through `struct_field_names` to land each value in
+        // the right slot.
+        let output = run_program(
+            "struct Pair { a: i64, b: i64 }\n\
+             let P: Pair = Pair { b: 22, a: 11 };\n\
+             fn main() { println(P.a); println(P.b); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "11\n22\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_array_literal() {
+        // Fixed-size `[a, b, c]` → `[N x i64]` constant. Indexed read
+        // uses the global's pointer as the array-storage pointer
+        // (collections.rs fast path).
+        let output = run_program(
+            "let ARR: Array[i64, 3] = [10, 20, 30];\n\
+             fn main() {\n\
+                 println(ARR[0]);\n\
+                 println(ARR[1]);\n\
+                 println(ARR[2]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "10\n20\n30\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_repeat_literal() {
+        // `[v; n]` materialises an `[n x T]` constant with each slot
+        // initialised to `v`. Verifies the count fold + element-value
+        // replication path.
+        let output = run_program(
+            "let R: Array[i64, 4] = [7; 4];\n\
+             fn main() {\n\
+                 let mut s: i64 = 0;\n\
+                 let mut i: i64 = 0;\n\
+                 while i < 4 {\n\
+                     s = s + R[i];\n\
+                     i = i + 1;\n\
+                 }\n\
+                 println(s);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "28\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_enum_unit_variant() {
+        // `EnumName.UnitVariant` path → enum layout's struct constant
+        // with the tag in field 0 and zero-initialised payload words.
+        // Match-arm dispatches against the loaded tag.
+        let output = run_program(
+            "enum Mode { Off, On, Auto }\n\
+             let DEFAULT_MODE: Mode = Mode.Off;\n\
+             let LIVE_MODE: Mode = Mode.Auto;\n\
+             fn main() {\n\
+                 let m: Mode = DEFAULT_MODE;\n\
+                 let a: Mode = LIVE_MODE;\n\
+                 match m {\n\
+                     Mode.Off => println(0),\n\
+                     Mode.On => println(1),\n\
+                     Mode.Auto => println(2),\n\
+                 }\n\
+                 match a {\n\
+                     Mode.Off => println(0),\n\
+                     Mode.On => println(1),\n\
+                     Mode.Auto => println(2),\n\
+                 }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "0\n2\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_struct_with_negative_field() {
+        // `Unary { Neg, Integer }` inside a struct field flows through
+        // the value-driven recursion. Verifies the recursive surface
+        // doesn't lose the sign at the nested position.
+        let output = run_program(
+            "struct Range { lo: i64, hi: i64 }\n\
+             let SPAN: Range = Range { lo: -7, hi: 3 };\n\
+             fn main() { println(SPAN.lo); println(SPAN.hi); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "-7\n3\n");
+    }
+
+    #[test]
+    fn test_ir_modbind_struct_emits_constant_struct() {
+        // The IR contains the struct constant with the right field
+        // values. `internal constant { i64, i64 } { i64 N, i64 M }`
+        // is the canonical shape; LLVM collapses all-zero aggregates
+        // to `zeroinitializer`, so we use a non-zero value here to
+        // exercise the explicit-field path.
+        let ir = ir_for(
+            "struct Pt { x: i64, y: i64 }\n\
+             let CORNER: Pt = Pt { x: 3, y: 7 };\n\
+             fn main() { println(CORNER.x); }",
+        );
+        assert!(
+            ir.contains("@CORNER = internal constant { i64, i64 } { i64 3, i64 7 }"),
+            "expected @CORNER const struct in IR, got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_modbind_array_emits_constant_array() {
+        // `Array[i64, 3]` with literal init lowers to a `[3 x i64]`
+        // constant aggregate global.
+        let ir = ir_for(
+            "let ARR: Array[i64, 3] = [1, 2, 3];\n\
+             fn main() { println(ARR[0]); }",
+        );
+        assert!(
+            ir.contains("@ARR = internal constant [3 x i64]"),
+            "expected `@ARR = internal constant [3 x i64]` in IR, got:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_e2e_defer_in_nested_block_fires_at_inner_block_exit() {
         // Bare `{ ... }` (ExprKind::Block) routes through
