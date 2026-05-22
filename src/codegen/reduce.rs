@@ -84,17 +84,14 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
-        // Collect-style reduction lowering is Phase 3 work (per
-        // phase-7-codegen.md "collect-style if-cond push reduction"). The
-        // analyzer emits `ReductionOp::Collect` for `#[par_unordered]`
-        // loops with an `acc.push(x)` body, but the codegen + runtime
-        // surface (per-worker partial Vec slots, `__karac_reduce_combine_collect_<ty>`
-        // helper) hasn't shipped yet. Fall through to sequential codegen;
-        // the analyzer's recognition still surfaces in `--concurrency-report`
-        // so users can see the shape is recognised without yet getting the
-        // parallel speedup.
+        // Collect-style reductions take a separate code path — accumulator
+        // is a `Vec[T]` (24-byte `{ptr, len, cap}`), not an integer; per-worker
+        // partials live in 24-byte slots; init writes an empty Vec; combine
+        // extends src into dst (heap concat + buffer-takeover). The scalar
+        // helpers below assume an integer accumulator with a single-instr
+        // combine, so Collect dispatches before those gates run.
         if reduction.op == ReductionOp::Collect {
-            return Ok(None);
+            return self.try_emit_collect_reduction_lowering(parent_body, stmt_index, &reduction);
         }
 
         // Unpack the loop expression. Two shapes supported in v1:
@@ -1389,6 +1386,824 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_int_value();
         let final_value = self.emit_reduce_combine_inst(reduction.op, parent_initial, reduced);
         self.builder.build_store(acc_slot.ptr, final_value).unwrap();
+
+        Ok(())
+    }
+
+    // ── Collect-style reduction lowering (Phase 3, 2026-05-21) ─────────
+    //
+    // `#[par_unordered] for k in 0..K { ... acc.push(EXPR); ... }` —
+    // accumulator is a `Vec[T]`, slot is the 24-byte `{ptr, len, cap}`
+    // struct, init writes an empty Vec, combine extends src into dst
+    // (heap concat + src-buffer takeover). The recognizer at
+    // `src/concurrency.rs::collect_push_shape` gates this on the explicit
+    // `#[par_unordered]` attribute since the worker-combine order is not
+    // input-order-preserving; the attribute is the user's "I tolerate
+    // any ordering" opt-in. v1 supports int element types (`Vec[i8]` …
+    // `Vec[i64]`); String / nested-Vec / struct element types fall back
+    // to sequential codegen until a workload surfaces them.
+
+    /// Lower a Collect-tagged loop. Mirrors `try_emit_reduction_lowering`'s
+    /// shape-extract path but uses the Vec-struct (24-byte slot) ABI and
+    /// dispatches to the Collect-specific worker / init / combine helpers.
+    /// Returns `Ok(None)` for any shape outside the Phase-3 supported set
+    /// (non-int element types, non-Vec accumulator type, early exits in
+    /// the body); falls back to sequential codegen for those.
+    #[allow(clippy::result_large_err)]
+    fn try_emit_collect_reduction_lowering(
+        &mut self,
+        parent_body: &Block,
+        stmt_index: usize,
+        reduction: &LoopReduction,
+    ) -> Result<Option<()>, String> {
+        let stmt = &parent_body.stmts[stmt_index];
+        let StmtKind::Expr(expr) = &stmt.kind else {
+            return Ok(None);
+        };
+        let Some(shape) = self.extract_loop_shape(parent_body, stmt_index, expr) else {
+            return Ok(None);
+        };
+
+        // Accumulator must be a Vec[T] — the `{ptr, len, cap}` struct
+        // shape — with an integer element type for Phase 3. The
+        // recognizer (`collect_push_shape`) checks the source-level shape
+        // `acc.push(EXPR)`; here we verify the LLVM-side type matches.
+        let Some(acc_slot) = self.variables.get(&reduction.accumulator).copied() else {
+            return Ok(None);
+        };
+        if !self.llvm_ty_is_vec_struct(acc_slot.ty) {
+            return Ok(None);
+        }
+        let elem_ty = self.vec_elem_type_for_var(&reduction.accumulator);
+        let BasicTypeEnum::IntType(elem_int_ty) = elem_ty else {
+            return Ok(None);
+        };
+        if !matches!(elem_int_ty.get_bit_width(), 8 | 16 | 32 | 64) {
+            return Ok(None);
+        }
+
+        // Early exits would cross the worker-fn boundary the same way
+        // they do for scalar reductions. Same rejection.
+        if block_has_early_exit(&shape.body) {
+            return Ok(None);
+        }
+
+        // Cost gates: `#[par_unordered]` is an explicit opt-in, so we
+        // skip the memory-bound gate and emit a zero per-iter cost
+        // sentinel (runtime treats 0 as "always dispatch"; see
+        // `runtime/src/lib.rs` DISPATCH_OVERHEAD_PER_CALL_UNITS_RT).
+        // The user accepted parallel dispatch when they wrote the
+        // attribute; second-guessing here would surprise them.
+        let per_iter_cost: u64 = 0;
+
+        // Compile `end` and `lo` once. The loop variable's int type is
+        // taken from `end_val`; the recognizer's range-unification has
+        // already ensured the loop body's `k` reads see this type.
+        let end_val = self.compile_expr(&shape.end_expr)?.into_int_value();
+        let loop_var_int_ty = end_val.get_type();
+        let (iter_total_val, lo_val) = match &shape.lo_expr {
+            None => (end_val, None),
+            Some(lo_expr) => {
+                let lo_val = self.compile_expr(lo_expr)?.into_int_value();
+                if lo_val.get_type() != loop_var_int_ty {
+                    return Ok(None);
+                }
+                let iter_total = self
+                    .builder
+                    .build_int_sub(end_val, lo_val, "iter.total")
+                    .unwrap();
+                (iter_total, Some(lo_val))
+            }
+        };
+
+        // Synthesize the per-elem-type helpers. Cached by element-type
+        // bit width so multiple reduction sites in the same module share
+        // one definition.
+        let init_fn = self.emit_reduce_collect_init_fn(elem_int_ty);
+        let combine_fn = self.emit_reduce_collect_combine_fn(elem_int_ty);
+
+        // Capture set + partition (same machinery as scalar — Collect's
+        // body can read any outer-scope binding the body refs).
+        let captures =
+            self.collect_reduction_captures(&shape.body, &reduction.accumulator, &shape.loop_var);
+        let (runtime_captures, const_int_captures) =
+            self.partition_const_int_captures(&captures, parent_body, stmt_index);
+
+        let worker_fn = self.emit_reduce_collect_worker_fn(
+            reduction,
+            loop_var_int_ty,
+            elem_int_ty,
+            &shape.loop_var,
+            &shape.body,
+            &runtime_captures,
+            &const_int_captures,
+            lo_val.is_some(),
+        )?;
+
+        self.emit_reduce_collect_call(
+            init_fn,
+            worker_fn,
+            combine_fn,
+            iter_total_val,
+            acc_slot,
+            loop_var_int_ty,
+            reduction,
+            &runtime_captures,
+            lo_val,
+            per_iter_cost,
+        )?;
+
+        Ok(Some(()))
+    }
+
+    /// Synthesize `void init_slot_collect_i<N>(*mut u8 slot)` — writes the
+    /// 24-byte `{null, 0, 0}` empty-Vec literal into the slot. Mirrors
+    /// `emit_reduce_init_fn`'s caching pattern but per-element-type.
+    fn emit_reduce_collect_init_fn(&mut self, elem_int_ty: IntType<'ctx>) -> FunctionValue<'ctx> {
+        let name = format!(
+            "__karac_reduce_init_collect_i{}",
+            elem_int_ty.get_bit_width()
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return existing;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let fn_ty = self
+            .context
+            .void_type()
+            .fn_type(&[BasicMetadataTypeEnum::from(ptr_ty)], false);
+        let f = self.module.add_function(&name, fn_ty, None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(f, "entry");
+        self.builder.position_at_end(entry);
+        let slot_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
+        let vec_ty = self.vec_struct_type();
+        let i64_t = self.context.i64_type();
+        let null_ptr = ptr_ty.const_null();
+        let zero = i64_t.const_zero();
+        let mut empty = vec_ty.get_undef();
+        empty = self
+            .builder
+            .build_insert_value(empty, null_ptr, 0, "v.data")
+            .unwrap()
+            .into_struct_value();
+        empty = self
+            .builder
+            .build_insert_value(empty, zero, 1, "v.len")
+            .unwrap()
+            .into_struct_value();
+        empty = self
+            .builder
+            .build_insert_value(empty, zero, 2, "v.cap")
+            .unwrap()
+            .into_struct_value();
+        self.builder.build_store(slot_ptr, empty).unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Synthesize `void combine_collect_i<N>(*mut u8 dst, *const u8 src)`
+    /// — extends `src` into `dst`, transferring src's elements to dst's
+    /// new buffer and zeroing src so its slot's subsequent cleanup is a
+    /// no-op. Strategy:
+    /// 1. `new_len = dst.len + src.len`. If 0 → early return (both empty).
+    /// 2. malloc `new_len * sizeof(elem)` bytes.
+    /// 3. memcpy dst's elements first (preserving order), then src's.
+    /// 4. free dst.data and src.data (free(null) is a no-op per C spec).
+    /// 5. Write `{new_data, new_len, new_len}` into dst; zero src.
+    ///
+    /// Cap == new_len (no slack) keeps the combine simple at the cost of
+    /// one fresh malloc per combine — fine for n_workers ~8-18 combines
+    /// per call. A future slice can reuse dst's existing capacity when
+    /// `dst.cap >= new_len`.
+    fn emit_reduce_collect_combine_fn(
+        &mut self,
+        elem_int_ty: IntType<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let name = format!(
+            "__karac_reduce_combine_collect_i{}",
+            elem_int_ty.get_bit_width()
+        );
+        if let Some(existing) = self.module.get_function(&name) {
+            return existing;
+        }
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty),
+                BasicMetadataTypeEnum::from(ptr_ty),
+            ],
+            false,
+        );
+        let f = self.module.add_function(&name, fn_ty, None);
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(f, "entry");
+        let do_merge_bb = self.context.append_basic_block(f, "do.merge");
+        let exit_bb = self.context.append_basic_block(f, "exit");
+        self.builder.position_at_end(entry);
+
+        let vec_ty = self.vec_struct_type();
+        let dst_ptr = f.get_nth_param(0).unwrap().into_pointer_value();
+        let src_ptr = f.get_nth_param(1).unwrap().into_pointer_value();
+        let elem_size = elem_int_ty.size_of();
+
+        // Load dst + src fields.
+        let dst_data_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst_ptr, 0, "dst.data.ptr")
+            .unwrap();
+        let dst_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst_ptr, 1, "dst.len.ptr")
+            .unwrap();
+        let dst_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, dst_ptr, 2, "dst.cap.ptr")
+            .unwrap();
+        let src_data_p = self
+            .builder
+            .build_struct_gep(vec_ty, src_ptr, 0, "src.data.ptr")
+            .unwrap();
+        let src_len_p = self
+            .builder
+            .build_struct_gep(vec_ty, src_ptr, 1, "src.len.ptr")
+            .unwrap();
+        let src_cap_p = self
+            .builder
+            .build_struct_gep(vec_ty, src_ptr, 2, "src.cap.ptr")
+            .unwrap();
+
+        let dst_data = self
+            .builder
+            .build_load(ptr_ty, dst_data_p, "dst.data")
+            .unwrap()
+            .into_pointer_value();
+        let dst_len = self
+            .builder
+            .build_load(i64_t, dst_len_p, "dst.len")
+            .unwrap()
+            .into_int_value();
+        let dst_cap = self
+            .builder
+            .build_load(i64_t, dst_cap_p, "dst.cap")
+            .unwrap()
+            .into_int_value();
+        let src_data = self
+            .builder
+            .build_load(ptr_ty, src_data_p, "src.data")
+            .unwrap()
+            .into_pointer_value();
+        let src_len = self
+            .builder
+            .build_load(i64_t, src_len_p, "src.len")
+            .unwrap()
+            .into_int_value();
+        let src_cap = self
+            .builder
+            .build_load(i64_t, src_cap_p, "src.cap")
+            .unwrap()
+            .into_int_value();
+
+        let new_len = self
+            .builder
+            .build_int_add(dst_len, src_len, "new.len")
+            .unwrap();
+        let zero = i64_t.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, new_len, zero, "new_len.zero")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_zero, exit_bb, do_merge_bb)
+            .unwrap();
+
+        // Merge path: malloc + 2× memcpy + 2× free + 6 stores.
+        self.builder.position_at_end(do_merge_bb);
+        let new_bytes = self
+            .builder
+            .build_int_mul(new_len, elem_size, "new.bytes")
+            .unwrap();
+        let new_data = self
+            .builder
+            .build_call(self.malloc_fn, &[new_bytes.into()], "new.data")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        // memcpy dst's elements first. `build_memcpy` is a no-op when
+        // size is 0, so we can call unconditionally — saves a branch.
+        let dst_bytes = self
+            .builder
+            .build_int_mul(dst_len, elem_size, "dst.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(new_data, 8, dst_data, 8, dst_bytes)
+            .unwrap();
+        // memcpy src's elements after dst's. Offset = dst_len * elem_size.
+        let dst_tail = unsafe {
+            self.builder
+                .build_gep(elem_int_ty, new_data, &[dst_len], "new.tail")
+                .unwrap()
+        };
+        let src_bytes = self
+            .builder
+            .build_int_mul(src_len, elem_size, "src.bytes")
+            .unwrap();
+        self.builder
+            .build_memcpy(dst_tail, 8, src_data, 8, src_bytes)
+            .unwrap();
+        // free dst.data (free(null) is no-op per C spec).
+        self.builder
+            .build_call(self.free_fn, &[dst_data.into()], "")
+            .unwrap();
+        // free src.data.
+        self.builder
+            .build_call(self.free_fn, &[src_data.into()], "")
+            .unwrap();
+        // Write new dst fields.
+        self.builder.build_store(dst_data_p, new_data).unwrap();
+        self.builder.build_store(dst_len_p, new_len).unwrap();
+        self.builder.build_store(dst_cap_p, new_len).unwrap();
+        // Zero src fields so the slot's subsequent cleanup (if any) is
+        // a no-op. After this, src is "donated" to dst.
+        self.builder
+            .build_store(src_data_p, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_store(src_len_p, zero).unwrap();
+        self.builder.build_store(src_cap_p, zero).unwrap();
+        // Reference dst_cap once so LLVM doesn't elide the load above
+        // before we settle on a smarter reuse path. (No-op in IR.)
+        let _ = dst_cap;
+        let _ = src_cap;
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        f
+    }
+
+    /// Synthesize the per-call Collect worker fn. Mirrors
+    /// `emit_reduce_worker_fn`'s scaffolding but the accumulator is a
+    /// local `Vec[T]` alloca (initialized to `{null, 0, 0}`), and the
+    /// final publish copies the Vec struct into the slot rather than
+    /// storing an integer. The worker does NOT register the local Vec
+    /// for cleanup — its buffer ownership transfers to the slot at
+    /// function exit; the next combine_fn call takes responsibility for
+    /// freeing it. Body-local lets register their own cleanup as usual.
+    #[allow(clippy::result_large_err)]
+    #[allow(clippy::too_many_arguments)]
+    fn emit_reduce_collect_worker_fn(
+        &mut self,
+        reduction: &LoopReduction,
+        loop_var_int_ty: IntType<'ctx>,
+        elem_int_ty: IntType<'ctx>,
+        loop_var_name: &str,
+        body: &Block,
+        captures: &[String],
+        const_int_captures: &[(String, i64, Option<IntSuffix>)],
+        has_lo: bool,
+    ) -> Result<FunctionValue<'ctx>, String> {
+        let worker_id = self.par_counter;
+        self.par_counter += 1;
+        let name = format!("__karac_reduce_worker_collect_{worker_id}");
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let fn_ty = self.context.void_type().fn_type(
+            &[
+                BasicMetadataTypeEnum::from(ptr_ty), // slot
+                BasicMetadataTypeEnum::from(i64_t),  // start
+                BasicMetadataTypeEnum::from(i64_t),  // end
+                BasicMetadataTypeEnum::from(ptr_ty), // ctx
+                BasicMetadataTypeEnum::from(ptr_ty), // cancel
+            ],
+            false,
+        );
+        let worker_fn = self.module.add_function(&name, fn_ty, None);
+
+        // Save outer state. Vec captures need vec_elem_types preserved
+        // for body-side `cap.len()` / `cap[idx]` etc. to dispatch through
+        // `compile_vec_method`; same for `var_type_names` for type-aware
+        // lookups. We re-insert the relevant outer entries after taking.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_cleanup = std::mem::take(&mut self.scope_cleanup_actions);
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        let saved_elem_types = std::mem::take(&mut self.vec_elem_types);
+        self.scope_cleanup_actions.push(Vec::new());
+
+        self.current_fn = Some(worker_fn);
+        let entry = self.context.append_basic_block(worker_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        // Env-struct unpack (mirror of scalar): lo + captures by value.
+        let env_struct_ty: Option<StructType<'ctx>> = if !has_lo && captures.is_empty() {
+            None
+        } else {
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            if has_lo {
+                field_tys.push(loop_var_int_ty.into());
+            }
+            for n in captures {
+                field_tys.push(saved_vars[n].ty);
+            }
+            Some(self.context.struct_type(&field_tys, false))
+        };
+        let mut lo_in_worker: Option<IntValue<'ctx>> = None;
+        if let Some(env_ty) = env_struct_ty {
+            let ctx_ptr = worker_fn.get_nth_param(3).unwrap().into_pointer_value();
+            let env_val = self
+                .builder
+                .build_load::<BasicTypeEnum<'ctx>>(env_ty.into(), ctx_ptr, "__reduce_env_load")
+                .unwrap()
+                .into_struct_value();
+            let capture_field_base = if has_lo {
+                let lo_field = self
+                    .builder
+                    .build_extract_value(env_val, 0, "__reduce_lo")
+                    .unwrap()
+                    .into_int_value();
+                lo_in_worker = Some(lo_field);
+                1
+            } else {
+                0
+            };
+            for (i, var_name) in captures.iter().enumerate() {
+                let cap_ty = saved_vars[var_name].ty;
+                let field_idx = (capture_field_base + i) as u32;
+                let field_val = self
+                    .builder
+                    .build_extract_value(env_val, field_idx, var_name)
+                    .unwrap();
+                let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
+                self.builder.build_store(alloca, field_val).unwrap();
+                self.variables.insert(
+                    var_name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: cap_ty,
+                    },
+                );
+                if let Some(type_name) = saved_var_types.get(var_name) {
+                    self.var_type_names
+                        .insert(var_name.clone(), type_name.clone());
+                }
+                if let Some(et) = saved_elem_types.get(var_name) {
+                    self.vec_elem_types.insert(var_name.clone(), *et);
+                }
+            }
+        }
+
+        // Const-int captures.
+        for (var_name, value, sfx) in const_int_captures {
+            let cap_ty = saved_vars[var_name].ty;
+            let const_val = self.const_int_for_suffix(*value, *sfx);
+            let alloca = self.create_entry_alloca(worker_fn, var_name, cap_ty);
+            self.builder.build_store(alloca, const_val).unwrap();
+            self.variables.insert(
+                var_name.clone(),
+                VarSlot {
+                    ptr: alloca,
+                    ty: cap_ty,
+                },
+            );
+            if let Some(type_name) = saved_var_types.get(var_name) {
+                self.var_type_names
+                    .insert(var_name.clone(), type_name.clone());
+            }
+        }
+
+        // Allocate the local Vec accumulator, init to `{null, 0, 0}`,
+        // register under the source-level acc name so the body's
+        // `acc.push(x)` dispatches into `compile_vec_method` against
+        // this alloca. NOT registered for cleanup — the slot inherits
+        // ownership at function exit.
+        let vec_ty = self.vec_struct_type();
+        let acc_alloca = self.create_entry_alloca(worker_fn, &reduction.accumulator, vec_ty.into());
+        let null_ptr = ptr_ty.const_null();
+        let zero = i64_t.const_zero();
+        let mut empty = vec_ty.get_undef();
+        empty = self
+            .builder
+            .build_insert_value(empty, null_ptr, 0, "acc.data")
+            .unwrap()
+            .into_struct_value();
+        empty = self
+            .builder
+            .build_insert_value(empty, zero, 1, "acc.len")
+            .unwrap()
+            .into_struct_value();
+        empty = self
+            .builder
+            .build_insert_value(empty, zero, 2, "acc.cap")
+            .unwrap()
+            .into_struct_value();
+        self.builder.build_store(acc_alloca, empty).unwrap();
+        self.variables.insert(
+            reduction.accumulator.clone(),
+            VarSlot {
+                ptr: acc_alloca,
+                ty: vec_ty.into(),
+            },
+        );
+        self.vec_elem_types
+            .insert(reduction.accumulator.clone(), elem_int_ty.into());
+
+        // Loop var (mirror of scalar). Truncate runtime's i64 start/end
+        // to the loop-var int width when narrower; shift by lo if set.
+        let raw_start = worker_fn.get_nth_param(1).unwrap().into_int_value();
+        let raw_end = worker_fn.get_nth_param(2).unwrap().into_int_value();
+        let (start_val, end_val) = if loop_var_int_ty.get_bit_width() < 64 {
+            let s = self
+                .builder
+                .build_int_truncate(raw_start, loop_var_int_ty, "start.trunc")
+                .unwrap();
+            let e = self
+                .builder
+                .build_int_truncate(raw_end, loop_var_int_ty, "end.trunc")
+                .unwrap();
+            (s, e)
+        } else {
+            (raw_start, raw_end)
+        };
+        let (start_val, end_val) = match lo_in_worker {
+            Some(lo) => {
+                let s = self
+                    .builder
+                    .build_int_add(start_val, lo, "start.shift")
+                    .unwrap();
+                let e = self
+                    .builder
+                    .build_int_add(end_val, lo, "end.shift")
+                    .unwrap();
+                (s, e)
+            }
+            None => (start_val, end_val),
+        };
+        let k_alloca = self.create_entry_alloca(worker_fn, loop_var_name, loop_var_int_ty.into());
+        self.builder.build_store(k_alloca, start_val).unwrap();
+        self.variables.insert(
+            loop_var_name.to_string(),
+            VarSlot {
+                ptr: k_alloca,
+                ty: loop_var_int_ty.into(),
+            },
+        );
+
+        // Loop scaffolding (no BCE preflight for Collect — body is
+        // push-heavy, not index-heavy).
+        let cond_bb = self.context.append_basic_block(worker_fn, "loop.cond");
+        let body_bb = self.context.append_basic_block(worker_fn, "loop.body");
+        let exit_bb = self.context.append_basic_block(worker_fn, "loop.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let k_now = self
+            .builder
+            .build_load(loop_var_int_ty, k_alloca, "k")
+            .unwrap()
+            .into_int_value();
+        let cond = self
+            .builder
+            .build_int_compare(IntPredicate::SLT, k_now, end_val, "loop.cond")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(cond, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let body_result = self.compile_block(body);
+        body_result?;
+
+        let current_bb = self.builder.get_insert_block().unwrap();
+        if current_bb.get_terminator().is_none() {
+            let k_cur = self
+                .builder
+                .build_load(loop_var_int_ty, k_alloca, "k.cur")
+                .unwrap()
+                .into_int_value();
+            let k_next = self
+                .builder
+                .build_int_add(k_cur, loop_var_int_ty.const_int(1, false), "k.next")
+                .unwrap();
+            self.builder.build_store(k_alloca, k_next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+        }
+
+        self.builder.position_at_end(exit_bb);
+        // Publish: load the local Vec struct and store into the slot.
+        // The slot now owns the heap buffer. Body-local lets get their
+        // cleanup via emit_scope_cleanup (acc was never registered).
+        let final_vec = self
+            .builder
+            .build_load(vec_ty, acc_alloca, "acc.final")
+            .unwrap();
+        let slot_ptr = worker_fn.get_nth_param(0).unwrap().into_pointer_value();
+        self.builder.build_store(slot_ptr, final_vec).unwrap();
+        self.emit_scope_cleanup();
+        self.builder.build_return(None).unwrap();
+
+        // Restore outer state.
+        self.vec_elem_types = saved_elem_types;
+        self.branch_cancel_ptr = saved_cancel_ptr;
+        self.scope_cleanup_actions = saved_cleanup;
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok(worker_fn)
+    }
+
+    /// Build the descriptor + out_slot in the parent frame, emit the
+    /// `karac_par_reduce` call, then fold the runtime-folded `out_slot`
+    /// Vec into the parent's existing accumulator via `combine_fn`.
+    /// Mirrors `emit_reduce_call` but with `slot_size = 24` (the Vec
+    /// struct width), `slot_align = 8`, and the Vec-aware post-call
+    /// fold.
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::result_large_err)]
+    fn emit_reduce_collect_call(
+        &mut self,
+        init_fn: FunctionValue<'ctx>,
+        worker_fn: FunctionValue<'ctx>,
+        combine_fn: FunctionValue<'ctx>,
+        iter_total: IntValue<'ctx>,
+        acc_slot: VarSlot<'ctx>,
+        loop_var_int_ty: IntType<'ctx>,
+        _reduction: &LoopReduction,
+        captures: &[String],
+        lo_val: Option<IntValue<'ctx>>,
+        per_iter_cost_units: u64,
+    ) -> Result<(), String> {
+        let parent_fn = self
+            .current_fn
+            .expect("emit_reduce_collect_call must run inside a function");
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        // Env struct: lo (if present) + captures by value.
+        let env_ctx_ptr: PointerValue<'ctx> = if lo_val.is_none() && captures.is_empty() {
+            ptr_ty.const_null()
+        } else {
+            let mut field_tys: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(captures.len() + 1);
+            if lo_val.is_some() {
+                field_tys.push(loop_var_int_ty.into());
+            }
+            for n in captures {
+                field_tys.push(self.variables[n].ty);
+            }
+            let env_ty = self.context.struct_type(&field_tys, false);
+            let env_alloca = self.create_entry_alloca(parent_fn, "__reduce_env", env_ty.into());
+            let mut env_agg = env_ty.get_undef();
+            let capture_base = if let Some(lo) = lo_val {
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, lo, 0, "__reduce_env_lo")
+                    .unwrap()
+                    .into_struct_value();
+                1
+            } else {
+                0
+            };
+            for (i, name) in captures.iter().enumerate() {
+                let slot = self.variables[name];
+                let val = self.builder.build_load(slot.ty, slot.ptr, name).unwrap();
+                env_agg = self
+                    .builder
+                    .build_insert_value(
+                        env_agg,
+                        val,
+                        (capture_base + i) as u32,
+                        "__reduce_env_field",
+                    )
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(env_alloca, env_agg).unwrap();
+            env_alloca
+        };
+
+        // Descriptor — same shape as scalar but slot_size = 24, slot_align = 8.
+        let desc_ty = self.context.struct_type(
+            &[
+                i64_t.into(),  // iter_total
+                i64_t.into(),  // slot_size
+                i64_t.into(),  // slot_align
+                ptr_ty.into(), // init_slot
+                ptr_ty.into(), // worker_fn
+                ptr_ty.into(), // combine_fn
+                ptr_ty.into(), // ctx
+                i64_t.into(),  // per_iter_cost_units
+            ],
+            false,
+        );
+        let desc_alloca = self.create_entry_alloca(parent_fn, "__reduce_desc", desc_ty.into());
+
+        let slot_size = i64_t.const_int(24, false);
+        let slot_align = i64_t.const_int(8, false);
+
+        let iter_total_widened = if iter_total.get_type().get_bit_width() < 64 {
+            self.builder
+                .build_int_z_extend(iter_total, i64_t, "iter.widen")
+                .unwrap()
+        } else {
+            iter_total
+        };
+
+        let mut desc_agg = desc_ty.get_undef();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, iter_total_widened, 0, "d.iter_total")
+            .unwrap()
+            .into_struct_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, slot_size, 1, "d.slot_size")
+            .unwrap()
+            .into_struct_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, slot_align, 2, "d.slot_align")
+            .unwrap()
+            .into_struct_value();
+        let init_ptr = init_fn.as_global_value().as_pointer_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, init_ptr, 3, "d.init_slot")
+            .unwrap()
+            .into_struct_value();
+        let worker_ptr = worker_fn.as_global_value().as_pointer_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, worker_ptr, 4, "d.worker_fn")
+            .unwrap()
+            .into_struct_value();
+        let combine_ptr = combine_fn.as_global_value().as_pointer_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, combine_ptr, 5, "d.combine_fn")
+            .unwrap()
+            .into_struct_value();
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, env_ctx_ptr, 6, "d.ctx")
+            .unwrap()
+            .into_struct_value();
+        let per_iter_const = i64_t.const_int(per_iter_cost_units, false);
+        desc_agg = self
+            .builder
+            .build_insert_value(desc_agg, per_iter_const, 7, "d.per_iter_cost")
+            .unwrap()
+            .into_struct_value();
+        self.builder.build_store(desc_alloca, desc_agg).unwrap();
+
+        // out_slot: a 24-byte Vec struct alloca in the parent frame.
+        let vec_ty = self.vec_struct_type();
+        let out_slot = self.create_entry_alloca(parent_fn, "__reduce_out", vec_ty.into());
+
+        let spawn_site_id = self
+            .context
+            .i32_type()
+            .const_int(self.par_counter as u64, false);
+        self.par_counter += 1;
+
+        self.builder
+            .build_call(
+                self.karac_par_reduce_fn,
+                &[desc_alloca.into(), out_slot.into(), spawn_site_id.into()],
+                "",
+            )
+            .unwrap();
+
+        // Post-call fold: extend out_slot's Vec into the parent's
+        // existing accumulator. `combine_fn` takes (dst, src) and
+        // transfers src's elements into dst, freeing both old buffers
+        // and zeroing src. The parent's pre-existing items (e.g. a
+        // `let mut results = Vec.new(); results.push(-1);` before the
+        // loop) appear first in the final dst; runtime-folded
+        // contributions follow.
+        self.builder
+            .build_call(combine_fn, &[acc_slot.ptr.into(), out_slot.into()], "")
+            .unwrap();
 
         Ok(())
     }

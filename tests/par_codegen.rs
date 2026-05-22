@@ -3735,4 +3735,212 @@ fn main() {
         )
         .expect("codegen failed (recursion should bottom out at depth cap)");
     }
+
+    // ── Phase 3 (2026-05-21): `#[par_unordered]` collect-style codegen ─────
+    //
+    // Tests for the Vec-accumulator code path in `src/codegen/reduce.rs`:
+    // `try_emit_collect_reduction_lowering` + per-elem-type init/combine
+    // helpers + Collect worker fn that owns a local Vec partial. Each test
+    // pairs a sink-correctness check (sum / count are order-independent so
+    // they survive the worker-combine reordering) with an IR pin that
+    // proves the new helpers were synthesized rather than the sequential
+    // fallback firing silently.
+
+    #[test]
+    fn test_e2e_collect_bare_push_matches_serial_sink() {
+        // K=1000 pushes of `k` produce a Vec whose length is 1000 and whose
+        // element sum is 0+1+...+999 = 499500. Order across workers is
+        // unconstrained but length and sum are not.
+        let src = r#"
+fn main() {
+    let mut results: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        results.push(k);
+    }
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < results.len() {
+        s = s + results[i];
+        i = i + 1i64;
+    }
+    println(results.len());
+    println(s);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2, "expected two lines, got:\n{}", out);
+        assert_eq!(lines[0], "1000", "length mismatch");
+        assert_eq!(
+            lines[1], "499500",
+            "sum mismatch (length right but contents wrong?)"
+        );
+    }
+
+    #[test]
+    fn test_e2e_collect_conditional_push_matches_serial_sink() {
+        // Conditional push: only k where k % 3 == 0 is pushed. For k in
+        // [0, 1000): count = ceil(1000/3) = 334 (0, 3, 6, ..., 999).
+        // Sum = 3 * (0 + 1 + ... + 333) = 3 * 333 * 334 / 2 = 166833.
+        let src = r#"
+fn main() {
+    let mut hits: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        if (k % 3i64) == 0i64 {
+            hits.push(k);
+        }
+    }
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < hits.len() {
+        s = s + hits[i];
+        i = i + 1i64;
+    }
+    println(hits.len());
+    println(s);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0], "334", "conditional count mismatch");
+        assert_eq!(lines[1], "166833", "conditional sum mismatch");
+    }
+
+    #[test]
+    fn test_e2e_collect_preserves_parent_initial_items() {
+        // Parent acc starts with two pre-existing items pushed before the
+        // par-unordered loop. Post-call fold extends out_slot's Vec into
+        // the parent acc, so the final length is 2 (pre) + 100 (loop) =
+        // 102, and the sum is (-1) + (-2) + sum(0..99) = -3 + 4950 = 4947.
+        // The pre-existing items appear first in the dst per combine_fn's
+        // "dst before src" memcpy order.
+        let src = r#"
+fn main() {
+    let mut acc: Vec[i64] = Vec.new();
+    acc.push(0i64 - 1i64);
+    acc.push(0i64 - 2i64);
+    #[par_unordered]
+    for k in 0i64..100i64 {
+        acc.push(k);
+    }
+    let mut s: i64 = 0i64;
+    let mut i: i64 = 0i64;
+    while i < acc.len() {
+        s = s + acc[i];
+        i = i + 1i64;
+    }
+    println(acc.len());
+    println(s);
+}
+"#;
+        let Some(out) = run_program(src) else { return };
+        let lines: Vec<&str> = out.trim().split('\n').collect();
+        assert_eq!(lines.len(), 2);
+        assert_eq!(
+            lines[0], "102",
+            "parent-initial items dropped from final length"
+        );
+        assert_eq!(
+            lines[1], "4947",
+            "parent-initial values not folded into sum"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_emits_par_reduce_call_and_collect_helpers() {
+        // IR pin: the `#[par_unordered]` collect lowering must emit a
+        // call to karac_par_reduce plus the per-elem-type init/combine
+        // helpers (`__karac_reduce_init_collect_i64`,
+        // `__karac_reduce_combine_collect_i64`) and a Collect-specific
+        // worker symbol (`__karac_reduce_worker_collect_<N>`). Without
+        // this pin, a silent fallthrough to sequential codegen would
+        // make the sink tests above still pass (sequential push gives
+        // the same multiset) but the lowering would have regressed.
+        let src = r#"
+fn main() {
+    let mut results: Vec[i64] = Vec.new();
+    #[par_unordered]
+    for k in 0i64..1000i64 {
+        results.push(k);
+    }
+    println(results.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            ir.contains("call void @karac_par_reduce"),
+            "expected karac_par_reduce call for #[par_unordered] collect loop; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_init_collect_i64"),
+            "expected init_collect_i64 helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_combine_collect_i64"),
+            "expected combine_collect_i64 helper; got:\n{ir}"
+        );
+        assert!(
+            ir.contains("__karac_reduce_worker_collect_"),
+            "expected worker_collect_<N> fn; got:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_collect_without_attribute_stays_sequential() {
+        // Regression guard: without `#[par_unordered]` the analyzer
+        // doesn't tag `acc.push(k)` as a Collect reduction (the gate is
+        // attribute-driven per Phase 2 design — order-not-preserved
+        // requires explicit user opt-in). Codegen must fall through to
+        // the sequential push path; no par_reduce call, no Collect
+        // helpers.
+        let src = r#"
+fn main() {
+    let mut results: Vec[i64] = Vec.new();
+    for k in 0i64..1000i64 {
+        results.push(k);
+    }
+    println(results.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+        assert!(
+            !ir.contains("__karac_reduce_init_collect_"),
+            "no `#[par_unordered]` ⇒ no init_collect helper; got:\n{ir}"
+        );
+        assert!(
+            !ir.contains("__karac_reduce_worker_collect_"),
+            "no `#[par_unordered]` ⇒ no worker_collect fn; got:\n{ir}"
+        );
+    }
 }
