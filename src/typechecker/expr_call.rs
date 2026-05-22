@@ -339,6 +339,19 @@ impl<'a> super::TypeChecker<'a> {
                         name: "Map".to_string(),
                         args: vec![self.env.fresh_type_var(), self.env.fresh_type_var()],
                     }),
+                    // `String.new()` has no syntactic stdlib declaration
+                    // (no `impl String { fn new() -> String }` in
+                    // `runtime/stdlib/*.kara`); codegen handles it directly
+                    // at `src/codegen/assoc_call.rs` (`String && method ==
+                    // "new"` arm) and the typechecker used to fall through
+                    // silently. The fall-through was harmless until the
+                    // `resolve_path_type` rejection of unknown `Type.method`
+                    // calls landed — now the typechecker rejects the call
+                    // before codegen can claim it. Surface a real `String`
+                    // return type here, mirroring how `Vec.new()` is
+                    // covered above. Same fix shape applies to
+                    // `String.with_capacity(n)` below.
+                    "String" => Some(Type::Str),
                     _ => None,
                 };
                 if let Some(ty) = result_ty {
@@ -360,7 +373,11 @@ impl<'a> super::TypeChecker<'a> {
         // empty, codegen sees no pending element type, and errors with
         // "element type unknown — requires a `let v: Vec[T] = ...`
         // annotation". Mirrors `Vec.new`'s shape but checks the
-        // capacity arg's type while we're here.
+        // capacity arg's type while we're here. `String.with_capacity(n)`
+        // joins the family for the same reason `String.new()` is in the
+        // `.new` arm above — codegen handles it directly, typechecker
+        // would otherwise reject under the `resolve_path_type` rejection
+        // path.
         if let ExprKind::Path { segments, .. } = &callee.kind {
             if segments.len() == 2 && segments[1] == "with_capacity" && args.len() == 1 {
                 let collection = segments[0].as_str();
@@ -378,6 +395,39 @@ impl<'a> super::TypeChecker<'a> {
                     self.record_expr_type(span, &ty);
                     return ty;
                 }
+                if collection == "String" {
+                    let cap_ty = self.infer_expr(&args[0].value);
+                    self.check_assignable(
+                        &Type::Int(IntSize::I64),
+                        &cap_ty,
+                        args[0].value.span.clone(),
+                    );
+                    self.record_expr_type(span, &Type::Str);
+                    return Type::Str;
+                }
+            }
+        }
+
+        // `String.from(x)` — codegen-only builtin (no syntactic
+        // `impl From for String` in baked stdlib); historically used to
+        // convert a `StringSlice` / string literal to an owned `String`,
+        // and pervasive across the test corpus (`String.from("hello")`
+        // etc.). Joins the special-arm family for the same reason
+        // `String.new()` does above — the `resolve_path_type` rejection
+        // path would otherwise reject every `String.from(...)` call.
+        // We don't strictly validate the arg type here (codegen accepts
+        // string literals + StringSlices + Strings transparently); the
+        // arg still gets recursive type inference so downstream
+        // expressions see its type.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "String"
+                && segments[1] == "from"
+                && args.len() == 1
+            {
+                let _ = self.infer_expr(&args[0].value);
+                self.record_expr_type(span, &Type::Str);
+                return Type::Str;
             }
         }
 

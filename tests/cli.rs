@@ -300,6 +300,41 @@ fn test_check_type_error() {
     assert!(stderr.contains("expected 2 argument(s), found 3"));
 }
 
+// `Pipeline::has_fatal_errors` includes typecheck errors so `karac build`
+// stops at the typechecker's diagnostic instead of proceeding into
+// codegen and emitting a misleading "no handler for method 'unwrap'"
+// downstream. Pins the user-visible behavior change — without the
+// `has_type_errors` extension, this test would see the codegen error
+// in stderr instead of the typecheck one. Surfaced 2026-05-22 building
+// the kata-91 bench mirror.
+#[cfg(feature = "llvm")]
+#[test]
+fn test_build_typecheck_error_does_not_fall_through_to_codegen() {
+    let out = karac_bin()
+        .args(["build", "tests/snapshots/undeclared_assoc_method.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "build should exit nonzero");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("error[typecheck]"),
+        "expected typecheck error in stderr, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("no associated function 'from_utf8' on type 'String'"),
+        "expected the new NoMethodFound diagnostic text, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("codegen failed"),
+        "build should stop at typecheck — codegen must not run for this input. \
+         stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("no handler for method 'unwrap'"),
+        "the old misleading codegen diagnostic must not surface. stderr: {stderr}"
+    );
+}
+
 #[test]
 fn test_check_provider_escape_error() {
     let out = karac_bin()

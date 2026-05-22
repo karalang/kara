@@ -94,6 +94,62 @@ impl<'a> super::TypeChecker<'a> {
     /// Called from `infer_method_call` when the object type is `Type::Str`.
     pub(super) fn infer_str_method(&mut self, method: &str, args: &[CallArg], span: &Span) -> Type {
         match method {
+            // Length / emptiness predicates — runtime ships these and the
+            // interpreter dispatches them; the typechecker enumeration was
+            // catching up per the source comment below. Surfaced 2026-05-22
+            // when the `resolve_path_type` rejection of unknown
+            // `Type.method(...)` calls made the silent `Type::Error`
+            // propagation from `String.from(...)` stop short-circuiting
+            // these (downstream `s.len()` started hitting `require_known_method`
+            // instead of inheriting Type::Error). Wired here so they pass
+            // typecheck cleanly without lint noise.
+            "len" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "'len' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Int(IntSize::I64)
+            }
+            "is_empty" => {
+                if !args.is_empty() {
+                    self.type_error(
+                        "'is_empty' takes no arguments".to_string(),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                }
+                Type::Bool
+            }
+            "contains" => {
+                // contains(substr: String) -> bool — runtime ships substring
+                // search; the typechecker just enforces the arg shape.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'contains' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'contains' expects a String substring, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Bool
+            }
             "sorted" => {
                 if !args.is_empty() {
                     self.type_error(
@@ -217,17 +273,20 @@ impl<'a> super::TypeChecker<'a> {
                 Type::Str
             }
             // Unknown string method — typo-suggestion diagnostic if close to
-            // a known name, silent otherwise (`len`, `contains`, `is_empty`,
-            // … are runtime-only and not yet wired through the typechecker).
-            // Flip to always-error once enumeration catches up to the
-            // interpreter's String surface — design.md § Method Resolution
-            // Step 7.
+            // a known name. `len` / `is_empty` / `contains` joined the
+            // enumerated list 2026-05-22; further runtime-only surface
+            // (e.g. `push_str`, `to_uppercase`, `split`) still falls
+            // through to the typo-suggestion path until per-method
+            // typechecker arms land — design.md § Method Resolution Step 7.
             _ => self.require_known_method(
                 "String",
                 method,
                 &[
                     "bytes",
                     "chars",
+                    "contains",
+                    "is_empty",
+                    "len",
                     "sorted",
                     "sorted_by",
                     "starts_with",

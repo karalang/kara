@@ -18515,3 +18515,76 @@ fn test_module_binding_immutable_read_at_use_site_does_not_fire_mutability_check
          }",
     );
 }
+
+// ── Undeclared `Type.method(...)` rejection ─────────────────────
+//
+// 2-segment `Type.method(...)` paths used to fall through silently
+// when neither the typechecker's special arms (`Vec.new()`, `Map.new()`,
+// `String.new()`, etc.) nor any registered impl method matched. The
+// permissive sentinel type then propagated to codegen, where a downstream
+// `.unwrap()` or pattern binding exploded with "no handler for method ..."
+// — sending future debuggers chasing a phantom codegen bug instead of
+// the actual missing/typo'd stdlib API. `resolve_path_type` now emits a
+// `NoMethodFound`-kind diagnostic when the first segment is a known
+// type (registered enum/struct, prelude primitive, or prelude type).
+// Paired with `Pipeline::has_fatal_errors` extension so `karac build`
+// stops at typecheck instead of proceeding to the misleading codegen
+// error.
+
+#[test]
+fn undeclared_assoc_method_on_named_type_rejects() {
+    let errs = typecheck_errors(
+        "fn main() {
+             let buf: Vec[u8] = Vec.new();
+             let _ = String.totally_made_up_method(buf);
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NoMethodFound)
+                && e.message.contains("totally_made_up_method")
+                && e.message.contains("String")),
+        "expected NoMethodFound mentioning 'totally_made_up_method' and 'String', got: {:?}",
+        errs.iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn undeclared_assoc_method_on_prelude_type_rejects() {
+    // `Vec.unknown_constructor()` — `Vec` is in PRELUDE_TYPES, so the
+    // new check fires even though `Vec` isn't in `env.structs` /
+    // `env.enums` directly.
+    let errs = typecheck_errors(
+        "fn main() {
+             let _ = Vec.unknown_constructor();
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NoMethodFound)
+                && e.message.contains("unknown_constructor")
+                && e.message.contains("Vec")),
+        "expected NoMethodFound on Vec.unknown_constructor, got: {:?}",
+        errs.iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn declared_assoc_method_on_string_still_resolves() {
+    // Regression guard: `String.new()` and `String.with_capacity(n)`
+    // are codegen-only builtins (no syntactic `impl String { ... }`
+    // in baked stdlib). The new rejection in `resolve_path_type` is
+    // matched by special arms in `infer_call` so these continue to
+    // typecheck — without them, the new diagnostic would fire for
+    // legitimate stdlib calls.
+    typecheck_ok(
+        "fn main() {
+             let _: String = String.new();
+             let _: String = String.with_capacity(64);
+         }",
+    );
+}

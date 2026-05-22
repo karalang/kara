@@ -315,12 +315,74 @@ impl<'a> super::TypeChecker<'a> {
                     return_type: Box::new(sig.return_type.clone()),
                 };
             }
+
+            // None of the special arms matched. If `type_name` is a known
+            // type — registered enum, registered struct, prelude primitive,
+            // or prelude type — emit a clean "no associated function"
+            // diagnostic instead of falling through to the silent
+            // identifier-resolution path below (which returns `Type::Error`
+            // with no user-facing diagnostic). Without this, a call like
+            // `String.from_utf8(buf)` (spec'd in design.md but not yet
+            // implemented in `runtime/stdlib/`) or any typo
+            // (`String.totally_made_up_method(buf)`) propagates a
+            // permissive sentinel type, and the user sees the failure
+            // first in *codegen* with a misleading "no handler for
+            // method 'unwrap' on variable 'x'" — sending future debuggers
+            // chasing a phantom heap-payload codegen bug instead of the
+            // actual missing / typo'd stdlib API. Surfaced 2026-05-22
+            // building the kata-91 bench mirror. Paired with the
+            // `Pipeline::has_fatal_errors` extension in `src/cli.rs` —
+            // without that companion change, `cmd_build` runs codegen
+            // after collecting non-fatal typecheck errors and the
+            // codegen failure still wins the user's stderr.
+            //
+            // **Ambient resource exemption.** Names in
+            // `PRELUDE_EFFECT_RESOURCES` (`Clock`, `RandomSource`,
+            // `FileSystem`, …) are explicitly *not* gated by this
+            // check. At a `with_provider[R](provider, || …)` site (and
+            // in the REPL's `:provide R = T {}` flow), the runtime
+            // substitutes a user-supplied type whose method surface
+            // can name *any* identifier — the typechecker has no way
+            // to know which methods that provider will eventually
+            // implement, so the original silent fallthrough is
+            // load-bearing for this dispatch shape. Without the
+            // exemption, `Clock.now()` / `RandomSource.next()` /
+            // `:provide RandomSource = FakeRng {}` followed by
+            // `RandomSource.next()` all break at typecheck.
+            if self.is_known_type_name(type_name)
+                && !crate::prelude::PRELUDE_EFFECT_RESOURCES.contains(&type_name.as_str())
+            {
+                self.type_error(
+                    format!(
+                        "no associated function '{}' on type '{}'",
+                        member, type_name
+                    ),
+                    span.clone(),
+                    TypeErrorKind::NoMethodFound,
+                );
+                return Type::Error;
+            }
         }
         // First segment as identifier
         if let Some(first) = segments.first() {
             return self.resolve_identifier_type(first, span);
         }
         Type::Error
+    }
+
+    /// True when `name` denotes a known Type-class identifier — a registered
+    /// enum or struct, a prelude primitive (e.g. `String`, `i32`), or a
+    /// prelude type (e.g. `Option`, `Result`, `Vec`). Used by
+    /// `resolve_path_type` to decide whether to surface a clean
+    /// "no associated function" diagnostic when a 2-segment `Type.method`
+    /// path fails to resolve all of its arms — vs. falling through to the
+    /// silent identifier-resolution path used for non-type-shaped paths
+    /// (e.g., `obj.field.method()` where the first segment is a value).
+    pub(super) fn is_known_type_name(&self, name: &str) -> bool {
+        self.env.enums.contains_key(name)
+            || self.env.structs.contains_key(name)
+            || crate::prelude::PRELUDE_PRIMITIVES.contains(&name)
+            || crate::prelude::PRELUDE_TYPES.contains(&name)
     }
 
     // ── Binary / Unary Operators ────────────────────────────────

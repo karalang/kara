@@ -630,6 +630,20 @@ impl Pipeline {
         self.resolved.as_ref().is_some_and(|r| !r.errors.is_empty())
     }
 
+    /// Hard typecheck errors only — warnings are stored separately in
+    /// `TypeCheckResult.warnings` via `type_lint_warning` and are
+    /// intentionally non-fatal at the CLI layer. Sibling to
+    /// `has_parse_errors` / `has_resolve_errors`; consumed by
+    /// `has_fatal_errors` so `cmd_build` stops before codegen when the
+    /// typechecker rejected any expression. Without this, a typecheck
+    /// error like "no associated function 'from_utf8' on type 'String'"
+    /// gets collected silently and the user only sees the downstream
+    /// codegen explosion ("no handler for method 'unwrap' on variable
+    /// 'parsed'"), which sends them chasing a phantom codegen bug.
+    fn has_type_errors(&self) -> bool {
+        self.typed.as_ref().is_some_and(|t| !t.errors.is_empty())
+    }
+
     fn typecheck(&mut self) {
         if self.resolved.is_none() || self.has_resolve_errors() {
             return;
@@ -801,9 +815,18 @@ impl Pipeline {
         self.raii_check();
     }
 
-    /// Collect all errors across phases.
+    /// Collect all errors across phases. Typecheck errors are included —
+    /// the typechecker is a hard gate, not a hint phase; a build that
+    /// proceeds past typecheck errors produces misleading downstream
+    /// diagnostics (e.g., the codegen "no handler for method 'unwrap'"
+    /// surfaced 2026-05-22 from a typecheck-but-silent
+    /// `String.from_utf8(buf)` call). Effect, ownership, and concurrency
+    /// errors remain non-fatal here so the analysis surface continues to
+    /// run for diagnostics-only consumers; consider extending this
+    /// predicate further if the same diagnostic-swallowing pattern
+    /// appears for any of those phases.
     fn has_fatal_errors(&self) -> bool {
-        self.has_parse_errors() || self.has_resolve_errors()
+        self.has_parse_errors() || self.has_resolve_errors() || self.has_type_errors()
     }
 
     fn total_errors(&self) -> usize {
