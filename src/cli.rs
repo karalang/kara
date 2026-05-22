@@ -6671,17 +6671,18 @@ fn discover_tests(tree: &ProgramTree) -> Vec<DiscoveredTest> {
                         // this branch and `qualified` becomes
                         // uniformly the case name.
                         qualified: t.name.clone(),
-                        // Slice 4 lifts attribute extraction onto
-                        // `TestCase.attributes`. Pre-slice-4 the
-                        // requires / with_provider surface is
-                        // empty for `Item::TestCase`-discovered
-                        // entries — programmers staying on the
-                        // legacy `fn test_*` path keep their
-                        // existing requires / providers; new
-                        // block-form cases without modifier
-                        // attributes are the v1 floor.
-                        requires: Vec::new(),
-                        with_providers: Vec::new(),
+                        // `#[test(requires=[...])]` and
+                        // `#[with_provider(R, ctor)]` attach to
+                        // block-form cases verbatim — the same
+                        // extract helpers walk `TestCase.attributes`
+                        // and `Function.attributes` because the
+                        // attribute *shape* is unchanged, only the
+                        // host item kind differs. design.md §
+                        // Testing pins the surface; slice 5's
+                        // example-fixture migration is the
+                        // workload validation.
+                        requires: extract_requires(&t.attributes),
+                        with_providers: extract_with_providers(&t.attributes),
                     });
                 }
                 _ => {}

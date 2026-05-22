@@ -1905,6 +1905,76 @@ fn test_test_block_form_coexists_with_legacy_fn_test_form() {
         .any(|l| l.contains("\"test\":\"<root>::test_legacy\"")));
 }
 
+#[test]
+fn test_test_block_form_requires_skips_when_env_var_unset() {
+    // Slice 4 lifts `#[test(requires=[...])]` extraction onto
+    // `TestCase.attributes`. The runner-side requires-gating path
+    // is unchanged — what's new is that block-form cases can now
+    // declare requires the same way as the legacy `fn test_*`
+    // form, and the resource-probe / skip behavior is identical.
+    let tmp = scratch_project("test-block-requires-skip");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "#[test(requires = [karac_blockreq_skipcase.fake_db])]\n\
+         test \"needs db\" { assert(false); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .arg("test")
+        .env_remove("KARA_RESOURCE_KARAC_BLOCKREQ_SKIPCASE_FAKE_DB")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    let skip = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_skip"))
+        .unwrap_or_else(|| panic!("expected test_skip in:\n{lines:?}"));
+    assert!(skip.contains("\"reason\":\"unsatisfied_requires\""));
+    // The `test` field is the case-name string, not the mangled id.
+    assert!(skip.contains("\"test\":\"needs db\""));
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"skipped\":1"));
+}
+
+#[test]
+fn test_test_block_form_with_provider_fixture_is_recognized() {
+    // Block-form cases can stack `#[with_provider(R, ctor)]`
+    // attributes the same way `fn test_*` does. The fixture
+    // pushes a provider frame before the body runs, so a
+    // resource-method call inside the body resolves against the
+    // fake instead of the ambient default.
+    let tmp = scratch_project("test-block-with-provider");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\n\
+         shared struct FakeClock { value: i64 }\n\
+         impl FakeClock {\n    fn now(self) -> i64 { self.value }\n}\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "#[with_provider(Clock, FakeClock { value: 42 })]\n\
+         test \"clock injected\" {\n    assert_eq(Clock.now(), 42);\n}\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    let pass = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_pass"))
+        .unwrap_or_else(|| panic!("expected test_pass in:\n{lines:?}"));
+    assert!(pass.contains("\"test\":\"clock injected\""));
+}
+
 // ── karac test (CR-24 follow-up slice 2: requires-gating) ───────
 
 #[test]
