@@ -1569,18 +1569,28 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Synthesize `void combine_collect_i<N>(*mut u8 dst, *const u8 src)`
     /// — extends `src` into `dst`, transferring src's elements to dst's
-    /// new buffer and zeroing src so its slot's subsequent cleanup is a
-    /// no-op. Strategy:
-    /// 1. `new_len = dst.len + src.len`. If 0 → early return (both empty).
-    /// 2. malloc `new_len * sizeof(elem)` bytes.
-    /// 3. memcpy dst's elements first (preserving order), then src's.
-    /// 4. free dst.data and src.data (free(null) is a no-op per C spec).
-    /// 5. Write `{new_data, new_len, new_len}` into dst; zero src.
+    /// final buffer and zeroing src so its slot's subsequent cleanup is a
+    /// no-op. Four-path strategy (Phase 3.1, 2026-05-21): the runtime calls
+    /// combine_fn N times (once per worker) into the same dst, so the
+    /// naive "fresh malloc + 2× memcpy per call" shape would do O(N²)
+    /// memcpy traffic across the chain. This implementation reuses dst's
+    /// existing buffer when it fits, grows with amortized doubling when
+    /// it doesn't, and adopts src's buffer wholesale on the first combine
+    /// (when dst is still empty) — total memcpy traffic across the N
+    /// combines drops to O(total_elements), and the first combine pays
+    /// zero memcpy cost at all.
     ///
-    /// Cap == new_len (no slack) keeps the combine simple at the cost of
-    /// one fresh malloc per combine — fine for n_workers ~8-18 combines
-    /// per call. A future slice can reuse dst's existing capacity when
-    /// `dst.cap >= new_len`.
+    /// 1. `new_len = dst.len + src.len`. If 0 → early return (both empty).
+    /// 2. `dst.cap == 0` (first combine into an empty dst) → adopt src's
+    ///    `{data, cap}` wholesale; no alloc, no memcpy. dst now owns
+    ///    src's buffer. src zeroed.
+    /// 3. `dst.cap >= new_len` (dst already has room) → memcpy src into
+    ///    dst's tail, free src.data, update dst.len. dst.data and dst.cap
+    ///    untouched.
+    /// 4. Otherwise (need to grow) → new_cap = max(new_len, dst.cap × 2)
+    ///    (amortized-doubling growth, like Vec.push's growth strategy);
+    ///    malloc one new buffer, memcpy both sides into it, free old
+    ///    dst.data and src.data.
     fn emit_reduce_collect_combine_fn(
         &mut self,
         elem_int_ty: IntType<'ctx>,
@@ -1605,7 +1615,11 @@ impl<'ctx> super::Codegen<'ctx> {
 
         let saved_bb = self.builder.get_insert_block();
         let entry = self.context.append_basic_block(f, "entry");
-        let do_merge_bb = self.context.append_basic_block(f, "do.merge");
+        let check_cap_bb = self.context.append_basic_block(f, "check.dst.cap");
+        let adopt_bb = self.context.append_basic_block(f, "adopt.src");
+        let check_room_bb = self.context.append_basic_block(f, "check.has.room");
+        let append_bb = self.context.append_basic_block(f, "append.in.place");
+        let grow_bb = self.context.append_basic_block(f, "grow.and.copy");
         let exit_bb = self.context.append_basic_block(f, "exit");
         self.builder.position_at_end(entry);
 
@@ -1614,7 +1628,8 @@ impl<'ctx> super::Codegen<'ctx> {
         let src_ptr = f.get_nth_param(1).unwrap().into_pointer_value();
         let elem_size = elem_int_ty.size_of();
 
-        // Load dst + src fields.
+        // Load all six fields up front. LLVM's mem2reg + DSE collapse any
+        // load that ends up unused on a given path.
         let dst_data_p = self
             .builder
             .build_struct_gep(vec_ty, dst_ptr, 0, "dst.data.ptr")
@@ -1671,24 +1686,98 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
 
+        let zero = i64_t.const_zero();
+        let null_ptr = ptr_ty.const_null();
         let new_len = self
             .builder
             .build_int_add(dst_len, src_len, "new.len")
             .unwrap();
-        let zero = i64_t.const_zero();
         let is_zero = self
             .builder
             .build_int_compare(IntPredicate::EQ, new_len, zero, "new_len.zero")
             .unwrap();
         self.builder
-            .build_conditional_branch(is_zero, exit_bb, do_merge_bb)
+            .build_conditional_branch(is_zero, exit_bb, check_cap_bb)
             .unwrap();
 
-        // Merge path: malloc + 2× memcpy + 2× free + 6 stores.
-        self.builder.position_at_end(do_merge_bb);
+        // ── check_cap_bb: is dst still empty? ──
+        // First-combine fast path: when dst.cap == 0 the init_slot left a
+        // `{null, 0, 0}` placeholder there. Skip the alloc + memcpy and
+        // just adopt src's `{data, cap}` wholesale.
+        self.builder.position_at_end(check_cap_bb);
+        let dst_empty = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, dst_cap, zero, "dst.cap.zero")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(dst_empty, adopt_bb, check_room_bb)
+            .unwrap();
+
+        // ── adopt_bb: dst takes ownership of src's buffer. ──
+        self.builder.position_at_end(adopt_bb);
+        self.builder.build_store(dst_data_p, src_data).unwrap();
+        self.builder.build_store(dst_len_p, src_len).unwrap();
+        self.builder.build_store(dst_cap_p, src_cap).unwrap();
+        self.builder.build_store(src_data_p, null_ptr).unwrap();
+        self.builder.build_store(src_len_p, zero).unwrap();
+        self.builder.build_store(src_cap_p, zero).unwrap();
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        // ── check_room_bb: does dst already have room for src? ──
+        self.builder.position_at_end(check_room_bb);
+        let has_room = self
+            .builder
+            .build_int_compare(IntPredicate::UGE, dst_cap, new_len, "dst.has.room")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(has_room, append_bb, grow_bb)
+            .unwrap();
+
+        // ── append_bb: memcpy src into dst's tail. ──
+        self.builder.position_at_end(append_bb);
+        let dst_tail = unsafe {
+            self.builder
+                .build_gep(elem_int_ty, dst_data, &[dst_len], "dst.tail")
+                .unwrap()
+        };
+        let src_bytes_append = self
+            .builder
+            .build_int_mul(src_len, elem_size, "src.bytes.append")
+            .unwrap();
+        self.builder
+            .build_memcpy(dst_tail, 8, src_data, 8, src_bytes_append)
+            .unwrap();
+        self.builder
+            .build_call(self.free_fn, &[src_data.into()], "")
+            .unwrap();
+        self.builder.build_store(dst_len_p, new_len).unwrap();
+        self.builder.build_store(src_data_p, null_ptr).unwrap();
+        self.builder.build_store(src_len_p, zero).unwrap();
+        self.builder.build_store(src_cap_p, zero).unwrap();
+        // dst.data and dst.cap are unchanged on this path; no stores.
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
+
+        // ── grow_bb: allocate a fresh buffer at max(new_len, 2*dst.cap), ──
+        // copy dst's then src's elements, free old buffers. The doubling
+        // gives amortized O(1) growth — across N combine calls, total
+        // memcpy traffic stays O(total_elements) instead of O(N×total).
+        self.builder.position_at_end(grow_bb);
+        let double_cap = self
+            .builder
+            .build_int_mul(dst_cap, i64_t.const_int(2, false), "double.cap")
+            .unwrap();
+        let use_new_len = self
+            .builder
+            .build_int_compare(IntPredicate::UGT, new_len, double_cap, "use.new_len")
+            .unwrap();
+        let new_cap = self
+            .builder
+            .build_select(use_new_len, new_len, double_cap, "new.cap")
+            .unwrap()
+            .into_int_value();
         let new_bytes = self
             .builder
-            .build_int_mul(new_len, elem_size, "new.bytes")
+            .build_int_mul(new_cap, elem_size, "new.bytes")
             .unwrap();
         let new_data = self
             .builder
@@ -1697,8 +1786,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_pointer_value();
-        // memcpy dst's elements first. `build_memcpy` is a no-op when
-        // size is 0, so we can call unconditionally — saves a branch.
         let dst_bytes = self
             .builder
             .build_int_mul(dst_len, elem_size, "dst.bytes")
@@ -1706,42 +1793,33 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_memcpy(new_data, 8, dst_data, 8, dst_bytes)
             .unwrap();
-        // memcpy src's elements after dst's. Offset = dst_len * elem_size.
-        let dst_tail = unsafe {
+        let new_tail = unsafe {
             self.builder
                 .build_gep(elem_int_ty, new_data, &[dst_len], "new.tail")
                 .unwrap()
         };
-        let src_bytes = self
+        let src_bytes_grow = self
             .builder
-            .build_int_mul(src_len, elem_size, "src.bytes")
+            .build_int_mul(src_len, elem_size, "src.bytes.grow")
             .unwrap();
         self.builder
-            .build_memcpy(dst_tail, 8, src_data, 8, src_bytes)
+            .build_memcpy(new_tail, 8, src_data, 8, src_bytes_grow)
             .unwrap();
-        // free dst.data (free(null) is no-op per C spec).
+        // free(null) is a no-op per C spec — dst.data is null here only
+        // when dst.cap > 0 was impossible (i.e. unreachable for this
+        // path, since adopt_bb caught dst.cap == 0).
         self.builder
             .build_call(self.free_fn, &[dst_data.into()], "")
             .unwrap();
-        // free src.data.
         self.builder
             .build_call(self.free_fn, &[src_data.into()], "")
             .unwrap();
-        // Write new dst fields.
         self.builder.build_store(dst_data_p, new_data).unwrap();
         self.builder.build_store(dst_len_p, new_len).unwrap();
-        self.builder.build_store(dst_cap_p, new_len).unwrap();
-        // Zero src fields so the slot's subsequent cleanup (if any) is
-        // a no-op. After this, src is "donated" to dst.
-        self.builder
-            .build_store(src_data_p, ptr_ty.const_null())
-            .unwrap();
+        self.builder.build_store(dst_cap_p, new_cap).unwrap();
+        self.builder.build_store(src_data_p, null_ptr).unwrap();
         self.builder.build_store(src_len_p, zero).unwrap();
         self.builder.build_store(src_cap_p, zero).unwrap();
-        // Reference dst_cap once so LLVM doesn't elide the load above
-        // before we settle on a smarter reuse path. (No-op in IR.)
-        let _ = dst_cap;
-        let _ = src_cap;
         self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         self.builder.position_at_end(exit_bb);
