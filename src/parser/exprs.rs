@@ -477,6 +477,13 @@ impl super::Parser {
                     kind: ExprKind::CharLit(c),
                 })
             }
+            Token::ByteLiteral(b) => {
+                self.advance();
+                Some(Expr {
+                    span: self.span_from(&start),
+                    kind: ExprKind::ByteLit(b),
+                })
+            }
             Token::StringLiteral(s) => {
                 let s = s.clone();
                 self.advance();

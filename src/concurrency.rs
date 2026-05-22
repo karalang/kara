@@ -1493,6 +1493,7 @@ impl<'a> ConcurrencyChecker<'a> {
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -1873,6 +1874,7 @@ impl<'a> ConcurrencyChecker<'a> {
             | ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }

@@ -29,6 +29,9 @@ impl<'a> super::Interpreter<'a> {
             ExprKind::Float(f, _) => Value::Float(*f),
             ExprKind::Bool(b) => Value::Bool(*b),
             ExprKind::CharLit(c) => Value::Char(*c),
+            // `b'X'` evaluates as a u8 via the shared `Value::Int(i64)` carrier
+            // (the typechecker has already classified the value as u8).
+            ExprKind::ByteLit(b) => Value::Int(i64::from(*b)),
             ExprKind::StringLit(s) => Value::String(s.clone()),
             ExprKind::MultiStringLit(s) => Value::String(s.clone()),
             ExprKind::InterpolatedStringLit(parts) => {

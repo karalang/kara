@@ -23,7 +23,7 @@ use super::inference::{
 };
 use super::types::{
     contains_type_param, impl_args_match, impl_table_key, is_integer, lub_block_type, type_display,
-    type_to_concrete_or_param_name, ConstArg, IntSize, ScrutineeMode, SubstValue, Type,
+    type_to_concrete_or_param_name, ConstArg, IntSize, ScrutineeMode, SubstValue, Type, UIntSize,
 };
 use super::TypeErrorKind;
 
@@ -1656,6 +1656,7 @@ impl<'a> super::TypeChecker<'a> {
             ExprKind::Integer(_, sfx) => self.type_from_int_suffix(*sfx, expr.span.clone()),
             ExprKind::Float(_, sfx) => Self::type_from_float_suffix(*sfx),
             ExprKind::CharLit(_) => Type::Char,
+            ExprKind::ByteLit(_) => Type::UInt(UIntSize::U8),
             ExprKind::StringLit(_) | ExprKind::MultiStringLit(_) => Type::Str,
             // `c"..."` C-string literal — typed `ref CStr` per
             // design.md § C-String Literals (v60 item 18). The

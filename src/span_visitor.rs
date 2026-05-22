@@ -279,6 +279,7 @@ fn visit_expr(e: &Expr, visit: &mut impl FnMut(&Span)) {
         ExprKind::Integer(_, _)
         | ExprKind::Float(_, _)
         | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }

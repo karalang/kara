@@ -110,7 +110,10 @@ impl<'ctx> super::Codegen<'ctx> {
             if let ExprKind::Identifier(name) = &object.kind {
                 let is_literal_index = matches!(
                     &index.kind,
-                    ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_)
+                    ExprKind::Integer(_, _)
+                        | ExprKind::Bool(_)
+                        | ExprKind::CharLit(_)
+                        | ExprKind::ByteLit(_)
                 );
                 if is_literal_index && self.generic_fns.contains_key(name) {
                     let explicit_args = vec![GenericArg::Const((**index).clone())];

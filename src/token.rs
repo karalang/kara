@@ -233,6 +233,9 @@ pub enum Token {
     Integer(i64, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLiteral(char),
+    /// `b'A'` byte char literal — type `u8` (design.md § Byte and
+    /// Byte-String Literals; phase-1-lexer slice).
+    ByteLiteral(u8),
     StringLiteral(String),
     MultiStringLiteral(String),
     InterpolatedStringLiteral(Vec<InterpolationPart>),

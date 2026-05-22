@@ -342,6 +342,7 @@ fn walk_expr(
         ExprKind::Integer(..)
         | ExprKind::Float(..)
         | ExprKind::CharLit(..)
+        | ExprKind::ByteLit(..)
         | ExprKind::StringLit(..)
         | ExprKind::MultiStringLit(..)
         | ExprKind::InterpolatedStringLit(..)

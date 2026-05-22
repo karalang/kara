@@ -337,6 +337,7 @@ impl<'a> super::TypeChecker<'a> {
             | ExprKind::Float(..)
             | ExprKind::Bool(..)
             | ExprKind::CharLit(..)
+            | ExprKind::ByteLit(..)
             | ExprKind::StringLit(..)
             | ExprKind::MultiStringLit(..)
             | ExprKind::InterpolatedStringLit(..)

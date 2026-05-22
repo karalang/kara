@@ -395,6 +395,7 @@ fn collect_callees_in_expr(
         | ExprKind::Float(_, _)
         | ExprKind::Bool(_)
         | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
         | ExprKind::StringLit(_)
         | ExprKind::MultiStringLit(_)
         | ExprKind::CStringLit { .. }

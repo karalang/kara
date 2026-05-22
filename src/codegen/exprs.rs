@@ -31,6 +31,15 @@ impl<'ctx> super::Codegen<'ctx> {
             // f-string char-arm pickup. `*c as u64` widens the surrogate-
             // free `char` to fit the const_int sign-agnostic constructor.
             ExprKind::CharLit(c) => Ok(self.context.i32_type().const_int(*c as u64, false).into()),
+            // `b'X'` lowers to an i8-width LLVM constant — width parity with
+            // the `u8` type the typechecker assigns. Sign-agnostic (LLVM
+            // integer types are bit-width-only); the `is_signed` flag on
+            // `const_int` doesn't affect storage.
+            ExprKind::ByteLit(b) => Ok(self
+                .context
+                .i8_type()
+                .const_int(u64::from(*b), false)
+                .into()),
             ExprKind::Bool(b) => Ok(self
                 .context
                 .bool_type()

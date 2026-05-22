@@ -31,6 +31,9 @@ pub enum ExprKind {
     Integer(i64, Option<IntSuffix>),
     Float(f64, Option<FloatSuffix>),
     CharLit(char),
+    /// `b'A'` byte char literal — type `u8` (design.md § Byte and
+    /// Byte-String Literals; phase-1-lexer slice).
+    ByteLit(u8),
     StringLit(String),
     MultiStringLit(String),
     InterpolatedStringLit(Vec<ParsedInterpolationPart>),

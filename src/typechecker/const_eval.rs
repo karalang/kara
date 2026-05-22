@@ -268,6 +268,7 @@ pub(super) fn infer_operand_target_ty(left: &Expr, right: &Expr) -> Option<Type>
             ExprKind::Integer(_, Some(IntSuffix::U128)) => Some(Type::UInt(UIntSize::U128)),
             ExprKind::Bool(_) => Some(Type::Bool),
             ExprKind::CharLit(_) => Some(Type::Char),
+            ExprKind::ByteLit(_) => Some(Type::UInt(UIntSize::U8)),
             _ => None,
         }
     }

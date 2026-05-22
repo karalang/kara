@@ -482,7 +482,10 @@ pub(super) fn expr_as_type_expr(expr: &Expr) -> Option<TypeExpr> {
 /// `Unary { Neg, Integer }` (negative-integer literals) qualify.
 pub(super) fn is_literal_const_arg_expr(expr: &Expr) -> bool {
     match &expr.kind {
-        ExprKind::Integer(_, _) | ExprKind::Bool(_) | ExprKind::CharLit(_) => true,
+        ExprKind::Integer(_, _)
+        | ExprKind::Bool(_)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_) => true,
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
@@ -502,6 +505,7 @@ pub(super) fn const_value_from_literal(expr: &Expr) -> Option<i64> {
         ExprKind::Integer(n, _) => Some(*n),
         ExprKind::Bool(b) => Some(*b as i64),
         ExprKind::CharLit(c) => Some(*c as i64),
+        ExprKind::ByteLit(b) => Some(i64::from(*b)),
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,

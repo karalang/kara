@@ -520,6 +520,101 @@ fn test_char_literal_unknown_escape() {
     assert!(matches!(tokens[0], Token::Error(_)));
 }
 
+// ──────────────── Byte literals (`b'X'`) ────────────────
+// design.md § Byte and Byte-String Literals. Type u8.
+
+#[test]
+fn test_byte_literal_simple_ascii() {
+    assert_eq!(tokens_only("b'A'")[0], Token::ByteLiteral(0x41));
+    assert_eq!(tokens_only("b'0'")[0], Token::ByteLiteral(0x30));
+    assert_eq!(tokens_only("b' '")[0], Token::ByteLiteral(0x20));
+    assert_eq!(tokens_only("b'~'")[0], Token::ByteLiteral(0x7E));
+}
+
+#[test]
+fn test_byte_literal_simple_escapes() {
+    assert_eq!(tokens_only("b'\\n'")[0], Token::ByteLiteral(b'\n'));
+    assert_eq!(tokens_only("b'\\t'")[0], Token::ByteLiteral(b'\t'));
+    assert_eq!(tokens_only("b'\\r'")[0], Token::ByteLiteral(b'\r'));
+    assert_eq!(tokens_only("b'\\\\'")[0], Token::ByteLiteral(b'\\'));
+    assert_eq!(tokens_only("b'\\''")[0], Token::ByteLiteral(b'\''));
+    assert_eq!(tokens_only("b'\\\"'")[0], Token::ByteLiteral(b'"'));
+    assert_eq!(tokens_only("b'\\0'")[0], Token::ByteLiteral(0));
+}
+
+#[test]
+fn test_byte_literal_hex_escape() {
+    assert_eq!(tokens_only("b'\\x00'")[0], Token::ByteLiteral(0x00));
+    assert_eq!(tokens_only("b'\\x7F'")[0], Token::ByteLiteral(0x7F));
+    assert_eq!(tokens_only("b'\\x80'")[0], Token::ByteLiteral(0x80));
+    assert_eq!(tokens_only("b'\\xFF'")[0], Token::ByteLiteral(0xFF));
+    assert_eq!(tokens_only("b'\\xff'")[0], Token::ByteLiteral(0xFF));
+    assert_eq!(tokens_only("b'\\xab'")[0], Token::ByteLiteral(0xAB));
+}
+
+#[test]
+fn test_byte_literal_unicode_escape_rejected() {
+    // design.md: "Unicode escapes are not permitted in byte literals"
+    let tokens = tokens_only("b'\\u{FF}'");
+    let Token::Error(msg) = &tokens[0] else {
+        panic!(
+            "expected error for \\u{{..}} in byte literal, got {:?}",
+            tokens[0]
+        );
+    };
+    assert!(
+        msg.contains("Unicode escapes are not permitted in byte literals"),
+        "diagnostic should mention the spec wording — got: {msg}"
+    );
+}
+
+#[test]
+fn test_byte_literal_non_ascii_rejected() {
+    let tokens = tokens_only("b'é'");
+    let Token::Error(msg) = &tokens[0] else {
+        panic!(
+            "expected error for non-ASCII byte literal, got {:?}",
+            tokens[0]
+        );
+    };
+    assert!(
+        msg.contains("non-ASCII") || msg.contains("ASCII"),
+        "diagnostic should mention ASCII — got: {msg}"
+    );
+}
+
+#[test]
+fn test_byte_literal_empty_rejected() {
+    let tokens = tokens_only("b''");
+    assert!(matches!(tokens[0], Token::Error(_)));
+}
+
+#[test]
+fn test_byte_literal_multi_byte_body_rejected() {
+    // Two ASCII bytes in the body with no escape — must be rejected.
+    let tokens = tokens_only("b'AB'");
+    assert!(matches!(tokens[0], Token::Error(_)));
+}
+
+#[test]
+fn test_byte_literal_in_binding() {
+    // The kata-corpus form — `let zero: u8 = b'0';`.
+    let tokens = tokens_only("let zero: u8 = b'0';");
+    assert_eq!(tokens[0], Token::Let);
+    // Verify the `b'0'` token landed; surrounding token shape isn't the focus.
+    assert!(tokens.contains(&Token::ByteLiteral(b'0')));
+}
+
+#[test]
+fn test_bare_identifier_b_still_legal() {
+    // Whitespace between `b` and `'x'` must NOT trigger the byte-literal
+    // arm — `b` remains a legal bare identifier when not immediately
+    // followed by `'`.
+    let tokens = tokens_only("b 'x'");
+    assert_eq!(tokens[0], ident("b"));
+    assert_eq!(tokens[1], Token::CharLiteral('x'));
+}
+
 #[test]
 fn test_dyn_keyword() {
     let tokens = tokens_only("dyn");

@@ -467,6 +467,7 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Float(_, sfx) => self.llvm_float_type_for_suffix(*sfx).into(),
             ExprKind::Bool(_) => self.context.bool_type().into(),
             ExprKind::CharLit(_) => self.context.i32_type().into(),
+            ExprKind::ByteLit(_) => self.context.i8_type().into(),
             ExprKind::StringLit(_) => self.context.ptr_type(AddressSpace::default()).into(),
             ExprKind::Identifier(name) => {
                 if let Some(&ty) = param_types.get(name) {

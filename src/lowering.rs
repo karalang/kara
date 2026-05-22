@@ -315,6 +315,7 @@ impl<'a> Lowerer<'a> {
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::InterpolatedStringLit(_)

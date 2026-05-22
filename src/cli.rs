@@ -1517,6 +1517,7 @@ impl YieldPointWalker<'_> {
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }
@@ -2005,6 +2006,7 @@ impl StateStructLayoutWalker<'_> {
             ExprKind::Integer(_, _)
             | ExprKind::Float(_, _)
             | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
             | ExprKind::StringLit(_)
             | ExprKind::MultiStringLit(_)
             | ExprKind::CStringLit { .. }

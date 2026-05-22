@@ -583,6 +583,7 @@ impl<'a> super::TypeChecker<'a> {
             }
             ExprKind::Bool(b) => Ok(ConstValue::Bool(*b)),
             ExprKind::CharLit(c) => Ok(ConstValue::Char(*c)),
+            ExprKind::ByteLit(b) => Ok(ConstValue::U8(*b)),
             ExprKind::Identifier(name) => {
                 if chain.iter().any(|n| n == name) {
                     let mut chain_with_self = chain.clone();

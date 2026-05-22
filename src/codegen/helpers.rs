@@ -63,6 +63,7 @@ pub(super) fn const_value_from_literal_expr(expr: &Expr) -> Option<crate::prelud
         },
         ExprKind::Bool(b) => Some(ConstValue::Bool(*b)),
         ExprKind::CharLit(c) => Some(ConstValue::Char(*c)),
+        ExprKind::ByteLit(b) => Some(ConstValue::U8(*b)),
         _ => None,
     }
 }

@@ -288,6 +288,17 @@ impl<'a> Lexer<'a> {
                 self.c_string()
             }
 
+            // Byte char literal `b'A'` (design.md § Byte and Byte-String
+            // Literals). The `b"..."` byte-string form is *not* yet
+            // implemented and falls into the reserved-string-prefix path
+            // below — kept distinct because design.md has an unresolved
+            // divergence about whether `b"..."` is shipped at v1 (line 429
+            // vs the byte-literal section). Only `b'` enters this arm.
+            b'b' if self.peek() == b'\'' => {
+                self.advance(); // consume opening `'`
+                self.byte_char_literal()
+            }
+
             // Raw-identifier escape `r#NAME` (design.md § Raw Identifiers).
             // `r"` is the reserved-string-prefix path (handled below); `r#"..."#`
             // is the reserved hash-string form (caught later via the lone `r`
@@ -869,6 +880,131 @@ impl<'a> Lexer<'a> {
         }
         self.advance(); // closing quote
         self.make_spanned(Token::CharLiteral(ch))
+    }
+
+    /// `b'X'` byte char literal. The leading `b'` has already been
+    /// consumed. Per design.md § Byte and Byte-String Literals: payload
+    /// is one ASCII byte (or one `\xHH` / simple escape). `\u{...}` is
+    /// rejected with a specced diagnostic; multi-byte UTF-8 in the body
+    /// is rejected (non-ASCII codepoints have no valid `u8`
+    /// representation).
+    fn byte_char_literal(&mut self) -> SpannedToken {
+        if self.is_at_end() {
+            return self.make_spanned(Token::Error("Unterminated byte literal".to_string()));
+        }
+        // Empty body `b''` is rejected here — closing quote with no payload.
+        if self.peek() == b'\'' {
+            self.advance();
+            return self.make_spanned(Token::Error(
+                "empty byte literal: `b''` must contain exactly one byte".to_string(),
+            ));
+        }
+
+        let byte: u8 = if self.peek() == b'\\' {
+            self.advance(); // consume backslash
+            if self.is_at_end() {
+                return self.make_spanned(Token::Error("Unterminated byte literal".to_string()));
+            }
+            match self.peek() {
+                b'n' => {
+                    self.advance();
+                    b'\n'
+                }
+                b't' => {
+                    self.advance();
+                    b'\t'
+                }
+                b'r' => {
+                    self.advance();
+                    b'\r'
+                }
+                b'\\' => {
+                    self.advance();
+                    b'\\'
+                }
+                b'\'' => {
+                    self.advance();
+                    b'\''
+                }
+                b'"' => {
+                    self.advance();
+                    b'"'
+                }
+                b'0' => {
+                    self.advance();
+                    0
+                }
+                b'x' => {
+                    self.advance();
+                    match self.parse_hex_byte_escape() {
+                        Ok(b) => b,
+                        Err(msg) => return self.make_spanned(Token::Error(msg)),
+                    }
+                }
+                b'u' => {
+                    // `\u{...}` is the canonical "use \xHH instead" footgun
+                    // — emit the design-specced diagnostic verbatim. Consume
+                    // up through the closing quote (or the `}` if present)
+                    // so the error recovery doesn't cascade. The user-facing
+                    // wording lives in design.md § Byte and Byte-String
+                    // Literals.
+                    self.advance(); // consume the `u`
+                                    // Consume `{...}` greedily if present.
+                    if self.peek() == b'{' {
+                        self.advance();
+                        while !self.is_at_end() && self.peek() != b'}' && self.peek() != b'\'' {
+                            self.advance();
+                        }
+                        if self.peek() == b'}' {
+                            self.advance();
+                        }
+                    }
+                    // Eat the closing quote if present so the next token starts cleanly.
+                    if self.peek() == b'\'' {
+                        self.advance();
+                    }
+                    return self.make_spanned(Token::Error(
+                        "Unicode escapes are not permitted in byte literals — use \\xFF for byte 0xFF.".to_string(),
+                    ));
+                }
+                _ => {
+                    let other = self.consume_codepoint();
+                    return self.make_spanned(Token::Error(format!(
+                        "Unknown escape sequence in byte literal: \\{other}"
+                    )));
+                }
+            }
+        } else {
+            // Direct byte: must be ASCII and not a control char or quote.
+            let b = self.peek();
+            if b >= 0x80 {
+                // Multi-byte UTF-8 codepoint — consume it (so the diagnostic
+                // spans the whole non-ASCII sequence) and emit the specced
+                // E_NON_ASCII_IN_BYTE_LITERAL error.
+                let other = self.consume_codepoint();
+                // Eat the trailing `'` if present so error recovery is clean.
+                if self.peek() == b'\'' {
+                    self.advance();
+                }
+                return self.make_spanned(Token::Error(format!(
+                    "non-ASCII character `{other}` in byte literal — byte literals must be a single ASCII byte; use \\xHH for byte values"
+                )));
+            }
+            self.advance();
+            b
+        };
+
+        if self.is_at_end() {
+            return self.make_spanned(Token::Error("Unterminated byte literal".to_string()));
+        }
+        if self.peek() != b'\'' {
+            // Multi-byte non-escape body — `b'AB'` etc.
+            return self.make_spanned(Token::Error(
+                "byte literal must contain exactly one byte".to_string(),
+            ));
+        }
+        self.advance(); // closing quote
+        self.make_spanned(Token::ByteLiteral(byte))
     }
 
     fn multi_string(&mut self) -> SpannedToken {
