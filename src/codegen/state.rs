@@ -53,6 +53,18 @@ pub(crate) struct SharedTypeInfo<'ctx> {
     pub(crate) field_names: Vec<String>,
     /// true if this is a shared enum (vs shared struct).
     pub(crate) is_enum: bool,
+    /// Niche optimization for `Option[shared T]` fields. Indexed by user-field
+    /// index (0-based; the heap-field index is `user_idx + 1` because index 0
+    /// is the refcount). For each entry `Some(inner_name)`, the field at that
+    /// index has source type `Option[<inner_name>]` where `<inner_name>` is a
+    /// `shared struct`, and the heap stores a single `ptr` (null = `None`,
+    /// non-null = `Some`) at this slot instead of the conventional 4-i64
+    /// `{tag, w0, w1, w2}` Option layout. Saves 24 bytes per field. The inner
+    /// struct's `heap_type` is resolved via `shared_types.get(inner_name)` at
+    /// use time so self-referential shapes (`Node → Option[Node]`) work even
+    /// when the field's type isn't yet registered at struct-declaration time.
+    /// `None` entries mean conventional layout for that field.
+    pub(crate) niche_option_fields: Vec<Option<String>>,
 }
 
 // ── Enum variant layout ─────────────────────────────────────────

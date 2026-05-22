@@ -738,7 +738,17 @@ impl<'ctx> super::Codegen<'ctx> {
                             &format!("field_{}", field_init.name),
                         )
                         .unwrap();
-                    self.builder.build_store(field_ptr, val).unwrap();
+                    // Niche-opt: the field slot is a single `ptr`, not the
+                    // 4-i64 Option enum. Extract w0 from the freshly-
+                    // computed Option value and store as ptr. No RC
+                    // bookkeeping here — the caller has already discharged
+                    // it (the inner ref is owned by `val` per the same
+                    // discipline the conventional store assumes).
+                    if self.niche_field_inner_heap_type(name, idx).is_some() {
+                        self.niche_store_option_field(field_ptr, val);
+                    } else {
+                        self.builder.build_store(field_ptr, val).unwrap();
+                    }
                     // Move-aware suppression for `Foo { ..., body: body }`
                     // when the field expr is an Identifier naming a
                     // tracked Vec / String. The struct field now owns

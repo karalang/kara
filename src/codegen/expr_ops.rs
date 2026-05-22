@@ -132,6 +132,12 @@ impl<'ctx> super::Codegen<'ctx> {
                                                     &format!("sh_idx_{}", field),
                                                 )
                                                 .unwrap();
+                                            if self.niche_field_inner_heap_type(seg, idx).is_some()
+                                            {
+                                                return Ok(
+                                                    self.niche_load_option_field(field_ptr, field)
+                                                );
+                                            }
                                             let field_ty = info
                                                 .heap_type
                                                 .get_field_type_at_index((idx + 1) as u32)
@@ -175,11 +181,16 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &format!("sh_call_{}", field),
                             )
                             .unwrap();
-                        let field_ty = info
-                            .heap_type
-                            .get_field_type_at_index((idx + 1) as u32)
-                            .unwrap();
-                        let loaded = self.builder.build_load(field_ty, field_ptr, field).unwrap();
+                        let loaded = if self.niche_field_inner_heap_type(&type_name, idx).is_some()
+                        {
+                            self.niche_load_option_field(field_ptr, field)
+                        } else {
+                            let field_ty = info
+                                .heap_type
+                                .get_field_type_at_index((idx + 1) as u32)
+                                .unwrap();
+                            self.builder.build_load(field_ty, field_ptr, field).unwrap()
+                        };
                         // `Option[shared T]` field: the upcoming
                         // `emit_rc_dec(ptr)` runs the outer Node's
                         // recursive drop fn, which walks the
@@ -244,6 +255,9 @@ impl<'ctx> super::Codegen<'ctx> {
                                 &format!("sh_{}", field),
                             )
                             .unwrap();
+                        if self.niche_field_inner_heap_type(&type_name, idx).is_some() {
+                            return Ok(self.niche_load_option_field(field_ptr, field));
+                        }
                         let field_ty = info
                             .heap_type
                             .get_field_type_at_index((idx + 1) as u32)
@@ -503,13 +517,30 @@ impl<'ctx> super::Codegen<'ctx> {
                                         if let Some((_, inner_info)) =
                                             self.option_inner_shared_type_for_type_expr(&field_te)
                                         {
-                                            self.emit_option_shared_field_store(
-                                                field_ptr,
-                                                new_val,
-                                                inner_info.heap_type,
-                                                rhs_is_fresh,
-                                                field,
-                                            );
+                                            // Route niche-optimized fields
+                                            // through the pointer-slot
+                                            // variant; conventional fields
+                                            // through the 4-i64 path.
+                                            if self
+                                                .niche_field_inner_heap_type(&type_name, idx)
+                                                .is_some()
+                                            {
+                                                self.emit_niche_option_shared_field_store(
+                                                    field_ptr,
+                                                    new_val,
+                                                    inner_info.heap_type,
+                                                    rhs_is_fresh,
+                                                    field,
+                                                );
+                                            } else {
+                                                self.emit_option_shared_field_store(
+                                                    field_ptr,
+                                                    new_val,
+                                                    inner_info.heap_type,
+                                                    rhs_is_fresh,
+                                                    field,
+                                                );
+                                            }
                                             return Ok(());
                                         }
                                     }
@@ -831,6 +862,134 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_conditional_branch(new_is_null, new_skip_bb, new_real_do_bb)
                 .unwrap();
             self.builder.position_at_end(new_real_do_bb);
+            self.emit_rc_inc(inner_heap_type, new_inner);
+            self.builder
+                .build_unconditional_branch(new_skip_bb)
+                .unwrap();
+            self.builder.position_at_end(new_skip_bb);
+        }
+    }
+
+    /// Niche-opt variant of `emit_option_shared_field_store` — the field
+    /// slot is a single `ptr` (null = None, non-null = Some), not the
+    /// 4-i64 Option enum. Same three-step refcount discipline:
+    ///   1. Load the old ptr; if non-null, dec_ref it (null-check
+    ///      subsumes the old tag-check because null *is* None here).
+    ///   2. Extract w0 from the incoming Option SSA value and store it
+    ///      as the new ptr (None's `const_zero` carries w0=0 which
+    ///      stores as null, so no separate tag branch is needed for
+    ///      the store itself).
+    ///   3. If RHS isn't fresh, inc_ref the new ptr (after null-check).
+    pub(super) fn emit_niche_option_shared_field_store(
+        &self,
+        field_ptr: PointerValue<'ctx>,
+        new_val: BasicValueEnum<'ctx>,
+        inner_heap_type: StructType<'ctx>,
+        rhs_is_fresh: bool,
+        field_name: &str,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let Some(fn_val) = self.current_fn else {
+            self.niche_store_option_field(field_ptr, new_val);
+            return;
+        };
+        // ── Step 1: dec old inner if old ptr is non-null. ──
+        let old_inner = self
+            .builder
+            .build_load(
+                ptr_ty,
+                field_ptr,
+                &format!("niche.fld.{field_name}.old.ptr"),
+            )
+            .unwrap()
+            .into_pointer_value();
+        let old_is_null = self
+            .builder
+            .build_is_null(old_inner, &format!("niche.fld.{field_name}.old.is_null"))
+            .unwrap();
+        let old_do_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.do"));
+        let old_skip_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("niche.fld.{field_name}.old.skip"));
+        self.builder
+            .build_conditional_branch(old_is_null, old_skip_bb, old_do_bb)
+            .unwrap();
+        self.builder.position_at_end(old_do_bb);
+        self.emit_rc_dec(inner_heap_type, old_inner);
+        self.builder
+            .build_unconditional_branch(old_skip_bb)
+            .unwrap();
+        self.builder.position_at_end(old_skip_bb);
+        // ── Step 2: tag-aware extract w0 from new_val, store as ptr.
+        //           When tag == None the payload words are LLVM `undef`
+        //           (see `try_compile_enum_variant`'s None build); a
+        //           bare `w0 as ptr` would materialize garbage. Select
+        //           against null on the None branch so the niche slot
+        //           always reads back correctly.
+        let sv = new_val.into_struct_value();
+        let new_tag = self
+            .builder
+            .build_extract_value(sv, 0, &format!("niche.fld.{field_name}.new.tag"))
+            .unwrap()
+            .into_int_value();
+        let new_w0 = self
+            .builder
+            .build_extract_value(sv, 1, &format!("niche.fld.{field_name}.new.w0"))
+            .unwrap()
+            .into_int_value();
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let is_some_for_store = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                new_tag,
+                i64_t.const_int(some_tag, false),
+                &format!("niche.fld.{field_name}.new.is_some.store"),
+            )
+            .unwrap();
+        let ptr_from_w0 = self
+            .builder
+            .build_int_to_ptr(
+                new_w0,
+                ptr_ty,
+                &format!("niche.fld.{field_name}.new.ptr_some"),
+            )
+            .unwrap();
+        let new_inner = self
+            .builder
+            .build_select(
+                is_some_for_store,
+                ptr_from_w0,
+                ptr_ty.const_null(),
+                &format!("niche.fld.{field_name}.new.ptr"),
+            )
+            .unwrap()
+            .into_pointer_value();
+        self.builder.build_store(field_ptr, new_inner).unwrap();
+        // ── Step 3: inc new inner if RHS is aliasing and ptr non-null. ──
+        let _ = i64_t;
+        if !rhs_is_fresh {
+            let new_is_null = self
+                .builder
+                .build_is_null(new_inner, &format!("niche.fld.{field_name}.new.is_null"))
+                .unwrap();
+            let new_do_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("niche.fld.{field_name}.new.do"));
+            let new_skip_bb = self
+                .context
+                .append_basic_block(fn_val, &format!("niche.fld.{field_name}.new.skip"));
+            self.builder
+                .build_conditional_branch(new_is_null, new_skip_bb, new_do_bb)
+                .unwrap();
+            self.builder.position_at_end(new_do_bb);
             self.emit_rc_inc(inner_heap_type, new_inner);
             self.builder
                 .build_unconditional_branch(new_skip_bb)

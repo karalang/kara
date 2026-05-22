@@ -561,6 +561,10 @@ impl<'ctx> super::Codegen<'ctx> {
             MapOrSet,
             RecurseShared(super::state::SharedTypeInfo<'ctx>),
             OptionShared(super::state::SharedTypeInfo<'ctx>),
+            /// Niche-optimized `Option[shared T]` field: heap slot is a
+            /// single `ptr` (null = None, non-null = Some), not the 4-i64
+            /// Option enum. Drop path collapses to one null-check + dec.
+            OptionSharedNiche(super::state::SharedTypeInfo<'ctx>),
             #[allow(dead_code)]
             _Phantom(&'a ()),
         }
@@ -571,6 +575,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 let head_name = field_kinds.get(i).and_then(|n| n.as_deref());
                 // Option[shared T]?
                 if let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(te) {
+                    if self.niche_field_inner_heap_type(struct_name, i).is_some() {
+                        return SharedFieldKind::OptionSharedNiche(inner_info);
+                    }
                     return SharedFieldKind::OptionShared(inner_info);
                 }
                 // Plain shared T?
@@ -613,7 +620,9 @@ impl<'ctx> super::Codegen<'ctx> {
         // back here.
         for kind in &kinds {
             match kind {
-                SharedFieldKind::RecurseShared(info) | SharedFieldKind::OptionShared(info) => {
+                SharedFieldKind::RecurseShared(info)
+                | SharedFieldKind::OptionShared(info)
+                | SharedFieldKind::OptionSharedNiche(info) => {
                     if let Some(inner_name) = self.struct_name_for_heap_type(info.heap_type) {
                         if inner_name != struct_name && !self.rc_drop_fns.contains_key(&inner_name)
                         {
@@ -788,6 +797,47 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_unconditional_branch(inner_skip_bb)
                         .unwrap();
                     self.builder.position_at_end(inner_skip_bb);
+                    self.builder.build_unconditional_branch(skip_bb).unwrap();
+                    self.builder.position_at_end(skip_bb);
+                }
+                SharedFieldKind::OptionSharedNiche(inner_info) => {
+                    // Niche layout: the heap field is a single nullable
+                    // pointer. Same drop discipline as `RecurseShared`
+                    // (the conventional non-Option `shared T` field
+                    // arm) — load, null-check, dec_ref — but reached
+                    // via the source-level `Option[shared T]` field
+                    // type rather than a bare `shared T`. The 24-byte
+                    // saving over `OptionShared` is the niche-opt
+                    // payoff for self-referential / linked-list shapes.
+                    let field_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            heap_type,
+                            p_arg,
+                            heap_field_idx,
+                            &format!("rcdrop.niche{field_idx}.p"),
+                        )
+                        .unwrap();
+                    let inner = self
+                        .builder
+                        .build_load(ptr_ty, field_ptr, &format!("rcdrop.niche{field_idx}.ptr"))
+                        .unwrap()
+                        .into_pointer_value();
+                    let inner_is_null = self
+                        .builder
+                        .build_is_null(inner, &format!("rcdrop.niche{field_idx}.is_null"))
+                        .unwrap();
+                    let do_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("rcdrop.niche{field_idx}.do"));
+                    let skip_bb = self
+                        .context
+                        .append_basic_block(drop_fn, &format!("rcdrop.niche{field_idx}.skip"));
+                    self.builder
+                        .build_conditional_branch(inner_is_null, skip_bb, do_bb)
+                        .unwrap();
+                    self.builder.position_at_end(do_bb);
+                    self.emit_rc_dec(inner_info.heap_type, inner);
                     self.builder.build_unconditional_branch(skip_bb).unwrap();
                     self.builder.position_at_end(skip_bb);
                 }

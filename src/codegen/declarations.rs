@@ -22,6 +22,44 @@ use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
 
+/// Decide whether a shared-struct field's source type is `Option[T]` where
+/// `T` is itself a (known) shared struct — the precondition for niche-opt
+/// storage of the field as a single nullable pointer instead of the
+/// conventional 4-i64 Option enum. Pre-computed at `declare_structs` time
+/// from a name-set so self-referential / forward-reference shapes don't
+/// trip on declaration order. Returns the inner shared-struct name when
+/// eligible, `None` otherwise.
+fn niche_inner_name_if_eligible(
+    ty: &TypeExpr,
+    shared_struct_names: &std::collections::HashSet<String>,
+) -> Option<String> {
+    let outer_path = match &ty.kind {
+        TypeKind::Path(p) => p,
+        _ => return None,
+    };
+    if outer_path.segments.last().map(|s| s.as_str()) != Some("Option") {
+        return None;
+    }
+    let inner_te = outer_path
+        .generic_args
+        .as_ref()?
+        .iter()
+        .find_map(|a| match a {
+            GenericArg::Type(t) => Some(t),
+            _ => None,
+        })?;
+    let inner_path = match &inner_te.kind {
+        TypeKind::Path(p) => p,
+        _ => return None,
+    };
+    let inner_name = inner_path.segments.last()?;
+    if shared_struct_names.contains(inner_name) {
+        Some(inner_name.clone())
+    } else {
+        None
+    }
+}
+
 /// Body-splitting statement classification used by `emit_state_machine_poll_fns`.
 ///
 /// Slice 8h queued only arg-less void free-fn names per arm; slice 8j
@@ -128,12 +166,55 @@ impl<'ctx> super::Codegen<'ctx> {
     // ── Struct declaration pass ───────────────────────────────────
 
     pub(super) fn declare_structs(&mut self, program: &Program) {
+        // Pre-pass: collect names of all `shared struct`s in the program.
+        // Needed before per-field niche-eligibility check because
+        // self-referential / forward-reference shapes (`shared struct Node {
+        // next: Option[Node] }`, `shared struct A { ref_b: Option[B] }`
+        // where B is declared later) wouldn't find their target in
+        // `shared_types` yet — that map is populated in the same loop that
+        // emits heap layouts. Niche eligibility is purely a name check,
+        // so a name-set built first is sufficient.
+        let shared_struct_names: std::collections::HashSet<String> = program
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Item::StructDef(s) if s.is_shared => Some(s.name.clone()),
+                _ => None,
+            })
+            .collect();
+
         for item in &program.items {
             if let Item::StructDef(s) = item {
+                // Per-field niche-eligibility decision (only meaningful for
+                // shared structs — owned structs don't get an RC header so
+                // there's no heap-layout to compact). A field is niche if
+                // its source type is `Option[T]` with T a known shared
+                // struct (`shared_struct_names`), in which case the heap
+                // slot is a single `ptr` (null = None, non-null = Some)
+                // instead of the conventional 4-i64 Option layout. Saves
+                // 24 bytes/field — biggest win on small reference-
+                // semantics shapes like the ListNode kata.
+                let niche_option_fields: Vec<Option<String>> = if s.is_shared {
+                    s.fields
+                        .iter()
+                        .map(|f| niche_inner_name_if_eligible(&f.ty, &shared_struct_names))
+                        .collect()
+                } else {
+                    vec![None; s.fields.len()]
+                };
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
                 let field_types: Vec<BasicTypeEnum<'ctx>> = s
                     .fields
                     .iter()
-                    .map(|f| self.llvm_type_for_type_expr(&f.ty))
+                    .enumerate()
+                    .map(|(i, f)| {
+                        if s.is_shared && niche_option_fields[i].is_some() {
+                            // Niche-optimized Option[shared T] — store as ptr.
+                            ptr_ty.into()
+                        } else {
+                            self.llvm_type_for_type_expr(&f.ty)
+                        }
+                    })
                     .collect();
                 let names: Vec<String> = s.fields.iter().map(|f| f.name.clone()).collect();
                 // Per-field user-type name (last path segment if the
@@ -174,6 +255,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             heap_type,
                             field_names: names.clone(),
                             is_enum: false,
+                            niche_option_fields,
                         },
                     );
                     // Also register field names for field-index lookups.
@@ -2110,6 +2192,12 @@ impl<'ctx> super::Codegen<'ctx> {
                             heap_type,
                             field_names: vec![],
                             is_enum: true,
+                            // Shared enums don't carry user-named fields the
+                            // way shared structs do — the heap layout is
+                            // `{ rc, tag, w0, w1, ... }`, not per-field-
+                            // typed. Niche-opt applies to shared-struct
+                            // Option fields only; leave empty for enums.
+                            niche_option_fields: Vec::new(),
                         },
                     );
                 }

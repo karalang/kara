@@ -944,9 +944,11 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(v) => v.into_pointer_value(),
             Err(_) => return,
         };
-        // GEP to the Option-typed field; its layout is the seeded
-        // 4-i64 Option struct. Zero the whole field — tag = 0 (None)
-        // and payload words zeroed for hygiene.
+        // GEP to the Option-typed field. Layout depends on niche-opt:
+        //   - Niche  → slot is a single `ptr`; store `null`.
+        //   - Legacy → slot is the 4-i64 Option struct; zero the whole
+        //              field (tag = 0 (None) + payload words zeroed for
+        //              hygiene).
         let heap_field_idx = (field_idx + 1) as u32;
         let field_ptr = match self.builder.build_struct_gep(
             info.heap_type,
@@ -957,8 +959,16 @@ impl<'ctx> super::Codegen<'ctx> {
             Ok(p) => p,
             Err(_) => return,
         };
-        let option_ty = self.enum_layouts["Option"].llvm_type;
-        let _ = self.builder.build_store(field_ptr, option_ty.const_zero());
+        if self
+            .niche_field_inner_heap_type(&type_name, field_idx)
+            .is_some()
+        {
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+            let _ = self.builder.build_store(field_ptr, ptr_ty.const_null());
+        } else {
+            let option_ty = self.enum_layouts["Option"].llvm_type;
+            let _ = self.builder.build_store(field_ptr, option_ty.const_zero());
+        }
     }
 
     pub(super) fn suppress_source_vec_cleanup_for_arg(&self, arg_expr: &Expr) {

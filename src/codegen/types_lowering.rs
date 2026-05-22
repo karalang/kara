@@ -993,6 +993,131 @@ impl<'ctx> super::Codegen<'ctx> {
     /// pointer occupies w0 (per `coerce_to_payload_words(ptr, 3)`'s
     /// primitive fast path, which `ptr_to_int`s the pointer into w0
     /// and zero-fills w1/w2).
+    /// Niche-opt lookup: for a `shared struct` field, return the inner
+    /// shared struct's `heap_type` iff the field is stored as a niche-
+    /// optimized pointer (null = None, non-null = Some) rather than the
+    /// conventional 4-i64 Option enum. Returns `None` for conventional
+    /// fields. Decoupled from `option_inner_shared_type_for_type_expr`:
+    /// niche eligibility is decided at `declare_structs` time against a
+    /// pre-collected shared-struct name set; this getter looks up the
+    /// already-stamped per-field decision plus the inner type's current
+    /// `heap_type` (resolved via `shared_types`, so self-referential
+    /// shapes resolve symmetrically once both names are registered).
+    pub(crate) fn niche_field_inner_heap_type(
+        &self,
+        struct_name: &str,
+        field_idx: usize,
+    ) -> Option<StructType<'ctx>> {
+        let outer = self.shared_types.get(struct_name)?;
+        let inner_name = outer.niche_option_fields.get(field_idx)?.as_ref()?;
+        Some(self.shared_types.get(inner_name)?.heap_type)
+    }
+
+    /// Niche-opt field load: given the heap pointer to a niche-optimized
+    /// `Option[shared T]` slot, materialize a full 4-i64 Option struct
+    /// SSA value so downstream code (pattern match, RcDecOption cleanup,
+    /// chain-inc balancing) sees the same shape it sees for conventional
+    /// fields. Tag is derived from null-ness of the loaded pointer; w0
+    /// carries the pointer-as-i64; w1/w2 are zero.
+    pub(crate) fn niche_load_option_field(
+        &self,
+        field_ptr: inkwell::values::PointerValue<'ctx>,
+        name: &str,
+    ) -> BasicValueEnum<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let option_ty = self.enum_layouts["Option"].llvm_type;
+        let loaded_ptr = self
+            .builder
+            .build_load(ptr_ty, field_ptr, &format!("{name}.niche.ptr"))
+            .unwrap()
+            .into_pointer_value();
+        let is_null = self
+            .builder
+            .build_is_null(loaded_ptr, &format!("{name}.niche.is_null"))
+            .unwrap();
+        let is_some = self
+            .builder
+            .build_not(is_null, &format!("{name}.niche.is_some"))
+            .unwrap();
+        let tag = self
+            .builder
+            .build_int_z_extend(is_some, i64_t, &format!("{name}.niche.tag"))
+            .unwrap();
+        let w0 = self
+            .builder
+            .build_ptr_to_int(loaded_ptr, i64_t, &format!("{name}.niche.w0"))
+            .unwrap();
+        // Start from `const_zero` so w1/w2 are already 0; only fill tag and w0.
+        let mut val: inkwell::values::StructValue<'ctx> = option_ty.const_zero();
+        val = self
+            .builder
+            .build_insert_value(val, tag, 0, &format!("{name}.niche.opt.tag"))
+            .unwrap()
+            .into_struct_value();
+        val = self
+            .builder
+            .build_insert_value(val, w0, 1, &format!("{name}.niche.opt.w0"))
+            .unwrap()
+            .into_struct_value();
+        val.into()
+    }
+
+    /// Niche-opt field store: convert a 4-i64 Option struct SSA value
+    /// into the single pointer the niche slot expects. Used by callers
+    /// that have already handled refcount bookkeeping (old-side dec,
+    /// new-side inc) — this helper does the byte-level write only.
+    ///
+    /// Tag-aware: when `tag == None`, stores `null` regardless of `w0`.
+    /// `None` values are built as `get_undef()` + tag store (see
+    /// `try_compile_enum_variant`'s non-shared branch) so `w0`/`w1`/`w2`
+    /// are LLVM `undef` for None. The conventional path doesn't care
+    /// (consumers gate on tag), but a niche store that copies undef as
+    /// a ptr lets it materialize as any value, including a non-null
+    /// one that breaks downstream null-as-None reads.
+    pub(crate) fn niche_store_option_field(
+        &self,
+        field_ptr: inkwell::values::PointerValue<'ctx>,
+        new_val: BasicValueEnum<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let sv = new_val.into_struct_value();
+        let tag = self
+            .builder
+            .build_extract_value(sv, 0, "niche.store.tag")
+            .unwrap()
+            .into_int_value();
+        let w0 = self
+            .builder
+            .build_extract_value(sv, 1, "niche.store.w0")
+            .unwrap()
+            .into_int_value();
+        let some_tag = self
+            .enum_layouts
+            .get("Option")
+            .and_then(|l| l.tags.get("Some").copied())
+            .unwrap_or(1);
+        let is_some = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                tag,
+                i64_t.const_int(some_tag, false),
+                "niche.store.is_some",
+            )
+            .unwrap();
+        let ptr_from_w0 = self
+            .builder
+            .build_int_to_ptr(w0, ptr_ty, "niche.store.ptr_some")
+            .unwrap();
+        let new_ptr = self
+            .builder
+            .build_select(is_some, ptr_from_w0, ptr_ty.const_null(), "niche.store.ptr")
+            .unwrap();
+        self.builder.build_store(field_ptr, new_ptr).unwrap();
+    }
+
     pub(super) fn option_inner_shared_type_for_type_expr(
         &self,
         te: &TypeExpr,
