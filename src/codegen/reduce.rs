@@ -84,6 +84,19 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(None);
         };
 
+        // Collect-style reduction lowering is Phase 3 work (per
+        // phase-7-codegen.md "collect-style if-cond push reduction"). The
+        // analyzer emits `ReductionOp::Collect` for `#[par_unordered]`
+        // loops with an `acc.push(x)` body, but the codegen + runtime
+        // surface (per-worker partial Vec slots, `__karac_reduce_combine_collect_<ty>`
+        // helper) hasn't shipped yet. Fall through to sequential codegen;
+        // the analyzer's recognition still surfaces in `--concurrency-report`
+        // so users can see the shape is recognised without yet getting the
+        // parallel speedup.
+        if reduction.op == ReductionOp::Collect {
+            return Ok(None);
+        }
+
         // Unpack the loop expression. Two shapes supported in v1:
         //   - `for k in 0..hi { ... }` (slice 3b)
         //   - `while k < hi { ...; k = k + 1; }` (slice 3b.4)
@@ -751,6 +764,10 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap()
                     .into_int_value()
             }
+            // Collect's combine is heap-Vec extend, not a single LLVM
+            // instruction. Guarded out by `try_emit_reduction_lowering`'s
+            // early-return; unreachable in Phase 2.
+            ReductionOp::Collect => unreachable!("Collect bypasses int combine"),
         }
     }
 
@@ -1398,6 +1415,10 @@ fn reduce_op_short_name(op: ReductionOp) -> &'static str {
         ReductionOp::BitXor => "bitxor",
         ReductionOp::Min => "min",
         ReductionOp::Max => "max",
+        // Collect is short-circuited in `try_emit_reduction_lowering`
+        // before reaching the helper-naming path; this arm is here for
+        // exhaustiveness so an accidental future caller fails-loud.
+        ReductionOp::Collect => "collect",
     }
 }
 
@@ -1432,6 +1453,13 @@ fn reduce_identity<'ctx>(op: ReductionOp, int_ty: IntType<'ctx>) -> IntValue<'ct
         ReductionOp::BitAnd => int_ty.const_all_ones(),
         ReductionOp::Min => signed_int_max(int_ty),
         ReductionOp::Max => signed_int_min(int_ty),
+        // Collect's identity is an empty container (`Vec.new()`), not an
+        // integer — Collect reductions take the heap-allocated path
+        // shipped in Phase 3 and never reach the integer-identity helper.
+        // `try_emit_reduction_lowering`'s early-return for Collect is
+        // what guards this; this arm is unreachable in Phase 2 and exists
+        // only for match exhaustiveness.
+        ReductionOp::Collect => unreachable!("Collect bypasses int identity"),
     }
 }
 

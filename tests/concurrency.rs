@@ -1620,6 +1620,208 @@ fn test_reduction_rejects_conditional_acc_update_with_extra_stmt_in_then() {
     );
 }
 
+// ── Collect-style reduction recognition (slice: par-unordered Phase 2, 2026-05-20) ──
+// `#[par_unordered] while ... { ...acc.push(x)... }` — the analyzer
+// recognizes `acc.push(x)` (bare) and `if cond { acc.push(x); }`
+// (conditional) shapes as `ReductionOp::Collect` only when the
+// enclosing loop carries the `#[par_unordered]` attribute. Without the
+// opt-in, the same shape falls through to "no parallelization
+// opportunities detected" because per-worker partial-Vec concat
+// produces worker-order output, not iteration-order — a semantic
+// surprise the user must opt into explicitly.
+
+#[test]
+fn test_reduction_recognized_for_bare_push_when_par_unordered() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            #[par_unordered]
+            while k < 100i64 {
+                results.push(k);
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "bare push with par_unordered must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert_eq!(r.accumulator, "results");
+    assert_eq!(r.op, ReductionOp::Collect);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_push_when_par_unordered() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            #[par_unordered]
+            while k < 100i64 {
+                if k > 5i64 {
+                    results.push(k);
+                }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(
+        main_fc.loop_reductions.len(),
+        1,
+        "conditional push with par_unordered must be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+    let r = &main_fc.loop_reductions[0];
+    assert_eq!(r.accumulator, "results");
+    assert_eq!(r.op, ReductionOp::Collect);
+}
+
+#[test]
+fn test_reduction_recognized_for_conditional_push_with_empty_else() {
+    // Empty else passes through the same matcher path as the no-else
+    // case (mirror of conditional_acc_update_shape's empty-else
+    // acceptance).
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            #[par_unordered]
+            while k < 100i64 {
+                if k > 5i64 { results.push(k); } else { }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert_eq!(main_fc.loop_reductions.len(), 1);
+    assert_eq!(main_fc.loop_reductions[0].accumulator, "results");
+    assert_eq!(main_fc.loop_reductions[0].op, ReductionOp::Collect);
+}
+
+#[test]
+fn test_reduction_rejects_bare_push_without_par_unordered() {
+    // Same source as the bare-push-recognized test above but with the
+    // attribute removed — the same `results.push(k)` body that
+    // *would* be recognized under opt-in must fall through to "no
+    // reduction" without the attribute. This is the key safety
+    // property: collect-style auto-par requires explicit user opt-in.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                results.push(k);
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "bare push without par_unordered must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_conditional_push_without_par_unordered() {
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut k: i64 = 0i64;
+            while k < 100i64 {
+                if k > 5i64 { results.push(k); }
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "conditional push without par_unordered must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_push_on_let_introduced_acc() {
+    // `let mut local: Vec[i64] = Vec.new();` *inside* the loop body
+    // creates a body-local accumulator — pushing into it isn't loop-
+    // carried; same shape that's already rejected for scalar
+    // reductions (see `test_reduction_recognized_for_two_arm_acc_update_same_op`'s
+    // `let_introduced` guard). Even with the par_unordered opt-in,
+    // body-local accumulators don't fan out across workers.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut k: i64 = 0i64;
+            #[par_unordered]
+            while k < 100i64 {
+                let mut local: Vec[i64] = Vec.new();
+                local.push(k);
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "body-local push must not be recognized, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
+#[test]
+fn test_reduction_rejects_mixed_push_and_scalar_accumulator() {
+    // Two distinct accumulators per iter — one Collect, one Add. The
+    // single-accumulator contract is preserved: the matcher returns
+    // None when reductions of different kinds appear in the same loop.
+    // The scalar accumulator uses `total = total + k` (sum of loop
+    // indices) rather than `total += 1i64`, because the `acc + const_lit`
+    // form is special-cased upstream as the loop-counter (induction-step)
+    // shape and is *ignored* by the matcher rather than treated as a
+    // competing reduction — that case doesn't actually exercise the
+    // mixed-acc rejection path.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let mut results: Vec[i64] = Vec.new();
+            let mut total: i64 = 0i64;
+            let mut k: i64 = 0i64;
+            #[par_unordered]
+            while k < 100i64 {
+                results.push(k);
+                total = total + k;
+                k = k + 1i64;
+            }
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    assert!(
+        main_fc.loop_reductions.is_empty(),
+        "mixed Collect+Add must not be recognized as a single reduction, got {:?}",
+        main_fc.loop_reductions
+    );
+}
+
 // ── Nested-binary chain recognition (slice: chain recognizer, 2026-05-20) ──
 // `sum = sum + a + b` parses left-associatively as
 // `Binary(+, Binary(+, sum, a), b)`. Today's `reduction_binary_shape`

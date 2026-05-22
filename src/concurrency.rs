@@ -184,6 +184,19 @@ pub struct FunctionConcurrency {
 /// Int-only allow-list per the roadmap entry; float `+`/`*` are deferred
 /// to v1.x behind an `#[fp_reassoc]` opt-in because IEEE-754 addition is
 /// not associative and per-thread combine order would break determinism.
+///
+/// `Collect` is a different reduction kind from the scalar ops: it
+/// represents a Vec/String/Buffer accumulator that *collects* per-iter
+/// contributions via `acc.push(x)` rather than scalar-folding. The
+/// combine model concatenates per-worker partial buffers, which produces
+/// worker-order output (not iteration-order). For this reason the
+/// analyzer only recognizes `Collect` when the enclosing loop carries
+/// the `#[par_unordered]` attribute — an explicit user opt-in to the
+/// unordered-output property. See `phase-7-codegen.md` collect-style
+/// reduction entry for the full design + slice plan. Codegen lowering
+/// is Phase 3 and not yet implemented; for now `try_emit_reduction_lowering`
+/// returns `Ok(None)` on a `Collect` reduction and the loop falls back
+/// to sequential codegen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReductionOp {
     Add,
@@ -193,6 +206,7 @@ pub enum ReductionOp {
     BitXor,
     Min,
     Max,
+    Collect,
 }
 
 impl ReductionOp {
@@ -207,6 +221,7 @@ impl ReductionOp {
             ReductionOp::BitXor => "^",
             ReductionOp::Min => "min",
             ReductionOp::Max => "max",
+            ReductionOp::Collect => "collect",
         }
     }
 
@@ -468,13 +483,19 @@ impl<'a> ConcurrencyChecker<'a> {
             let StmtKind::Expr(expr) = &stmt.kind else {
                 continue;
             };
-            let body = match &expr.kind {
-                ExprKind::For { body, .. }
-                | ExprKind::While { body, .. }
-                | ExprKind::Loop { body, .. } => body,
+            let (body, attributes) = match &expr.kind {
+                ExprKind::For {
+                    body, attributes, ..
+                }
+                | ExprKind::While {
+                    body, attributes, ..
+                }
+                | ExprKind::Loop {
+                    body, attributes, ..
+                } => (body, attributes.as_slice()),
                 _ => continue,
             };
-            if let Some((accumulator, op)) = self.classify_loop_body(body) {
+            if let Some((accumulator, op)) = self.classify_loop_body(body, attributes) {
                 out.push(LoopReduction {
                     accumulator,
                     op,
@@ -494,7 +515,16 @@ impl<'a> ConcurrencyChecker<'a> {
     /// alongside as loop-counter steps). Returns `None` for any other
     /// shape: multiple distinct accumulators, mixed ops, non-reduction
     /// writes, or writes nested inside `if`/`else`/inner-loop branches.
-    fn classify_loop_body(&self, body: &Block) -> Option<(String, ReductionOp)> {
+    fn classify_loop_body(
+        &self,
+        body: &Block,
+        attributes: &[Attribute],
+    ) -> Option<(String, ReductionOp)> {
+        // `#[par_unordered]` opts into the collect-shape recognizer
+        // (`acc.push(x)` and `if cond { acc.push(x); }`). Other loops
+        // see only the scalar-reduction shapes. See
+        // `phase-7-codegen.md` collect-style follow-on for the design.
+        let par_unordered = attributes.iter().any(|a| a.is_bare("par_unordered"));
         // Names freshly introduced inside the loop body. Writes to these
         // are body-scoped and not loop-carried.
         let mut let_introduced: HashSet<String> = HashSet::new();
@@ -613,6 +643,51 @@ impl<'a> ConcurrencyChecker<'a> {
                         }
                         continue;
                     }
+                    // Collect-style recognition (Phase 2 — gated on
+                    // `#[par_unordered]`). Two shapes:
+                    //   acc.push(EXPR)                                  (bare)
+                    //   if cond { acc.push(EXPR); }                     (conditional)
+                    // The combine model is per-worker partial Vecs
+                    // concat'd in worker-order, so the output ordering
+                    // differs from iteration-order — the attribute is
+                    // the user's explicit opt-in to that property. Push
+                    // arg expressions are accepted as-is (no acc-read
+                    // restriction inside them is needed for correctness:
+                    // the arg is per-iter data, evaluated within the
+                    // worker's slice, never folded with sibling workers'
+                    // partials before final concat).
+                    if par_unordered {
+                        if let Some(name) = collect_push_shape(expr) {
+                            if let_introduced.contains(&name) {
+                                continue;
+                            }
+                            match reduction {
+                                None => reduction = Some((name, ReductionOp::Collect)),
+                                Some((ref existing_name, existing_op)) => {
+                                    if existing_name != &name || existing_op != ReductionOp::Collect
+                                    {
+                                        return None;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                        if let Some(name) = self.conditional_collect_shape(expr) {
+                            if let_introduced.contains(&name) {
+                                continue;
+                            }
+                            match reduction {
+                                None => reduction = Some((name, ReductionOp::Collect)),
+                                Some((ref existing_name, existing_op)) => {
+                                    if existing_name != &name || existing_op != ReductionOp::Collect
+                                    {
+                                        return None;
+                                    }
+                                }
+                            }
+                            continue;
+                        }
+                    }
                     // Else: any inner write to an outer-scope name (via
                     // nested if/else or inner loop) breaks the simple-
                     // reduction recognition; defer multi-write loops to a
@@ -665,6 +740,33 @@ impl<'a> ConcurrencyChecker<'a> {
                         }
                     }
                 }
+            } else if par_unordered {
+                // Mirror of the StmtKind::Expr collect-shape arm above.
+                // Trailing-expression position (no semicolon on the last
+                // collect step) — analogous to `conditional_minmax_shape`
+                // landing in both stmt + final_expr positions.
+                if let Some(name) =
+                    collect_push_shape(e).or_else(|| self.conditional_collect_shape(e))
+                {
+                    if !let_introduced.contains(&name) {
+                        match reduction {
+                            None => reduction = Some((name, ReductionOp::Collect)),
+                            Some((ref existing_name, existing_op)) => {
+                                if existing_name != &name || existing_op != ReductionOp::Collect {
+                                    return None;
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let mut inner_writes = HashSet::new();
+                    self.collect_expr_inner_writes(e, &mut inner_writes);
+                    for w in &inner_writes {
+                        if !let_introduced.contains(w) {
+                            return None;
+                        }
+                    }
+                }
             } else {
                 let mut inner_writes = HashSet::new();
                 self.collect_expr_inner_writes(e, &mut inner_writes);
@@ -677,6 +779,49 @@ impl<'a> ConcurrencyChecker<'a> {
         }
 
         reduction
+    }
+
+    /// Recognize the conditional collect shape:
+    ///
+    ///   if cond { acc.push(EXPR); }
+    ///   if cond { acc.push(EXPR); } else { /* empty */ }
+    ///
+    /// Returns `Some(acc_name)` when the if-stmt wraps a single
+    /// `acc.push(_)` method call. Like the conditional-acc-update
+    /// helper, the else-branch must be absent OR an empty block; a
+    /// two-arm version (push different values in each arm) is left to
+    /// a follow-on if a workload surfaces it. The condition is **not**
+    /// required to be acc-free here — `acc.len()` queries inside the
+    /// condition are workload-relative but never read partial state
+    /// across workers, since each worker's local Vec is independent
+    /// until the final concat. The combine model treats every push as
+    /// contributing one element to the parent's Vec; ordering is
+    /// already worker-driven, so the condition's per-iter timing
+    /// doesn't add an extra ordering hazard.
+    fn conditional_collect_shape(&self, expr: &Expr) -> Option<String> {
+        let ExprKind::If {
+            condition: _,
+            then_block,
+            else_branch,
+        } = &expr.kind
+        else {
+            return None;
+        };
+        if let Some(else_expr) = else_branch {
+            let ExprKind::Block(b) = &else_expr.kind else {
+                return None;
+            };
+            if !b.stmts.is_empty() || b.final_expr.is_some() {
+                return None;
+            }
+        }
+        if then_block.stmts.len() != 1 || then_block.final_expr.is_some() {
+            return None;
+        }
+        let StmtKind::Expr(inner) = &then_block.stmts[0].kind else {
+            return None;
+        };
+        collect_push_shape(inner)
     }
 
     /// Recognize the conditional-accumulator-update shape:
@@ -2151,4 +2296,37 @@ fn single_stmt_block_as_acc_update(block: &Block) -> Option<(String, ReductionOp
         return None;
     }
     single_stmt_as_acc_update(&block.stmts[0])
+}
+
+/// Recognize the collect-step shape: `acc.push(EXPR)` where `acc` is a
+/// bare identifier (no field / index / chain receivers). Returns
+/// `Some(acc_name)` on a match; `None` otherwise.
+///
+/// Generic-arg lists on `push` (`acc.push[T](x)`) are accepted only with
+/// no args — the `push` method has no useful generic args today; the
+/// matcher is shape-only and doesn't validate `acc`'s type. The codegen
+/// layer (Phase 3) is responsible for confirming `acc: Vec[T]` /
+/// `String` / similar; non-matching types fall through to sequential
+/// code as a natural consequence of the codegen-side type check.
+///
+/// The single-arg requirement is the canonical `Vec::push(x)` shape; if
+/// future workloads need `push_many(values)` or other multi-arg
+/// collectors, the matcher can be extended.
+fn collect_push_shape(expr: &Expr) -> Option<String> {
+    let ExprKind::MethodCall {
+        object,
+        method,
+        args,
+        ..
+    } = &expr.kind
+    else {
+        return None;
+    };
+    if method != "push" || args.len() != 1 {
+        return None;
+    }
+    let ExprKind::Identifier(name) = &object.kind else {
+        return None;
+    };
+    Some(name.clone())
 }
