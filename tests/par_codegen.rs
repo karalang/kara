@@ -466,6 +466,148 @@ fn main() {
         );
     }
 
+    // ── Slice 3 audit: cancel-check granularity at non-call sites ──────
+    //
+    // Slice 3 (Phase 7 line 67) audited every non-call IR shape in the
+    // codegen pipeline against the cooperative-cancel design intent. The
+    // conclusion: all v1 observable effects route through either
+    // `compile_call` (`src/codegen/call_dispatch.rs:87`) or
+    // `compile_method_call` (`src/codegen/method_call.rs:37`), both of
+    // which emit `emit_branch_cancel_check` unconditionally at entry.
+    // Non-call IR shapes — raw `build_load` / `build_store` for struct
+    // field access (`compile_field_access` / `compile_field_store`),
+    // index access (`compile_index_load` / `compile_index_store`),
+    // tuple-extract — do NOT carry cancel checks. This matches the v1
+    // semantics where effect verbs (`reads`/`writes`/`sends`/`receives`)
+    // are declared on FUNCTIONS rather than per-operation: a par-branch
+    // calling a `writes(R)` method gets the check at the call site, and
+    // the field stores inside the callee aren't checked again. The
+    // following tests pin that invariant so a future codegen change
+    // (e.g. inlining a method body inline into the par-branch fn, or
+    // emitting raw runtime intrinsics that bypass the call helpers)
+    // doesn't silently regress the contract.
+
+    #[test]
+    fn test_ir_par_branch_field_access_does_not_add_cancel_check() {
+        // Pin: raw struct field reads inside a par-branch lower to
+        // `build_extract_value` / `build_struct_gep` + `build_load` and
+        // do NOT contribute mid-branch cancel checks. Only the
+        // surrounding effectful call site emits a check. Each branch's
+        // body is a single block expression so the field reads and the
+        // helper call all compile inside the same par-branch fn.
+        let ir = ir_for_with_pipeline(
+            r#"
+effect resource Log;
+fn helper(n: i64) -> i64 writes(Log) { n + 1 }
+struct Pair { a: i64, b: i64 }
+fn main() {
+    par {
+        let _ = {
+            let p = Pair { a: 1_i64, b: 2_i64 };
+            let r1 = p.a;
+            let r2 = p.b;
+            let r3 = helper(p.a);
+            let r4 = p.a;
+            r4
+        };
+        let _ = {
+            let q = Pair { a: 3_i64, b: 4_i64 };
+            let s1 = q.b;
+            let s2 = q.a;
+            let s3 = helper(q.b);
+            s3
+        };
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 2,
+            "field reads inside par-branch must not add cancel checks; \
+             expected exactly 2 (one per helper() call), found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_indexing_does_not_add_cancel_check() {
+        // Pin: index access (`arr[i]`) inside a par-branch lowers to a
+        // bounds-checked GEP + load and does NOT contribute mid-branch
+        // cancel checks at the indexing IR site. The effectchecker
+        // tracks `arr[i]` as carrying a synthetic `__builtin_index` call
+        // with `panics` effect for bounds-check failure, but that
+        // synthetic call is not materialised as a real LLVM call — it's
+        // an inline bounds compare + abort. In v1's panic semantics,
+        // panic aborts the process (no graceful Err-path interaction
+        // with the cancel flag), so the missing check is by design.
+        // Each branch is one block expression; the array is built
+        // inside the branch so the capture story stays simple.
+        let ir = ir_for_with_pipeline(
+            r#"
+effect resource Log;
+fn helper(n: i64) -> i64 writes(Log) { n + 1 }
+fn main() {
+    par {
+        let _ = {
+            let arr = [10_i64, 20_i64, 30_i64];
+            let x = arr[0];
+            let y = arr[1];
+            let z = helper(arr[0]);
+            z
+        };
+        let _ = {
+            let brr = [40_i64, 50_i64, 60_i64];
+            let u = brr[2];
+            let v = helper(brr[1]);
+            v
+        };
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 2,
+            "index reads inside par-branch must not add cancel checks; \
+             expected exactly 2 (one per helper() call), found {total}; IR:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_ir_par_branch_literal_only_no_mid_branch_cancel_check() {
+        // Pin: a par-branch whose body materialises only literals (no
+        // binops, no calls, no field/index access) emits ZERO
+        // mid-branch cancel checks. The entry-time check at branch
+        // start still runs (it's the early-return cancellation path,
+        // not counted by `count_branch_cancel_checks` which keys on
+        // the `call.cancel.flag = load` instruction unique to
+        // per-call-site checks). This locks in the corollary of the
+        // audit: with no call sites and no non-call effect-bearing
+        // IR shapes in the body, no mid-branch checks fire. Note
+        // that binops like `1 + 2` are NOT literal-only — the
+        // lowering pass rewrites them to `i64.add(1, 2)` calls
+        // (`src/lowering.rs`), which DO trip cancel checks via the
+        // standard call path, so we restrict this test to plain
+        // literals.
+        let ir = ir_for_with_pipeline(
+            r#"
+fn main() {
+    par {
+        let _ = 1_i64;
+        let _ = 2_i64;
+        let _ = 3_i64;
+    }
+}
+"#,
+        );
+        let total = count_branch_cancel_checks(&ir);
+        assert_eq!(
+            total, 0,
+            "literal-only par-branches must not emit mid-branch cancel checks; \
+             found {total}; IR:\n{ir}"
+        );
+    }
+
     /// Slice 1a (Phase 7 — Par codegen: cancellation and error
     /// propagation, 2026-05-18). A par-block branch whose let-statement
     /// carries an explicit `Result[T, E]` type annotation must (a)
