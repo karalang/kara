@@ -39,6 +39,115 @@ impl<'ctx> super::Codegen<'ctx> {
                 let len = self.builder.build_load(i64_t, len_ptr, "vec.len").unwrap();
                 Ok(len)
             }
+            // `String.starts_with(prefix: String) -> bool`. The typechecker
+            // arm in `stdlib_seq.rs::infer_str_method` accepts this only on
+            // `Type::Str` receivers, but the codegen lives here because
+            // Strings share the `{ptr, len, cap}` shape with `Vec[T]` and
+            // route through `compile_vec_method` for `.len()` and friends.
+            // Implementation: load `recv.len`, evaluate the prefix String,
+            // extract `prefix.len`; short-circuit to `false` when
+            // `recv.len < prefix.len`; otherwise `memcmp(recv.data,
+            // prefix.data, prefix.len) == 0`. Uses the same `self.memcmp_fn`
+            // declared in `Codegen::new` that `compile_string_binop` uses
+            // for the `==` operator.
+            "starts_with" => {
+                if args.is_empty() {
+                    return Err("String.starts_with requires a prefix argument".to_string());
+                }
+                let bool_t = self.context.bool_type();
+                let i32_t = self.context.i32_type();
+
+                // Receiver: load data ptr + len from {ptr, len, cap}.
+                let recv_data_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "sw.recv.ptr.p")
+                    .unwrap();
+                let recv_data = self
+                    .builder
+                    .build_load(ptr_ty, recv_data_ptr, "sw.recv.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let recv_len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "sw.recv.len.p")
+                    .unwrap();
+                let recv_len = self
+                    .builder
+                    .build_load(i64_t, recv_len_ptr, "sw.recv.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // Prefix: evaluate the arg; expect a String struct value.
+                let prefix_val = self.compile_expr(&args[0].value)?;
+                let prefix_struct = prefix_val.into_struct_value();
+                let prefix_data = self
+                    .builder
+                    .build_extract_value(prefix_struct, 0, "sw.prefix.ptr")
+                    .unwrap()
+                    .into_pointer_value();
+                let prefix_len = self
+                    .builder
+                    .build_extract_value(prefix_struct, 1, "sw.prefix.len")
+                    .unwrap()
+                    .into_int_value();
+
+                // recv_len >= prefix_len?
+                let has_len = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGE,
+                        recv_len,
+                        prefix_len,
+                        "sw.has_len",
+                    )
+                    .unwrap();
+
+                let fn_val = self.current_fn.unwrap();
+                let cmp_bb = self.context.append_basic_block(fn_val, "sw.cmp");
+                let cont_bb = self.context.append_basic_block(fn_val, "sw.cont");
+
+                // Result slot: i1, default false (taken when has_len is false).
+                let result_slot = self.create_entry_alloca(fn_val, "sw.result", bool_t.into());
+                self.builder
+                    .build_store(result_slot, bool_t.const_zero())
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(has_len, cmp_bb, cont_bb)
+                    .unwrap();
+
+                // memcmp(recv.data, prefix.data, prefix.len) — compare the
+                // first prefix.len bytes. memcmp returns 0 iff equal.
+                self.builder.position_at_end(cmp_bb);
+                let cmp_result = self
+                    .builder
+                    .build_call(
+                        self.memcmp_fn,
+                        &[recv_data.into(), prefix_data.into(), prefix_len.into()],
+                        "sw.memcmp",
+                    )
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_int_value();
+                let is_eq = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::EQ,
+                        cmp_result,
+                        i32_t.const_zero(),
+                        "sw.eq",
+                    )
+                    .unwrap();
+                self.builder.build_store(result_slot, is_eq).unwrap();
+                self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+                self.builder.position_at_end(cont_bb);
+                let result = self
+                    .builder
+                    .build_load(bool_t, result_slot, "sw.load")
+                    .unwrap();
+                Ok(result)
+            }
             // VecDeque codegen alias: `push_back` is identical to Vec
             // `push` (append at index `len`); the VecDeque interpreter
             // ship at `4227e21` documented this front/back-shared

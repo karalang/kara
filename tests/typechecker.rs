@@ -9108,6 +9108,41 @@ fn test_string_chars_rejects_arguments() {
 }
 
 #[test]
+fn test_string_starts_with_returns_bool() {
+    // `String.starts_with(prefix: String) -> bool`. Filed and shipped
+    // 2026-05-21 to unblock backend-kata path routing.
+    let result = typecheck_ok(
+        r#"fn f() -> bool {
+            let s = "/todos/42";
+            s.starts_with("/todos/")
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
+fn test_string_starts_with_rejects_zero_args() {
+    let errors = typecheck_errors(r#"fn f() { let s = "x"; s.starts_with(); }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "Expected WrongNumberOfArgs for starts_with with no args, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_string_starts_with_rejects_non_string_arg() {
+    let errors = typecheck_errors(r#"fn f() { let s = "x"; s.starts_with(42); }"#);
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "Expected TypeMismatch for starts_with with i64 arg, got: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_string_bytes_returns_slice_u8() {
     // `String.bytes()` returns the `Slice[u8]` view design.md §
     // Character type points programmers at for O(1) byte-positional

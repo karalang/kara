@@ -6225,6 +6225,21 @@ fn test_string_chars_empty_iterates_zero_times() {
 }
 
 #[test]
+fn test_string_starts_with_interpreter() {
+    // Mirrors the four-case probe at
+    // `/tmp/kara-probes/starts_with_probe.kara`: match / mismatch /
+    // prefix-longer-than-receiver / empty-prefix.
+    let output = run(r#"fn main() {
+            let s = "/todos/42";
+            if s.starts_with("/todos/") { println("yes"); } else { println("no"); }
+            if s.starts_with("/foo") { println("yes2"); } else { println("no2"); }
+            if s.starts_with("/todos/42/extra") { println("yes3"); } else { println("no3"); }
+            if s.starts_with("") { println("yes4"); } else { println("no4"); }
+        }"#);
+    assert_eq!(output, "yes\nno2\nno3\nyes4\n");
+}
+
+#[test]
 fn test_string_chars_with_map_char_as_key() {
     // Locks down the LeetCode #3 idiom — chars feeding a Map[char, i64]
     // last-index map. The sliding-window kata is the natural-pull that

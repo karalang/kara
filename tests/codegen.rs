@@ -19346,4 +19346,68 @@ fn main() {
         .expect("compile + run failed");
         assert_eq!(output.trim(), "AAA\nBBB\nCCC\n404");
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // String.starts_with — typechecker arm + interpreter dispatch +
+    // codegen dispatch (shipped 2026-05-21).
+    //
+    // String and Vec share the `{ptr, len, cap}` layout, so String
+    // method calls route through `compile_vec_method`. The codegen
+    // arm short-circuits to `false` when `recv.len < prefix.len`,
+    // otherwise reuses `self.memcmp_fn` (the same memcmp used by
+    // String `==`) to compare the first `prefix.len` bytes.
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_string_starts_with_basic() {
+        let output = run_program(
+            "fn main() {\n\
+                 let s: String = \"/todos/42\";\n\
+                 if s.starts_with(\"/todos/\") { println(\"yes\"); } else { println(\"no\"); }\n\
+                 if s.starts_with(\"/foo\") { println(\"yes2\"); } else { println(\"no2\"); }\n\
+                 if s.starts_with(\"/todos/42/extra\") { println(\"yes3\"); } else { println(\"no3\"); }\n\
+                 if s.starts_with(\"\") { println(\"yes4\"); } else { println(\"no4\"); }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output.trim(), "yes\nno2\nno3\nyes4");
+    }
+
+    #[test]
+    fn test_ir_string_starts_with_uses_memcmp() {
+        let ir = ir_for(
+            "fn matches(s: String, p: String) -> bool {\n\
+                 s.starts_with(p)\n\
+             }",
+        );
+        assert!(
+            ir.contains("call i32 @memcmp") || ir.contains("call ptr @memcmp"),
+            "String.starts_with should emit memcmp:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_string_starts_with_function_return_receiver_bound() {
+        // The kata's natural form: receiver comes from a function-call
+        // result (`req.path()` returning a fresh owned String), bound
+        // to an annotated identifier first. Two related codegen gaps
+        // sit just outside this slice and would need their own
+        // follow-ups: (a) chained `path().starts_with(...)` on a
+        // non-identifier receiver, and (b) bare `let p = path();`
+        // without the `: String` annotation (`pattern_binding_types`
+        // doesn't yet write "String" for inferred bindings, so
+        // `vec_elem_types` doesn't register and the dispatch falls
+        // through). Both affect every Vec/String method on
+        // function-return receivers, not just `starts_with`. The
+        // annotated bind form `let p: String = path();` works.
+        let output = run_program(
+            "fn path() -> String { \"/todos/42\" }\n\
+             fn main() {\n\
+                 let p: String = path();\n\
+                 if p.starts_with(\"/todos/\") { println(\"hit\"); } else { println(\"miss\"); }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output.trim(), "hit");
+    }
 }

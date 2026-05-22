@@ -160,6 +160,33 @@ impl<'a> super::TypeChecker<'a> {
                     mutable: false,
                 }
             }
+            "starts_with" => {
+                // starts_with(prefix: String) -> bool. Returns true iff
+                // the receiver's bytes begin with prefix's bytes.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'starts_with' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'starts_with' expects a String prefix, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Bool
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name, silent otherwise (`len`, `contains`, `is_empty`,
             // … are runtime-only and not yet wired through the typechecker).
@@ -169,7 +196,7 @@ impl<'a> super::TypeChecker<'a> {
             _ => self.require_known_method(
                 "String",
                 method,
-                &["bytes", "chars", "sorted", "sorted_by"],
+                &["bytes", "chars", "sorted", "sorted_by", "starts_with"],
                 args,
                 span,
             ),
