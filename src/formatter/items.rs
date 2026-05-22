@@ -60,6 +60,7 @@ impl super::Formatter {
                 self.writeln(&format!("{vis}import {rendered};"));
             }
             Item::ConstDecl(c) => self.format_const(c),
+            Item::ModuleBinding(b) => self.format_module_binding(b),
             Item::AliasDecl(a) => {
                 self.writeln(&format!(
                     "alias {} = {};",
@@ -702,6 +703,22 @@ impl super::Formatter {
         self.format_type_expr(&c.ty);
         self.write_str(" = ");
         self.format_expr(&c.value);
+        self.write_str(";\n");
+    }
+
+    // ── Module-Level Bindings ───────────────────────────────────
+
+    pub(super) fn format_module_binding(&mut self, b: &ModuleBinding) {
+        self.write_indent();
+        self.write_visibility(b.visibility());
+        self.write_str(if b.is_mut { "let mut " } else { "let " });
+        self.write_ident(&b.name);
+        if let Some(ref ty) = b.ty {
+            self.write_str(": ");
+            self.format_type_expr(ty);
+        }
+        self.write_str(" = ");
+        self.format_expr(&b.value);
         self.write_str(";\n");
     }
 

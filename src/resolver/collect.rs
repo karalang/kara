@@ -46,6 +46,7 @@ impl<'a> super::Resolver<'a> {
                 Item::EffectGroup(e) => self.collect_effect_group(e),
                 Item::EffectVerbDecl(e) => self.collect_effect_verb(e),
                 Item::ConstDecl(c) => self.collect_const(c),
+                Item::ModuleBinding(b) => self.collect_module_binding(b),
                 Item::TypeAlias(t) => self.collect_type_alias(t),
                 Item::UseDecl(u) => self.collect_use(u),
                 Item::Import(i) => self.collect_import(i),
@@ -940,6 +941,38 @@ impl<'a> super::Resolver<'a> {
             Ok(id) => self.record_deprecation_if_present(id, &c.deprecation),
             Err(err) => self.errors.push(err),
         }
+    }
+
+    /// Slice 1 of design.md § Module-Level Bindings: the parser
+    /// produces `Item::ModuleBinding` but only emits the
+    /// `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` stub diagnostic here.
+    /// Slices 3-5 of the same tracker entry replace this with real
+    /// Const-class naming validation + symbol registration +
+    /// compile-time-constant-initializer + mutability tracking.
+    ///
+    /// We do NOT register the name in the symbol table at slice 1 —
+    /// that would create the illusion of a usable binding while
+    /// downstream phases still drop the AST node on the floor. The
+    /// resulting "undefined name" diagnostics at any use sites are
+    /// the expected secondary signal pointing readers at the failing
+    /// declaration.
+    fn collect_module_binding(&mut self, b: &ModuleBinding) {
+        let keyword = if b.is_mut { "let mut" } else { "let" };
+        self.errors.push(ResolveError {
+            message: format!(
+                "error[E_MODULE_BINDING_NOT_YET_IMPLEMENTED]: module-level `{keyword} {}` \
+                 is parsed but not yet wired into the resolver / typechecker / codegen \
+                 — surface is the parser-only slice 1 of design.md § Module-Level \
+                 Bindings; real semantics land in slices 3-9 (see \
+                 docs/implementation_checklist/phase-8-stdlib-floor.md)",
+                b.name,
+            ),
+            span: b.span.clone(),
+            kind: ResolveErrorKind::UndefinedName,
+            suggestion: None,
+            replacement: None,
+            stub_hint: None,
+        });
     }
 
     fn collect_type_alias(&mut self, t: &TypeAliasDef) {

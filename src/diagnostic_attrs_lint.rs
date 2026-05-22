@@ -160,6 +160,9 @@ fn walk_item(item: &Item, level: LintLevel, diags: &mut Vec<LintDiagnostic>) {
             emit_off_target_for(&t.attributes, "marker trait", &[], level, diags)
         }
         Item::ConstDecl(c) => emit_off_target_for(&c.attributes, "module const", &[], level, diags),
+        Item::ModuleBinding(b) => {
+            emit_off_target_for(&b.attributes, "module-level binding", &[], level, diags)
+        }
         Item::TypeAlias(t) => emit_off_target_for(&t.attributes, "type alias", &[], level, diags),
         Item::DistinctType(d) => {
             emit_off_target_for(&d.attributes, "distinct type", &[], level, diags)

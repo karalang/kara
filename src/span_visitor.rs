@@ -113,6 +113,13 @@ pub fn visit_item_spans(item: &Item, visit: &mut impl FnMut(&Span)) {
             visit_type(&c.ty, visit);
             visit_expr(&c.value, visit);
         }
+        Item::ModuleBinding(b) => {
+            visit(&b.span);
+            if let Some(ref ty) = b.ty {
+                visit_type(ty, visit);
+            }
+            visit_expr(&b.value, visit);
+        }
         Item::AliasDecl(a) => visit(&a.span),
         Item::IndependentDecl(i) => visit(&i.span),
         Item::ExternFunction(e) => {

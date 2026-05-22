@@ -178,8 +178,8 @@ impl super::Parser {
                 Some(Item::TypeAlias(def))
             }
             Token::Let => {
-                self.reject_top_level_let();
-                None
+                let decl = self.parse_module_binding(attributes, is_pub, is_private)?;
+                Some(Item::ModuleBinding(decl))
             }
             _ => {
                 if !attributes.is_empty() || is_pub || is_private {
@@ -1426,48 +1426,61 @@ impl super::Parser {
         Some(fields)
     }
 
-    // ── Module & Import ──────────────────────────────────────────
+    // ── Module-Level Bindings ────────────────────────────────────
 
-    /// Per `docs/design.md § Module System` / brainstorming_v41.md §M1b,
-    /// `mod name;` declarations do not exist in Kāra — the module tree is
-    /// derived from the directory layout. The `mod` keyword stays reserved
-    /// (a future inline-module feature could claim it), but at parse time
-    /// every `mod ... ;` form is rejected with a directive-style diagnostic.
-    /// We consume tokens through the trailing semicolon (or stop at the next
-    /// item-starting token, whichever comes first) so a misplaced `mod`
-    /// declaration does not poison the rest of the file.
-    fn reject_top_level_let(&mut self) {
-        // `let` is statement-only in Kāra; module-level constants use
-        // `const`. The parser used to silently fall through the item
-        // dispatch on `Token::Let`, leaving the declaration unregistered
-        // and producing a confusing downstream `undefined name` diagnostic
-        // at the reference site rather than the declaration site. The
-        // explicit arm + did-you-mean hint here keeps the error close to
-        // the actual mistake.
+    /// `[ATTRIBUTES] [VIS] let [mut] NAME[: TYPE] = INIT;` — module-level
+    /// binding parser arm. Slice 1 of the design.md § Module-Level
+    /// Bindings work surfaces the parser; downstream phases (slices 3-9)
+    /// emit `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` at the declaration
+    /// site until they wire real semantics.
+    ///
+    /// Shape mirrors `parse_const_decl` with two structural differences:
+    /// `mut` is optionally accepted between `let` and the identifier, and
+    /// the `: TYPE` annotation is optional (when the initializer's type
+    /// is unambiguous, the annotation may be elided — final-form
+    /// inference rule lands in slice 5).
+    fn parse_module_binding(
+        &mut self,
+        attributes: Vec<Attribute>,
+        is_pub: bool,
+        is_private: bool,
+    ) -> Option<ModuleBinding> {
         let start = self.current_span();
-        self.advance(); // consume `let`
-                        // Skip the rest of the spurious let-binding so error recovery
-                        // resumes cleanly on the next item. We tolerate the typical
-                        // `let NAME[: TYPE] = EXPR;` shape; if the user wrote something
-                        // else, the outer `synchronize_to_item` pass will catch the
-                        // next item-starting token.
-        while !self.is_at_end()
-            && !matches!(
-                self.peek_token(),
-                Token::Semicolon | Token::Fn | Token::Const | Token::Pub | Token::Private
-            )
-        {
-            self.advance();
-        }
-        let _ = self.eat(&Token::Semicolon);
-        let span = self.span_from(&start);
-        self.errors.push(ParseError {
-            message: "`let` is statement-only in Kāra; use `const NAME: T = ...;` for \
-                      module-level constants. See `docs/design.md § Constants`."
-                .to_string(),
-            span,
-        });
+        self.expect(&Token::Let)?;
+        let is_mut = self.eat(&Token::Mut);
+        let name = self.expect_identifier()?;
+        // Slice 1 accepts the syntactic surface for downstream consumers.
+        // The Const-class naming rule (all-caps with optional digits /
+        // underscores) is the responsibility of slice 3's resolver step
+        // per the tracker — emitting `E_MODULE_BINDING_NAMING` from there
+        // keeps the parser slice purely syntactic.
+        let ty = if self.eat(&Token::Colon) {
+            Some(self.parse_type()?)
+        } else {
+            None
+        };
+        self.expect(&Token::Equal)?;
+        let value = self.parse_expression()?;
+        self.expect(&Token::Semicolon)?;
+        let doc_comment = self.take_pending_doc();
+        let deprecation = self.scan_deprecated_attr(&attributes);
+        let lint_overrides = self.scan_lint_level_attrs(&attributes);
+        Some(ModuleBinding {
+            span: self.span_from(&start),
+            attributes,
+            doc_comment,
+            is_pub,
+            is_private,
+            is_mut,
+            name,
+            ty,
+            value,
+            deprecation,
+            lint_overrides,
+        })
     }
+
+    // ── Module & Import ──────────────────────────────────────────
 
     fn reject_mod_decl(&mut self) {
         let start = self.current_span();

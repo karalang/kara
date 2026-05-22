@@ -4258,6 +4258,45 @@ fn stub_hint_render_source_with_typed_args() {
 }
 
 #[test]
+fn test_module_binding_emits_not_yet_implemented_stub() {
+    // Slice 1 of design.md § Module-Level Bindings: the parser
+    // accepts `let [mut] NAME ... ;` at item position but the
+    // resolver / typechecker / codegen wiring lands in slices
+    // 3-9. Until those slices ship, the resolver emits
+    // `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` at the declaration
+    // span so users get a focused error at the source of the
+    // unsupported form rather than a confusing "undefined name"
+    // at any use site.
+    let errors = resolve_errors("let MIN_FLOOR: i64 = 1;");
+    assert!(
+        errors.iter().any(
+            |e| e.message.contains("E_MODULE_BINDING_NOT_YET_IMPLEMENTED")
+                && e.message.contains("let MIN_FLOOR")
+        ),
+        "expected stub diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_module_binding_mut_emits_let_mut_in_stub() {
+    // `let mut` shape surfaces the `mut` keyword in the stub
+    // diagnostic — exercises the `is_mut` field through the
+    // formatter path so a future slice removing the stub
+    // diagnostic doesn't accidentally drop the mutability
+    // signal at use sites.
+    let errors = resolve_errors("let mut COUNTER: i64 = 0;");
+    assert!(
+        errors.iter().any(
+            |e| e.message.contains("E_MODULE_BINDING_NOT_YET_IMPLEMENTED")
+                && e.message.contains("let mut COUNTER")
+        ),
+        "expected stub diagnostic with `let mut`, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_file_resolves_visible_callee_without_stub_hint() {
     // Sanity / regression: a *resolved* call in a test file produces
     // no diagnostic at all — the stub-hint enrichment must fire only

@@ -768,7 +768,11 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
         | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
-        | Item::IndependentDecl(_) => false,
+        | Item::IndependentDecl(_)
+        // Module-level `let [mut]` bindings are parsed at slice 1 but
+        // not yet exposed for cross-module name resolution — slice 3
+        // of the tracker wires symbol registration + visibility.
+        | Item::ModuleBinding(_) => false,
     })
 }
 

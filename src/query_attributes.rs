@@ -173,6 +173,10 @@ fn walk_item(item: &Item, filter: &AttributeQueryFilter, out: &mut Vec<Attribute
             }
         }
         Item::ConstDecl(c) => emit_attrs(&c.attributes, &format!("const {}", c.name), filter, out),
+        Item::ModuleBinding(b) => {
+            let kw = if b.is_mut { "let mut" } else { "let" };
+            emit_attrs(&b.attributes, &format!("{kw} {}", b.name), filter, out)
+        }
         Item::TypeAlias(t) => emit_attrs(&t.attributes, &format!("type {}", t.name), filter, out),
         Item::DistinctType(d) => {
             emit_attrs(&d.attributes, &format!("distinct {}", d.name), filter, out)

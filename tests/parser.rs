@@ -1775,32 +1775,84 @@ fn test_mod_decl_rejection_recovers_for_following_items() {
 }
 
 #[test]
-fn test_top_level_let_rejected_with_did_you_mean_const() {
-    // `let` is statement-only; module-level constants use `const`. The
-    // parser used to silently drop top-level `let` items, leaving the
-    // confusing diagnostic to fire at the resolve stage as `undefined
-    // name`. The explicit arm + did-you-mean hint keeps the error close
-    // to the actual declaration site. Originally surfaced writing
-    // `kara-katas/leetcode/65-valid-number/valid.kara` (2026-05-20).
-    let (_, errors) = parse_with_errors("let MIN_FLOOR: i64 = 1;");
-    assert!(
-        errors
-            .iter()
-            .any(|e| e.message.contains("`let` is statement-only")
-                && e.message.contains("use `const NAME")),
-        "expected did-you-mean-const diagnostic, got: {:?}",
-        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
-    );
+fn test_module_binding_immutable_with_type() {
+    // Slice 1 of design.md § Module-Level Bindings: the parser
+    // accepts `let NAME: TYPE = INIT;` at item position and produces
+    // `Item::ModuleBinding`. The resolver fires
+    // `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` at the declaration
+    // span — covered separately in `tests/resolver.rs`. Parser
+    // shape only here.
+    let prog = parse_ok("let MIN_FLOOR: i64 = 1;");
+    let Item::ModuleBinding(b) = &prog.items[0] else {
+        panic!("expected ModuleBinding, got {:?}", prog.items[0]);
+    };
+    assert_eq!(b.name, "MIN_FLOOR");
+    assert!(!b.is_mut);
+    assert!(!b.is_pub);
+    assert!(!b.is_private);
+    assert!(b.ty.is_some(), "expected type annotation");
 }
 
 #[test]
-fn test_top_level_let_rejection_recovers_for_following_items() {
-    // After rejecting the spurious `let`, the parser must resync so the
-    // following function still parses. Expect exactly one parse error
-    // (the let-rejection) and a fully-formed function.
+fn test_module_binding_mutable() {
+    let prog = parse_ok("let mut COUNTER: i64 = 0;");
+    let Item::ModuleBinding(b) = &prog.items[0] else {
+        panic!("expected ModuleBinding, got {:?}", prog.items[0]);
+    };
+    assert_eq!(b.name, "COUNTER");
+    assert!(b.is_mut);
+}
+
+#[test]
+fn test_module_binding_pub() {
+    let prog = parse_ok("pub let MAX: i64 = 100;");
+    let Item::ModuleBinding(b) = &prog.items[0] else {
+        panic!("expected ModuleBinding, got {:?}", prog.items[0]);
+    };
+    assert!(b.is_pub);
+    assert!(!b.is_mut);
+}
+
+#[test]
+fn test_module_binding_type_elided() {
+    // No `: TYPE` — slice 5 will infer the type from the
+    // initializer at typecheck; the parser only carries the
+    // optional through unchanged.
+    let prog = parse_ok("let SEED = 42;");
+    let Item::ModuleBinding(b) = &prog.items[0] else {
+        panic!("expected ModuleBinding, got {:?}", prog.items[0]);
+    };
+    assert_eq!(b.name, "SEED");
+    assert!(b.ty.is_none());
+}
+
+#[test]
+fn test_module_binding_recovers_for_following_items() {
+    // The parser accepts the binding cleanly — no parse-time
+    // error fires (resolver-time diagnostic owns the
+    // "not yet implemented" message). Following items still
+    // parse. Originally surfaced by
+    // `kara-katas/leetcode/65-valid-number/valid.kara` (2026-05-20).
     let (prog, errors) = parse_with_errors("let MIN_FLOOR: i64 = 1; fn main() { }");
-    assert_eq!(errors.len(), 1, "got {:?}", errors);
-    assert!(matches!(prog.items.last(), Some(Item::Function(f)) if f.name == "main"));
+    assert!(errors.is_empty(), "got parse errors: {:?}", errors);
+    assert_eq!(prog.items.len(), 2);
+    assert!(matches!(&prog.items[0], Item::ModuleBinding(b) if b.name == "MIN_FLOOR"));
+    assert!(matches!(&prog.items[1], Item::Function(f) if f.name == "main"));
+}
+
+#[test]
+fn test_module_binding_missing_equals_recovers() {
+    // Missing initializer (`let X: i64;`) is a parse error at
+    // slice 1 — the parser expects `=` after the optional
+    // type annotation. Statement-form uninitialized `let x: T;`
+    // is intentionally not mirrored at module scope (every
+    // module binding must have a constant initializer per
+    // design.md § Module-Level Bindings).
+    let (_, errors) = parse_with_errors("let X: i64;");
+    assert!(
+        !errors.is_empty(),
+        "expected at least one parse error on missing `=`",
+    );
 }
 
 #[test]

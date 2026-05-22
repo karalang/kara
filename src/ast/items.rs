@@ -96,6 +96,15 @@ pub enum Item {
     UseDecl(UseDecl),
     Import(ImportDecl),
     ConstDecl(ConstDecl),
+    /// `[ATTRIBUTES] [VIS] let [mut] NAME[: TYPE] = INIT;` — module-level
+    /// binding (immutable or mutable). Spec at `design.md § Module-Level
+    /// Bindings`. Slice-1 surface: parser produces the AST node; downstream
+    /// phases (resolver, typechecker, effect-checker, ownership, codegen)
+    /// emit `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` at the declaration site
+    /// until slices 3-9 wire real semantics. Pattern mirrors
+    /// [`Item::TraitAlias`] — parser/AST recognized, downstream stub
+    /// diagnostic until the dedicated implementation lands.
+    ModuleBinding(ModuleBinding),
     AliasDecl(AliasDecl),
     IndependentDecl(IndependentDecl),
     ExternFunction(ExternFunction),
@@ -243,6 +252,7 @@ impl_vis!(UnionDef);
 impl_vis!(EnumDef);
 impl_vis!(TraitDef);
 impl_vis!(ConstDecl);
+impl_vis!(ModuleBinding);
 impl_vis!(ExternFunction);
 impl_vis!(OpaqueTypeDecl);
 impl_vis!(TypeAliasDef);
@@ -749,6 +759,35 @@ pub struct ConstDecl {
     /// `#[deprecated]` payload — see [`Deprecation`].
     pub deprecation: Option<Deprecation>,
     /// See [`Function::lint_overrides`]. Slice-4a broadens attachment.
+    pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
+}
+
+// ── Module-Level Bindings ────────────────────────────────────────
+
+/// `[ATTRIBUTES] [VIS] let [mut] NAME[: TYPE] = INIT;` payload —
+/// module-level binding declaration. See [`Item::ModuleBinding`].
+///
+/// Field layout mirrors [`ConstDecl`] with two structural differences:
+/// `is_mut` distinguishes `let` (immutable) from `let mut` (mutable),
+/// and `ty` is optional because the type annotation can be elided when
+/// the initializer's type is unambiguous (final-form inference rule
+/// lands in slice 5; slice 1 only carries the optional through parse).
+#[derive(Debug, Clone)]
+pub struct ModuleBinding {
+    pub span: Span,
+    pub attributes: Vec<Attribute>,
+    /// Joined `///` doc-comment text preceding the binding.
+    pub doc_comment: Option<String>,
+    pub is_pub: bool,
+    pub is_private: bool,
+    pub is_mut: bool,
+    pub name: String,
+    /// Optional `: TYPE` annotation. `None` when elided.
+    pub ty: Option<TypeExpr>,
+    pub value: Expr,
+    /// `#[deprecated]` payload — see [`Deprecation`].
+    pub deprecation: Option<Deprecation>,
+    /// See [`Function::lint_overrides`].
     pub lint_overrides: Vec<crate::lints::LintLevelOverride>,
 }
 
