@@ -186,6 +186,9 @@ pub fn collect_item_def_paths(program: &Program) -> HashMap<String, DefPath> {
             Item::ConstDecl(d) => {
                 out.insert(d.name.clone(), DefPath::item(d.name.clone()));
             }
+            Item::ModuleBinding(d) => {
+                out.insert(d.name.clone(), DefPath::item(d.name.clone()));
+            }
             Item::ExternFunction(f) => {
                 out.insert(f.name.clone(), DefPath::item(f.name.clone()));
             }
@@ -206,11 +209,7 @@ pub fn collect_item_def_paths(program: &Program) -> HashMap<String, DefPath> {
             | Item::Import(_)
             | Item::ExternBlock(_)
             | Item::AliasDecl(_)
-            | Item::IndependentDecl(_)
-            // Module-level `let [mut]` bindings are parsed at slice 1 but
-            // do not yet contribute a DefPath — slice 3 of the tracker
-            // wires resolver registration and adds the entry here.
-            | Item::ModuleBinding(_) => {}
+            | Item::IndependentDecl(_) => {}
         }
     }
     out

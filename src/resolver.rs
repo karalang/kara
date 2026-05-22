@@ -724,6 +724,7 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
             Item::TraitAlias(t) => names.push(t.name.clone()),
             Item::MarkerTrait(t) => names.push(t.name.clone()),
             Item::ConstDecl(c) => names.push(c.name.clone()),
+            Item::ModuleBinding(b) => names.push(b.name.clone()),
             Item::TypeAlias(t) => names.push(t.name.clone()),
             Item::DistinctType(d) => names.push(d.name.clone()),
             Item::ExternFunction(e) => names.push(e.name.clone()),
@@ -753,19 +754,13 @@ fn module_top_level_names_for_id(tree: &ProgramTree, id: ModuleId) -> Vec<String
             }
             // Enum variants surface through their parent enum; impl blocks
             // aren't top-level named items; non-`pub` imports stay internal;
-            // use / alias / independent / layout have no importable name;
-            // module-level bindings are parsed at slice 1 but downstream
-            // visibility/resolver wiring lands in slice 3 — until then
-            // they're invisible to cross-module name lookup so the kata-side
-            // surface fails at the declaration site instead of leaking a
-            // half-wired symbol into other modules.
+            // use / alias / independent / layout have no importable name.
             Item::ImplBlock(_)
             | Item::LayoutDef(_)
             | Item::UseDecl(_)
             | Item::Import(_)
             | Item::AliasDecl(_)
-            | Item::IndependentDecl(_)
-            | Item::ModuleBinding(_) => {}
+            | Item::IndependentDecl(_) => {}
         }
     }
     names

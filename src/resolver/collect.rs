@@ -943,36 +943,66 @@ impl<'a> super::Resolver<'a> {
         }
     }
 
-    /// Slice 1 of design.md § Module-Level Bindings: the parser
-    /// produces `Item::ModuleBinding` but only emits the
-    /// `E_MODULE_BINDING_NOT_YET_IMPLEMENTED` stub diagnostic here.
-    /// Slices 3-5 of the same tracker entry replace this with real
-    /// Const-class naming validation + symbol registration +
-    /// compile-time-constant-initializer + mutability tracking.
+    /// Slice 3 of design.md § Module-Level Bindings: enforce the
+    /// Const-class naming convention on the binding identifier, then
+    /// register the name in the same Const-class namespace that
+    /// `collect_const` populates. Slices 5-9 layer type / mutability /
+    /// effect / codegen on top of the registered symbol; the
+    /// compile-time-constant initializer rule (slice 4) is the next
+    /// typechecker-side gate.
     ///
-    /// We do NOT register the name in the symbol table at slice 1 —
-    /// that would create the illusion of a usable binding while
-    /// downstream phases still drop the AST node on the floor. The
-    /// resulting "undefined name" diagnostics at any use sites are
-    /// the expected secondary signal pointing readers at the failing
-    /// declaration.
+    /// The registration uses `SymbolKind::Constant` because design.md
+    /// §273 puts module-level bindings in the Const-class namespace
+    /// alongside `const NAME` decls. Downstream phases that need the
+    /// mutability bit re-read it from the `Item::ModuleBinding` AST
+    /// node (the typechecker, effect checker, and codegen all walk
+    /// `program.items` separately from the symbol table).
     fn collect_module_binding(&mut self, b: &ModuleBinding) {
-        let keyword = if b.is_mut { "let mut" } else { "let" };
-        self.errors.push(ResolveError {
-            message: format!(
-                "error[E_MODULE_BINDING_NOT_YET_IMPLEMENTED]: module-level `{keyword} {}` \
-                 is parsed but not yet wired into the resolver / typechecker / codegen \
-                 — surface is the parser-only slice 1 of design.md § Module-Level \
-                 Bindings; real semantics land in slices 3-9 (see \
-                 docs/implementation_checklist/phase-8-stdlib-floor.md)",
-                b.name,
-            ),
-            span: b.span.clone(),
-            kind: ResolveErrorKind::UndefinedName,
-            suggestion: None,
-            replacement: None,
-            stub_hint: None,
-        });
+        // Const-class naming: parallels `parse_const_decl`'s
+        // `check_ident_class(.., IdentClass::Const, "const", ..)`
+        // call, but at the resolver per the slice-3 spec so the
+        // diagnostic carries the named `E_MODULE_BINDING_NAMING`
+        // code rather than the generic parser-side message shape.
+        let actual = crate::lexer::classify_ident(&b.name);
+        if actual != crate::lexer::IdentClass::Const {
+            let suggestion = crate::lexer::suggest_const_name(&b.name);
+            let actual_desc = match actual {
+                crate::lexer::IdentClass::Type => "Type-class",
+                crate::lexer::IdentClass::Value => "Value-class",
+                crate::lexer::IdentClass::Const => unreachable!(),
+            };
+            self.errors.push(ResolveError {
+                message: format!(
+                    "error[E_MODULE_BINDING_NAMING]: module-level binding name \
+                     `{}` is {actual_desc} but module-level `let` / `let mut` \
+                     bindings introduce Const-class identifiers \
+                     (SCREAMING_SNAKE_CASE); consider renaming to `{}`",
+                    b.name, suggestion,
+                ),
+                span: b.span.clone(),
+                kind: ResolveErrorKind::UndefinedName,
+                suggestion: Some(format!("rename to `{}`", suggestion)),
+                replacement: None,
+                stub_hint: None,
+            });
+            // Continue and still attempt registration under the
+            // offending name so use-site references don't double-up
+            // with cascading "undefined name" diagnostics.
+        }
+        match self.table.define(
+            b.name.clone(),
+            SymbolKind::Constant,
+            b.span.clone(),
+            b.is_pub,
+        ) {
+            Ok(id) => self.record_deprecation_if_present(id, &b.deprecation),
+            Err(mut err) => {
+                if matches!(err.kind, ResolveErrorKind::DuplicateDefinition) {
+                    err.message = format!("error[E_DUPLICATE_MODULE_BINDING]: {}", err.message,);
+                }
+                self.errors.push(err);
+            }
+        }
     }
 
     fn collect_type_alias(&mut self, t: &TypeAliasDef) {

@@ -753,6 +753,7 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
         Item::TraitAlias(t) => t.name == name,
         Item::MarkerTrait(t) => t.name == name,
         Item::ConstDecl(c) => c.name == name,
+        Item::ModuleBinding(b) => b.name == name,
         Item::TypeAlias(t) => t.name == name,
         Item::DistinctType(d) => d.name == name,
         Item::ExternFunction(e) => e.name == name,
@@ -768,11 +769,7 @@ fn module_defines_local_item(module: &Module, name: &str) -> bool {
         | Item::UseDecl(_)
         | Item::Import(_)
         | Item::AliasDecl(_)
-        | Item::IndependentDecl(_)
-        // Module-level `let [mut]` bindings are parsed at slice 1 but
-        // not yet exposed for cross-module name resolution — slice 3
-        // of the tracker wires symbol registration + visibility.
-        | Item::ModuleBinding(_) => false,
+        | Item::IndependentDecl(_) => false,
     })
 }
 
@@ -859,6 +856,7 @@ pub fn canonical_item_visibility(
             Item::EnumDef(e) if e.name == origin_name => return Some(e.visibility()),
             Item::TraitDef(t) if t.name == origin_name => return Some(t.visibility()),
             Item::ConstDecl(c) if c.name == origin_name => return Some(c.visibility()),
+            Item::ModuleBinding(b) if b.name == origin_name => return Some(b.visibility()),
             Item::TypeAlias(t) if t.name == origin_name => return Some(t.visibility()),
             Item::DistinctType(d) if d.name == origin_name => return Some(d.visibility()),
             Item::ExternFunction(e) if e.name == origin_name => return Some(e.visibility()),
