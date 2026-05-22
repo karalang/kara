@@ -19702,4 +19702,231 @@ fn main() {
             ir
         );
     }
+
+    // ── Json.parse codegen (phase-8 line 435 slice 2) ─────────────
+    //
+    // Round-trip tests pair `Json.parse(s)` with `.stringify()` so the
+    // assertion runs against the parser's output verbatim. Each test
+    // covers one variant of the FFI→Kāra walker
+    // (`__karac_json_ffi_to_kara`): scalar variants (Null, Bool,
+    // Number, String) plus the recursive Array and Object arms. A
+    // dedicated error-path test exercises the Result.Err return.
+
+    #[test]
+    fn test_e2e_json_parse_null_roundtrip() {
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"null\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "null");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_bool_true_roundtrip() {
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"true\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_bool_false_roundtrip() {
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"false\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "false");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_number_roundtrip() {
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"42.5\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42.5");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_string_roundtrip() {
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"\\\"hello\\\"\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "\"hello\"");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_empty_string_roundtrip() {
+        // Empty payload exercises the `str_len == 0` fast path in the
+        // lift walker — no malloc fires for the data pointer.
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"\\\"\\\"\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "\"\"");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_array_roundtrip() {
+        // Recursive walk over arr_items[0..N] — exercises both the
+        // outer Json.Array repack and the per-child self-call in
+        // `__karac_json_ffi_to_kara`.
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"[1,2,3]\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[1.0,2.0,3.0]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_empty_array_roundtrip() {
+        // Zero-length Array exercises the malloc-skip empty-buffer
+        // path (`arr_len == 0` → null data ptr, cap = 0).
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"[]\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_object_roundtrip() {
+        // Object arm — exercises the parallel obj_keys / obj_vals
+        // walk, the strlen-based key-copy path, and the 56-byte tuple
+        // stride between the String key (offset 0) and Json value
+        // (offset 24) in the synthesized buffer.
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"{\\\"a\\\":1,\\\"b\\\":true}\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{\"a\":1.0,\"b\":true}");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_nested_roundtrip() {
+        // Triple-level nesting — exercises both Array→Object and
+        // Object→Array recursion paths through
+        // `__karac_json_ffi_to_kara`'s self-call sites.
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"{\\\"items\\\":[1,2,3],\\\"meta\\\":{\\\"v\\\":true}}\") {\n\
+                     Ok(j) => println(j.stringify()),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "{\"items\":[1.0,2.0,3.0],\"meta\":{\"v\":true}}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_parse_error_returns_err() {
+        // Invalid JSON — the Err arm fires and the tag carries through
+        // the Result destructure. The kata's `/echo` endpoint relies
+        // on this Err/Ok discrimination.
+        let out = run_program(
+            "fn main() {\n\
+                 match Json.parse(\"{not json}\") {\n\
+                     Ok(_) => println(\"ok\"),\n\
+                     Err(_) => println(\"err\"),\n\
+                 }\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "err");
+        }
+    }
+
+    #[test]
+    fn test_ir_json_parse_emits_lift_helper_once() {
+        // Pin the lift walker definition is module-private and emitted
+        // exactly once across multiple `Json.parse(...)` call sites,
+        // mirroring the stringify-side invariant.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let r1 = Json.parse(\"1\");\n\
+                 let r2 = Json.parse(\"2\");\n\
+             }",
+        );
+        assert!(
+            ir.contains("__karac_json_ffi_to_kara"),
+            "parse dispatch should reference the synthesized lift helper:\n{ir}"
+        );
+        let helper_defs = ir
+            .matches("define internal { i64, i64, i64, i64 } @__karac_json_ffi_to_kara")
+            .count();
+        assert_eq!(
+            helper_defs, 1,
+            "lift helper should be defined exactly once, found {}:\n{}",
+            helper_defs, ir
+        );
+        // Both call sites should reach `karac_runtime_json_parse`.
+        let parse_calls = ir.matches("call ptr @karac_runtime_json_parse").count();
+        assert!(
+            parse_calls >= 2,
+            "expected ≥2 runtime parse calls (one per Json.parse site), got {}:\n{}",
+            parse_calls,
+            ir
+        );
+    }
 }

@@ -484,6 +484,19 @@ impl<'ctx> super::Codegen<'ctx> {
                         .struct_types
                         .get(name)
                         .map(|st| Self::llvm_type_word_count((*st).into()))
+                        .or_else(|| {
+                            // Enum-typed binding (e.g. `Ok(j)` where j: Json) —
+                            // the binding's natural width is the enum's full
+                            // tagged-union LLVM struct size. Without this arm
+                            // the Some-name branch falls to the i64 default,
+                            // which truncates 4-i64 `Json` payloads to a single
+                            // word and breaks `match Json.parse(s) { Ok(j) =>
+                            // j.stringify() ... }` and any other Result-wrapped
+                            // multi-word enum value.
+                            self.enum_layouts
+                                .get(name)
+                                .map(|layout| Self::llvm_type_word_count(layout.llvm_type.into()))
+                        })
                         .unwrap_or(1),
                     None => 1,
                 }
@@ -529,6 +542,15 @@ impl<'ctx> super::Codegen<'ctx> {
                         .struct_types
                         .get(name)
                         .map(|st| (*st).into())
+                        .or_else(|| {
+                            // Enum-typed binding: return the enum's tagged-
+                            // union LLVM type so `reconstruct_payload_value`
+                            // builds a struct of the right shape. Mirrors the
+                            // analogous arm in `pattern_payload_word_count`.
+                            self.enum_layouts
+                                .get(name)
+                                .map(|layout| layout.llvm_type.into())
+                        })
                         .unwrap_or_else(|| self.context.i64_type().into()),
                     None => self.context.i64_type().into(),
                 }
@@ -664,7 +686,23 @@ impl<'ctx> super::Codegen<'ctx> {
             type_name.as_ref().and_then(|n| match n.as_str() {
                 "String" | "str" | "Vec" => Some(self.vec_struct_type().into()),
                 "Slice" => Some(self.slice_struct_type().into()),
-                _ => self.struct_types.get(n.as_str()).map(|st| (*st).into()),
+                _ => self
+                    .struct_types
+                    .get(n.as_str())
+                    .map(|st| (*st).into())
+                    // Enum-typed binding (e.g. `Ok(j)` where j: Json):
+                    // return the enum's tagged-union LLVM struct so the
+                    // multi-word destructure rebuilds a `{tag, w0..wN}`
+                    // value the downstream method-call dispatcher can
+                    // operate on. Without this, the heuristic fallback
+                    // below picks `vec_struct_type` (`{ptr, i64, i64}`)
+                    // and downstream `.method()` calls explode when
+                    // they extract the tag from field 0 as a pointer.
+                    .or_else(|| {
+                        self.enum_layouts
+                            .get(n.as_str())
+                            .map(|layout| layout.llvm_type.into())
+                    }),
             });
         // Heuristic fallback when the typechecker didn't record a name:
         // 3 words → vec/string shape; 2 words → slice shape.

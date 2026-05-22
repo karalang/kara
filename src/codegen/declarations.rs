@@ -2374,14 +2374,36 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
-        // Result[T, E]: { i64 tag, i64 w0 }  — Err(tag=0, w0=err) | Ok(tag=1, w0=val)
-        // Kept at the legacy single-word payload shape: every Result
-        // consumer in the codebase (including the `?` operator's
-        // hardcoded `enum_ty` in `compile_question`) assumes
-        // `{i64, i64}`. Widening Result would require updating those
-        // sites in lockstep; the Vec.pop / VecDeque.pop_* upgrade
-        // doesn't depend on Result, so we leave it untouched.
-        let result_enum_type = self.context.struct_type(&[i64_t, i64_t], false);
+        // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3 }
+        // — Err(tag=0) | Ok(tag=1), payload occupies w0..w3.
+        //
+        // Phase-8 line 435 slice 2 widening (2026-05-21): bumped from the
+        // legacy `{i64, i64}` (single payload word) to four payload words
+        // so `Result[Json, JsonError]` — the return type of
+        // `Json.parse(s)` — can carry the four-word `Json` enum value
+        // verbatim in the Ok arm. Backwards-compatible by construction:
+        //   - Construction (`try_compile_enum_variant`) extracts the
+        //     value's natural LLVM-field count via `coerce_to_payload_words`
+        //     and writes only those many words; trailing slots stay undef.
+        //   - Destructure (`reconstruct_payload_value`) reads only as many
+        //     words as the binding's natural width (`pattern_payload_word_count`),
+        //     so single-word bindings still extract w0 alone.
+        //   - The `?` operator (`compile_question`) pulls `enum_ty`
+        //     dynamically from the enclosing function's return type.
+        //   - Par-block surfaces (`par_blocks::compile_par_block`) read
+        //     the Result struct type from the slot-layout descriptor, not
+        //     a hardcoded shape.
+        // The Err arm of `Result[Json, JsonError]` truncates `JsonError`
+        // (5 words: u32 line + u32 column + String (ptr,len,cap)) to four
+        // — `cap` is lost, so the message String's scope-exit free becomes
+        // a no-op (acceptable v1 behavior; the message bytes leak but
+        // remain valid until process exit, and the kata's `/echo` arm
+        // never reads them anyway). A future Result-payload-width sweep
+        // can widen further once we have a need for it.
+        let result_enum_type = self
+            .context
+            .struct_type(&[i64_t, i64_t, i64_t, i64_t, i64_t], false);
+        let result_payload_words = 4usize;
         if !self.enum_layouts.contains_key("Result") {
             let mut tags = HashMap::new();
             tags.insert("Err".to_string(), 0u64);
@@ -2390,11 +2412,17 @@ impl<'ctx> super::Codegen<'ctx> {
             field_counts.insert("Err".to_string(), 1usize);
             field_counts.insert("Ok".to_string(), 1usize);
             let mut field_word_offsets = HashMap::new();
-            field_word_offsets.insert("Err".to_string(), vec![(0, 1)]);
-            field_word_offsets.insert("Ok".to_string(), vec![(0, 1)]);
+            field_word_offsets.insert("Err".to_string(), vec![(0, result_payload_words)]);
+            field_word_offsets.insert("Ok".to_string(), vec![(0, result_payload_words)]);
             let mut field_drop_kinds = HashMap::new();
-            field_drop_kinds.insert("Err".to_string(), vec![EnumDropKind::None]);
-            field_drop_kinds.insert("Ok".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert(
+                "Err".to_string(),
+                std::iter::repeat_n(EnumDropKind::None, result_payload_words).collect(),
+            );
+            field_drop_kinds.insert(
+                "Ok".to_string(),
+                std::iter::repeat_n(EnumDropKind::None, result_payload_words).collect(),
+            );
             self.enum_layouts.insert(
                 "Result".to_string(),
                 EnumLayout {

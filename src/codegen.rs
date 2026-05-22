@@ -1434,6 +1434,17 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // karac_runtime_json_parse(input: *const c_char, error_out: *mut KaracJsonError)
+        //   -> *mut KaracJsonValue. Returns null on parse error with the
+        // KaracJsonError struct populated; caller owns the FFI tree and
+        // (on null return) the message string. Phase-8 line 435 slice 2.
+        let json_parse_ty = ptr_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_parse",
+            json_parse_ty,
+            Some(Linkage::External),
+        );
+
         // ── Map runtime extern declarations ──────────────────────────────
         // All map methods use opaque ptr for the map handle and key/value
         // pointers. Sizes and fn-pointers are passed as i64 / ptr.

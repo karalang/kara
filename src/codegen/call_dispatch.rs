@@ -165,6 +165,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // `Json.parse(s)` codegen dispatch (phase-8 line 435 slice 2).
+        // Two-segment path `[Json, parse]` with one String arg. Routes
+        // through the synthesized `__karac_json_ffi_to_kara` walker and
+        // returns a `Result[Json, JsonError]`-shaped 5-i64 struct.
+        // Intercepted ahead of the generic 2-segment associated-call
+        // path below so the placeholder `Result.Err(...)` body in
+        // `runtime/stdlib/json.kara` never lowers under compiled mode.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Json"
+                && segments[1] == "parse"
+                && args.len() == 1
+            {
+                let input_val = self.compile_expr(&args[0].value)?;
+                return self.compile_json_parse(input_val);
+            }
+        }
+
         // Associated function calls: Vec::new(), etc. Theme 6 sub-step 4
         // intercepts `R.method(args)` where R is an `effect resource R: T`
         // before assoc-call dispatch: those go through the runtime stack

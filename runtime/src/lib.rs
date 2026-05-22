@@ -3600,6 +3600,55 @@ mod tests {
     }
 
     #[test]
+    fn test_karac_json_value_layout_pinned() {
+        // `KaracJsonValue` is referenced by hand-coded byte-offset GEPs
+        // in `src/codegen/json.rs`'s `__karac_json_ffi_to_kara` walker.
+        // Lock the offsets here so a reorder of the source struct
+        // surfaces as a runtime-crate test failure rather than as
+        // wrong-payload values emerging from `Json.parse` calls.
+        //
+        // Layout (8-byte aligned, total 72 bytes):
+        //   tag:       u8           offset  0  (size 1)
+        //   bool_val:  bool         offset  1  (size 1, +6 padding)
+        //   num_val:   f64          offset  8  (size 8)
+        //   str_ptr:   *mut u8      offset 16  (size 8)
+        //   str_len:   usize        offset 24  (size 8)
+        //   arr_items: ptr-of-ptr   offset 32  (size 8)
+        //   arr_len:   usize        offset 40  (size 8)
+        //   obj_keys:  ptr-of-ptr   offset 48  (size 8)
+        //   obj_vals:  ptr-of-ptr   offset 56  (size 8)
+        //   obj_len:   usize        offset 64  (size 8)
+        assert_eq!(std::mem::size_of::<KaracJsonValue>(), 72);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, tag), 0);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, bool_val), 1);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, num_val), 8);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, str_ptr), 16);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, str_len), 24);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, arr_items), 32);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, arr_len), 40);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_keys), 48);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_vals), 56);
+        assert_eq!(std::mem::offset_of!(KaracJsonValue, obj_len), 64);
+    }
+
+    #[test]
+    fn test_karac_json_error_layout_pinned() {
+        // `KaracJsonError` is allocated on the codegen-emitted caller's
+        // stack and read field-by-field after a failed
+        // `karac_runtime_json_parse`. Pin the offsets so the codegen-side
+        // GEPs stay in sync with the struct shape.
+        //
+        // Layout (8-byte aligned, total 16 bytes):
+        //   line:    u32           offset  0  (size 4)
+        //   column:  u32           offset  4  (size 4)
+        //   message: *mut c_char   offset  8  (size 8)
+        assert_eq!(std::mem::size_of::<KaracJsonError>(), 16);
+        assert_eq!(std::mem::offset_of!(KaracJsonError, line), 0);
+        assert_eq!(std::mem::offset_of!(KaracJsonError, column), 4);
+        assert_eq!(std::mem::offset_of!(KaracJsonError, message), 8);
+    }
+
+    #[test]
     fn test_spawn_site_entry_layout_pinned() {
         // Mirrors the LLVM struct layout in `Codegen::emit_spawn_sites_metadata`:
         //   { i32 id, ptr file_cstr, i32 line, i32 col, i32 worker_count, i32 reserved }
