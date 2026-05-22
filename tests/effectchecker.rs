@@ -6405,3 +6405,248 @@ fn test_modbind_let_mut_read_inside_loop_attributed() {
         inferred.effects
     );
 }
+
+// ── Slice 7: par-block conflict rule (design.md §1328) ───────────
+//
+// A `par { }` branch whose transitive effect set contains
+// `writes(BINDING_resource)` for a `let mut BINDING` whose type is
+// not an explicit concurrency primitive (`Atomic[T]` / `Mutex[T]` /
+// `RwLock[T]` / `Arc[...]`) and is not `#[thread_local]` is rejected
+// with `error[E_MODULE_BINDING_WRITE_IN_PAR]`. Reader+reader stays
+// legal; reader+writer is caught by the writer-branch arm of the
+// rule; writer+writer fires once per offending binding.
+
+fn has_par_conflict_for(errors: &[EffectError], binding_name: &str) -> bool {
+    errors.iter().any(|e| {
+        e.kind == EffectErrorKind::ModuleBindingWriteInPar
+            && e.message.contains(&format!("'{}'", binding_name))
+    })
+}
+
+#[test]
+fn test_par_block_bare_write_rejected() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn run() { par { COUNTER = 1; } }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "COUNTER"),
+        "expected E_MODULE_BINDING_WRITE_IN_PAR for direct par-block write; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    let found = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar)
+        .expect("expected at least one par-block conflict diagnostic");
+    assert!(
+        found
+            .message
+            .contains("wrap in Atomic[T], Mutex[T], or use #[thread_local]"),
+        "expected §1328 verbatim fix-it; got message: {}",
+        found.message
+    );
+}
+
+#[test]
+fn test_par_block_write_via_callee_rejected() {
+    // Transitive write via a function call inside `par { }`. The
+    // effect-set check is the load-bearing property: the callee
+    // doesn't write directly inside the par branch, but its
+    // synthetic write effect propagates through and trips the rule
+    // exactly as if the assignment had appeared inline.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = COUNTER + 1; }\n\
+         fn run() { par { bump(); } }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "COUNTER"),
+        "expected E_MODULE_BINDING_WRITE_IN_PAR via transitive callee; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_compound_assign_rejected() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn run() { par { COUNTER += 1; } }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "COUNTER"),
+        "expected E_MODULE_BINDING_WRITE_IN_PAR for compound assign; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_reader_writer_cross_branch_rejected() {
+    // Reader in one branch, writer in another. The rule fires on
+    // the writer branch — that's the offending operation regardless
+    // of whether the sibling is a reader or another writer.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn run() -> i64 {\n\
+             let mut snapshot: i64 = 0;\n\
+             par {\n\
+                 snapshot = COUNTER;\n\
+                 COUNTER = 1;\n\
+             }\n\
+             snapshot\n\
+         }",
+    );
+    assert!(
+        has_par_conflict_for(&errors, "COUNTER"),
+        "expected E_MODULE_BINDING_WRITE_IN_PAR for reader+writer across branches; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_reader_reader_allowed() {
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn run() -> i64 {\n\
+             let mut snap1: i64 = 0;\n\
+             let mut snap2: i64 = 0;\n\
+             par {\n\
+                 snap1 = COUNTER;\n\
+                 snap2 = COUNTER;\n\
+             }\n\
+             snap1 + snap2\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "did not expect par-block conflict for reader+reader; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_par_block_atomic_wrapped_allowed() {
+    // `Atomic[T]` carries its own synchronisation — writing under
+    // `par { }` is well-defined and the rule must not fire.
+    let parsed = parse(
+        "let mut COUNTER: Atomic[i64] = Atomic.new(0);\n\
+         fn run() { par { COUNTER = COUNTER; } }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "did not expect E_MODULE_BINDING_WRITE_IN_PAR for Atomic-wrapped binding"
+    );
+}
+
+#[test]
+fn test_par_block_mutex_wrapped_allowed() {
+    let parsed = parse(
+        "let mut TODOS: Mutex[i64] = Mutex.new(0);\n\
+         fn run() { par { TODOS = TODOS; } }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "did not expect E_MODULE_BINDING_WRITE_IN_PAR for Mutex-wrapped binding"
+    );
+}
+
+#[test]
+fn test_par_block_thread_local_allowed() {
+    let parsed = parse(
+        "#[thread_local]\n\
+         let mut SCRATCH: i64 = 0;\n\
+         fn run() { par { SCRATCH = 1; } }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "did not expect E_MODULE_BINDING_WRITE_IN_PAR for #[thread_local] binding; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_par_block_write_outside_par_not_flagged() {
+    let result = effectcheck_ok(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = 1; }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::ModuleBindingWriteInPar),
+        "did not expect par-block conflict outside par; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_par_block_writer_writer_fires_once_per_binding() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn run() {\n\
+             par {\n\
+                 COUNTER = 1;\n\
+                 COUNTER = 2;\n\
+             }\n\
+         }",
+    );
+    let count = errors
+        .iter()
+        .filter(|e| {
+            e.kind == EffectErrorKind::ModuleBindingWriteInPar && e.message.contains("'COUNTER'")
+        })
+        .count();
+    assert_eq!(
+        count,
+        1,
+        "expected exactly one par-block conflict for COUNTER; got {}: {:?}",
+        count,
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_par_block_two_distinct_bindings_two_diagnostics() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         let mut FLAG: bool = false;\n\
+         fn run() {\n\
+             par {\n\
+                 COUNTER = 1;\n\
+                 FLAG = true;\n\
+             }\n\
+         }",
+    );
+    assert!(has_par_conflict_for(&errors, "COUNTER"));
+    assert!(has_par_conflict_for(&errors, "FLAG"));
+}

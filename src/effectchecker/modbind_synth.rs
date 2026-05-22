@@ -38,6 +38,23 @@ pub(crate) struct ModBindingInfo {
     /// `ThreadLocal[<NAME>_resource]` when `#[thread_local]` is
     /// present (design.md §1330).
     pub(crate) resource_name: String,
+    /// Source span of the binding declaration. Used as the secondary
+    /// label on the slice-7 par-block conflict diagnostic so the
+    /// programmer can see both the offending `par { }` and the
+    /// declaration that bound the synthetic resource.
+    pub(crate) decl_span: Span,
+    /// `true` when the binding's declared type is one of the
+    /// explicit concurrency primitives — `Atomic[T]`, `Mutex[T]`,
+    /// `RwLock[T]`, `Arc[T]` — per design.md §1328. Slice 7's
+    /// par-block check uses this to skip the rejection: those types
+    /// carry their own synchronisation, so writing them concurrently
+    /// is well-defined. `#[thread_local]` also escapes the
+    /// rejection via the resource-wrapping path (the resource name
+    /// is `ThreadLocal[BINDING_resource]`, which never conflicts
+    /// with itself across tasks), so this flag stays `false` for
+    /// thread-locals; the par-block check filters them out by
+    /// resource-name prefix instead.
+    pub(crate) is_concurrency_primitive: bool,
 }
 
 /// Synthetic callee-key prefix for the read side. The suffix is the
@@ -69,11 +86,61 @@ impl<'a> super::EffectChecker<'a> {
             } else {
                 base
             };
-            self.modbind_let_mut
-                .insert(b.name.clone(), ModBindingInfo { resource_name });
+            let is_concurrency_primitive =
+                b.ty.as_ref()
+                    .map(type_is_concurrency_primitive)
+                    .unwrap_or(false);
+            self.modbind_let_mut.insert(
+                b.name.clone(),
+                ModBindingInfo {
+                    resource_name,
+                    decl_span: b.span.clone(),
+                    is_concurrency_primitive,
+                },
+            );
         }
     }
 
+    /// Look up a binding name in the `let mut` table and return its
+    /// metadata. Slice 7's par-block check uses this through the
+    /// synthetic resource name carried on the offending effect.
+    pub(crate) fn lookup_modbind_by_resource(
+        &self,
+        resource: &str,
+    ) -> Option<(&str, &ModBindingInfo)> {
+        // Resource names take one of two forms — `<NAME>_resource` for
+        // bare bindings and `ThreadLocal[<NAME>_resource]` for
+        // `#[thread_local]` ones. We strip either decoration and look
+        // the source name up in the table.
+        let inner = resource
+            .strip_prefix("ThreadLocal[")
+            .and_then(|s| s.strip_suffix(']'))
+            .unwrap_or(resource);
+        let name = inner.strip_suffix("_resource")?;
+        self.modbind_let_mut
+            .get_key_value(name)
+            .map(|(k, v)| (k.as_str(), v))
+    }
+}
+
+/// Returns `true` when the outermost type name of `ty` is one of the
+/// supported concurrency primitives per design.md §1328. Generics
+/// are not inspected — `Atomic[i64]`, `Mutex[Vec[i64]]`,
+/// `RwLock[shared struct S]`, `Arc[shared struct S]` are all
+/// recognised purely by the root path segment.
+fn type_is_concurrency_primitive(ty: &TypeExpr) -> bool {
+    let segments = match &ty.kind {
+        TypeKind::Path(p) => &p.segments,
+        _ => return false,
+    };
+    let last = match segments.last() {
+        Some(s) => s.as_str(),
+        None => return false,
+    };
+    matches!(last, "Atomic" | "Mutex" | "RwLock" | "Arc")
+}
+
+impl<'a> super::EffectChecker<'a> {
     /// For every module-level `let mut BINDING`, seed `inferred_effects`
     /// with two synthetic callee keys carrying the read/write effects
     /// on the binding's synthetic resource. The walker emits these
@@ -132,6 +199,363 @@ impl<'a> super::EffectChecker<'a> {
         }
         walker.walk_block(block);
         walker.calls
+    }
+
+    /// Slice-7 par-block conflict rule (design.md §1328). For every
+    /// `par { }` expression reachable from any function or method
+    /// body, walk the block as a single execution region (the spec
+    /// rejects writes from *any* branch, so the union of branch
+    /// effects is the conflict surface); for each transitive effect
+    /// of the region that lands on a synthetic per-binding resource,
+    /// reject if the binding's type is not an explicit concurrency
+    /// primitive (`Atomic[T]` / `Mutex[T]` / `RwLock[T]` / `Arc[...]`)
+    /// and not `#[thread_local]`. The diagnostic copies the §1328
+    /// fix-it verbatim and embeds the binding-decl line so the
+    /// programmer can find the declaration without re-reading the
+    /// span column.
+    pub(crate) fn check_modbind_par_conflicts(&mut self) {
+        if self.modbind_let_mut.is_empty() {
+            return;
+        }
+        // Snapshot the bodies so we can mutate `self.errors` inside the
+        // analysis loop without re-borrowing the maps. Cloning is
+        // cheap here: the walk produces few results, and this only
+        // runs once per program.
+        let work: Vec<(String, Block)> = self
+            .function_bodies
+            .iter()
+            .map(|(n, f)| (n.clone(), f.body.clone()))
+            .chain(
+                self.method_bodies
+                    .iter()
+                    .map(|(n, f)| (n.clone(), f.body.clone())),
+            )
+            .collect();
+        for (_fn_name, body) in &work {
+            let par_blocks = collect_par_blocks_in_block(body);
+            for (par_block, par_span) in par_blocks {
+                self.check_one_par_block(&par_block, &par_span);
+            }
+        }
+    }
+
+    fn check_one_par_block(&mut self, block: &Block, par_span: &Span) {
+        // Collect the par-block's transitive effects via the same
+        // machinery `infer_function_effects` uses: direct calls +
+        // synthetic modbind read/write entries → look up each
+        // entry's seeded effect set.
+        let bounds: HashMap<String, Vec<TraitBound>> = HashMap::new();
+        let direct_calls = self.collect_calls_in_block(block, &bounds);
+        let synth_calls = self.collect_modbind_synth_calls_in_block(block, &[]);
+        let mut effects: Vec<Effect> = Vec::new();
+        for (callee, _span) in direct_calls.into_iter().chain(synth_calls) {
+            for e in self.get_callee_effects(&callee) {
+                if !effects.contains(&e) {
+                    effects.push(e);
+                }
+            }
+        }
+        // Track which bindings already reported so a par block that
+        // writes the same binding twice still produces one
+        // diagnostic per offending binding (not one per write site).
+        let mut seen: HashSet<String> = HashSet::new();
+        for effect in &effects {
+            if !matches!(effect.verb, EffectVerbKind::Writes) {
+                continue;
+            }
+            // `ThreadLocal[...]` resources never participate in the
+            // conflict — per-task disjoint instances by construction.
+            if effect.resource.starts_with("ThreadLocal[") {
+                continue;
+            }
+            let Some((name, info)) = self.lookup_modbind_by_resource(&effect.resource) else {
+                continue;
+            };
+            if info.is_concurrency_primitive {
+                continue;
+            }
+            if !seen.insert(name.to_string()) {
+                continue;
+            }
+            let decl_line = info.decl_span.line;
+            let name_owned = name.to_string();
+            self.errors.push(super::EffectError {
+                message: format!(
+                    "module-level let mut '{}' cannot be written from inside par {{ }} — wrap in Atomic[T], Mutex[T], or use #[thread_local] for per-task state (binding declared at line {})",
+                    name_owned, decl_line
+                ),
+                span: par_span.clone(),
+                kind: super::EffectErrorKind::ModuleBindingWriteInPar,
+                subtype_trace: None,
+            });
+        }
+    }
+}
+
+use std::collections::HashSet;
+
+/// Recursively walk a block and collect every `par { }` expression
+/// reachable from it, paired with the span of the par-block
+/// expression itself. The returned span is the locus of the slice-7
+/// diagnostic. Nested par blocks (a par inside an outer par's
+/// branch) are reported too — each carries its own conflict
+/// surface.
+fn collect_par_blocks_in_block(block: &Block) -> Vec<(Block, Span)> {
+    let mut out = Vec::new();
+    for stmt in &block.stmts {
+        collect_par_in_stmt(stmt, &mut out);
+    }
+    if let Some(ref e) = block.final_expr {
+        collect_par_in_expr(e, &mut out);
+    }
+    out
+}
+
+fn collect_par_in_stmt(stmt: &Stmt, out: &mut Vec<(Block, Span)>) {
+    match &stmt.kind {
+        StmtKind::Let { value, .. }
+        | StmtKind::Assign { value, .. }
+        | StmtKind::CompoundAssign { value, .. }
+        | StmtKind::Expr(value) => collect_par_in_expr(value, out),
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collect_par_in_expr(value, out);
+            for s in &else_block.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = else_block.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        StmtKind::LetUninit { .. } => {}
+    }
+}
+
+fn collect_par_in_expr(expr: &Expr, out: &mut Vec<(Block, Span)>) {
+    match &expr.kind {
+        ExprKind::Par(block) => {
+            out.push((block.clone(), expr.span.clone()));
+            // Walk INTO the par-block's branches so nested par blocks
+            // are caught too.
+            for s in &block.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = block.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::Block(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::Try(b)
+        | ExprKind::Seq(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => {
+            for s in &b.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = b.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_par_in_expr(condition, out);
+            for s in &then_block.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = then_block.final_expr {
+                collect_par_in_expr(e, out);
+            }
+            if let Some(e) = else_branch {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::IfLet {
+            value,
+            then_block,
+            else_branch,
+            ..
+        } => {
+            collect_par_in_expr(value, out);
+            for s in &then_block.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = then_block.final_expr {
+                collect_par_in_expr(e, out);
+            }
+            if let Some(e) = else_branch {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_par_in_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_par_in_expr(g, out);
+                }
+                collect_par_in_expr(&arm.body, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_par_in_expr(condition, out);
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::WhileLet { value, body, .. } => {
+            collect_par_in_expr(value, out);
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_par_in_expr(iterable, out);
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::Loop { body, .. } => {
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::Closure { body, .. } => collect_par_in_expr(body, out),
+        ExprKind::Binary { left, right, .. } | ExprKind::Pipe { left, right } => {
+            collect_par_in_expr(left, out);
+            collect_par_in_expr(right, out);
+        }
+        ExprKind::NilCoalesce { left, right } => {
+            collect_par_in_expr(left, out);
+            collect_par_in_expr(right, out);
+        }
+        ExprKind::Unary { operand, .. } | ExprKind::Question(operand) => {
+            collect_par_in_expr(operand, out);
+        }
+        ExprKind::OptionalChain { object, args, .. } => {
+            collect_par_in_expr(object, out);
+            if let Some(args) = args {
+                for a in args {
+                    collect_par_in_expr(&a.value, out);
+                }
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_par_in_expr(callee, out);
+            for a in args {
+                collect_par_in_expr(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_par_in_expr(object, out);
+            for a in args {
+                collect_par_in_expr(&a.value, out);
+            }
+        }
+        ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+            collect_par_in_expr(object, out);
+        }
+        ExprKind::Index { object, index } => {
+            collect_par_in_expr(object, out);
+            collect_par_in_expr(index, out);
+        }
+        ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+            for e in items {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::PrefixCollectionLiteral { items, .. } => {
+            for e in items {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::RepeatLiteral { value, count, .. } => {
+            collect_par_in_expr(value, out);
+            collect_par_in_expr(count, out);
+        }
+        ExprKind::MapLiteral(entries) => {
+            for (k, v) in entries {
+                collect_par_in_expr(k, out);
+                collect_par_in_expr(v, out);
+            }
+        }
+        ExprKind::StructLiteral { fields, spread, .. } => {
+            for f in fields {
+                collect_par_in_expr(&f.value, out);
+            }
+            if let Some(s) = spread {
+                collect_par_in_expr(s, out);
+            }
+        }
+        ExprKind::Cast { expr: inner, .. } => collect_par_in_expr(inner, out),
+        ExprKind::Range { start, end, .. } => {
+            if let Some(s) = start {
+                collect_par_in_expr(s, out);
+            }
+            if let Some(e) = end {
+                collect_par_in_expr(e, out);
+            }
+        }
+        ExprKind::Return(Some(inner)) => collect_par_in_expr(inner, out),
+        ExprKind::Break {
+            value: Some(inner), ..
+        } => collect_par_in_expr(inner, out),
+        ExprKind::Providers { bindings, body } => {
+            for b in bindings {
+                collect_par_in_expr(&b.value, out);
+            }
+            for s in &body.stmts {
+                collect_par_in_stmt(s, out);
+            }
+            if let Some(ref e) = body.final_expr {
+                collect_par_in_expr(e, out);
+            }
+        }
+        // Leaves with no nested expressions.
+        ExprKind::Identifier(_)
+        | ExprKind::Path { .. }
+        | ExprKind::SelfValue
+        | ExprKind::SelfType
+        | ExprKind::Integer(_, _)
+        | ExprKind::Float(_, _)
+        | ExprKind::CharLit(_)
+        | ExprKind::ByteLit(_)
+        | ExprKind::StringLit(_)
+        | ExprKind::MultiStringLit(_)
+        | ExprKind::InterpolatedStringLit(_)
+        | ExprKind::CStringLit { .. }
+        | ExprKind::Bool(_)
+        | ExprKind::Continue { .. }
+        | ExprKind::Return(None)
+        | ExprKind::Break { value: None, .. }
+        | ExprKind::PipePlaceholder
+        | ExprKind::OffsetOf { .. }
+        | ExprKind::Error => {}
     }
 }
 

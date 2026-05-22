@@ -189,6 +189,21 @@ pub enum EffectErrorKind {
     /// forbids. Emitted by `check_profile_compat` after inference
     /// settles.
     ProfileIncompatibleEffect,
+    /// A `par { }` branch's transitive effect set contains
+    /// `writes(BINDING_resource)` for a module-level `let mut BINDING`
+    /// whose type is not an explicit concurrency primitive
+    /// (`Atomic[T]`, `Mutex[T]`, `RwLock[T]`, `Arc[...]`) and is not
+    /// `#[thread_local]` (whose resource is wrapped as
+    /// `ThreadLocal[BINDING_resource]` and never conflicts with
+    /// itself across tasks). Slice 7 of the phase-8 module-let work
+    /// (design.md §1328) — upgrades the existing reads/writes
+    /// conflict from a "serialize" to a hard error inside `par { }`
+    /// because serialising within a par region is almost never what
+    /// the programmer meant. Both the offending par span and the
+    /// binding's decl span are labeled; the fix-it list is the §1328
+    /// verbatim three-way split (`Atomic[T]` / `Mutex[T]` /
+    /// `#[thread_local]`).
+    ModuleBindingWriteInPar,
 }
 
 impl std::fmt::Display for EffectError {
@@ -646,6 +661,7 @@ impl<'a> EffectChecker<'a> {
         self.check_call_site_subtyping();
         self.check_with_e_unification();
         self.check_profile_compat();
+        self.check_modbind_par_conflicts();
 
         // Phase C: Detect mutual recursion groups and build resolution traces
         let mutual_recursion_groups = self.detect_mutual_recursion_groups();

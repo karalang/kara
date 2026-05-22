@@ -2505,6 +2505,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ProfileIncompatibleEffect => {
                     ("E0407", "error")
                 }
+                crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar => {
+                    ("E0408", "error")
+                }
             };
             let extra_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);
