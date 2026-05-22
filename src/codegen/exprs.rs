@@ -258,10 +258,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            ExprKind::Block(block) | ExprKind::Seq(block) => match self.compile_block(block)? {
-                Some(v) => Ok(v),
-                None => Ok(self.context.i64_type().const_int(0, false).into()),
-            },
+            ExprKind::Block(block) | ExprKind::Seq(block) => {
+                match self.compile_block_with_frame(block)? {
+                    Some(v) => Ok(v),
+                    None => Ok(self.context.i64_type().const_int(0, false).into()),
+                }
+            }
             ExprKind::FieldAccess { object, field } => self.compile_field_access(object, field),
             ExprKind::StructLiteral { path, fields, .. } => {
                 let name = path.last().map(|s| s.as_str()).unwrap_or("");
@@ -298,7 +300,7 @@ impl<'ctx> super::Codegen<'ctx> {
             } => self.compile_if_let(pattern, value, then_block, else_branch.as_deref()),
             // Unsafe blocks: safety checks live in earlier phases; codegen just
             // compiles the inner block normally.
-            ExprKind::Unsafe(block) => match self.compile_block(block)? {
+            ExprKind::Unsafe(block) => match self.compile_block_with_frame(block)? {
                 Some(v) => Ok(v),
                 None => Ok(self.context.i64_type().const_int(0, false).into()),
             },

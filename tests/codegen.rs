@@ -20020,4 +20020,129 @@ fn main() {
             assert_eq!(lines, vec!["0", "3", "2", "1"]);
         }
     }
+
+    // --- Phase 7 § *defer codegen* slice 1.5: block-scope + runtime-reachability ---
+    //
+    // Slice 1 ships function-scoped, compile-time-registered defer:
+    // every `defer` lands on the function's top cleanup frame and
+    // fires at function exit, regardless of which enclosing block
+    // declared it or whether that block's runtime branch was taken.
+    // Slice 1.5 narrows the drain scope by pushing a fresh
+    // `scope_cleanup_actions` frame inside the "naked block" path
+    // (if-arms, bare `{ ... }` / `Seq` / `unsafe` expression-blocks,
+    // nested defer bodies) and draining it at block exit via
+    // `compile_block_with_frame`. Because the drain IR lives at the
+    // end of the *emitted* block body, a not-taken conditional arm
+    // bypasses the drain instruction entirely — runtime-reachability
+    // falls out of block-scoping for free. These four tests pin the
+    // four observable shapes that distinguish slice 1.5 from slice 1.
+
+    #[test]
+    fn test_e2e_defer_in_if_true_fires_at_end_of_arm() {
+        // The defer is declared inside the if's then-block. Slice 1.5
+        // requires it to fire when control falls off the end of that
+        // block (before the merge BB), not at function exit. Expected
+        // stream: `before-if` → `in-if` → `after-defer` → defer body
+        // (`a`) → `after-if`.
+        let out = run_program(
+            r#"
+fn main() {
+    println("before-if");
+    if true {
+        println("in-if");
+        defer { println("a"); }
+        println("after-defer");
+    }
+    println("after-if");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["before-if", "in-if", "after-defer", "a", "after-if"]
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_in_if_false_does_not_fire() {
+        // Runtime-reachability: the defer's drain IR is emitted
+        // inside the then-arm's BB. Because the conditional jump
+        // skips that BB at runtime (`if false`), the drain
+        // instruction is never executed, so the defer body never
+        // runs. This is the v1 correctness gap vs the interpreter
+        // that slice 1.5 closes (interpreter's
+        // `test_defer_registers_when_reached_not_at_block_start`).
+        let out = run_program(
+            r#"
+fn main() {
+    println("before");
+    if false {
+        defer { println("not-printed"); }
+    }
+    println("after");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["before", "after"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_in_while_body_fires_per_iteration() {
+        // While bodies already push a per-iteration cleanup frame
+        // (`compile_while` in `src/codegen/control_flow.rs:499`)
+        // so defer landed on it correctly in slice 1; this test
+        // pins that semantic in a lock-in form alongside the new
+        // if-arm tests above so a regression to function-scoped
+        // defer (which would print all three `d`s after `after`)
+        // is caught here.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut i = 0;
+    while i < 3 {
+        defer { println("d"); }
+        i = i + 1;
+    }
+    println("after");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["d", "d", "d", "after"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_in_nested_block_fires_at_inner_block_exit() {
+        // Bare `{ ... }` (ExprKind::Block) routes through
+        // `compile_block_with_frame` in slice 1.5, so a defer
+        // inside the nested block scopes to that block — fires
+        // at the inner block's end-of-emission, before any
+        // outer-block statements that follow. Expected stream:
+        // `before` → `in-block` → defer body (`inner-defer`) →
+        // `after`.
+        let out = run_program(
+            r#"
+fn main() {
+    println("before");
+    {
+        defer { println("inner-defer"); }
+        println("in-block");
+    };
+    println("after");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["before", "in-block", "inner-defer", "after"]);
+        }
+    }
 }

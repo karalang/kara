@@ -772,7 +772,14 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => None,
         };
         if let Some(block) = body_clone {
-            let _ = self.compile_block(&block);
+            // Slice 1.5: route the defer body through the frame-pushing
+            // variant so a nested `defer` inside this body scopes to the
+            // defer body itself (drains at end-of-defer-body) instead of
+            // bubbling up to the enclosing scope's frame. Also gives the
+            // defer body the same runtime-reachability shape as a naked
+            // block: a `defer` inside an `if false { ... }` nested in
+            // here never fires.
+            let _ = self.compile_block_with_frame(&block);
             return;
         }
         let action_ref = &self.scope_cleanup_actions[frame_idx][action_idx];

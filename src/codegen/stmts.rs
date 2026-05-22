@@ -47,6 +47,50 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Slice 1.5 (Phase 7 defer codegen). Compile a "naked" block —
+    /// one whose enclosing construct does NOT already manage a
+    /// `scope_cleanup_actions` frame (if/if-let arms, bare
+    /// `{ ... }` / `Seq` / `unsafe` expression-blocks, nested
+    /// `defer` bodies). Pushes a fresh frame at entry; on normal
+    /// fall-through drains it via `drain_top_frame_with_emit`
+    /// (emitting the cleanup IR inside the block's current BB);
+    /// on early-terminator paths the frame was already walked by
+    /// the early-exit's `emit_scope_cleanup`, so we just pop.
+    ///
+    /// Block-scoping a frame closes two slice-1 gaps in one
+    /// shape:
+    /// 1. **Block-scope dispatch** — a `defer` inside the block
+    ///    fires at block exit, not function exit (matches the
+    ///    interpreter's per-block `cleanup` Vec drain semantics).
+    /// 2. **Runtime-reachability** — the drain IR is emitted
+    ///    inside the block's BB, so an unreached arm
+    ///    (`if false { defer ... }`) never executes the drain.
+    ///
+    /// Callers that already manage their own frame at the right
+    /// scope boundary (`compile_for_range` / `compile_while` /
+    /// `compile_loop` / match arms / par-branch worker fns /
+    /// `compile_function`) keep using plain `compile_block` and
+    /// continue to push+drain at the right granularity.
+    pub(super) fn compile_block_with_frame(
+        &mut self,
+        block: &Block,
+    ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
+        self.scope_cleanup_actions.push(Vec::new());
+        let result = self.compile_block(block)?;
+        let body_has_terminator = self
+            .builder
+            .get_insert_block()
+            .unwrap()
+            .get_terminator()
+            .is_some();
+        if !body_has_terminator {
+            self.drain_top_frame_with_emit();
+        } else {
+            self.scope_cleanup_actions.pop();
+        }
+        Ok(result)
+    }
+
     /// Compile a function's top-level body, dispatching inferred parallel
     /// groups to `karac_par_run` (slice 2 — auto-par codegen MVP).
     ///

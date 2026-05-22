@@ -47,7 +47,7 @@ impl<'ctx> super::Codegen<'ctx> {
 
         self.builder.position_at_end(then_bb);
         self.bind_pattern_values(pattern, val)?;
-        let then_val = self.compile_block(then_block)?;
+        let then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
             .get_insert_block()
@@ -62,7 +62,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(else_bb);
         let else_val = if let Some(eb) = else_branch {
             match &eb.kind {
-                ExprKind::Block(blk) => self.compile_block(blk)?,
+                ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
                 _ => Some(self.compile_expr(eb)?),
             }
         } else {
@@ -404,7 +404,7 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(then_bb);
-        let then_val = self.compile_block(then_block)?;
+        let then_val = self.compile_block_with_frame(then_block)?;
         let then_terminated = self
             .builder
             .get_insert_block()
@@ -419,7 +419,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(else_bb);
         let else_val = if let Some(else_expr) = else_branch {
             match &else_expr.kind {
-                ExprKind::Block(blk) => self.compile_block(blk)?,
+                ExprKind::Block(blk) => self.compile_block_with_frame(blk)?,
                 ExprKind::If {
                     condition: c,
                     then_block: tb,
