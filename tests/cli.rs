@@ -1503,7 +1503,7 @@ fn test_test_all_passing() {
     );
     write(
         &tmp.join("src/main_test.kara"),
-        "fn test_add() { assert_eq(add(1, 2), 3); }\nfn test_zero() { assert_eq(add(0, 0), 0); }\n",
+        "test \"add\" { assert_eq(add(1, 2), 3); }\ntest \"zero\" { assert_eq(add(0, 0), 0); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1532,12 +1532,10 @@ fn test_test_failure_emits_left_right_and_location() {
         &tmp.join("src/main.kara"),
         "fn main() {}\nfn add(a: i64, b: i64) -> i64 { a + b }\n",
     );
-    // `assert_eq(add(2, 2), 5)` — left=4, right=5, line 1 col 23 of the
-    // test file (the call is the second statement after the comment-free
-    // first line).
+    // `assert_eq(add(2, 2), 5)` — left=4, right=5.
     write(
         &tmp.join("src/main_test.kara"),
-        "fn test_failing() { assert_eq(add(2, 2), 5); }\n",
+        "test \"failing\" { assert_eq(add(2, 2), 5); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1552,7 +1550,7 @@ fn test_test_failure_emits_left_right_and_location() {
         .iter()
         .find(|l| event_kind(l) == Some("test_fail"))
         .unwrap_or_else(|| panic!("expected a test_fail event in:\n{lines:?}"));
-    assert!(fail_line.contains("\"test\":\"<root>::test_failing\""));
+    assert!(fail_line.contains("\"test\":\"failing\""));
     assert!(fail_line.contains("\"left\":\"4\""));
     assert!(fail_line.contains("\"right\":\"5\""));
     assert!(fail_line.contains("\"location\":{\"file\":"));
@@ -1568,7 +1566,7 @@ fn test_test_filter_narrows_to_substring_match() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "fn test_alpha() { assert(true); }\nfn test_beta() { assert(true); }\nfn test_gamma() { assert(true); }\n",
+        "test \"alpha\" { assert(true); }\ntest \"beta\" { assert(true); }\ntest \"gamma\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -1586,7 +1584,7 @@ fn test_test_filter_narrows_to_substring_match() {
         .filter(|l| event_kind(l) == Some("test_pass"))
         .collect();
     assert_eq!(pass_lines.len(), 1);
-    assert!(pass_lines[0].contains("test_beta"));
+    assert!(pass_lines[0].contains("\"test\":\"beta\""));
 }
 
 #[test]
@@ -1596,7 +1594,7 @@ fn test_test_filter_no_matches_runs_zero_tests() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "fn test_alpha() { assert(true); }\n",
+        "test \"alpha\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -1642,7 +1640,7 @@ fn test_test_compile_error_exits_nonzero_without_summary() {
     // error and the runner aborts before emitting any test events.
     write(
         &tmp.join("src/main_test.kara"),
-        "fn test_a() { undefined_function(); }\n",
+        "test \"a\" { undefined_function(); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1672,7 +1670,7 @@ fn test_test_test_only_module_with_no_production_sibling() {
     // No src/standalone.kara — only the test file.
     write(
         &tmp.join("src/standalone_test.kara"),
-        "fn test_in_standalone_module() { assert(true); }\n",
+        "test \"in standalone module\" { assert(true); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1685,19 +1683,27 @@ fn test_test_test_only_module_with_no_production_sibling() {
         .iter()
         .find(|l| event_kind(l) == Some("test_pass"))
         .unwrap();
-    assert!(pass.contains("standalone::test_in_standalone_module"));
+    // The `test` field on the event is the case-name string verbatim
+    // — no module qualifier prefix. `--filter` matches against this
+    // same string.
+    assert!(pass.contains("\"test\":\"in standalone module\""));
 }
 
 #[test]
 fn test_test_helper_in_test_file_not_run() {
-    // Functions in a `_test.kara` file whose name does NOT start with `test_`
-    // are helpers, not tests (per design.md § Testing > Unit tests).
+    // Helper functions in a `_test.kara` file — whatever they are
+    // named, including `fn test_helper`-style names — are never
+    // discovered as tests. Discovery is structural (`Item::TestCase`),
+    // not name-based, so a free function cannot accidentally become
+    // a test by naming convention.
     let tmp = scratch_project("test-helper-skip");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "fn make_pair() -> (i64, i64) { (1, 2) }\nfn test_uses_helper() { let p = make_pair(); assert_eq(p.0, 1); }\n",
+        "fn make_pair() -> (i64, i64) { (1, 2) }\n\
+         fn test_helper_named_like_a_test() -> i64 { 42 }\n\
+         test \"uses helper\" { let p = make_pair(); assert_eq(p.0, 1); }\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1710,14 +1716,21 @@ fn test_test_helper_in_test_file_not_run() {
         .iter()
         .find(|l| event_kind(l) == Some("test_pass"))
         .unwrap();
-    assert!(pass.contains("test_uses_helper"));
+    assert!(pass.contains("\"test\":\"uses helper\""));
+    // Neither the unrelated helper nor the conventionally-named
+    // helper appears in any test event — discovery does not see
+    // them as cases regardless of their identifiers.
     assert!(!stdout.contains("make_pair"));
+    assert!(!stdout.contains("test_helper_named_like_a_test"));
 }
 
 #[test]
 fn test_test_test_prefixed_function_in_production_code_is_not_a_test() {
-    // A `test_` prefix in production code (not a `_test.kara` file) is just
-    // a regular function. It should NOT be picked up as a test.
+    // A `test_` prefix on a production-code function is a name like
+    // any other; it has never been a discovery signal (discovery is
+    // structural and only walks `_test.kara` companion files). The
+    // test keeps existing as a regression guard against any future
+    // re-introduction of name-based discovery.
     let tmp = scratch_project("test-prefix-prod");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
@@ -1869,19 +1882,20 @@ fn test_test_block_form_filter_matches_case_name() {
 }
 
 #[test]
-fn test_test_block_form_coexists_with_legacy_fn_test_form() {
-    // Slices 2–4 keep the convention-based `fn test_*` discovery
-    // alive alongside `Item::TestCase`. Slice 5 collapses the
-    // legacy path; until then both shapes must run side by side
-    // so partial migration of a project's `_test.kara` files
-    // doesn't silently drop either form.
-    let tmp = scratch_project("test-block-coexist");
+fn test_test_helpers_alongside_test_cases_in_same_file() {
+    // Block-form test cases coexist with free helper functions in
+    // the same `_test.kara` file. Discovery is structural — only
+    // `Item::TestCase` entries are picked up, so any number of
+    // `fn` items can live alongside cases as helpers without
+    // accidentally becoming tests themselves.
+    let tmp = scratch_project("test-block-helpers");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "test \"block form\" { assert(true); }\n\
-         fn test_legacy() { assert(true); }\n",
+        "fn helper_one() -> i64 { 1 }\n\
+         fn helper_two() -> i64 { 2 }\n\
+         test \"helpers compose\" {\n    assert_eq(helper_one() + helper_two(), 3);\n}\n",
     );
 
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
@@ -1889,20 +1903,13 @@ fn test_test_block_form_coexists_with_legacy_fn_test_form() {
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "stdout:\n{stdout}");
     let lines = jsonl_lines(&stdout);
-    assert!(lines[0].contains("\"total_tests\":2"));
+    assert!(lines[0].contains("\"total_tests\":1"));
     let pass: Vec<&&str> = lines
         .iter()
         .filter(|l| event_kind(l) == Some("test_pass"))
         .collect();
-    assert_eq!(pass.len(), 2);
-    // Block-form event carries the case-name string verbatim;
-    // legacy `fn test_*` event keeps the `<module>::fn_name`
-    // qualifier (the schema doesn't change — only the source of
-    // the string differs).
-    assert!(pass.iter().any(|l| l.contains("\"test\":\"block form\"")));
-    assert!(pass
-        .iter()
-        .any(|l| l.contains("\"test\":\"<root>::test_legacy\"")));
+    assert_eq!(pass.len(), 1);
+    assert!(pass[0].contains("\"test\":\"helpers compose\""));
 }
 
 #[test]
@@ -1984,7 +1991,7 @@ fn test_test_requires_skips_when_resource_unavailable() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_skipcase.fake_db])]\nfn test_needs_db() { assert(false); }\n",
+        "#[test(requires = [karac_slice2_skipcase.fake_db])]\ntest \"needs db\" { assert(false); }\n",
     );
 
     // Env var KARA_RESOURCE_KARAC_SLICE2_SKIPCASE_FAKE_DB is unset; the
@@ -2006,7 +2013,7 @@ fn test_test_requires_skips_when_resource_unavailable() {
         .unwrap_or_else(|| panic!("expected a test_skip line; got: {lines:?}"));
     assert!(skip.contains("\"reason\":\"unsatisfied_requires\""));
     assert!(skip.contains("\"resources\":[\"karac_slice2_skipcase.fake_db\"]"));
-    assert!(skip.contains("test_needs_db"));
+    assert!(skip.contains("\"test\":\"needs db\""));
     let summary = lines.last().unwrap();
     assert!(summary.contains("\"skipped\":1"));
     assert!(summary.contains("\"failed\":0"));
@@ -2020,7 +2027,7 @@ fn test_test_requires_runs_when_env_var_set() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_runcase.fake_db])]\nfn test_needs_db() { assert(true); }\n",
+        "#[test(requires = [karac_slice2_runcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -2057,7 +2064,7 @@ fn test_test_requires_health_check_overrides_env_var() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_healthcase.fake_db])]\nfn test_needs_db() { assert(true); }\n",
+        "#[test(requires = [karac_slice2_healthcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // env var IS set — but the failing health-check should take precedence.
@@ -2087,7 +2094,7 @@ fn test_test_requires_health_check_success_runs_test() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_healthok.fake_db])]\nfn test_needs_db() { assert(true); }\n",
+        "#[test(requires = [karac_slice2_healthok.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     // No env var set — only the (passing) health check matters.
@@ -2115,7 +2122,7 @@ fn test_test_requires_partial_satisfied_lists_only_missing() {
     // Two requires; A is set in env, B is not. Skip event must list only B.
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_partial.have_a, karac_slice2_partial.miss_b])]\nfn test_needs_both() { assert(true); }\n",
+        "#[test(requires = [karac_slice2_partial.have_a, karac_slice2_partial.miss_b])]\ntest \"needs both\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -2149,7 +2156,7 @@ fn test_test_all_promotes_skip_to_failure() {
     write(&tmp.join("src/main.kara"), "fn main() {}\n");
     write(
         &tmp.join("src/main_test.kara"),
-        "#[test(requires = [karac_slice2_allcase.fake_db])]\nfn test_needs_db() { assert(true); }\n",
+        "#[test(requires = [karac_slice2_allcase.fake_db])]\ntest \"needs db\" { assert(true); }\n",
     );
 
     let out = karac_bin()
@@ -2328,7 +2335,7 @@ fn with_provider_project(tag: &str, test_attrs_and_body: &str) -> std::path::Pat
 #[test]
 fn test_with_provider_fixture_pushes_frame_for_test() {
     let body = "#[with_provider(Clock, FakeClock { t: 42 })]\n\
-                fn test_reads_injected_clock() {\n\
+                test \"reads injected clock\" {\n\
                     assert_eq(Clock.now(), 42);\n\
                 }\n";
     let tmp = with_provider_project("test-with-provider-basic", body);
@@ -2341,7 +2348,7 @@ fn test_with_provider_fixture_pushes_frame_for_test() {
         .iter()
         .find(|l| event_kind(l) == Some("test_pass"))
         .unwrap_or_else(|| panic!("expected test_pass; got:\n{lines:?}"));
-    assert!(pass.contains("test_reads_injected_clock"));
+    assert!(pass.contains("\"test\":\"reads injected clock\""));
 }
 
 #[test]
@@ -2351,7 +2358,7 @@ fn test_with_provider_constructor_failure_emits_structured_fail() {
     // `provider_construction_failed` instead of running the test body.
     let body = "fn boom() -> FakeClock { unreachable() }\n\
                 #[with_provider(Clock, boom())]\n\
-                fn test_broken_fixture() {\n\
+                test \"broken fixture\" {\n\
                     assert_eq(1, 1);\n\
                 }\n";
     let tmp = with_provider_project("test-with-provider-ctor-fail", body);
@@ -2387,7 +2394,7 @@ fn test_with_provider_and_requires_conflict_rejected_at_discovery() {
     // rejects with `requires_and_with_provider_conflict`.
     let body = "#[test(requires = [Clock])]\n\
                 #[with_provider(Clock, FakeClock { t: 0 })]\n\
-                fn test_contradictory_fixture() {\n\
+                test \"contradictory fixture\" {\n\
                     assert_eq(1, 1);\n\
                 }\n";
     let tmp = with_provider_project("test-with-provider-conflict", body);
@@ -2416,7 +2423,7 @@ fn test_with_provider_fail_event_grows_providers_field() {
     // `providers` array listing the active fixtures. Passing tests stay
     // lean and do not carry this field.
     let body = "#[with_provider(Clock, FakeClock { t: 7 })]\n\
-                fn test_fails_with_fixture() {\n\
+                test \"fails with fixture\" {\n\
                     assert_eq(Clock.now(), 999);\n\
                 }\n";
     let tmp = with_provider_project("test-with-provider-fail-providers-field", body);
@@ -2455,7 +2462,7 @@ fn test_multiple_with_provider_attributes_all_active_in_body() {
         &tmp.join("src/main_test.kara"),
         "#[with_provider(Clock, FakeClock { t: 42 })]\n\
          #[with_provider(AuditLog, FakeLog { n: 3 })]\n\
-         fn test_two_providers() {\n\
+         test \"two providers\" {\n\
              assert_eq(Clock.now(), 42);\n\
              assert_eq(AuditLog.count(), 3);\n\
          }\n",
@@ -2494,8 +2501,8 @@ fn test_with_provider_frame_popped_between_tests() {
     write(
         &tmp.join("src/main_test.kara"),
         "#[with_provider(Clock, FakeClock { t: 1 })]\n\
-         fn test_a_has_clock() { assert_eq(Clock.now(), 1); }\n\
-         fn test_b_no_fixture() { assert_ne(Clock.now(), 1); }\n",
+         test \"a has clock\" { assert_eq(Clock.now(), 1); }\n\
+         test \"b no fixture\" { assert_ne(Clock.now(), 1); }\n",
     );
     let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
     let _ = std::fs::remove_dir_all(&tmp);
@@ -2503,13 +2510,13 @@ fn test_with_provider_frame_popped_between_tests() {
     let lines = jsonl_lines(&stdout);
     let a = lines
         .iter()
-        .find(|l| l.contains("test_a_has_clock"))
-        .unwrap_or_else(|| panic!("expected test_a_has_clock event; got:\n{lines:?}"));
+        .find(|l| l.contains("\"test\":\"a has clock\""))
+        .unwrap_or_else(|| panic!("expected `a has clock` event; got:\n{lines:?}"));
     assert_eq!(event_kind(a), Some("test_pass"));
     let b = lines
         .iter()
-        .find(|l| l.contains("test_b_no_fixture"))
-        .unwrap_or_else(|| panic!("expected test_b_no_fixture event; got:\n{lines:?}"));
+        .find(|l| l.contains("\"test\":\"b no fixture\""))
+        .unwrap_or_else(|| panic!("expected `b no fixture` event; got:\n{lines:?}"));
     assert_eq!(event_kind(b), Some("test_pass"));
 }
 
@@ -2533,10 +2540,10 @@ fn test_with_provider_overrides_builtin_primitive_clock() {
     write(
         &tmp.join("src/main_test.kara"),
         "#[with_provider(Clock, FakeClock { t: 1_700_000_000 })]\n\
-         fn test_clock_override_returns_fake() {\n\
+         test \"clock override returns fake\" {\n\
              assert_eq(Clock.now(), 1_700_000_000);\n\
          }\n\
-         fn test_clock_without_fixture_uses_ambient_default() {\n\
+         test \"clock without fixture uses ambient default\" {\n\
              assert_ne(Clock.now(), 1_700_000_000);\n\
          }\n",
     );
@@ -2546,12 +2553,12 @@ fn test_with_provider_overrides_builtin_primitive_clock() {
     let lines = jsonl_lines(&stdout);
     let with_fixture = lines
         .iter()
-        .find(|l| l.contains("test_clock_override_returns_fake"))
+        .find(|l| l.contains("\"test\":\"clock override returns fake\""))
         .unwrap_or_else(|| panic!("expected override event; got:\n{lines:?}"));
     assert_eq!(event_kind(with_fixture), Some("test_pass"));
     let without_fixture = lines
         .iter()
-        .find(|l| l.contains("test_clock_without_fixture_uses_ambient_default"))
+        .find(|l| l.contains("\"test\":\"clock without fixture uses ambient default\""))
         .unwrap_or_else(|| panic!("expected ambient-default event; got:\n{lines:?}"));
     assert_eq!(event_kind(without_fixture), Some("test_pass"));
 }

@@ -5,8 +5,7 @@
 // trivial-test case; the design-study value here is confirming that
 // a domain-type brick doesn't force any of the injection machinery.
 
-#[test]
-fn test_add_same_currency() {
+test "add same currency" {
     let a = Money.new(1234, Currency.USD);
     let b = Money.new(567, Currency.USD);
     let sum = a.add(b).unwrap();
@@ -14,8 +13,7 @@ fn test_add_same_currency() {
     assert_eq(sum.currency, Currency.USD);
 }
 
-#[test]
-fn test_add_mismatched_currency_errors() {
+test "add mismatched currency errors" {
     let a = Money.new(1234, Currency.USD);
     let b = Money.new(567, Currency.EUR);
     match a.add(b) {
@@ -27,8 +25,7 @@ fn test_add_mismatched_currency_errors() {
     }
 }
 
-#[test]
-fn test_cmp_same_currency() {
+test "cmp same currency" {
     let a = Money.new(1000, Currency.USD);
     let b = Money.new(2000, Currency.USD);
     assert_eq(a.cmp_same(b).unwrap(), Ordering.Less);
@@ -36,15 +33,13 @@ fn test_cmp_same_currency() {
     assert_eq(a.cmp_same(a).unwrap(), Ordering.Equal);
 }
 
-#[test]
-fn test_cmp_mismatched_currency_errors() {
+test "cmp mismatched currency errors" {
     let a = Money.new(1000, Currency.USD);
     let b = Money.new(1000, Currency.EUR);
     assert(a.cmp_same(b).is_err());
 }
 
-#[test]
-fn test_display_formats_minor_units() {
+test "display formats minor units" {
     let m = Money.new(1234, Currency.USD);
     assert_eq(f"{m}".to_string(), "12.34 USD".to_string());
 }

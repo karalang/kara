@@ -6609,89 +6609,64 @@ fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) 
     }
 }
 
-/// Materialize a module's items with every `Item::TestCase` rewritten
-/// to a synthesized `Item::Function`. Used at the per-module Program
-/// build step in `karac test` so the resolver / typechecker /
-/// interpreter never see the `TestCase` variant — they process a
-/// regular function body and the runner dispatches through the
-/// existing `call_function` path. Non-`TestCase` items pass through
-/// unchanged with a single clone (the rest of the test runner
-/// already builds a cloned `Program` per module, so this folds into
-/// that clone with no extra allocation profile).
-fn lower_module_test_cases(items: &[Item], module_label: &str) -> Vec<Item> {
-    items
-        .iter()
-        .map(|item| match item {
-            Item::TestCase(tc) => {
-                let mangled = mangled_test_function_name(module_label, tc.name_span.line, &tc.name);
-                Item::Function(lower_test_case_to_function(tc, mangled))
-            }
-            other => other.clone(),
-        })
-        .collect()
-}
-
-fn discover_tests(tree: &ProgramTree) -> Vec<DiscoveredTest> {
-    let mut out = Vec::new();
-    for (mod_id, module) in tree.modules.iter().enumerate() {
+/// Rewrite every `Item::TestCase` in the program tree to a
+/// synthesized `Item::Function` *and* collect the parallel
+/// `DiscoveredTest` list in one pass. The mangled function name on
+/// each lowered `Item::Function` matches the `fn_name` field on the
+/// returned `DiscoveredTest`, so the runner's later
+/// `Interpreter::run_test_function(t.fn_name)` finds the entry the
+/// standard `register_items` walk already registered.
+///
+/// Lowering happens *before* the resolver / typechecker run on the
+/// program tree. Without that ordering, a typo or undefined-symbol
+/// reference inside a test body would slip past name resolution (the
+/// no-op `TestCase` arms in resolver / typechecker skip the body
+/// unread) and only surface as a runtime error in the per-test loop —
+/// breaking the contract that compile failures exit non-zero with no
+/// test events emitted.
+///
+/// Test cases are structural: `Item::TestCase` entries from
+/// `test "case" { body }` syntax per design.md § Testing. The
+/// convention-based `fn test_*` discovery is gone — helper functions
+/// in `_test.kara` files (any name, including `fn test_*`) stay
+/// `Item::Function` and are never picked up as tests, closing the
+/// silent-skip failure mode where a project written to the design
+/// silently ran zero tests because the runner walked `fn test_*`
+/// instead of `Item::TestCase`.
+fn lower_and_discover_test_cases(tree: &mut ProgramTree) -> Vec<DiscoveredTest> {
+    let mut tests = Vec::new();
+    for (mod_id, module) in tree.modules.iter_mut().enumerate() {
         if module.is_synthetic {
             continue;
         }
-        let Some(test_start) = module.test_items_start else {
+        if module.test_items_start.is_none() {
             continue;
-        };
+        }
         let label = module_label(&module.path);
-        for item in &module.items[test_start..] {
+        let mut new_items: Vec<Item> = Vec::with_capacity(module.items.len());
+        for item in module.items.drain(..) {
             match item {
-                Item::Function(f) if f.name.starts_with("test_") => {
-                    out.push(DiscoveredTest {
+                Item::TestCase(tc) => {
+                    let mangled = mangled_test_function_name(&label, tc.name_span.line, &tc.name);
+                    tests.push(DiscoveredTest {
                         module_id: mod_id,
-                        fn_name: f.name.clone(),
-                        qualified: format!("{}::{}", label, f.name),
-                        requires: extract_requires(&f.attributes),
-                        with_providers: extract_with_providers(&f.attributes),
+                        fn_name: mangled.clone(),
+                        // User-visible qualifier — design.md § Testing
+                        // pins this to the case-name string verbatim:
+                        // the string `--filter` matches against, the
+                        // `test` field on every JSONL event.
+                        qualified: tc.name.clone(),
+                        requires: extract_requires(&tc.attributes),
+                        with_providers: extract_with_providers(&tc.attributes),
                     });
+                    new_items.push(Item::Function(lower_test_case_to_function(&tc, mangled)));
                 }
-                Item::TestCase(t) => {
-                    // The interpreter lookup name must match what
-                    // `lower_module_test_cases` produces — both
-                    // call sites use `mangled_test_function_name`
-                    // with the same inputs, so the registration
-                    // and the `run_test_function` call agree by
-                    // construction.
-                    let mangled = mangled_test_function_name(&label, t.name_span.line, &t.name);
-                    out.push(DiscoveredTest {
-                        module_id: mod_id,
-                        fn_name: mangled,
-                        // User-visible qualifier — design.md §
-                        // Testing pins this to the case-name
-                        // string verbatim (the same string
-                        // `--filter` matches against and the
-                        // `test` field on every JSONL event
-                        // carries). Slice 5 collapses the legacy
-                        // `fn test_*` path so all entries take
-                        // this branch and `qualified` becomes
-                        // uniformly the case name.
-                        qualified: t.name.clone(),
-                        // `#[test(requires=[...])]` and
-                        // `#[with_provider(R, ctor)]` attach to
-                        // block-form cases verbatim — the same
-                        // extract helpers walk `TestCase.attributes`
-                        // and `Function.attributes` because the
-                        // attribute *shape* is unchanged, only the
-                        // host item kind differs. design.md §
-                        // Testing pins the surface; slice 5's
-                        // example-fixture migration is the
-                        // workload validation.
-                        requires: extract_requires(&t.attributes),
-                        with_providers: extract_with_providers(&t.attributes),
-                    });
-                }
-                _ => {}
+                other => new_items.push(other),
             }
         }
+        module.items = new_items;
     }
-    out
+    tests
 }
 
 /// Pull resource paths out of a `#[test(requires = [a.b, c.d])]` attribute.
@@ -6948,7 +6923,20 @@ fn cmd_test(filter: Option<String>, all: bool) {
         }
     };
 
-    let BuildTreeOk { tree, parse_errors } = built;
+    let BuildTreeOk {
+        mut tree,
+        parse_errors,
+    } = built;
+
+    // Lower every `Item::TestCase` to a synthesized `Item::Function`
+    // and collect the parallel `DiscoveredTest` list, *before* resolve
+    // / typecheck run. Putting the lowering ahead of name resolution
+    // is what gives the runner its compile-failure contract: an
+    // undefined symbol inside a test body produces a resolve error
+    // here at the global step, and the runner exits non-zero with no
+    // test events. See `lower_and_discover_test_cases`.
+    let discovered_tests = lower_and_discover_test_cases(&mut tree);
+
     let cycles = module::detect_cycles(&tree);
 
     let resolve_errors: Vec<ModuleResolveErrors> = if parse_errors.is_empty() && cycles.is_empty() {
@@ -6985,10 +6973,13 @@ fn cmd_test(filter: Option<String>, all: bool) {
         process::exit(1);
     }
 
-    // Discover tests, apply filter, sort by (module_id, fn_name) so order is
-    // stable across runs — declaration order within a module, modules in
-    // walk order. LLM consumers diffing two test runs depend on this.
-    let mut tests = discover_tests(&tree);
+    // Apply filter to the discovery list built before resolve. Sort
+    // by (module_id, fn_name) so order is stable across runs —
+    // declaration order within a module (each case lives on a
+    // distinct source line, and the mangled name embeds the line, so
+    // sorting by mangled name matches source order), modules in walk
+    // order. LLM consumers diffing two test runs depend on this.
+    let mut tests = discovered_tests;
     if let Some(needle) = &filter {
         tests.retain(|t| t.qualified.contains(needle.as_str()));
     }
@@ -7053,18 +7044,14 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // transition happens exactly once per module.
         if current_module != Some(t.module_id) {
             let m = &tree.modules[t.module_id];
-            // Lower every `Item::TestCase` in this module to a
-            // synthesized `Item::Function` keyed by the same mangled
-            // name that `discover_tests` already wrote into
-            // `DiscoveredTest.fn_name` above. Downstream resolve /
-            // typecheck / interpret see only regular function
-            // declarations; the test body flows through the
-            // standard pipeline and `run_test_function(t.fn_name)`
-            // finds the lowered entry in `env.functions`.
-            let label = module_label(&m.path);
-            let lowered_items = lower_module_test_cases(&m.items, &label);
+            // `Item::TestCase` lowering has already happened at the
+            // global tree level (see `lower_and_discover_test_cases`),
+            // so cloning the module's items hands the standard
+            // resolver / typechecker / interpreter pipeline a regular
+            // `Item::Function` body that `run_test_function(t.fn_name)`
+            // looks up through the usual `call_function` path.
             let program = Program {
-                items: lowered_items,
+                items: m.items.clone(),
                 ..Program::default()
             };
             let resolved = Resolver::new(&program)

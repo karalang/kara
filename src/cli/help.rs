@@ -26,12 +26,12 @@ COMMANDS:
                       the abort when kara.toml / src/main.kara /
                       src/lib.kara already exist in the CWD form.
     test [<filter>]   Run the project's tests. Walks the project root,
-                      discovers `_test.kara` files, and invokes every
-                      `test_*` function via the interpreter. Output is
-                      JSONL on stdout (see `docs/design.md § Testing`).
-                      Optional positional substring filter limits which
-                      tests run by qualified ID
-                      (`<module_path>::<fn_name>`).
+                      discovers `_test.kara` files, and runs every
+                      `test \"case name\" {{ body }}` declaration via the
+                      interpreter. Output is JSONL on stdout (see
+                      `docs/design.md § Testing`). Optional positional
+                      substring filter matches against each case's name
+                      string.
     query <kind> <target>
                       Query compiler analysis. Per-function kinds take
                       `<file>.<function>` as target; `cost-summary` takes
@@ -396,9 +396,10 @@ USAGE:
     karac test [<filter>] [--all]
 
 ARGS:
-    <filter>   Optional substring matched against each test's
-               fully-qualified ID (`<module_path>::<fn_name>`). Only tests
-               whose ID contains this substring run; the others are
+    <filter>   Optional substring matched against each test case's
+               name — the string literal between `test` and `{` in a
+               `test \"case name\" { body }` declaration. Only cases
+               whose name contains this substring run; the others are
                silently dropped (they do not appear as `test_skip`).
 
 OPTIONS:

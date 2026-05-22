@@ -45,13 +45,13 @@ impl DatabaseProvider for InMemoryUserDB {
 // wraps the body in `with_provider[UserDB](_, || { ... })`.
 
 #[with_provider(UserDB, InMemoryUserDB.new)]
-fn test_insert_then_get() {
+test "insert then get" {
     UserDB.insert("alice", "1").unwrap();
     assert(UserDB.get("alice") == Some("1"));
 }
 
 #[with_provider(UserDB, InMemoryUserDB.new)]
-fn test_missing_key_is_none() {
+test "missing key is none" {
     assert(UserDB.get("nobody") == None);
 }
 
@@ -60,7 +60,7 @@ fn test_missing_key_is_none() {
 
 #[with_provider(UserDB,  InMemoryUserDB.new)]
 #[with_provider(AuditDB, InMemoryUserDB.new)]
-fn test_two_providers() {
+test "two providers" {
     UserDB.insert("alice", "1").unwrap();
     AuditDB.insert("audit:alice", "created").unwrap();
     assert(UserDB.get("alice") == Some("1"));
@@ -71,7 +71,7 @@ fn test_two_providers() {
 //
 // Useful when one test wants to swap providers partway through.
 
-fn test_swap_provider_midway() {
+test "swap provider midway" {
     with_provider[UserDB](InMemoryUserDB.new(), || {
         UserDB.insert("alice", "v1").unwrap();
         assert(UserDB.get("alice") == Some("v1"));
@@ -87,7 +87,7 @@ fn test_swap_provider_midway() {
 //
 // Flattens what would otherwise be a callback pyramid.
 
-fn test_providers_block() {
+test "providers block" {
     providers {
         UserDB  => InMemoryUserDB.new(),
         AuditDB => InMemoryUserDB.new(),

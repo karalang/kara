@@ -1991,21 +1991,20 @@ fn test_attribute_with_equal_sign_args() {
     // but design-conformant attributes like `#[test(requires = [...])]`
     // must parse out of the box.
     let prog =
-        parse_ok("#[test(requires = [db.UserDB, payment.PaymentAPI])]\nfn test_checkout() { }");
-    if let Item::Function(f) = &prog.items[0] {
-        assert_eq!(f.attributes[0].path[0], "test");
-        assert_eq!(f.attributes[0].args.len(), 1);
-        assert_eq!(f.attributes[0].args[0].name.as_deref(), Some("requires"));
-        let value = f.attributes[0].args[0]
-            .value
-            .as_ref()
-            .expect("requires arg should carry an array literal value");
-        match &value.kind {
-            ExprKind::ArrayLiteral(elems) => assert_eq!(elems.len(), 2),
-            other => panic!("expected ArrayLiteral, got {other:?}"),
-        }
-    } else {
-        panic!("Expected Function");
+        parse_ok("#[test(requires = [db.UserDB, payment.PaymentAPI])]\ntest \"checkout\" { }");
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    assert_eq!(t.attributes[0].path[0], "test");
+    assert_eq!(t.attributes[0].args.len(), 1);
+    assert_eq!(t.attributes[0].args[0].name.as_deref(), Some("requires"));
+    let value = t.attributes[0].args[0]
+        .value
+        .as_ref()
+        .expect("requires arg should carry an array literal value");
+    match &value.kind {
+        ExprKind::ArrayLiteral(elems) => assert_eq!(elems.len(), 2),
+        other => panic!("expected ArrayLiteral, got {other:?}"),
     }
 }
 
@@ -7155,27 +7154,26 @@ fn providers_expr(prog: &Program) -> (&Vec<ProviderBinding>, &Block) {
 fn test_with_provider_attribute_parses_positional_args() {
     let prog = parse_ok(
         "#[with_provider(Clock, FakeClock.new)]\n\
-         fn test_timestamp() { }",
+         test \"timestamp\" { }",
     );
-    if let Item::Function(f) = &prog.items[0] {
-        let attr = &f.attributes[0];
-        assert_eq!(attr.path[0], "with_provider");
-        assert_eq!(attr.args.len(), 2);
-        // Both args are positional — `name` is None.
-        assert!(attr.args[0].name.is_none());
-        assert!(attr.args[1].name.is_none());
-        // First arg is a bare identifier `Clock`.
-        match &attr.args[0].value.as_ref().unwrap().kind {
-            ExprKind::Identifier(n) => assert_eq!(n, "Clock"),
-            other => panic!("expected Identifier, got {other:?}"),
-        }
-        // Second arg is a path / field access `FakeClock.new`. Parser
-        // leaves it as either `FieldAccess(Path(["FakeClock"]), "new")`
-        // or similar — we just require it parses without error.
-        assert!(attr.args[1].value.is_some());
-    } else {
-        panic!("expected Function");
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    let attr = &t.attributes[0];
+    assert_eq!(attr.path[0], "with_provider");
+    assert_eq!(attr.args.len(), 2);
+    // Both args are positional — `name` is None.
+    assert!(attr.args[0].name.is_none());
+    assert!(attr.args[1].name.is_none());
+    // First arg is a bare identifier `Clock`.
+    match &attr.args[0].value.as_ref().unwrap().kind {
+        ExprKind::Identifier(n) => assert_eq!(n, "Clock"),
+        other => panic!("expected Identifier, got {other:?}"),
     }
+    // Second arg is a path / field access `FakeClock.new`. Parser
+    // leaves it as either `FieldAccess(Path(["FakeClock"]), "new")`
+    // or similar — we just require it parses without error.
+    assert!(attr.args[1].value.is_some());
 }
 
 #[test]
@@ -7183,15 +7181,14 @@ fn test_with_provider_attribute_parses_constructor_call() {
     // Constructor arg can itself be a call expression.
     let prog = parse_ok(
         "#[with_provider(Clock, FakeClock.at(0))]\n\
-         fn test_fixed_time() { }",
+         test \"fixed time\" { }",
     );
-    if let Item::Function(f) = &prog.items[0] {
-        let attr = &f.attributes[0];
-        assert_eq!(attr.args.len(), 2);
-        assert!(attr.args[1].value.is_some());
-    } else {
-        panic!("expected Function");
-    }
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    let attr = &t.attributes[0];
+    assert_eq!(attr.args.len(), 2);
+    assert!(attr.args[1].value.is_some());
 }
 
 #[test]
@@ -7199,34 +7196,32 @@ fn test_with_provider_attribute_allows_dotted_resource_path() {
     // `db.UserDB` resource path — field-access expression chain.
     let prog = parse_ok(
         "#[with_provider(db.UserDB, FakeDB.new)]\n\
-         fn test_fixture() { }",
+         test \"fixture\" { }",
     );
-    if let Item::Function(f) = &prog.items[0] {
-        let attr = &f.attributes[0];
-        assert_eq!(attr.args.len(), 2);
-        // First arg is a FieldAccess expression — the typechecker can
-        // decide whether it resolves to a valid resource path later.
-        assert!(attr.args[0].value.is_some());
-    } else {
-        panic!("expected Function");
-    }
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    let attr = &t.attributes[0];
+    assert_eq!(attr.args.len(), 2);
+    // First arg is a FieldAccess expression — the typechecker can
+    // decide whether it resolves to a valid resource path later.
+    assert!(attr.args[0].value.is_some());
 }
 
 #[test]
-fn test_multiple_with_provider_attributes_on_one_fn() {
+fn test_multiple_with_provider_attributes_on_one_test_case() {
     // Multi-attribute form — source order is outer-to-inner.
     let prog = parse_ok(
         "#[with_provider(Clock, FakeClock.new)]\n\
          #[with_provider(UserDB, FakeDB.new)]\n\
-         fn test_two_providers() { }",
+         test \"two providers\" { }",
     );
-    if let Item::Function(f) = &prog.items[0] {
-        assert_eq!(f.attributes.len(), 2);
-        assert_eq!(f.attributes[0].path[0], "with_provider");
-        assert_eq!(f.attributes[1].path[0], "with_provider");
-    } else {
-        panic!("expected Function");
-    }
+    let Item::TestCase(t) = &prog.items[0] else {
+        panic!("expected TestCase");
+    };
+    assert_eq!(t.attributes.len(), 2);
+    assert_eq!(t.attributes[0].path[0], "with_provider");
+    assert_eq!(t.attributes[1].path[0], "with_provider");
 }
 
 #[test]
