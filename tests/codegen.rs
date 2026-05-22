@@ -20119,6 +20119,236 @@ fn main() {
         }
     }
 
+    // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
+    //
+    // Real LLVM globals — immutable `let X: T = INIT` lowers to
+    // `@X = internal constant T INIT`; `let mut X: T = INIT` lowers
+    // to `@X = internal global T INIT`. `#[thread_local]` adds the
+    // thread-local storage class. Reads route through LLVM `load`,
+    // writes through LLVM `store`. Tests below exercise each shape
+    // end-to-end so a regression in any layer surfaces.
+
+    #[test]
+    fn test_e2e_modbind_immutable_let_read() {
+        let output = run_program(
+            "let MAX: i64 = 100;\n\
+             fn main() { println(MAX); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "100\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_let_mut_read_and_write() {
+        // Bump in one function, read in main — global state survives
+        // across function calls, which is the v1-blocking property
+        // captured by §1322's synthetic-resource conflict analysis.
+        let output = run_program(
+            "let mut COUNTER: i64 = 0;\n\
+             fn bump() { COUNTER = COUNTER + 1; }\n\
+             fn main() {\n\
+                 bump();\n\
+                 bump();\n\
+                 bump();\n\
+                 println(COUNTER);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_compound_assign() {
+        // `+=` / `-=` / `*=` lower to load + binop + store on the
+        // global pointer. Catches any drift in the CompoundAssign
+        // arm's identifier-LHS fast path.
+        let output = run_program(
+            "let mut N: i64 = 5;\n\
+             fn main() {\n\
+                 N += 10;\n\
+                 N -= 3;\n\
+                 N *= 2;\n\
+                 println(N);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "24\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_string_slice_literal() {
+        // `let G: StringSlice = "hello";` materialises a (ptr, len,
+        // cap=0) aggregate global. `cap=0` is the static-buffer
+        // marker — runtime scope-exit cleanup never frees this
+        // pointer.
+        let output = run_program(
+            "let GREETING: StringSlice = \"hello\";\n\
+             fn main() { println(GREETING); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "hello\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_thread_local_read_write() {
+        // `#[thread_local]` lowers to an LLVM thread-local global.
+        // Single-task case: behaves identically to a non-thread-local
+        // `let mut` (each task sees its own copy starting at the
+        // initializer). The per-task disjoint-instance semantic
+        // matters for parallel code; main-thread sanity check here.
+        let output = run_program(
+            "#[thread_local]\n\
+             let mut TLS_COUNTER: i64 = 0;\n\
+             fn main() {\n\
+                 TLS_COUNTER = 42;\n\
+                 println(TLS_COUNTER);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_bool_let_mut() {
+        let output = run_program(
+            "let mut FLAG: bool = false;\n\
+             fn flip() { FLAG = true; }\n\
+             fn main() {\n\
+                 flip();\n\
+                 println(FLAG);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "true\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_float_immutable_let() {
+        let output = run_program(
+            "let PI: f64 = 3.14;\n\
+             fn main() { println(PI); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3.14\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_negated_int_literal() {
+        // `let X = -42;` — the AST shape is `Unary { Neg, Integer }`,
+        // not `Integer(-42)`. The slice-9 surface lowers it
+        // recursively so the negative-init case works.
+        let output = run_program(
+            "let TEMP: i64 = -42;\n\
+             fn main() { println(TEMP); }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "-42\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_two_distinct_bindings_independent() {
+        // Two distinct `let mut` bindings get their own globals; a
+        // write to one doesn't leak into the other. Mirrors the
+        // slice-6 effect-checker test which proves synthetic
+        // resources are per-binding; this is the codegen analogue.
+        let output = run_program(
+            "let mut A: i64 = 0;\n\
+             let mut B: i64 = 0;\n\
+             fn main() {\n\
+                 A = 7;\n\
+                 B = 11;\n\
+                 println(A);\n\
+                 println(B);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "7\n11\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_read_from_callee_observes_writes_from_caller() {
+        // Writer in main, reader in private fn — confirms the
+        // global-state visibility property end-to-end. If the read
+        // path resolved to a stale local snapshot instead of the
+        // global, the second `read()` call would print `0`.
+        let output = run_program(
+            "let mut STATE: i64 = 0;\n\
+             fn read() -> i64 { STATE }\n\
+             fn main() {\n\
+                 println(read());\n\
+                 STATE = 100;\n\
+                 println(read());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "0\n100\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_local_shadow_takes_precedence() {
+        // A function-local `let mut COUNTER` shadows the
+        // module-level binding for the duration of that scope — the
+        // identifier read resolves to the local slot first per the
+        // compile_expr Identifier arm's lookup order (`variables`
+        // before `module_bindings`). Without this guarantee, a
+        // function that happened to name a local after a module
+        // binding would silently read the global instead.
+        let output = run_program(
+            "let mut COUNTER: i64 = 100;\n\
+             fn local_shadows() -> i64 {\n\
+                 let COUNTER: i64 = 7;\n\
+                 COUNTER\n\
+             }\n\
+             fn main() {\n\
+                 println(local_shadows());\n\
+                 println(COUNTER);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "7\n100\n");
+    }
+
+    #[test]
+    fn test_ir_modbind_emits_internal_global() {
+        // The lowered IR contains the global with `internal` linkage
+        // and the right constant/non-constant flag for the
+        // `let` / `let mut` distinction.
+        let ir = ir_for(
+            "let MAX: i64 = 100;\n\
+             let mut COUNTER: i64 = 0;\n\
+             fn main() { println(MAX); println(COUNTER); }",
+        );
+        assert!(
+            ir.contains("@MAX = internal constant i64 100"),
+            "expected `@MAX = internal constant i64 100` in IR, got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("@COUNTER = internal global i64 0"),
+            "expected `@COUNTER = internal global i64 0` in IR, got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_modbind_thread_local_carries_storage_class() {
+        // `#[thread_local]` must produce the `thread_local` keyword
+        // on the LLVM global so the linker emits the per-task TLS
+        // segment. The general-dynamic model is portable across
+        // ELF/Mach-O; LLVM IR prints it as `thread_local` (no
+        // qualifier) by default.
+        let ir = ir_for(
+            "#[thread_local]\n\
+             let mut TLS_COUNTER: i64 = 0;\n\
+             fn main() { TLS_COUNTER = 1; println(TLS_COUNTER); }",
+        );
+        assert!(
+            ir.contains("thread_local") && ir.contains("@TLS_COUNTER"),
+            "expected thread_local TLS_COUNTER global in IR, got:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_e2e_defer_in_nested_block_fires_at_inner_block_exit() {
         // Bare `{ ... }` (ExprKind::Block) routes through

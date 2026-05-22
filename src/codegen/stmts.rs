@@ -1413,6 +1413,17 @@ impl<'ctx> super::Codegen<'ctx> {
                     None
                 };
                 if let ExprKind::Identifier(name) = &target.kind {
+                    // Slice 9: module-level `let mut BINDING = …;`
+                    // identifier-LHS assignment writes directly to
+                    // the LLVM global. The typechecker (slice 5)
+                    // rejects writes to immutable `let`, so a hit on
+                    // `try_store_module_binding` for `is_mut = false`
+                    // is impossible under correct upstream behaviour;
+                    // LLVM's `constant` global flag also catches the
+                    // case independently as a verifier error.
+                    if self.try_store_module_binding(name, val) {
+                        return Ok(());
+                    }
                     // For shared types: rc_dec old value, rc_inc new value
                     // (only when the RHS is not itself a fresh-ref source).
                     if let Some(type_name) = self.var_type_names.get(name).cloned() {
@@ -1678,7 +1689,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             StmtKind::CompoundAssign { target, op, value } => {
                 if let ExprKind::Identifier(name) = &target.kind {
-                    let current = self.load_variable(name)?;
+                    // Slice 9: module-binding compound-assign loads
+                    // through the global pointer (not the local
+                    // variable map). `load_variable` errors when the
+                    // name has no entry in `self.variables`; the
+                    // module-binding fast path bypasses that — the
+                    // load lowers to a direct LLVM `load` from the
+                    // global.
+                    let current = if let Some(loaded) = self.try_load_module_binding(name) {
+                        loaded
+                    } else {
+                        self.load_variable(name)?
+                    };
                     let rhs = self.compile_expr(value)?;
                     let binop = match op {
                         CompoundOp::Add => BinOp::Add,
@@ -1693,6 +1715,17 @@ impl<'ctx> super::Codegen<'ctx> {
                         CompoundOp::Shr => BinOp::Shr,
                     };
                     let result = self.compile_binop(&binop, current, rhs)?;
+                    // Slice 9: module-binding compound-assign — store
+                    // the binop's result back through the global. The
+                    // load above (via `load_variable`) routes through
+                    // the existing Identifier arm in `compile_expr`,
+                    // which preferentially picks the module-binding
+                    // path via `try_load_module_binding`. The store
+                    // here mirrors that — `try_store_module_binding`
+                    // short-circuits before the local-slot fallback.
+                    if self.try_store_module_binding(name, result) {
+                        return Ok(());
+                    }
                     if let Some(slot) = self.variables.get(name).copied() {
                         self.builder.build_store(slot.ptr, result).unwrap();
                     }

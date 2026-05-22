@@ -44,6 +44,7 @@ mod http;
 mod json;
 mod maps;
 mod method_call;
+mod module_bindings;
 mod mono;
 mod par_blocks;
 mod pattern_binding;
@@ -640,6 +641,18 @@ pub(super) struct Codegen<'ctx> {
     /// Cycles are precluded upstream by the typechecker's const-evaluation
     /// pass (`check_const_decl`).
     pub(crate) consts: HashMap<String, Expr>,
+    /// Module-level `let` / `let mut` bindings — slice 9 of the
+    /// phase-8 module-let work (design.md §1278-1330). Populated by
+    /// `declare_module_bindings` before any function body is
+    /// compiled. Identifier loads in function bodies short-circuit
+    /// to a real LLVM `load` from the global via
+    /// `try_load_module_binding`; assignments / compound-assigns
+    /// route through `try_store_module_binding`. Distinct from
+    /// `consts`, which inlines the value expression at each use site
+    /// — module bindings need real LLVM globals so `let mut`
+    /// mutation is observable across functions and `#[thread_local]`
+    /// gets the per-task disjoint instance.
+    pub(crate) module_bindings: HashMap<String, module_bindings::ModuleBindingInfo<'ctx>>,
     /// Source filename threaded in from the CLI (`compile_to_object_with_options`
     /// / `compile_to_ir_with_options`). When `Some`, `emit_error_trace_push`
     /// emits a deduped global string and passes its `(ptr, len)` to the runtime
@@ -1692,6 +1705,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
             consts: HashMap::new(),
+            module_bindings: HashMap::new(),
             source_filename: None,
             source_filename_global: None,
             source_text: None,
@@ -2043,6 +2057,14 @@ impl<'ctx> Codegen<'ctx> {
                 self.consts.insert(c.name.clone(), c.value.clone());
             }
         }
+
+        // Slice 9 of phase-8 module-let work — emit one LLVM global per
+        // `Item::ModuleBinding`. Must precede function compilation so
+        // forward references from any function body resolve through
+        // `try_load_module_binding`. Distinct from `consts`: bindings
+        // become real LLVM globals (mutable for `let mut`,
+        // `thread_local` for `#[thread_local]`), not inlined values.
+        self.declare_module_bindings(program);
 
         // Theme 6: assign stable u32 IDs to `effect resource R[: T]`
         // declarations + capture each provider trait's method-declaration

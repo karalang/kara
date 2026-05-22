@@ -168,6 +168,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 if self.variables.contains_key(name.as_str()) {
                     self.load_variable(name)
+                } else if let Some(loaded) = self.try_load_module_binding(name) {
+                    // Slice 9: module-level `let` / `let mut` bindings
+                    // are real LLVM globals. The lookup precedes the
+                    // `consts` arm because slice 3 of the module-let
+                    // work registers these in the Const-class
+                    // namespace alongside `const` items; the resolver
+                    // disambiguates by item kind, and codegen mirrors
+                    // by preferring the module-binding load when both
+                    // tables resolve.
+                    Ok(loaded)
                 } else if let Some(ev) = self.try_unit_enum_variant(name) {
                     Ok(ev)
                 } else if let Some(const_value) = self.consts.get(name).cloned() {
