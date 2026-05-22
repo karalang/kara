@@ -782,6 +782,7 @@ impl<'a> CfgBuilder<'a> {
                 label,
                 condition,
                 body,
+                ..
             } => {
                 let header = self.new_block();
                 self.add_edge(cur, header);
@@ -831,6 +832,7 @@ impl<'a> CfgBuilder<'a> {
                 pattern: _,
                 iterable,
                 body,
+                ..
             } => {
                 // Iterable is evaluated once before the loop.
                 let after_iter = self.lower_expr(iterable, cur, exit, loops);
@@ -853,7 +855,7 @@ impl<'a> CfgBuilder<'a> {
                 self.add_edge(body_exit, header);
                 merge
             }
-            ExprKind::Loop { label, body } => {
+            ExprKind::Loop { label, body, .. } => {
                 let header = self.new_block();
                 self.add_edge(cur, header);
                 let merge = self.new_block();

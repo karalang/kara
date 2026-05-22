@@ -238,6 +238,7 @@ impl super::Formatter {
                 label,
                 condition,
                 body,
+                ..
             } => {
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
@@ -252,6 +253,7 @@ impl super::Formatter {
                 pattern,
                 value,
                 body,
+                ..
             } => {
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
@@ -268,6 +270,7 @@ impl super::Formatter {
                 pattern,
                 iterable,
                 body,
+                ..
             } => {
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
@@ -279,7 +282,7 @@ impl super::Formatter {
                 self.write_str(" ");
                 self.format_block(body);
             }
-            ExprKind::Loop { label, body } => {
+            ExprKind::Loop { label, body, .. } => {
                 if let Some(ref l) = label {
                     write!(self.output, "'{l}: ").unwrap();
                 }

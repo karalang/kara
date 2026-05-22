@@ -517,6 +517,108 @@ fn test_for_loop_tuple_destructure() {
     }
 }
 
+// ── Loop attribute parsing (Phase 1 — par_unordered surface, 2026-05-20) ──
+//
+// `#[par_unordered] while/for/loop ...` parses with the attribute attached
+// to the loop AST node. Other attribute names on loops are rejected;
+// attribute-then-non-loop expressions are rejected. The attribute surface
+// stores the parsed `Attribute` set in `ExprKind::While::attributes` (and
+// peers) for the Phase 2 analyzer to consult; behaviour is otherwise
+// unchanged from the un-attributed loop.
+
+#[test]
+fn test_par_unordered_attr_parses_on_while() {
+    let prog = parse_ok(
+        "fn main() { let mut k: i64 = 0i64; #[par_unordered] while k < 10i64 { k = k + 1i64; } }",
+    );
+    if let Item::Function(f) = &prog.items[0] {
+        // Body: [let, while]. The attributed while is index 1.
+        if let StmtKind::Expr(expr) = &f.body.stmts[1].kind {
+            if let ExprKind::While { attributes, .. } = &expr.kind {
+                assert_eq!(attributes.len(), 1);
+                assert!(attributes[0].is_bare("par_unordered"));
+            } else {
+                panic!("expected While, got {:?}", expr.kind);
+            }
+        } else {
+            panic!("expected expr-stmt at index 1");
+        }
+    }
+}
+
+#[test]
+fn test_par_unordered_attr_parses_on_for() {
+    let prog = parse_ok("fn main() { #[par_unordered] for k in 0i64..10i64 { process(k); } }");
+    if let Item::Function(f) = &prog.items[0] {
+        if let StmtKind::Expr(expr) = &f.body.stmts[0].kind {
+            if let ExprKind::For { attributes, .. } = &expr.kind {
+                assert_eq!(attributes.len(), 1);
+                assert!(attributes[0].is_bare("par_unordered"));
+            } else {
+                panic!("expected For, got {:?}", expr.kind);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_par_unordered_attr_parses_on_loop() {
+    let prog = parse_ok("fn main() { #[par_unordered] loop { break; } }");
+    if let Item::Function(f) = &prog.items[0] {
+        if let StmtKind::Expr(expr) = &f.body.stmts[0].kind {
+            if let ExprKind::Loop { attributes, .. } = &expr.kind {
+                assert_eq!(attributes.len(), 1);
+                assert!(attributes[0].is_bare("par_unordered"));
+            } else {
+                panic!("expected Loop, got {:?}", expr.kind);
+            }
+        }
+    }
+}
+
+#[test]
+fn test_loop_without_attribute_has_empty_attributes() {
+    // Regression — un-attributed loops still parse and carry an empty
+    // attributes vec (the AST change is additive at every construction
+    // site, including the no-attribute paths).
+    let prog = parse_ok("fn main() { let mut k: i64 = 0i64; while k < 10i64 { k = k + 1i64; } }");
+    if let Item::Function(f) = &prog.items[0] {
+        if let StmtKind::Expr(expr) = &f.body.stmts[1].kind {
+            if let ExprKind::While { attributes, .. } = &expr.kind {
+                assert!(attributes.is_empty());
+            }
+        }
+    }
+}
+
+#[test]
+fn test_unknown_attribute_on_loop_rejected_with_focused_diagnostic() {
+    let (_, errors) = parse_with_errors("fn main() { #[bogus_attr] while true { break; } }");
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("`#[bogus_attr]` is not valid on a loop expression")
+            && e.message.contains("only `#[par_unordered]` is recognised")),
+        "expected focused unknown-loop-attr diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_attribute_then_non_loop_expression_rejected() {
+    // `#[par_unordered]` before an if-expression is rejected — loop
+    // attributes don't apply to other expression kinds.
+    let (_, errors) =
+        parse_with_errors("fn main() { #[par_unordered] if true { 1i64 } else { 2i64 }; }");
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("expected `while`, `for`, or `loop` after attribute block")),
+        "expected attribute-then-non-loop diagnostic, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+    );
+}
+
 #[test]
 fn test_for_loop_wildcard() {
     parse_ok("fn main() { for _ in 0..10 { do_something(); } }");

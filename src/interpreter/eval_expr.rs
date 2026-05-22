@@ -439,6 +439,7 @@ impl<'a> super::Interpreter<'a> {
                 condition,
                 body,
                 label,
+                ..
             } => {
                 loop {
                     let cond = self.eval_expr_inner(condition);
@@ -479,6 +480,7 @@ impl<'a> super::Interpreter<'a> {
                 iterable,
                 body,
                 label,
+                ..
             } => {
                 let iter_val = self.eval_expr_inner(iterable);
                 let items = match iter_val {
@@ -559,7 +561,7 @@ impl<'a> super::Interpreter<'a> {
             }
 
             // Loop
-            ExprKind::Loop { body, label } => loop {
+            ExprKind::Loop { body, label, .. } => loop {
                 match self.eval_block_inner(body) {
                     Ok(_) => {}
                     Err(ControlFlow::Break {

@@ -14,7 +14,7 @@
 use crate::ast::*;
 use crate::token::{Span, Token};
 
-use super::starts_upper;
+use super::{starts_upper, ParseError};
 
 impl super::Parser {
     // ── Expressions (Pratt Parser) ───────────────────────────────
@@ -587,6 +587,65 @@ impl super::Parser {
                 })
             }
 
+            // Attribute-prefixed loop expression — `#[par_unordered] while
+            // ... { }` / `#[par_unordered] for ... { }` / `#[par_unordered]
+            // loop { }`. At Phase 1 the only recognised attribute name is
+            // `par_unordered` (opt-in for the upcoming collect-style
+            // reduction lowering, per docs/implementation_checklist/
+            // phase-7-codegen.md "collect-style if-cond push reduction"
+            // follow-on). Other attribute names and non-loop expressions
+            // following the attribute block are rejected with a focused
+            // diagnostic. Labeled loops with attributes
+            // (`#[par_unordered] my_label: while ...`) are deferred to a
+            // follow-up slice — the unlabeled case is the only one the
+            // analyzer / codegen will recognise in Phase 2.
+            Token::Pound => {
+                let attr_start = self.current_span();
+                let attributes = self.parse_attributes();
+                for attr in &attributes {
+                    if !attr.is_bare("par_unordered") {
+                        let name = attr.path.join("::");
+                        self.errors.push(ParseError {
+                            message: format!(
+                                "attribute `#[{name}]` is not valid on a loop expression; \
+                                 only `#[par_unordered]` is recognised here at Phase 1. \
+                                 See `docs/implementation_checklist/phase-7-codegen.md` \
+                                 collect-style reduction follow-on for the surface plan."
+                            ),
+                            span: attr.span.clone(),
+                        });
+                    }
+                }
+                match self.peek_token() {
+                    Token::While => self.parse_while_expr_with_label_and_attrs(None, attributes),
+                    Token::For => self.parse_for_expr_with_label_and_attrs(None, attributes),
+                    Token::Loop => {
+                        self.advance(); // consume `loop`
+                        let body = self.parse_block()?;
+                        Some(Expr {
+                            span: self.span_from(&attr_start),
+                            kind: ExprKind::Loop {
+                                label: None,
+                                body,
+                                attributes,
+                            },
+                        })
+                    }
+                    _ => {
+                        self.errors.push(ParseError {
+                            message: "expected `while`, `for`, or `loop` after attribute \
+                                      block; loop attributes do not apply to other \
+                                      expression kinds at Phase 1. Labeled-loop targets \
+                                      (`#[par_unordered] label: while ...`) are deferred \
+                                      to a follow-up slice."
+                                .to_string(),
+                            span: self.span_from(&attr_start),
+                        });
+                        None
+                    }
+                }
+            }
+
             // If expression
             Token::If => self.parse_if_expr(),
 
@@ -605,7 +664,11 @@ impl super::Parser {
                 let body = self.parse_block()?;
                 Some(Expr {
                     span: self.span_from(&start),
-                    kind: ExprKind::Loop { label: None, body },
+                    kind: ExprKind::Loop {
+                        label: None,
+                        body,
+                        attributes: Vec::new(),
+                    },
                 })
             }
 
@@ -907,10 +970,18 @@ impl super::Parser {
     }
 
     fn parse_while_expr(&mut self) -> Option<Expr> {
-        self.parse_while_expr_with_label(None)
+        self.parse_while_expr_with_label_and_attrs(None, Vec::new())
     }
 
     fn parse_while_expr_with_label(&mut self, label: Option<String>) -> Option<Expr> {
+        self.parse_while_expr_with_label_and_attrs(label, Vec::new())
+    }
+
+    fn parse_while_expr_with_label_and_attrs(
+        &mut self,
+        label: Option<String>,
+        attributes: Vec<Attribute>,
+    ) -> Option<Expr> {
         let start = self.current_span();
         self.expect(&Token::While)?;
 
@@ -935,6 +1006,7 @@ impl super::Parser {
                     pattern,
                     value: Box::new(value),
                     body,
+                    attributes,
                 },
             });
         }
@@ -950,15 +1022,24 @@ impl super::Parser {
                 label,
                 condition: Box::new(condition),
                 body,
+                attributes,
             },
         })
     }
 
     fn parse_for_expr(&mut self) -> Option<Expr> {
-        self.parse_for_expr_with_label(None)
+        self.parse_for_expr_with_label_and_attrs(None, Vec::new())
     }
 
     fn parse_for_expr_with_label(&mut self, label: Option<String>) -> Option<Expr> {
+        self.parse_for_expr_with_label_and_attrs(label, Vec::new())
+    }
+
+    fn parse_for_expr_with_label_and_attrs(
+        &mut self,
+        label: Option<String>,
+        attributes: Vec<Attribute>,
+    ) -> Option<Expr> {
         let start = self.current_span();
         self.expect(&Token::For)?;
         if let Some(ref l) = label {
@@ -978,6 +1059,7 @@ impl super::Parser {
                 pattern,
                 iterable: Box::new(iterable),
                 body,
+                attributes,
             },
         })
     }
@@ -1180,6 +1262,7 @@ impl super::Parser {
                         kind: ExprKind::Loop {
                             label: Some(name),
                             body,
+                            attributes: Vec::new(),
                         },
                     });
                 }

@@ -220,8 +220,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 label,
                 condition,
                 body,
+                ..
             } => self.compile_while(label.as_deref(), condition, body),
-            ExprKind::Loop { label, body } => self.compile_loop(label.as_deref(), body),
+            ExprKind::Loop { label, body, .. } => self.compile_loop(label.as_deref(), body),
             ExprKind::Break { label, value } => {
                 self.compile_break(label.as_deref(), value.as_deref())
             }
@@ -287,6 +288,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 pattern,
                 iterable,
                 body,
+                ..
             } => self.compile_for(label.as_deref(), pattern, iterable, body),
             ExprKind::IfLet {
                 pattern,

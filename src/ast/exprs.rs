@@ -6,7 +6,7 @@
 
 use crate::token::{FloatSuffix, IntSuffix, Span};
 
-use super::{Block, GenericArg, MatchArm, Pattern, TypeExpr};
+use super::{Attribute, Block, GenericArg, MatchArm, Pattern, TypeExpr};
 
 // ── Expressions ──────────────────────────────────────────────────
 
@@ -129,22 +129,33 @@ pub enum ExprKind {
         label: Option<String>,
         condition: Box<Expr>,
         body: Block,
+        /// Outer attributes on the loop expression (`#[par_unordered]` etc.).
+        /// Empty unless the parser saw one or more `#[...]` lines before the
+        /// `while` keyword. The concurrency analyzer reads this set to gate
+        /// shape-recognition that has unordered-output semantics.
+        attributes: Vec<Attribute>,
     },
     WhileLet {
         label: Option<String>,
         pattern: Pattern,
         value: Box<Expr>,
         body: Block,
+        /// See [`ExprKind::While::attributes`].
+        attributes: Vec<Attribute>,
     },
     For {
         label: Option<String>,
         pattern: Pattern,
         iterable: Box<Expr>,
         body: Block,
+        /// See [`ExprKind::While::attributes`].
+        attributes: Vec<Attribute>,
     },
     Loop {
         label: Option<String>,
         body: Block,
+        /// See [`ExprKind::While::attributes`].
+        attributes: Vec<Attribute>,
     },
     /// Labeled block expression — `label: { ... }` (design.md § Loops >
     /// Labeled blocks; syntax.md §5.3). The block becomes a `break` target

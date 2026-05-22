@@ -386,6 +386,7 @@ impl<'a> super::Resolver<'a> {
                 condition,
                 body,
                 label,
+                ..
             } => {
                 self.resolve_expr(condition);
                 self.loop_labels.push((label.clone(), LabelKind::Loop));
@@ -400,6 +401,7 @@ impl<'a> super::Resolver<'a> {
                 value,
                 body,
                 label,
+                ..
             } => {
                 self.resolve_expr(value);
                 self.loop_labels.push((label.clone(), LabelKind::Loop));
@@ -415,6 +417,7 @@ impl<'a> super::Resolver<'a> {
                 iterable,
                 body,
                 label,
+                ..
             } => {
                 self.resolve_expr(iterable);
                 self.loop_labels.push((label.clone(), LabelKind::Loop));
@@ -425,7 +428,7 @@ impl<'a> super::Resolver<'a> {
                 self.loop_labels.pop();
             }
 
-            ExprKind::Loop { body, label } => {
+            ExprKind::Loop { body, label, .. } => {
                 self.loop_labels.push((label.clone(), LabelKind::Loop));
                 self.table.push_scope(ScopeKind::Loop);
                 self.resolve_block_no_scope(body);
