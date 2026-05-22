@@ -4293,11 +4293,17 @@ Three file conventions, three commands. `karac build` ignores all of them:
 | `_fuzz.kara` | `karac fuzz` | Coverage-guided fuzz tests — slow, run separately |
 | `_bench.kara` | `karac bench` | Benchmarks — performance measurement, not correctness |
 
-Tests that require live external services (databases, APIs) are marked with `#[test(requires = [...])]` in `_test.kara` files. `karac test` skips tests with unsatisfied `requires`; `karac test --all` fails if any required resource is unavailable:
+**Discovery mechanism.** Test cases are declared with the block form `test "case name" { body }` at module scope. Discovery is **structural, not name-based** — `karac test` walks the AST for `Item::TestCase` entries inside `_test.kara` companion files; free functions in those files are helpers, not tests, no matter what they are named. A function named `fn test_helper()` is a helper. A function named `fn make_pair()` is a helper. The block form is the only thing that makes a test a test.
+
+This is a deliberate design choice. Convention-based discovery (`test_`-prefix on functions) has two known failure modes: silent skip when the prefix is forgotten or misspelled, and silent inclusion when an unrelated helper happens to be named with the prefix. The block form fails *loudly* on misuse — a misplaced `test "..." { }` inside a function body emits `E_TEST_BLOCK_NOT_TOP_LEVEL`, and a typo in the keyword (`tset "..." { }`) is an immediate parse error rather than a quiet absence. Visibility modifiers (`pub` / `private`) on a test case are rejected at parse — test cases are not callables and have no cross-module identity.
+
+A test case's source line is its unique identity within a module; case names need not be unique within a file (two cases can share a description if useful), and the case-name string is what appears verbatim in every JSONL event's `test` field and what `--filter` matches against.
+
+Tests that require live external services (databases, APIs) are marked with `#[test(requires = [...])]` on the test case. `karac test` skips tests with unsatisfied `requires`; `karac test --all` fails if any required resource is unavailable:
 
 ```
 #[test(requires = [db.UserDB, payment.PaymentAPI])]
-fn test_checkout_flow() {
+test "checkout flow" {
     // needs real database and payment service running
 }
 ```
@@ -4318,11 +4324,11 @@ Names in `requires` are module-qualified paths matching the effect resource decl
 
 When a test is skipped due to an unavailable resource, `karac test` prints which resource is missing and which env var or config key to set. `karac test --all` treats any skipped test as a failure.
 
-**Per-test provider injection.** Tests for stateful providers (e.g., an in-memory database) should receive a fresh provider instance per test. Use `#[with_provider(...)]` on the test function — the test runner wraps the test body in `with_provider(Provider.new(), || { ... })` automatically:
+**Per-test provider injection.** Tests for stateful providers (e.g., an in-memory database) should receive a fresh provider instance per test. Use `#[with_provider(...)]` on the test case — the test runner wraps the test body in `with_provider(Provider.new(), || { ... })` automatically:
 
 ```
 #[with_provider(db.UserDB, InMemoryUserDB.new)]
-fn test_create_user() {
+test "create user" {
     // InMemoryUserDB.new() is called fresh for this test
     create_user("alice");
     assert(find_user("alice") != None);
@@ -4337,22 +4343,22 @@ The argument to `#[with_provider]` is `(resource_path, constructor_fn)`. Multipl
 
 **Built-in primitives use the same mechanism.** `#[with_provider(Clock, FakeClock.at(T))]` and `#[with_provider(RandomSource, FakeRandom.from_seed(42))]` work identically to user-declared resources. Built-in primitives (`Clock`, `RandomSource`, `Env`, `FileSystem`, etc.) register their default providers at program start; `#[with_provider]` pushes a replacement on the provider stack for the test's duration. The override is uniformly visible inside the test body via the same resource-using calls.
 
-**Unit tests.** Functions prefixed with `test_` in `_test.kara` files. Everything else is a helper:
+**Unit tests.** Block-form `test "name" { body }` declarations in `_test.kara` files. Free functions in the same file are helpers:
 
 ```
 // math.kara
 fn add(a: i64, b: i64) -> i64 { a + b }
 
 // math_test.kara (same directory = same module = private access)
-fn test_add() {
+test "add positives" {
     assert(add(1, 2) == 3);
 }
 
-fn test_negative() {
+test "add across zero" {
     assert(add(-1, 1) == 0);
 }
 
-fn make_pair() -> (i64, i64) {      // helper — no test_ prefix, not run as a test
+fn make_pair() -> (i64, i64) {      // helper — not a `test "..." { }` block, not run as a test
     (1, 2)
 }
 ```
@@ -4368,16 +4374,16 @@ fn make_pair() -> (i64, i64) {      // helper — no test_ prefix, not run as a 
 
 All four propagate `panics`. `assert_eq` and `assert_ne` require `Eq + Debug`; `assert_snapshot` requires `Display` (user-facing text format, not debug repr). `assert` and `assert_ne` require `bool` and `Eq + Debug` respectively — no trait bounds on `assert` itself.
 
-**Property tests.** `#[property]` attribute on a `test_`-prefixed function. The framework generates random inputs using the `Arbitrary` trait and runs the test body for each. On failure, it shrinks the input to the minimal failing case:
+**Property tests.** `#[property]` attribute on a test case. The framework generates random inputs using the `Arbitrary` trait and runs the test body for each. On failure, it shrinks the input to the minimal failing case. The block form does not yet take typed parameters (the v1 `Item::TestCase` body is parameter-less); property surface that needs typed inputs is reserved for a follow-up CR — until it lands, the case body can call into a helper that performs its own quickcheck-style loop. Future-form sketch:
 
 ```
 #[property]
-fn test_sort_preserves_length(input: Vec[i32]) {
+test "sort preserves length"(input: Vec[i32]) {
     assert(sort(input.clone()).len() == input.len());
 }
 
 #[property(cases = 1000)]          // default is 100
-fn test_sort_is_idempotent(input: Vec[i32]) {
+test "sort is idempotent"(input: Vec[i32]) {
     let once = sort(input.clone());
     let twice = sort(once.clone());
     assert(once == twice);
@@ -4405,17 +4411,17 @@ trait Shrink {
 }
 ```
 
-**Snapshot tests.** `#[snapshot]` attribute on a `test_`-prefixed function. First run saves the output to a file. Subsequent runs compare against the saved snapshot — failure means the output changed. `karac test --update-snapshots` accepts new output as the baseline. Useful for compilers, formatters, and code generators:
+**Snapshot tests.** `#[snapshot]` attribute on a test case. First run saves the output to a file. Subsequent runs compare against the saved snapshot — failure means the output changed. `karac test --update-snapshots` accepts new output as the baseline. Useful for compilers, formatters, and code generators:
 
 ```
 #[snapshot]
-fn test_pretty_printer() {
+test "pretty printer" {
     let ast = parse("fn foo() { 42 }");
     assert_snapshot(pretty_print(ast));
 }
 ```
 
-**Snapshot file location and identity.** Snapshots are stored at `tests/snapshots/<module_path>/<test_name>.snap` relative to the package root. The file name is derived from the test function's fully qualified name (e.g., `my_module::test_pretty_printer.snap`). Renaming a test function produces a new snapshot path; the old `.snap` file becomes an orphan and `karac test` reports it as stale (remove with `karac test --clean-snapshots`). Snapshot files are plain text — the `Display` output of the value passed to `assert_snapshot`. They are committed to source control.
+**Snapshot file location and identity.** Snapshots are stored at `tests/snapshots/<module_path>/<slugified-case-name>.snap` relative to the package root. The file name is derived from the case-name string with a stable slugification rule (lowercase, replace runs of non-alphanumeric characters with a single underscore, trim leading / trailing underscores). Renaming a case produces a new snapshot path; the old `.snap` file becomes an orphan and `karac test` reports it as stale (remove with `karac test --clean-snapshots`). Snapshot files are plain text — the `Display` output of the value passed to `assert_snapshot`. They are committed to source control.
 
 **Fuzz tests.** Functions in `_fuzz.kara` files take raw bytes and must not crash. The compiler generates a libFuzzer-compatible harness. Coverage-guided — libFuzzer mutates inputs to maximize code path coverage. Run with `karac fuzz`, never in CI:
 
@@ -4449,7 +4455,7 @@ Event types and required fields:
 | Event | Required fields | Notes |
 |---|---|---|
 | `run_start` | `total_tests: int` | Emitted once at the beginning of the run after test discovery. |
-| `test_pass` | `test: string`, `duration_ms: int` | `test` is the fully-qualified test ID: `<module_path>::<fn_name>` (e.g., `db.connection::test_reconnect`). |
+| `test_pass` | `test: string`, `duration_ms: int` | `test` is the case-name string verbatim (the string literal between `test` and `{` in the `test "case name" { body }` declaration). |
 | `test_fail` | `test: string`, `duration_ms: int`, `location: {file, line, col}`, `message: string` | Optional `assertion: string` (source text of the assertion), `left: string` + `right: string` for `assert_eq` / `assert_ne` failures. Optional `reason: string` for non-assertion failures — v1 reasons: `"provider_construction_failed"` (a `#[with_provider]` constructor panicked or returned `Err`; `duration_ms: 0` since the body never ran), `"requires_and_with_provider_conflict"` (same resource appears in both `#[test(requires = [X])]` and `#[with_provider(X, ...)]`). Optional `providers: [string]` lists fully-qualified resource paths that were active for this test (via `#[with_provider]` or program-rooted defaults); surfaced only on failure events so post-hoc triage is self-contained without source access. |
 | `test_skip` | `test: string`, `reason: string` | v1 reasons: `"unsatisfied_requires"` (with `resources: [string]` field listing missing resource paths). Future slices may introduce new reasons — consumers must tolerate unknown reason strings. |
 | `summary` | `total: int`, `passed: int`, `failed: int`, `skipped: int`, `duration_ms: int` | Emitted once at the end of the run. |
@@ -4458,7 +4464,7 @@ Event types and required fields:
 
 **Exit code.** `0` if every test passes (or is skipped under permitted conditions). Non-zero if any `test_fail` event was emitted, or if any `test_skip` event was emitted under `--all`.
 
-**Filtering.** `karac test <substring>` runs only tests whose fully-qualified ID contains `<substring>`. Filtering happens after discovery; filtered-out tests are not emitted as events (they do not appear as `test_skip`). The `run_start` event's `total_tests` reflects post-filter count.
+**Filtering.** `karac test <substring>` runs only test cases whose name (the string between `test` and `{`) contains `<substring>`. Filtering happens after discovery; filtered-out tests are not emitted as events (they do not appear as `test_skip`). The `run_start` event's `total_tests` reflects post-filter count.
 
 ### Strings
 
@@ -7175,7 +7181,7 @@ The signature is **effect-polymorphic** over `E` — the additional effects the 
 - All parallel tasks within the block share the same provider instance via `Arc`.
 - The provider's internal synchronization (connection pool semaphore, `Mutex`, etc.) handles concurrent access — this is where backpressure and concurrency limits belong, not on the effect declaration.
 - Production providers (database connection pools, HTTP clients) satisfy `Send + Sync` naturally.
-- Test providers with mutable in-memory state must use `Mutex` internally to satisfy `Sync`. For per-test state isolation, use `#[with_provider(...)]` on each test function — the test runner constructs a fresh provider instance per test (see [Testing](#testing)). `karac test --sequential` is available for tests that require genuine serialization (e.g., shared ports or files), but does not provide state isolation between tests sharing a provider instance.
+- Test providers with mutable in-memory state must use `Mutex` internally to satisfy `Sync`. For per-test state isolation, use `#[with_provider(...)]` on each test case — the test runner constructs a fresh provider instance per test (see [Testing](#testing)). `karac test --sequential` is available for tests that require genuine serialization (e.g., shared ports or files), but does not provide state isolation between tests sharing a provider instance.
 
 The `Arc` wrapping is an implementation detail — the programmer passes a plain value to `with_provider` and the compiler handles the rest. **Cost note:** Reading through an `Arc` pointer is a plain pointer dereference — identical cost to `Rc` or `Box`. The atomic refcount operations only occur on clone and drop, not on every field access. In a single-threaded test scenario, the provider is created once, used through one reference, and dropped once — the total atomic overhead is two operations (~10-40ns), which is negligible. Conditionally using `Rc` for single-threaded contexts would add compiler complexity for an invisible saving.
 
@@ -7216,11 +7222,11 @@ assert_eq(rows.len(), 2);   // fine: rows is outside the provider scope
 
 The restriction applies only to **closures and function values** that would invoke the resource after scope exit — because calling them later would use a provider that has already been torn down.
 
-**For test fixtures, prefer `#[with_provider]` over inline scoping.** Placing the provider scope at the test-function level (via the attribute) avoids nesting entirely and gives each test a fresh provider instance automatically:
+**For test fixtures, prefer `#[with_provider]` over inline scoping.** Placing the provider scope on the test case (via the attribute) avoids nesting entirely and gives each test a fresh provider instance automatically:
 
 ```kara
 #[with_provider(Db, InMemoryDb.new)]
-fn test_query() {
+test "query returns two rows" {
     let rows = execute(plan(q));   // Db is in scope for the entire test body
     assert_eq(rows.len(), 2);
 }
@@ -7253,7 +7259,7 @@ error: closure captures provider-rooted resource `TestClock` but escapes its pro
 **Escape hatches — restructure, not relax.** Users who want a "configured helper" pattern have two options that preserve the invariant:
 
 - **Build the closure outside the provider block**, taking the resource as an explicit parameter. The closure becomes pure over the resource axis; the provider scope is established by whoever eventually invokes it.
-- **Push the provider block up to the caller.** Instead of returning a closure from inside `with_provider`, have the outermost function enter the provider block and run the caller's logic within it. This is the standard pattern for test fixtures: `#[with_provider(TestClock.new())]` on the test function, not on a helper it calls.
+- **Push the provider block up to the caller.** Instead of returning a closure from inside `with_provider`, have the outermost function enter the provider block and run the caller's logic within it. This is the standard pattern for test fixtures: `#[with_provider(TestClock.new())]` on the test case, not on a helper it calls.
 
 Neither escape hatch relaxes the rule; both restructure the code so the provider-bound resource never needs to outlive its scope.
 
