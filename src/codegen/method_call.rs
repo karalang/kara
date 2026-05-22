@@ -612,7 +612,31 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_request_body(&name);
                 }
+                // `std.json` codegen-side wiring (phase-8 line 435):
+                // `j.stringify()` on a Kāra-side `Json` enum value.
+                // Loads the receiver's four enum words, dispatches
+                // through the synthesized `__karac_json_kara_to_ffi`
+                // walker, calls `karac_runtime_json_stringify`, and
+                // copies the result into a fresh Kāra String.
+                if method == "stringify"
+                    && args.is_empty()
+                    && matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Json")
+                {
+                    let recv_val = self.compile_expr(object)?;
+                    return self.compile_json_stringify(recv_val);
+                }
             }
+        }
+
+        // `std.json` codegen-side wiring (phase-8 line 435) —
+        // non-identifier-receiver path: `Json.Object([...]).stringify()`,
+        // `Json.Array([...]).stringify()`, etc. The receiver is an
+        // expression that evaluates to a Json enum value; we compile it
+        // to its struct value and feed it through the same lowering
+        // path as the identifier case.
+        if method == "stringify" && args.is_empty() && self.expr_is_json_value(object) {
+            let recv_val = self.compile_expr(object)?;
+            return self.compile_json_stringify(recv_val);
         }
 
         // User impl-block method on a struct receiver: route `obj.method(args)`

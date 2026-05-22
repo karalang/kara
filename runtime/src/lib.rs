@@ -2163,6 +2163,222 @@ pub unsafe extern "C" fn karac_runtime_json_free_string(s: *mut std::os::raw::c_
     drop(std::ffi::CString::from_raw(s));
 }
 
+// ── std.json codegen-side wiring: per-variant FFI constructors ───────────
+//
+// Slice (1) of the `Json.stringify()` codegen entry in phase-8-stdlib-floor.md.
+// The compiled-binary path to `j.stringify()` requires walking a Kāra-side
+// `Json` enum value (variant-tagged `{ tag i64, w0 i64, w1 i64, w2 i64 }`)
+// into a runtime-side `*mut KaracJsonValue` tree before handing the tree to
+// `karac_runtime_json_stringify`. The walker itself is emitted on the codegen
+// side (one synthesized LLVM helper `__karac_json_kara_to_ffi` per module);
+// the helpers below are the primitive constructors it calls.
+//
+// Memory ownership rule matches the rest of the std.json surface: each
+// constructor returns a freshly Boxed `KaracJsonValue` (or, for the buffer
+// helpers, a freshly allocated `Vec<_>::into_raw` triple), and the caller
+// owns the resulting allocation through to either `karac_runtime_json_*` or
+// `karac_runtime_json_free_value`. Buffers allocated by `_alloc_*_buf` MUST
+// be handed to the matching `_make_array` / `_make_object` consumer — those
+// constructors capture the buffer for later free via `Vec::from_raw_parts`
+// in `karac_runtime_json_free_value`'s Array/Object arms.
+
+/// Construct a `KaracJsonValue::Null` and return ownership.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_null() -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Null as u8,
+        bool_val: false,
+        num_val: 0.0,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+    }))
+}
+
+/// Construct a `KaracJsonValue::Bool(b != 0)`. Pass `1` for `true`, `0` for
+/// `false`; any non-zero value is treated as true.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_bool(b: u8) -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Bool as u8,
+        bool_val: b != 0,
+        num_val: 0.0,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+    }))
+}
+
+/// Construct a `KaracJsonValue::Number(n)`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_number(n: f64) -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Number as u8,
+        bool_val: false,
+        num_val: n,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+    }))
+}
+
+/// Construct a `KaracJsonValue::String` by copying `len` UTF-8 bytes from
+/// `ptr` into a freshly allocated runtime buffer. Empty strings (`len == 0`)
+/// store a null pointer with `len == 0`.
+///
+/// # Safety
+///
+/// `ptr` must either be null with `len == 0`, or point at `len` initialized
+/// UTF-8 bytes (the function does not enforce UTF-8 validity — invalid input
+/// surfaces as lossy stringification later).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_json_make_string(
+    ptr: *const u8,
+    len: usize,
+) -> *mut KaracJsonValue {
+    let (out_ptr, out_len) = if ptr.is_null() || len == 0 {
+        (std::ptr::null_mut(), 0usize)
+    } else {
+        let slice = std::slice::from_raw_parts(ptr, len);
+        let buf = slice.to_vec().into_boxed_slice();
+        let n = buf.len();
+        (Box::into_raw(buf) as *mut u8, n)
+    };
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::String as u8,
+        bool_val: false,
+        num_val: 0.0,
+        str_ptr: out_ptr,
+        str_len: out_len,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+    }))
+}
+
+/// Allocate a length-`len` items buffer for use with
+/// `karac_runtime_json_make_array`. Returns a `Vec`-allocated pointer suitable
+/// for the matching `Vec::from_raw_parts` reclamation in
+/// `karac_runtime_json_free_value`. Caller is responsible for populating each
+/// slot with a child `*mut KaracJsonValue` before handing the buffer off.
+///
+/// `len == 0` returns null (matching `karac_runtime_json_free_value`'s null-
+/// guard on `arr_items`).
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_alloc_items_buf(len: usize) -> *mut *mut KaracJsonValue {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+    let mut v: Vec<*mut KaracJsonValue> = vec![std::ptr::null_mut(); len];
+    let ptr = v.as_mut_ptr();
+    std::mem::forget(v);
+    ptr
+}
+
+/// Allocate a length-`len` keys buffer for use with
+/// `karac_runtime_json_make_object`. Same allocation contract as
+/// `_alloc_items_buf`. Each slot is a `*mut c_char` — populate via
+/// `karac_runtime_json_alloc_key`.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_alloc_keys_buf(len: usize) -> *mut *mut std::os::raw::c_char {
+    if len == 0 {
+        return std::ptr::null_mut();
+    }
+    let mut v: Vec<*mut std::os::raw::c_char> = vec![std::ptr::null_mut(); len];
+    let ptr = v.as_mut_ptr();
+    std::mem::forget(v);
+    ptr
+}
+
+/// Copy `len` UTF-8 bytes from `ptr` into a CString-allocated buffer and
+/// return the raw pointer. Pairs with `karac_runtime_json_free_value`'s
+/// Object arm, which reclaims each key via `CString::from_raw`. Empty or
+/// null input returns a CString containing the empty string (the runtime's
+/// Object-key free path expects a valid CString).
+///
+/// # Safety
+///
+/// `ptr` must either be null with `len == 0`, or point at `len` initialized
+/// bytes that are UTF-8 (interior NULs are stripped via `from_utf8_lossy`
+/// fallback when CString construction fails).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_json_alloc_key(
+    ptr: *const u8,
+    len: usize,
+) -> *mut std::os::raw::c_char {
+    let bytes: &[u8] = if ptr.is_null() || len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(ptr, len)
+    };
+    let s = String::from_utf8_lossy(bytes);
+    std::ffi::CString::new(s.as_ref())
+        .unwrap_or_else(|_| std::ffi::CString::new("").unwrap())
+        .into_raw()
+}
+
+/// Construct a `KaracJsonValue::Array(items[0..len])`. Takes ownership of
+/// the `items` buffer (allocated by `karac_runtime_json_alloc_items_buf`)
+/// and of each child node; the caller must not free either after the
+/// transfer. A subsequent `karac_runtime_json_free_value` on the result
+/// reclaims both.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_array(
+    items: *mut *mut KaracJsonValue,
+    len: usize,
+) -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Array as u8,
+        bool_val: false,
+        num_val: 0.0,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: items,
+        arr_len: len,
+        obj_keys: std::ptr::null_mut(),
+        obj_vals: std::ptr::null_mut(),
+        obj_len: 0,
+    }))
+}
+
+/// Construct a `KaracJsonValue::Object(keys[0..len], vals[0..len])`.
+/// Same ownership contract as `_make_array`: `keys`, `vals`, every CString
+/// in `keys[*]`, and every child node in `vals[*]` are transferred to the
+/// new value's free path.
+#[no_mangle]
+pub extern "C" fn karac_runtime_json_make_object(
+    keys: *mut *mut std::os::raw::c_char,
+    vals: *mut *mut KaracJsonValue,
+    len: usize,
+) -> *mut KaracJsonValue {
+    Box::into_raw(Box::new(KaracJsonValue {
+        tag: KaracJsonTag::Object as u8,
+        bool_val: false,
+        num_val: 0.0,
+        str_ptr: std::ptr::null_mut(),
+        str_len: 0,
+        arr_items: std::ptr::null_mut(),
+        arr_len: 0,
+        obj_keys: keys,
+        obj_vals: vals,
+        obj_len: len,
+    }))
+}
+
 // ── Slice B: HTTP server FFI surface (minimal `std.http`) ─────────────────
 //
 // Per locked design choices (2026-05-09):

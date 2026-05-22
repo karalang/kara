@@ -41,6 +41,7 @@ mod exprs;
 mod functions;
 mod helpers;
 mod http;
+mod json;
 mod maps;
 mod method_call;
 mod mono;
@@ -1348,6 +1349,90 @@ impl<'ctx> Codegen<'ctx> {
         if module.get_function("strlen").is_none() {
             module.add_function("strlen", strlen_type, Some(Linkage::External));
         }
+
+        // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
+        //
+        // Per-variant FFI constructors invoked by the synthesized
+        // `__karac_json_kara_to_ffi` walker in `compile_json_lower_helper`,
+        // plus the `stringify` / `free_value` / `free_string` consumers
+        // called by `compile_method_call`'s Json arm. See
+        // `runtime/src/lib.rs::karac_runtime_json_*` for the matching
+        // ownership rules.
+        let json_make_null_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_json_make_null",
+            json_make_null_ty,
+            Some(Linkage::External),
+        );
+        let i8_ty = context.i8_type();
+        let json_make_bool_ty = ptr_type.fn_type(&[i8_ty.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_bool",
+            json_make_bool_ty,
+            Some(Linkage::External),
+        );
+        let f64_ty = context.f64_type();
+        let json_make_number_ty = ptr_type.fn_type(&[f64_ty.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_number",
+            json_make_number_ty,
+            Some(Linkage::External),
+        );
+        let json_make_string_ty = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_string",
+            json_make_string_ty,
+            Some(Linkage::External),
+        );
+        let json_alloc_items_buf_ty = ptr_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_alloc_items_buf",
+            json_alloc_items_buf_ty,
+            Some(Linkage::External),
+        );
+        let json_alloc_keys_buf_ty = ptr_type.fn_type(&[i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_alloc_keys_buf",
+            json_alloc_keys_buf_ty,
+            Some(Linkage::External),
+        );
+        let json_alloc_key_ty = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_alloc_key",
+            json_alloc_key_ty,
+            Some(Linkage::External),
+        );
+        let json_make_array_ty = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_array",
+            json_make_array_ty,
+            Some(Linkage::External),
+        );
+        let json_make_object_ty =
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_make_object",
+            json_make_object_ty,
+            Some(Linkage::External),
+        );
+        let json_stringify_ty = ptr_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_stringify",
+            json_stringify_ty,
+            Some(Linkage::External),
+        );
+        let json_free_value_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_free_value",
+            json_free_value_ty,
+            Some(Linkage::External),
+        );
+        let json_free_string_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_json_free_string",
+            json_free_string_ty,
+            Some(Linkage::External),
+        );
 
         // ── Map runtime extern declarations ──────────────────────────────
         // All map methods use opaque ptr for the map handle and key/value

@@ -53,6 +53,23 @@ impl<'ctx> super::Codegen<'ctx> {
             if let Some(cv) = crate::prelude::lookup_primitive_const(name, field) {
                 return Ok(self.compile_primitive_const(cv));
             }
+            // Unit-variant enum access via `EnumName.Variant` (e.g.
+            // `Json.Null`, `Ordering.Equal`). Parser turns this into a
+            // FieldAccess with the enum name as the object — without an
+            // explicit arm here, the access falls through to the generic
+            // struct-field path which returns the `i64 0` placeholder.
+            // Mirrors the `Identifier(name)`-bare path that
+            // `try_unit_enum_variant` handles elsewhere, but scoped to
+            // the `EnumName.Variant` form.
+            if let Some(layout) = self.enum_layouts.get(name) {
+                if layout.tags.contains_key(field)
+                    && layout.field_counts.get(field).copied().unwrap_or(0) == 0
+                {
+                    if let Some(ev) = self.try_unit_enum_variant(field) {
+                        return Ok(ev);
+                    }
+                }
+            }
         }
         // FFI union field read (phase 5 line 569 slice 4). Detect a
         // union-typed receiver — by-binding via `var_type_names` →

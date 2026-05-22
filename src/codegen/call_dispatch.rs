@@ -138,6 +138,33 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Three-segment Json method call: `Json.Variant.stringify()`
+        // parses as `Call { callee: Path { segments: [Json, Variant,
+        // stringify] }, args: [] }` when the variant is a bare-name
+        // unit form (e.g. `Json.Null.stringify()`). The 2-segment
+        // dispatch below wouldn't match this shape, so route to the
+        // synthesized Json walker by hand: construct the unit-variant
+        // value via `try_unit_enum_variant`, then feed it through
+        // `compile_json_stringify`. Phase-8 line 435 slice 3.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 3
+                && segments[0] == "Json"
+                && segments[2] == "stringify"
+                && args.is_empty()
+            {
+                let variant = segments[1].clone();
+                if let Some(layout) = self.enum_layouts.get("Json") {
+                    if layout.tags.contains_key(&variant)
+                        && layout.field_counts.get(&variant).copied().unwrap_or(0) == 0
+                    {
+                        if let Some(unit_val) = self.try_unit_enum_variant(&variant) {
+                            return self.compile_json_stringify(unit_val);
+                        }
+                    }
+                }
+            }
+        }
+
         // Associated function calls: Vec::new(), etc. Theme 6 sub-step 4
         // intercepts `R.method(args)` where R is an `effect resource R: T`
         // before assoc-call dispatch: those go through the runtime stack

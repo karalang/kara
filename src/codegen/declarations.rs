@@ -2297,6 +2297,83 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // std.json `Json` enum — baked stdlib in `runtime/stdlib/json.kara`
+        // reaches the typechecker via `STDLIB_PROGRAMS` but does NOT reach
+        // codegen's `declare_enums` pass (codegen reads only the user's
+        // `program.items`). Without an explicit layout seed here, the
+        // codegen-side `Json.X(...)` construction in `try_compile_enum_variant`
+        // falls through to the default `i64 0` placeholder, breaking
+        // `Json.stringify()` dispatch and every kata that emits JSON via
+        // compiled binaries (phase-8 line 435).
+        //
+        // Variant layout (4 i64 words total — matches Option's seeded shape):
+        //   Null    (tag=0) — 0 payload words
+        //   Bool    (tag=1) — 1 payload word  (bool stored at w0)
+        //   Number  (tag=2) — 1 payload word  (f64 bitpattern at w0)
+        //   String  (tag=3) — 3 payload words ({data ptr, len, cap})
+        //   Array   (tag=4) — 3 payload words (Vec[Json] = {data, len, cap})
+        //   Object  (tag=5) — 3 payload words (Vec[(String, Json)] = {data, len, cap})
+        //
+        // String/Array/Object's data buffer should be dropped at scope
+        // exit. EnumDropKind::VecOrString does the standard `cap > 0 ?
+        // free(data)` walk in `emit_enum_drop_switch` — but Array/Object
+        // need recursive child cleanup (each element is itself a Json or
+        // a (String, Json) tuple). The runtime-side
+        // `karac_runtime_json_free_value` handles the recursive case via
+        // tag-keyed dispatch; for codegen-built Kāra `Json` values stored
+        // in local bindings, the value lives entirely in registers /
+        // stack until the user calls `.stringify()`, which immediately
+        // frees the intermediate FFI tree it materialized — so v1's
+        // EnumDropKind::None on Array/Object is correct (no Kāra-side
+        // heap-owning state at the variant-layout level beyond what the
+        // Vec-typed payload's own drop path would handle). When the
+        // higher-level Vec[Json] / Vec[(String, Json)] drop landing
+        // arrives, switch these to VecOrString.
+        if !self.enum_layouts.contains_key("Json") {
+            let json_enum_type = self
+                .context
+                .struct_type(&[i64_t, i64_t, i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Null".to_string(), 0u64);
+            tags.insert("Bool".to_string(), 1u64);
+            tags.insert("Number".to_string(), 2u64);
+            tags.insert("String".to_string(), 3u64);
+            tags.insert("Array".to_string(), 4u64);
+            tags.insert("Object".to_string(), 5u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Null".to_string(), 0usize);
+            field_counts.insert("Bool".to_string(), 1usize);
+            field_counts.insert("Number".to_string(), 1usize);
+            field_counts.insert("String".to_string(), 1usize);
+            field_counts.insert("Array".to_string(), 1usize);
+            field_counts.insert("Object".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Null".to_string(), Vec::new());
+            field_word_offsets.insert("Bool".to_string(), vec![(0, 1)]);
+            field_word_offsets.insert("Number".to_string(), vec![(0, 1)]);
+            field_word_offsets.insert("String".to_string(), vec![(0, 3)]);
+            field_word_offsets.insert("Array".to_string(), vec![(0, 3)]);
+            field_word_offsets.insert("Object".to_string(), vec![(0, 3)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Null".to_string(), Vec::new());
+            field_drop_kinds.insert("Bool".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("Number".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("String".to_string(), vec![EnumDropKind::VecOrString]);
+            field_drop_kinds.insert("Array".to_string(), vec![EnumDropKind::VecOrString]);
+            field_drop_kinds.insert("Object".to_string(), vec![EnumDropKind::VecOrString]);
+            self.enum_layouts.insert(
+                "Json".to_string(),
+                EnumLayout {
+                    llvm_type: json_enum_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+        }
+
         // Result[T, E]: { i64 tag, i64 w0 }  — Err(tag=0, w0=err) | Ok(tag=1, w0=val)
         // Kept at the legacy single-word payload shape: every Result
         // consumer in the codebase (including the `?` operator's

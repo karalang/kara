@@ -19561,4 +19561,145 @@ fn main() {
         .expect("compile + run failed");
         assert_eq!(output, "1\n0\n");
     }
+
+    // ── Phase 8 line 435 follow-up — std.json codegen ─────────────
+    //
+    // Compiled-binary path for `j.stringify()` over the baked
+    // `runtime/stdlib/json.kara` `Json` enum. Six tests cover the
+    // walker's per-variant arms (Null/Bool/Number/String/Array/
+    // Object), the non-identifier-receiver entry shape
+    // (`Json.X(...).stringify()` without an intermediate `let`),
+    // and the 3-segment-Path entry shape for the unit `Null`
+    // variant (`Json.Null.stringify()` parses as one Path callee).
+
+    #[test]
+    fn test_e2e_json_stringify_null() {
+        let out = run_program("fn main() { println(Json.Null.stringify()); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "null");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_bool_true() {
+        let out = run_program("fn main() { println(Json.Bool(true).stringify()); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "true");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_bool_false() {
+        let out = run_program("fn main() { println(Json.Bool(false).stringify()); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "false");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_number() {
+        let out = run_program("fn main() { println(Json.Number(3.14).stringify()); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "3.14");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_string() {
+        let out = run_program("fn main() { println(Json.String(\"hi\").stringify()); }");
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "\"hi\"");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_identifier_receiver() {
+        // Variable-bound Json receiver — exercises the `var_type_names[
+        // "j"] == "Json"` dispatch arm in `compile_method_call` rather
+        // than the non-identifier path. Covers the parser shape where
+        // `Json.Null` is the RHS of a let and `.stringify()` is a
+        // distinct MethodCall against the binding.
+        let out = run_program(
+            "fn main() {\n\
+                 let j = Json.Number(42.0);\n\
+                 println(j.stringify());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "42.0");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_array() {
+        // Vec[Json] payload — exercises the 32-byte element stride and
+        // the recursive `__karac_json_kara_to_ffi` self-call inside the
+        // array arm. Verifies the per-element walk produces JSON in
+        // source order.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[Json] = Vec.new();\n\
+                 xs.push(Json.Number(1.0));\n\
+                 xs.push(Json.Number(2.0));\n\
+                 xs.push(Json.Number(3.0));\n\
+                 println(Json.Array(xs).stringify());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "[1.0,2.0,3.0]");
+        }
+    }
+
+    #[test]
+    fn test_e2e_json_stringify_object() {
+        // Vec[(String, Json)] payload — exercises the 56-byte tuple
+        // stride (String at offset 0, Json at offset 24) and the per-
+        // key CString allocation in `karac_runtime_json_alloc_key`.
+        // Verifies insertion-order Object iteration in stringify
+        // output (locked design (ii) in `runtime/stdlib/json.kara`).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut pairs: Vec[(String, Json)] = Vec.new();\n\
+                 pairs.push((\"a\", Json.Number(1.0)));\n\
+                 pairs.push((\"b\", Json.Bool(true)));\n\
+                 println(Json.Object(pairs).stringify());\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "{\"a\":1.0,\"b\":true}");
+        }
+    }
+
+    #[test]
+    fn test_ir_json_stringify_emits_helper() {
+        // Pin the synthesized walker is materialized exactly once even
+        // across multiple `.stringify()` call sites — the lazy memo on
+        // `__karac_json_kara_to_ffi` is what keeps IR size bounded.
+        let ir = ir_for(
+            "fn main() {\n\
+                 println(Json.Number(1.0).stringify());\n\
+                 println(Json.Number(2.0).stringify());\n\
+             }",
+        );
+        assert!(
+            ir.contains("__karac_json_kara_to_ffi"),
+            "stringify dispatch should reference the synthesized walker:\n{ir}"
+        );
+        let helper_defs = ir
+            .matches("define internal ptr @__karac_json_kara_to_ffi")
+            .count();
+        assert_eq!(
+            helper_defs, 1,
+            "walker should be defined exactly once, found {}:\n{}",
+            helper_defs, ir
+        );
+        // Both call sites should reuse the helper.
+        let helper_calls = ir.matches("call ptr @__karac_json_kara_to_ffi").count();
+        assert!(
+            helper_calls >= 2,
+            "expected ≥2 helper calls (one per stringify site), got {}:\n{}",
+            helper_calls,
+            ir
+        );
+    }
 }
