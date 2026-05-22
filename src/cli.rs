@@ -4,7 +4,7 @@
 //! and running the appropriate compiler phases.
 
 use crate::ast::EffectVerbKind;
-use crate::ast::{Item, Program};
+use crate::ast::{Function, Item, Program};
 use crate::concurrency::ConcurrencyAnalysis;
 use crate::effectchecker::{DeclaredEffects, EffectCheckResult, EffectErrorKind};
 use crate::interpreter::{DbgOutputMode, ErrorTraceFrame, Interpreter, TestOutcome};
@@ -6537,6 +6537,98 @@ struct WithProviderFixture {
     constructor: crate::ast::Expr,
 }
 
+/// Stable opaque interpreter-side identifier for an `Item::TestCase`.
+/// The synthesized `Item::Function` (see [`lower_test_case_to_function`])
+/// registers under this name so [`Interpreter::run_test_function`] can
+/// dispatch through the regular `call_function` path with no extra
+/// branching. Format: `__test_<sanitized-module-label>_<line>_<8-hex>`.
+///
+/// The hash prefix is `blake3(case_name)[..8]` — first 8 hex chars of
+/// the case name's blake3 digest. Two cases at the same (module, line)
+/// with different names can't both legally exist (one source line, one
+/// item), so the line component already pins identity; the hash is a
+/// belt-and-braces guard against module-path edge cases (synthetic
+/// label collisions across re-export scaffolds, etc.) and gives the
+/// mangled name a recognizable shape even when several cases share a
+/// line through future macro expansion. Dots in the module label
+/// become underscores so the mangled string stays a single contiguous
+/// token in debugger / profiler views.
+fn mangled_test_function_name(module_label: &str, line: usize, case_name: &str) -> String {
+    let label_safe: String = module_label
+        .chars()
+        .map(|c| if c == '.' || c == ':' { '_' } else { c })
+        .collect();
+    let digest = blake3::hash(case_name.as_bytes());
+    let hex = digest.to_hex();
+    format!("__test_{}_{}_{}", label_safe, line, &hex.as_str()[..8])
+}
+
+/// Synthesize an `Item::Function` shell from an `Item::TestCase` so
+/// the regular resolve / typecheck / interpret pipeline can chew the
+/// body without growing TestCase-specific arms in every phase. The
+/// synthesized function has:
+///
+/// - the mangled name from [`mangled_test_function_name`]
+/// - the case body, cloned verbatim
+/// - no params, no self-param, no return type, no effects, no
+///   contracts — the runner calls it as `call_function(name, &[])`
+///   and inspects `runtime_errors` for failure details, so any
+///   declared signature surface would be unused.
+/// - `is_pub: false`, `is_private: false` — visibility is already
+///   rejected at the parse site; the synthesized function is
+///   module-internal regardless.
+/// - the attribute list copied from the TestCase. Slice 4 lifts
+///   `#[test(requires=[...])]` / `#[with_provider(...)]` extraction
+///   onto `TestCase.attributes`; until then the field carries
+///   whatever the parser attached without behavior change.
+fn lower_test_case_to_function(tc: &crate::ast::TestCase, mangled_name: String) -> Function {
+    Function {
+        span: tc.span.clone(),
+        attributes: tc.attributes.clone(),
+        doc_comment: tc.doc_comment.clone(),
+        is_pub: false,
+        is_private: false,
+        is_unsafe: false,
+        name: mangled_name,
+        generic_params: None,
+        params: Vec::new(),
+        self_param: None,
+        return_type: None,
+        effects: None,
+        requires: Vec::new(),
+        ensures: Vec::new(),
+        where_clause: None,
+        body: tc.body.clone(),
+        stdlib_origin: false,
+        deprecation: None,
+        is_track_caller: false,
+        lint_overrides: Vec::new(),
+        profile_compat: Vec::new(),
+    }
+}
+
+/// Materialize a module's items with every `Item::TestCase` rewritten
+/// to a synthesized `Item::Function`. Used at the per-module Program
+/// build step in `karac test` so the resolver / typechecker /
+/// interpreter never see the `TestCase` variant — they process a
+/// regular function body and the runner dispatches through the
+/// existing `call_function` path. Non-`TestCase` items pass through
+/// unchanged with a single clone (the rest of the test runner
+/// already builds a cloned `Program` per module, so this folds into
+/// that clone with no extra allocation profile).
+fn lower_module_test_cases(items: &[Item], module_label: &str) -> Vec<Item> {
+    items
+        .iter()
+        .map(|item| match item {
+            Item::TestCase(tc) => {
+                let mangled = mangled_test_function_name(module_label, tc.name_span.line, &tc.name);
+                Item::Function(lower_test_case_to_function(tc, mangled))
+            }
+            other => other.clone(),
+        })
+        .collect()
+}
+
 fn discover_tests(tree: &ProgramTree) -> Vec<DiscoveredTest> {
     let mut out = Vec::new();
     for (mod_id, module) in tree.modules.iter().enumerate() {
@@ -6548,8 +6640,8 @@ fn discover_tests(tree: &ProgramTree) -> Vec<DiscoveredTest> {
         };
         let label = module_label(&module.path);
         for item in &module.items[test_start..] {
-            if let Item::Function(f) = item {
-                if f.name.starts_with("test_") {
+            match item {
+                Item::Function(f) if f.name.starts_with("test_") => {
                     out.push(DiscoveredTest {
                         module_id: mod_id,
                         fn_name: f.name.clone(),
@@ -6558,6 +6650,41 @@ fn discover_tests(tree: &ProgramTree) -> Vec<DiscoveredTest> {
                         with_providers: extract_with_providers(&f.attributes),
                     });
                 }
+                Item::TestCase(t) => {
+                    // The interpreter lookup name must match what
+                    // `lower_module_test_cases` produces — both
+                    // call sites use `mangled_test_function_name`
+                    // with the same inputs, so the registration
+                    // and the `run_test_function` call agree by
+                    // construction.
+                    let mangled = mangled_test_function_name(&label, t.name_span.line, &t.name);
+                    out.push(DiscoveredTest {
+                        module_id: mod_id,
+                        fn_name: mangled,
+                        // User-visible qualifier — design.md §
+                        // Testing pins this to the case-name
+                        // string verbatim (the same string
+                        // `--filter` matches against and the
+                        // `test` field on every JSONL event
+                        // carries). Slice 5 collapses the legacy
+                        // `fn test_*` path so all entries take
+                        // this branch and `qualified` becomes
+                        // uniformly the case name.
+                        qualified: t.name.clone(),
+                        // Slice 4 lifts attribute extraction onto
+                        // `TestCase.attributes`. Pre-slice-4 the
+                        // requires / with_provider surface is
+                        // empty for `Item::TestCase`-discovered
+                        // entries — programmers staying on the
+                        // legacy `fn test_*` path keep their
+                        // existing requires / providers; new
+                        // block-form cases without modifier
+                        // attributes are the v1 floor.
+                        requires: Vec::new(),
+                        with_providers: Vec::new(),
+                    });
+                }
+                _ => {}
             }
         }
     }
@@ -6923,8 +7050,18 @@ fn cmd_test(filter: Option<String>, all: bool) {
         // transition happens exactly once per module.
         if current_module != Some(t.module_id) {
             let m = &tree.modules[t.module_id];
+            // Lower every `Item::TestCase` in this module to a
+            // synthesized `Item::Function` keyed by the same mangled
+            // name that `discover_tests` already wrote into
+            // `DiscoveredTest.fn_name` above. Downstream resolve /
+            // typecheck / interpret see only regular function
+            // declarations; the test body flows through the
+            // standard pipeline and `run_test_function(t.fn_name)`
+            // finds the lowered entry in `env.functions`.
+            let label = module_label(&m.path);
+            let lowered_items = lower_module_test_cases(&m.items, &label);
             let program = Program {
-                items: m.items.clone(),
+                items: lowered_items,
                 ..Program::default()
             };
             let resolved = Resolver::new(&program)

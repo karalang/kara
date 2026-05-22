@@ -1770,6 +1770,141 @@ fn test_test_test_outside_project_emits_manifest_error() {
     assert!(stdout.contains("manifest_error"));
 }
 
+// ── karac test (test-block syntax — phase-4 slice 2/3) ──────────
+
+#[test]
+fn test_test_block_form_all_passing() {
+    let tmp = scratch_project("test-block-all-pass");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\nfn add(a: i64, b: i64) -> i64 { a + b }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"add positives\" {\n    assert_eq(add(1, 2), 3);\n}\n\
+         test \"add zeros\" {\n    assert_eq(add(0, 0), 0);\n}\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert!(lines[0].contains("\"total_tests\":2"));
+    let pass: Vec<&&str> = lines
+        .iter()
+        .filter(|l| event_kind(l) == Some("test_pass"))
+        .collect();
+    assert_eq!(pass.len(), 2, "got: {lines:?}");
+    // The `test` field on each event is the case-name string
+    // verbatim — no `<root>::__test_...` mangling leaks through.
+    assert!(pass
+        .iter()
+        .any(|l| l.contains("\"test\":\"add positives\"")));
+    assert!(pass.iter().any(|l| l.contains("\"test\":\"add zeros\"")));
+    let summary = lines.last().unwrap();
+    assert!(summary.contains("\"passed\":2"));
+    assert!(summary.contains("\"failed\":0"));
+}
+
+#[test]
+fn test_test_block_form_failure_surfaces_case_name() {
+    let tmp = scratch_project("test-block-failure");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/main.kara"),
+        "fn main() {}\nfn add(a: i64, b: i64) -> i64 { a + b }\n",
+    );
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"sum should be five\" {\n    assert_eq(add(2, 2), 5);\n}\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected exit != 0; stdout:\n{stdout}"
+    );
+    let lines = jsonl_lines(&stdout);
+    let fail = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_fail"))
+        .unwrap_or_else(|| panic!("expected test_fail in:\n{lines:?}"));
+    assert!(fail.contains("\"test\":\"sum should be five\""));
+    assert!(fail.contains("\"left\":\"4\""));
+    assert!(fail.contains("\"right\":\"5\""));
+}
+
+#[test]
+fn test_test_block_form_filter_matches_case_name() {
+    let tmp = scratch_project("test-block-filter");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"alpha case\" { assert(true); }\n\
+         test \"beta case\" { assert(true); }\n\
+         test \"gamma case\" { assert(true); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["test", "beta"])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert!(lines[0].contains("\"total_tests\":1"));
+    let pass: Vec<&&str> = lines
+        .iter()
+        .filter(|l| event_kind(l) == Some("test_pass"))
+        .collect();
+    assert_eq!(pass.len(), 1);
+    assert!(pass[0].contains("\"test\":\"beta case\""));
+}
+
+#[test]
+fn test_test_block_form_coexists_with_legacy_fn_test_form() {
+    // Slices 2–4 keep the convention-based `fn test_*` discovery
+    // alive alongside `Item::TestCase`. Slice 5 collapses the
+    // legacy path; until then both shapes must run side by side
+    // so partial migration of a project's `_test.kara` files
+    // doesn't silently drop either form.
+    let tmp = scratch_project("test-block-coexist");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"block form\" { assert(true); }\n\
+         fn test_legacy() { assert(true); }\n",
+    );
+
+    let out = karac_bin().current_dir(&tmp).arg("test").output().unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert!(lines[0].contains("\"total_tests\":2"));
+    let pass: Vec<&&str> = lines
+        .iter()
+        .filter(|l| event_kind(l) == Some("test_pass"))
+        .collect();
+    assert_eq!(pass.len(), 2);
+    // Block-form event carries the case-name string verbatim;
+    // legacy `fn test_*` event keeps the `<module>::fn_name`
+    // qualifier (the schema doesn't change — only the source of
+    // the string differs).
+    assert!(pass.iter().any(|l| l.contains("\"test\":\"block form\"")));
+    assert!(pass
+        .iter()
+        .any(|l| l.contains("\"test\":\"<root>::test_legacy\"")));
+}
+
 // ── karac test (CR-24 follow-up slice 2: requires-gating) ───────
 
 #[test]
