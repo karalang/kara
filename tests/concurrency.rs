@@ -561,6 +561,82 @@ fn test_cost_model_hot_loop_plus_let_init_marked_trivial() {
 }
 
 #[test]
+fn test_cost_model_byte_lit_let_init_counts_as_constant() {
+    // Distillation of the kata-91 bench failure mode. Pre-fix
+    // `stmt_is_constant_init` listed Integer/Float/CharLit/StringLit/
+    // CStringLit/Bool/Identifier but not `ByteLit`, so `let zero: u8 =
+    // b'0';` was mis-classified as non-constant. With one Vec.new()
+    // sibling and one byte-lit let in a 4-stmt prologue,
+    // `non_constant_count` reached 2 (instead of 1), flipping
+    // `is_trivial` to false and emitting a 4-branch par-block for
+    // four ~3-instruction stores. Downstream, the captured `let l =
+    // 80i64` became a `karac_par_run`-opaque load, breaking LLVM's
+    // const-prop into `k % l` (which then lowered as `sdiv` instead
+    // of `umulh`-reciprocal). Cost on kata-91's 10M-iter hot loop:
+    // ~47 ms — the full gap to rustc-O at the time.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let l: i64 = 80i64;
+            let zero: u8 = b'0';
+            let mut buf: Vec[u8] = Vec.new();
+            let mut j: i64 = 0i64;
+            println(l);
+            println(zero);
+            println(buf.len());
+            println(j);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    // Either no non-trivial group was formed, or the only group is
+    // trivial. Both shapes mean codegen skips the par dispatch.
+    for group in &main_fc.parallel_groups {
+        assert!(
+            group.is_trivial,
+            "Group {:?} (reason: {:?}) should be marked trivial — \
+             three of its four stmts are literal-init lets (Integer / \
+             ByteLit / Integer); only Vec.new() does meaningful work",
+            group.statement_indices, group.reason
+        );
+    }
+}
+
+#[test]
+fn test_cost_model_multi_string_lit_counts_as_constant() {
+    // Sibling to the ByteLit test. `MultiStringLit` (Kāra's multi-line
+    // string literal form) is textual data with no runtime work, parity
+    // with `StringLit`. Pre-fix the heuristic listed `StringLit` but
+    // not `MultiStringLit`, so a let-of-multi-string would also drive
+    // the non-constant count past 1 and emit a wasteful par-group.
+    // Without a concrete bench failure for this one, this test is the
+    // forward-compat guard: the analyzer should treat both string-
+    // literal forms identically for the cost-model gate.
+    let analysis = analyze(
+        r#"
+        fn main() {
+            let banner: String = """hello
+                                    world""";
+            let mut buf: Vec[u8] = Vec.new();
+            let n: i64 = 0i64;
+            println(banner);
+            println(buf.len());
+            println(n);
+        }
+        "#,
+    );
+    let main_fc = get_function(&analysis, "main");
+    for group in &main_fc.parallel_groups {
+        assert!(
+            group.is_trivial,
+            "Group {:?} (reason: {:?}) should be marked trivial — \
+             MultiStringLit is a literal, only Vec.new() does real work",
+            group.statement_indices, group.reason
+        );
+    }
+}
+
+#[test]
 fn test_cost_model_two_effectful_calls_still_parallelized() {
     // Control case: two effectful calls on independent resources
     // have real structural parallelism. The cost-model gate must
