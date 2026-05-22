@@ -202,8 +202,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_int_compare(inkwell::IntPredicate::SGE, start, recv_len, "ss.ge_len")
                     .unwrap();
-                let out_of_range =
-                    self.builder.build_or(lt_zero, ge_len, "ss.oor").unwrap();
+                let out_of_range = self.builder.build_or(lt_zero, ge_len, "ss.oor").unwrap();
 
                 let fn_val = self.current_fn.unwrap();
                 let copy_bb = self.context.append_basic_block(fn_val, "ss.copy");
@@ -211,8 +210,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 let cont_bb = self.context.append_basic_block(fn_val, "ss.cont");
 
                 // Result slot for the assembled String aggregate.
-                let result_slot =
-                    self.create_entry_alloca(fn_val, "ss.result", str_ty.into());
+                let result_slot = self.create_entry_alloca(fn_val, "ss.result", str_ty.into());
                 self.builder
                     .build_conditional_branch(out_of_range, empty_bb, copy_bb)
                     .unwrap();
@@ -255,12 +253,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // src = recv_data + start (byte-stride GEP via i8).
                 let src = unsafe {
                     self.builder
-                        .build_gep(
-                            self.context.i8_type(),
-                            recv_data,
-                            &[start],
-                            "ss.src",
-                        )
+                        .build_gep(self.context.i8_type(), recv_data, &[start], "ss.src")
                         .unwrap()
                 };
                 self.builder.build_memcpy(buf, 1, src, 1, new_len).unwrap();

@@ -9169,9 +9169,7 @@ fn test_string_substring_rejects_zero_args() {
 fn test_string_substring_rejects_non_int_arg() {
     let errors = typecheck_errors(r#"fn f() { let s = "x"; s.substring("a"); }"#);
     assert!(
-        errors
-            .iter()
-            .any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
         "Expected TypeMismatch for substring with String arg, got: {:?}",
         errors
     );
