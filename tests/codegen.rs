@@ -19461,4 +19461,43 @@ fn main() {
             "String.substring should memcpy from the receiver:\n{ir}"
         );
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // i64.parse(s: String) -> Option[i64] — shipped 2026-05-21.
+    //
+    // Calls `karac_runtime_parse_i64(data, len, *out)`; trims +
+    // i64::from_str on the runtime side; PHI-builds Option[i64] at
+    // the merge BB via `build_option_some_via_phis`.
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_i64_parse_basic() {
+        let output = run_program(
+            "fn main() {\n\
+                 match i64.parse(\"42\") { Some(n) => println(n), None => println(-1) }\n\
+                 match i64.parse(\"not a number\") { Some(n) => println(n), None => println(-1) }\n\
+                 match i64.parse(\"-7\") { Some(n) => println(n), None => println(-1) }\n\
+                 match i64.parse(\"  100  \") { Some(n) => println(n), None => println(-1) }\n\
+                 match i64.parse(\"\") { Some(n) => println(n), None => println(-1) }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n-1\n-7\n100\n-1\n");
+    }
+
+    #[test]
+    fn test_ir_i64_parse_calls_runtime_extern() {
+        let ir = ir_for(
+            "fn parse_id(s: String) -> i64 {\n\
+                 match i64.parse(s) {\n\
+                     Some(n) => n,\n\
+                     None => -1,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            ir.contains("call i8 @karac_runtime_parse_i64"),
+            "i64.parse should call the runtime extern:\n{ir}"
+        );
+    }
 }

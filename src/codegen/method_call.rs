@@ -402,6 +402,17 @@ impl<'ctx> super::Codegen<'ctx> {
                 if OP_METHODS.contains(&method) {
                     return self.compile_assoc_call(type_name.as_str(), method, args);
                 }
+                // `<int_type>.parse(s: String) -> Option[i64]` — base-10
+                // signed parse. Extends the primitive-type-receiver
+                // dispatch already used by binop methods.
+                if method == "parse"
+                    && matches!(
+                        type_name.as_str(),
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    return self.compile_assoc_call(type_name.as_str(), method, args);
+                }
             }
         }
 

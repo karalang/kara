@@ -49,6 +49,41 @@ impl<'a> super::Interpreter<'a> {
                         return self.eval_expr_inner(&arg.value);
                     }
                 }
+                // `<int_type>.parse(s: String) -> Option[T]`. Base-10
+                // parse via Rust's `str::parse::<i64>()`. Currently all
+                // ints lower to `i64` at the Value layer, so every
+                // primitive-int type's `parse` produces `Value::Int`;
+                // narrower-typed `parse` (`i8.parse`, `u32.parse`,
+                // etc.) is a future codegen-time tweak.
+                if method == "parse"
+                    && matches!(
+                        target,
+                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+                    )
+                {
+                    if let Some(arg) = args.first() {
+                        let s_val = self.eval_expr_inner(&arg.value);
+                        if let Value::String(s) = s_val {
+                            return match s.trim().parse::<i64>() {
+                                Ok(n) => Value::EnumVariant {
+                                    enum_name: "Option".to_string(),
+                                    variant: "Some".to_string(),
+                                    data: EnumData::Tuple(vec![Value::Int(n)]),
+                                },
+                                Err(_) => Value::EnumVariant {
+                                    enum_name: "Option".to_string(),
+                                    variant: "None".to_string(),
+                                    data: EnumData::Unit,
+                                },
+                            };
+                        }
+                    }
+                    return Value::EnumVariant {
+                        enum_name: "Option".to_string(),
+                        variant: "None".to_string(),
+                        data: EnumData::Unit,
+                    };
+                }
                 if let Some(result) = self.dispatch_lowered_op(method, args, span) {
                     return result;
                 }

@@ -6256,6 +6256,35 @@ fn test_string_substring_interpreter() {
 }
 
 #[test]
+fn test_i64_parse_interpreter() {
+    // Five cases mirror `/tmp/kara-probes/i64_parse_full_probe.kara`:
+    // numeric / non-numeric / negative / whitespace-padded / empty.
+    let output = run(r#"fn main() {
+            match i64.parse("42") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("not a number") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("-7") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("  100  ") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+            match i64.parse("") {
+                Some(n) => println(n),
+                None => println(-1),
+            }
+        }"#);
+    assert_eq!(output, "42\n-1\n-7\n100\n-1\n");
+}
+
+#[test]
 fn test_string_chars_with_map_char_as_key() {
     // Locks down the LeetCode #3 idiom — chars feeding a Map[char, i64]
     // last-index map. The sliding-window kata is the natural-pull that

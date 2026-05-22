@@ -2366,6 +2366,35 @@ pub unsafe extern "C" fn karac_runtime_http_request_body_len(
     (*request).body_len
 }
 
+/// Parse a UTF-8 byte slice as a base-10 signed 64-bit integer.
+/// Returns `1` on success (with the parsed value written through
+/// `out`) or `0` on failure. Trims leading/trailing whitespace
+/// before parsing. On failure the contents of `*out` are unspecified;
+/// the caller should not read them.
+///
+/// # Safety
+///
+/// `data` must point at `len` initialized UTF-8 bytes (or be null
+/// with `len == 0`). `out` must be a valid `*mut i64`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_parse_i64(data: *const u8, len: usize, out: *mut i64) -> u8 {
+    if data.is_null() || len == 0 || out.is_null() {
+        return 0;
+    }
+    let slice = std::slice::from_raw_parts(data, len);
+    let s = match std::str::from_utf8(slice) {
+        Ok(s) => s,
+        Err(_) => return 0,
+    };
+    match s.trim().parse::<i64>() {
+        Ok(n) => {
+            *out = n;
+            1
+        }
+        Err(_) => 0,
+    }
+}
+
 /// Synchronously serve HTTP/1.1 traffic on `addr_cstr` until a fatal
 /// error breaks the accept loop. The Kāra-side handler is invoked
 /// through `tokio::task::block_in_place` per request so it can do

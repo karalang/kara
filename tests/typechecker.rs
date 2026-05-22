@@ -9176,6 +9176,23 @@ fn test_string_substring_rejects_non_int_arg() {
 }
 
 #[test]
+fn test_i64_parse_returns_option_i64() {
+    // `i64.parse(s: String) -> Option[i64]`. Match-destructuring on
+    // Some(n: i64) and None confirms the typechecker treats the
+    // result as Option[i64] (would fail to unify if Option[T] for
+    // some other T).
+    let result = typecheck_ok(
+        r#"fn f() -> i64 {
+            match i64.parse("42") {
+                Some(n) => n,
+                None => -1,
+            }
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
 fn test_string_bytes_returns_slice_u8() {
     // `String.bytes()` returns the `Slice[u8]` view design.md §
     // Character type points programmers at for O(1) byte-positional

@@ -1315,6 +1315,19 @@ impl<'ctx> Codegen<'ctx> {
             request_body_len_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_parse_i64(data: *const u8, len: usize, out: *mut i64) -> u8`.
+        // Returns 1 on success (with the parsed value at `*out`), 0 on
+        // failure. Backs `i64.parse(s: String) -> Option[i64]` and the
+        // narrower integer-type parse methods (which all currently lower
+        // to i64 at the Value layer).
+        let parse_i64_type = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        let _karac_runtime_parse_i64_fn = module.add_function(
+            "karac_runtime_parse_i64",
+            parse_i64_type,
+            Some(Linkage::External),
+        );
         let response_set_status_type = context
             .void_type()
             .fn_type(&[ptr_type.into(), context.i16_type().into()], false);

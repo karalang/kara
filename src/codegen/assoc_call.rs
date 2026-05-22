@@ -49,6 +49,109 @@ impl<'ctx> super::Codegen<'ctx> {
                 return self.compile_expr(&arg.value);
             }
         }
+        // `<int_type>.parse(s: String) -> Option[i64]` — base-10 signed
+        // parse via the `karac_runtime_parse_i64` extern. Returns
+        // `Option.Some(value)` on success, `Option.None` on failure
+        // (rejects empty / non-numeric / overflow). Trims whitespace
+        // before parsing.
+        if method == "parse"
+            && matches!(
+                type_name,
+                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize"
+            )
+        {
+            if _args.is_empty() {
+                return Err(format!("{}.parse requires a String argument", type_name));
+            }
+            let i64_t = self.context.i64_type();
+            let i8_t = self.context.i8_type();
+            let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+            // Evaluate the String arg, extract `{data, len}`.
+            let s_val = self.compile_expr(&_args[0].value)?;
+            let s_struct = s_val.into_struct_value();
+            let s_data = self
+                .builder
+                .build_extract_value(s_struct, 0, "parse.s.ptr")
+                .unwrap()
+                .into_pointer_value();
+            let s_len = self
+                .builder
+                .build_extract_value(s_struct, 1, "parse.s.len")
+                .unwrap()
+                .into_int_value();
+
+            // Allocate the out-i64 slot the runtime writes through.
+            let fn_val = self
+                .current_fn
+                .ok_or_else(|| "T.parse called outside fn".to_string())?;
+            let out_slot = self.create_entry_alloca(fn_val, "parse.out", i64_t.into());
+
+            // Call the runtime extern.
+            let parse_fn = self
+                .module
+                .get_function("karac_runtime_parse_i64")
+                .expect("karac_runtime_parse_i64 declared in Codegen::new");
+            let success = self
+                .builder
+                .build_call(
+                    parse_fn,
+                    &[s_data.into(), s_len.into(), out_slot.into()],
+                    "parse.ok",
+                )
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let is_ok = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::NE,
+                    success,
+                    i8_t.const_zero(),
+                    "parse.ok.bool",
+                )
+                .unwrap();
+
+            // Branch on success: load the parsed value in the some
+            // branch; the none branch holds no payload.
+            let some_bb = self.context.append_basic_block(fn_val, "parse.some");
+            let none_bb = self.context.append_basic_block(fn_val, "parse.none");
+            let merge_bb = self.context.append_basic_block(fn_val, "parse.merge");
+
+            self.builder
+                .build_conditional_branch(is_ok, some_bb, none_bb)
+                .unwrap();
+
+            // Some: load *out, coerce to 3-word payload, branch to merge.
+            self.builder.position_at_end(some_bb);
+            let parsed = self
+                .builder
+                .build_load(i64_t, out_slot, "parse.value")
+                .unwrap();
+            let some_payload_words = self.coerce_to_payload_words(parsed, 3)?;
+            let some_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // None: just branch to merge.
+            self.builder.position_at_end(none_bb);
+            let none_end_bb = self.builder.get_insert_block().unwrap();
+            self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+            // Merge: PHI-assemble Option[i64].
+            self.builder.position_at_end(merge_bb);
+            // Suppress the unused-warning on `ptr_ty` when the helper
+            // closure doesn't touch it directly. (The build above
+            // consumes only the existing locals.)
+            let _ = ptr_ty;
+            let agg = self.build_option_some_via_phis(
+                &some_payload_words,
+                some_end_bb,
+                none_end_bb,
+                "parse.opt",
+            );
+            return Ok(agg);
+        }
         // Lowered operator dispatch: `<Primitive>.<op>(args)` — synthesized
         // by the lowering pass. Reroute to the existing BinOp/UnaryOp
         // intrinsic compilation so we don't have to duplicate codegen logic.
