@@ -6650,3 +6650,316 @@ fn test_par_block_two_distinct_bindings_two_diagnostics() {
     assert!(has_par_conflict_for(&errors, "COUNTER"));
     assert!(has_par_conflict_for(&errors, "FLAG"));
 }
+
+// ── Slice 8: pub fn synthetic-resource rejection (design.md §1326) ─
+//
+// Under `public_effects = "declared"`, a `pub fn` that carries an
+// effect on a synthetic per-binding resource (`<NAME>_resource`)
+// cannot satisfy the declaration discipline — the resource is not
+// nameable. The dedicated rejection fires with `E0409`. The two
+// supported escapes are: wrap the binding in a concurrency primitive
+// (`Atomic[T]` / `Mutex[T]` / `RwLock[T]` / `Arc[shared struct S]`)
+// or switch the project to `public_effects = "inferred"`.
+// `#[thread_local]` is also implicitly permitted — the wrapped
+// `ThreadLocal[...]` resource never conflicts across tasks, so it
+// raises no synchronisation concern at the public boundary.
+
+fn has_pub_fn_synth_for(errors: &[EffectError], binding_name: &str) -> bool {
+    errors.iter().any(|e| {
+        e.kind == EffectErrorKind::PubFnSyntheticResource
+            && e.message.contains(&format!("'{}'", binding_name))
+    })
+}
+
+#[test]
+fn test_pub_fn_writes_modbind_under_declared_rejected() {
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         pub fn bump() { COUNTER = 1; }",
+    );
+    assert!(
+        has_pub_fn_synth_for(&errors, "COUNTER"),
+        "expected E_PUB_FN_SYNTHETIC_RESOURCE for direct pub-fn write; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+    let found = errors
+        .iter()
+        .find(|e| e.kind == EffectErrorKind::PubFnSyntheticResource)
+        .expect("expected at least one pub-fn synthetic-resource diagnostic");
+    assert!(
+        found.message.contains("Atomic[T]")
+            && found.message.contains("Mutex[T]")
+            && found.message.contains("RwLock[T]")
+            && found.message.contains("Arc[shared struct S]")
+            && found.message.contains("public_effects = \"inferred\""),
+        "expected §1326 verbatim escape-hatch fix-it; got message: {}",
+        found.message
+    );
+}
+
+#[test]
+fn test_pub_fn_reads_modbind_under_declared_rejected() {
+    // Reads contribute `reads(BINDING_resource)` which is just as
+    // un-nameable as the write side — same rejection applies.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         pub fn current() -> i64 { COUNTER }",
+    );
+    assert!(
+        has_pub_fn_synth_for(&errors, "COUNTER"),
+        "expected E_PUB_FN_SYNTHETIC_RESOURCE for pub-fn read; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pub_fn_modbind_via_callee_rejected() {
+    // Transitive: a public function whose body calls a private
+    // function that writes the binding still inherits the synthetic
+    // effect through call-graph propagation. The rejection fires on
+    // the public boundary regardless of where the assignment lives.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         fn _bump() { COUNTER = 1; }\n\
+         pub fn bump() { _bump() }",
+    );
+    assert!(
+        has_pub_fn_synth_for(&errors, "COUNTER"),
+        "expected E_PUB_FN_SYNTHETIC_RESOURCE via transitive callee; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pub_fn_modbind_under_inferred_policy_allowed() {
+    // §1326 escape-hatch (b): under `public_effects = "inferred"`,
+    // the rejection is suppressed entirely. The effect is still in
+    // the inferred set (conflict analysis continues to work), it
+    // just isn't a declaration violation.
+    let parsed = parse(
+        "let mut COUNTER: i64 = 0;\n\
+         pub fn bump() { COUNTER = 1; }",
+    );
+    assert!(parsed.errors.is_empty());
+    let result = effectcheck_with_policy(&parsed.program, PublicEffectsPolicy::Inferred);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE under Inferred policy; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_atomic_wrapped_allowed() {
+    // §1326 escape-hatch (a): `Atomic[T]` carries its own
+    // synchronisation. The synthetic-resource concern doesn't apply.
+    let parsed = parse(
+        "let mut COUNTER: Atomic[i64] = Atomic.new(0);\n\
+         pub fn bump() { COUNTER = COUNTER; }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for Atomic-wrapped binding; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_mutex_wrapped_allowed() {
+    let parsed = parse(
+        "let mut LOCKED: Mutex[i64] = Mutex.new(0);\n\
+         pub fn set() { LOCKED = LOCKED; }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for Mutex-wrapped binding; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_rwlock_wrapped_allowed() {
+    let parsed = parse(
+        "let mut CACHE: RwLock[i64] = RwLock.new(0);\n\
+         pub fn store() { CACHE = CACHE; }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for RwLock-wrapped binding; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_thread_local_allowed() {
+    // `#[thread_local]` resource is `ThreadLocal[BINDING_resource]`,
+    // which never conflicts across tasks — the public-boundary
+    // synchronisation concern doesn't apply.
+    let parsed = parse(
+        "#[thread_local]\n\
+         let mut SCRATCH: i64 = 0;\n\
+         pub fn set() { SCRATCH = 1; }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for #[thread_local] binding; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_immutable_let_no_rejection() {
+    // Immutable `let` declares no synthetic resource — reading it is
+    // a non-effect, so the public-boundary check has nothing to fire.
+    let parsed = parse(
+        "let MAX: i64 = 100;\n\
+         pub fn limit() -> i64 { MAX }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for immutable let; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_private_fn_modbind_no_rejection() {
+    // Private functions don't satisfy the `pub fn` precondition; the
+    // synthetic effect is fine on a private boundary because the
+    // declaration discipline doesn't apply.
+    let parsed = parse(
+        "let mut COUNTER: i64 = 0;\n\
+         fn bump() { COUNTER = 1; }",
+    );
+    let result = karac::effectcheck(&parsed.program);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::PubFnSyntheticResource),
+        "did not expect E_PUB_FN_SYNTHETIC_RESOURCE for private fn; got: {:?}",
+        result.errors
+    );
+}
+
+#[test]
+fn test_pub_fn_two_distinct_bindings_two_diagnostics() {
+    // One diagnostic per (function, offending binding) pair — a
+    // single pub fn that touches two synthetic resources produces
+    // two diagnostics so the programmer sees both fix sites.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         let mut FLAG: bool = false;\n\
+         pub fn touch_both() { COUNTER = 1; FLAG = true; }",
+    );
+    assert!(has_pub_fn_synth_for(&errors, "COUNTER"));
+    assert!(has_pub_fn_synth_for(&errors, "FLAG"));
+}
+
+#[test]
+fn test_pub_fn_reads_and_writes_same_binding_dedupes() {
+    // A pub fn that both reads and writes the same binding produces
+    // one diagnostic for that binding, not two.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         pub fn touch() { COUNTER = COUNTER + 1; }",
+    );
+    let count = errors
+        .iter()
+        .filter(|e| {
+            e.kind == EffectErrorKind::PubFnSyntheticResource && e.message.contains("'COUNTER'")
+        })
+        .count();
+    assert_eq!(
+        count,
+        1,
+        "expected exactly one pub-fn synth diagnostic per binding; got {}: {:?}",
+        count,
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pub_fn_modbind_no_double_fire_missing_declaration() {
+    // Synthetic modbind effects must be filtered out of
+    // `verify_declarations` so the user sees only the dedicated
+    // §1326 rejection — not a generic "Add: writes(COUNTER_resource)"
+    // suggestion that would direct them to write a name that isn't
+    // legal anywhere.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         pub fn bump() { COUNTER = 1; }",
+    );
+    let missing_with_synth: Vec<_> = errors
+        .iter()
+        .filter(|e| {
+            e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("COUNTER_resource")
+        })
+        .collect();
+    assert!(
+        missing_with_synth.is_empty(),
+        "did not expect a MissingEffectDeclaration mentioning the synthetic resource; got: {:?}",
+        missing_with_synth
+            .iter()
+            .map(|e| &e.message)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn test_pub_method_modbind_rejected() {
+    // Impl-block methods marked `pub fn` are also covered — the
+    // pass walks `function_bodies` and `method_bodies` keyed in
+    // `function_visibility`.
+    let errors = effectcheck_errors(
+        "let mut COUNTER: i64 = 0;\n\
+         struct Counter {}\n\
+         impl Counter {\n\
+             pub fn bump(ref self) { COUNTER = COUNTER + 1; }\n\
+         }",
+    );
+    assert!(
+        has_pub_fn_synth_for(&errors, "COUNTER"),
+        "expected E_PUB_FN_SYNTHETIC_RESOURCE on pub method; got: {:?}",
+        errors
+            .iter()
+            .map(|e| (&e.kind, &e.message))
+            .collect::<Vec<_>>()
+    );
+}

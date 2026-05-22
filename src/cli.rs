@@ -2508,6 +2508,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::effectchecker::EffectErrorKind::ModuleBindingWriteInPar => {
                     ("E0408", "error")
                 }
+                crate::effectchecker::EffectErrorKind::PubFnSyntheticResource => ("E0409", "error"),
             };
             let extra_json = err.subtype_trace.as_ref().map(|t| {
                 let slot = json_string_list(&t.slot_effects);

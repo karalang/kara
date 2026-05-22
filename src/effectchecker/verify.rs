@@ -60,6 +60,16 @@ impl<'a> super::EffectChecker<'a> {
                             if self.is_transparent_verb(&te.effect.verb) {
                                 continue;
                             }
+                            // Synthetic per-binding resources (slice 6 / §1322)
+                            // cannot appear in a user-written `with ...` clause
+                            // — they're project-internal identifiers. The
+                            // generic "add it to the declaration" fix-it would
+                            // be wrong; slice 8's dedicated rejection
+                            // (`verify_pub_fn_no_synthetic_resource`) owns the
+                            // diagnostic for these effects.
+                            if self.is_synthetic_modbind_resource(&te.effect.resource) {
+                                continue;
+                            }
                             // Effects whose origin is a polymorphic callee
                             // (declared `with _` / `with E`, or transitively
                             // poly via `calls_polymorphic`) are contributed
@@ -109,6 +119,12 @@ impl<'a> super::EffectChecker<'a> {
                             if self.is_transparent_verb(&te.effect.verb) {
                                 continue;
                             }
+                            // Synthetic modbind resources are owned by
+                            // slice 8's dedicated rejection — skip here so
+                            // we don't double-fire missing-declaration.
+                            if self.is_synthetic_modbind_resource(&te.effect.resource) {
+                                continue;
+                            }
                             // Same poly-origin filter as the pure `with E`
                             // arm above — effects propagated through a
                             // polymorphic callee belong to E, not to the
@@ -148,6 +164,12 @@ impl<'a> super::EffectChecker<'a> {
                         for effect in &inferred_effects {
                             // Skip transparent effects
                             if self.is_transparent_verb(&effect.verb) {
+                                continue;
+                            }
+                            // Synthetic modbind resources are owned by
+                            // slice 8's dedicated rejection — skip here so
+                            // we don't double-fire missing-declaration.
+                            if self.is_synthetic_modbind_resource(&effect.resource) {
                                 continue;
                             }
                             if !declared_effects.contains(effect) {
@@ -202,10 +224,17 @@ impl<'a> super::EffectChecker<'a> {
                     if self.public_effects_policy != PublicEffectsPolicy::Inferred {
                         // Under Declared policy, require explicit effect annotations.
                         if let Some(inferred_set) = inferred {
+                            // Filter synthetic modbind resources out of the
+                            // fix-it list — slice 8's dedicated rejection
+                            // owns those diagnostics, and the
+                            // "Add: writes(COUNTER_resource)" message
+                            // would suggest a name the user cannot legally
+                            // write in source.
                             let non_transparent: Vec<&TracedEffect> = inferred_set
                                 .effects
                                 .iter()
                                 .filter(|e| !self.is_transparent_verb(&e.effect.verb))
+                                .filter(|e| !self.is_synthetic_modbind_resource(&e.effect.resource))
                                 .collect();
                             if !non_transparent.is_empty() {
                                 let effects_list: Vec<String> = non_transparent

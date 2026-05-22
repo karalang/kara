@@ -204,6 +204,23 @@ pub enum EffectErrorKind {
     /// verbatim three-way split (`Atomic[T]` / `Mutex[T]` /
     /// `#[thread_local]`).
     ModuleBindingWriteInPar,
+    /// A `pub fn` carries an effect whose resource is the synthetic
+    /// per-binding resource (`<NAME>_resource` or
+    /// `ThreadLocal[<NAME>_resource]`) for a module-level `let mut`
+    /// whose type is not an explicit concurrency primitive and is not
+    /// `#[thread_local]`. The synthetic resource is not nameable in a
+    /// `with ...` declaration, so the `public_effects = "declared"`
+    /// discipline cannot be satisfied. Slice 8 of the phase-8
+    /// module-let work (design.md §1326) — fires only under the
+    /// `Declared` policy. The two supported escapes are: wrap the
+    /// binding in `Atomic[T]` / `Mutex[T]` / `RwLock[T]` /
+    /// `Arc[shared struct S]` and declare effects against those
+    /// well-known resources, or set `public_effects = "inferred"` at
+    /// the project level. `#[thread_local]` is also implicitly
+    /// permitted — its `ThreadLocal[...]` resource never conflicts
+    /// across tasks, so a public function carrying that effect raises
+    /// no synchronisation concern.
+    PubFnSyntheticResource,
 }
 
 impl std::fmt::Display for EffectError {
@@ -656,6 +673,7 @@ impl<'a> EffectChecker<'a> {
         self.infer_effects();
         self.infer_private_trait_ceilings();
         self.verify_declarations();
+        self.verify_pub_fn_no_synthetic_resource();
         self.verify_impl_trait_ceilings();
         self.verify_trait_default_bodies();
         self.check_call_site_subtyping();

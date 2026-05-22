@@ -121,6 +121,17 @@ impl<'a> super::EffectChecker<'a> {
             .get_key_value(name)
             .map(|(k, v)| (k.as_str(), v))
     }
+
+    /// `true` when `resource` is the synthetic effect-resource name
+    /// of a module-level `let mut` binding (with or without the
+    /// `ThreadLocal[...]` wrapper). Used by slice 8 / verify_declarations
+    /// to filter synthetic effects out of the missing/over-declared
+    /// checks — they can't be declared in source, so the generic
+    /// "add `with reads(X)`" fix-it would be wrong; slice 8's
+    /// dedicated rejection owns those diagnostics instead.
+    pub(crate) fn is_synthetic_modbind_resource(&self, resource: &str) -> bool {
+        self.lookup_modbind_by_resource(resource).is_some()
+    }
 }
 
 /// Returns `true` when the outermost type name of `ty` is one of the
@@ -288,6 +299,96 @@ impl<'a> super::EffectChecker<'a> {
                 kind: super::EffectErrorKind::ModuleBindingWriteInPar,
                 subtype_trace: None,
             });
+        }
+    }
+
+    /// Slice-8 `pub fn` synthetic-resource rejection (design.md §1326).
+    /// Runs only under `public_effects = "declared"`. For each public
+    /// function (top-level or impl method), walk its inferred effect
+    /// set and emit one diagnostic per offending (function, binding)
+    /// pair when the effect's resource is the synthetic per-binding
+    /// name of a `let mut` whose type is NOT an explicit concurrency
+    /// primitive (`Atomic[T]` / `Mutex[T]` / `RwLock[T]` / `Arc[...]`)
+    /// and is NOT `#[thread_local]` (whose `ThreadLocal[...]` wrapper
+    /// never conflicts across tasks, so a public function carrying
+    /// that effect raises no synchronisation concern).
+    ///
+    /// The two supported escapes — verbatim per §1326 — are: wrap the
+    /// binding in a named concurrency primitive and declare effects
+    /// on the well-known wrapper resource, or set
+    /// `public_effects = "inferred"` at the project level. The
+    /// diagnostic carries both, plus the binding's decl line so the
+    /// programmer can navigate without re-reading the span column.
+    pub(crate) fn verify_pub_fn_no_synthetic_resource(&mut self) {
+        if self.public_effects_policy != super::PublicEffectsPolicy::Declared {
+            return;
+        }
+        if self.modbind_let_mut.is_empty() {
+            return;
+        }
+        let fn_names: Vec<String> = self.function_bodies.keys().cloned().collect();
+        let method_names: Vec<String> = self.method_bodies.keys().cloned().collect();
+        for name in fn_names.iter().chain(method_names.iter()) {
+            let is_pub = self.function_visibility.get(name).copied().unwrap_or(false);
+            if !is_pub {
+                continue;
+            }
+            let Some(inferred) = self.inferred_effects.get(name).cloned() else {
+                continue;
+            };
+            let span = self.function_spans.get(name).cloned().unwrap_or(Span {
+                line: 0,
+                column: 0,
+                offset: 0,
+                length: 0,
+            });
+            // One diagnostic per (function, offending binding). A
+            // function that reads AND writes the same binding still
+            // produces one diagnostic for that binding (writes
+            // strictly dominates; both contribute the same fix).
+            let mut seen: HashSet<String> = HashSet::new();
+            for te in &inferred.effects {
+                if self.is_transparent_verb(&te.effect.verb) {
+                    continue;
+                }
+                // ThreadLocal-wrapped resources are per-task disjoint —
+                // §1326's "no named synchronisation primitive" concern
+                // doesn't apply, mirroring slice 7's filter.
+                if te.effect.resource.starts_with("ThreadLocal[") {
+                    continue;
+                }
+                let Some((binding_name, info)) =
+                    self.lookup_modbind_by_resource(&te.effect.resource)
+                else {
+                    continue;
+                };
+                // Concurrency-primitive escape (§1326 path (a)): the
+                // developer has chosen the supported wrapping; the
+                // synthetic-resource concern doesn't apply.
+                if info.is_concurrency_primitive {
+                    continue;
+                }
+                let binding_name = binding_name.to_string();
+                if !seen.insert(binding_name.clone()) {
+                    continue;
+                }
+                let verb = super::verb_name(&te.effect.verb);
+                let decl_line = info.decl_span.line;
+                self.errors.push(super::EffectError {
+                    message: format!(
+                        "public function '{}' performs {}({}) on module-level let mut '{}' \
+                         (binding declared at line {}); the synthetic per-binding resource \
+                         is not nameable in a `with ...` declaration. Either wrap the \
+                         binding in Atomic[T], Mutex[T], RwLock[T], or Arc[shared struct S] \
+                         and expose pub fn methods that declare effects on those well-known \
+                         resources, or set public_effects = \"inferred\" in kara.toml",
+                        name, verb, te.effect.resource, binding_name, decl_line,
+                    ),
+                    span: span.clone(),
+                    kind: super::EffectErrorKind::PubFnSyntheticResource,
+                    subtype_trace: None,
+                });
+            }
         }
     }
 }
