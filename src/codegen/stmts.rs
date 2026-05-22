@@ -1655,6 +1655,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(())
             }
+            StmtKind::Defer { body } => {
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::UserDefer(body.clone()));
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

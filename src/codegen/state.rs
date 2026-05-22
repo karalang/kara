@@ -17,6 +17,8 @@ use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{FunctionValue, IntValue, PointerValue};
 
+use crate::ast::Block;
+
 // ── Variable slot: pointer + LLVM type for typed loads ─────────
 
 #[derive(Clone, Copy)]
@@ -325,6 +327,13 @@ pub(crate) enum CleanupAction<'ctx> {
         /// so cleanup is robust against a future seed-table renumber.
         some_tag: u64,
     },
+    /// User-source `defer { ... }` block to compile at scope exit.
+    /// Pushed in program order at the `defer` statement's site; drained
+    /// LIFO together with the compiler-internal cleanup variants at
+    /// scope exit. Slice 1 of Phase 7 § *defer / errdefer codegen*
+    /// covers normal-exit semantics; error-exit dispatch (errdefer,
+    /// `?`-propagation, panic) lands in slice 2.
+    UserDefer(Block),
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

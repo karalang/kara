@@ -705,42 +705,78 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Emit all cleanup actions registered across all scope frames (for function exit).
-    /// Iterates frames in reverse (innermost first) and within each frame in push order
-    /// (consistent with how RAII destruction works in block-structured languages).
-    pub(super) fn emit_scope_cleanup(&self) {
+    /// Iterates frames in reverse (innermost first) and within each frame in reverse
+    /// push order (LIFO). LIFO is mandatory for user `defer` per design.md § Drop
+    /// ordering within a branch ("last declared, first drained"); compiler-internal
+    /// cleanup variants (RcDec, FreeVecBuffer, FreeMapHandle, EnumDrop, StructDrop,
+    /// RcDecOption) each touch independent allocations and commute, so reversing
+    /// their order is a no-op for correctness.
+    pub(super) fn emit_scope_cleanup(&mut self) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
 
-        for frame in self.scope_cleanup_actions.iter().rev() {
-            for action in frame {
-                self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
+            let n = self.scope_cleanup_actions[frame_idx].len();
+            for action_idx in (0..n).rev() {
+                self.emit_cleanup_action_at(frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
             }
         }
     }
 
     /// Drain the topmost `scope_cleanup_actions` frame: emit cleanup IR for
-    /// every action it holds (in push order), then pop the frame. Used by
-    /// `compile_match` to fire match-arm-scoped cleanups (let-bindings inside
-    /// the arm body, plus the match-arm pattern binding itself) at end-of-arm
-    /// instead of end-of-function — without this the alloca reuse across
-    /// match-arm iterations leaks all but the last bound value.
+    /// every action it holds (in reverse push order — LIFO), then pop the
+    /// frame. Used by `compile_match` to fire match-arm-scoped cleanups
+    /// (let-bindings inside the arm body, plus the match-arm pattern binding
+    /// itself) at end-of-arm instead of end-of-function — without this the
+    /// alloca reuse across match-arm iterations leaks all but the last bound
+    /// value.
     ///
     /// Caller is responsible for ensuring the basic-block insertion point is
     /// somewhere meaningful (i.e. the arm-body's end before the merge branch).
     /// No-op if the cleanup stack is empty.
     pub(super) fn drain_top_frame_with_emit(&mut self) {
-        let Some(frame) = self.scope_cleanup_actions.pop() else {
+        if self.scope_cleanup_actions.is_empty() {
             return;
-        };
+        }
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
         let fn_val = self.current_fn.unwrap();
-        for action in &frame {
-            self.emit_cleanup_action(action, fn_val, vec_ty, ptr_ty, i64_t);
+        let top_idx = self.scope_cleanup_actions.len() - 1;
+        let n = self.scope_cleanup_actions[top_idx].len();
+        for action_idx in (0..n).rev() {
+            self.emit_cleanup_action_at(top_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
         }
+        self.scope_cleanup_actions.pop();
+    }
+
+    /// Dispatch one cleanup action by `(frame_idx, action_idx)` indices into
+    /// `scope_cleanup_actions`. Uses indices rather than a borrowed reference
+    /// so user-defer dispatch (`UserDefer(Block)`) can release the borrow,
+    /// clone the body, and then call `compile_block` under `&mut self`.
+    /// Compiler-internal variants take the existing `&self` `emit_cleanup_action`
+    /// fast path.
+    fn emit_cleanup_action_at(
+        &mut self,
+        frame_idx: usize,
+        action_idx: usize,
+        fn_val: FunctionValue<'ctx>,
+        vec_ty: StructType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        i64_t: inkwell::types::IntType<'ctx>,
+    ) {
+        let body_clone = match &self.scope_cleanup_actions[frame_idx][action_idx] {
+            CleanupAction::UserDefer(block) => Some(block.clone()),
+            _ => None,
+        };
+        if let Some(block) = body_clone {
+            let _ = self.compile_block(&block);
+            return;
+        }
+        let action_ref = &self.scope_cleanup_actions[frame_idx][action_idx];
+        self.emit_cleanup_action(action_ref, fn_val, vec_ty, ptr_ty, i64_t);
     }
 
     /// Per-action cleanup IR emitter. Extracted from `emit_scope_cleanup` so
@@ -1150,6 +1186,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder.position_at_end(skip_bb);
                 self.builder.build_unconditional_branch(join_bb).unwrap();
                 self.builder.position_at_end(join_bb);
+            }
+            CleanupAction::UserDefer(_) => {
+                // Routed through `emit_cleanup_action_at` instead — user-defer
+                // bodies require `&mut self` to compile a Block, while this
+                // function is `&self`. The indirection at the drain sites
+                // (`emit_scope_cleanup` / `drain_top_frame_with_emit`) splits
+                // the UserDefer case out before reaching this match.
+                unreachable!(
+                    "CleanupAction::UserDefer must be dispatched via emit_cleanup_action_at"
+                );
             }
         }
     }

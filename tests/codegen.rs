@@ -19929,4 +19929,95 @@ fn main() {
             ir
         );
     }
+
+    // ── defer / errdefer codegen ─────────────────────────────────
+    //
+    // Slice 1 (Phase 7 § *defer / errdefer codegen*) pins user `defer`
+    // on normal scope exit only: the deferred block compiles via
+    // `compile_block` from the `UserDefer(Block)` cleanup variant when
+    // `emit_scope_cleanup` drains the function's top frame at return.
+    // LIFO order is mandatory per design.md § *Drop ordering within a
+    // branch* — "last declared, first drained". Error-exit, panic, and
+    // `?`-propagation paths are slice 2's scope; block-scoped dispatch
+    // and runtime-reachability of defers inside not-taken branches are
+    // tracked as a follow-on entry in phase-7-codegen.md.
+
+    #[test]
+    fn test_e2e_defer_fires_on_normal_scope_exit() {
+        let out = run_program(
+            r#"
+fn main() {
+    defer { println("deferred"); }
+    println("inline");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["inline", "deferred"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_lifo_order_within_function() {
+        let out = run_program(
+            r#"
+fn main() {
+    defer { println("a"); }
+    defer { println("b"); }
+    println("body");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["body", "b", "a"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_fires_on_explicit_early_return() {
+        // `return` from the function body calls `emit_scope_cleanup`
+        // before `build_return`, which walks every live cleanup frame
+        // LIFO — including registered user defers. Pins that the early-
+        // return path drains the same cleanup stack as the normal-exit
+        // path. (Block-scope dispatch and runtime-reachability — defer
+        // inside a not-taken branch must NOT fire — are tracked
+        // separately in phase-7-codegen.md as a follow-on; this slice
+        // covers function-scoped, compile-time-registered defer.)
+        let out = run_program(
+            r#"
+fn body() {
+    defer { println("d"); }
+    println("a");
+    return;
+    println("unreached");
+}
+
+fn main() { body(); }
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["a", "d"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_with_three_actions_lifo() {
+        let out = run_program(
+            r#"
+fn main() {
+    defer { println("1"); }
+    defer { println("2"); }
+    defer { println("3"); }
+    println("0");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "3", "2", "1"]);
+        }
+    }
 }
