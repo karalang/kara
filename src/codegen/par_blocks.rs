@@ -18,15 +18,30 @@ use inkwell::AddressSpace;
 
 use super::state::{CleanupAction, ResultSlot, ReturnSlot, VarSlot};
 
-/// Slice 1b (Phase 7 — Par codegen: cancellation and error
-/// propagation, 2026-05-20) return type for `emit_par_run`. First
-/// element is the return-slot map (slice A); second is the parent-
-/// allocated Result-slot array pointer + struct type, `Some` only
-/// when at least one branch is Result-typed.
+/// Slice 1b/2 (Phase 7 — Par codegen: cancellation and error
+/// propagation, 2026-05-20 / 2026-05-21) return type for
+/// `emit_par_run`. First element is the return-slot map (slice A);
+/// second is the parent-allocated Result-surface — Result-slot array
+/// pointer + per-slot struct type + earliest-err-idx `i32` pointer
+/// (sentinel `u32::MAX` = no err). `Some` only when at least one
+/// branch is Result-typed.
 type ParRunResult<'ctx> = (
     HashMap<String, BasicValueEnum<'ctx>>,
-    Option<(PointerValue<'ctx>, StructType<'ctx>)>,
+    Option<ParResultSurface<'ctx>>,
 );
+
+/// Parent-allocated state surfaced from `emit_par_run` to
+/// `compile_par_block` when at least one branch in the par-block is
+/// Result-typed. Slice 2 (2026-05-21) added `earliest_err_idx_ptr`:
+/// branch fns do `atomicrmw umin` against this slot on Err detect,
+/// and the parent loads it once after `karac_par_run` returns to pick
+/// the source-order winner without a per-slot tag walk.
+#[derive(Clone, Copy)]
+pub(super) struct ParResultSurface<'ctx> {
+    pub slots_ptr: PointerValue<'ctx>,
+    pub slot_struct_ty: StructType<'ctx>,
+    pub earliest_err_idx_ptr: PointerValue<'ctx>,
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Slice 1a (Phase 7 — Par codegen: cancellation and error
@@ -202,12 +217,13 @@ impl<'ctx> super::Codegen<'ctx> {
         // pointer through the per-branch env struct, and each branch
         // fn writes its slot's value before returning. The barrier
         // inside `karac_par_run` guarantees all writes are visible by
-        // the time the runtime call returns. Slice 1b: emit_par_run
-        // additionally returns the parent-allocated Result-slot array
-        // pointer (and the Result struct type) when any branch is
-        // Result-typed; we walk those slots in step 7 below to
-        // short-circuit the par-block's value on the first Err.
-        let (slot_values, result_slots_info) =
+        // the time the runtime call returns. Slice 1b/2: emit_par_run
+        // additionally returns the parent-allocated `ParResultSurface`
+        // when any branch is Result-typed — slot array pointer + slot
+        // struct type + the `i32` "earliest err idx" cell that branch
+        // fns CAS-min'd into. Step 7 uses this to surface the
+        // source-order first Err without walking every slot tag.
+        let (slot_values, result_surface) =
             self.emit_par_run(&block.stmts, &block.span, &return_slots, &result_slots)?;
 
         // Step 6 — Bind each loaded slot value as a fresh local in the
@@ -251,33 +267,35 @@ impl<'ctx> super::Codegen<'ctx> {
         // statement-form par-blocks (`par { side_effect_a();
         // side_effect_b(); }`).
         //
-        // Slice 1b (Phase 7 — Par codegen: cancellation and error
-        // propagation, 2026-05-20). When any branch is Result-typed
-        // *and* the par-block has a join expression, walk the parent-
-        // allocated `__par_result_slots` array in branch-index order
-        // (slot.array_index is assigned in source-statement order in
-        // `compile_par_block` step 4). For each slot: load its tag
-        // (Result field 0; Err == 0 per `seed_builtin_enum_layouts`)
-        // and branch on Err to a per-slot "err found" block that
-        // loads the full Result value and jumps to the par-block exit
-        // BB. When every slot is Ok, fall through to a `compile_join`
-        // BB that evaluates the user's join expression. All paths
-        // phi-merge at the exit BB, so the par-block's value is the
-        // first errored slot's Result if any branch errored, else
-        // the join expression's value. The phi type is the shared
-        // Result struct (`{ i64, i64 }`); the join expression is
-        // assumed to evaluate to a value of that same LLVM type — when
-        // slice 2 wires Result inference through the typechecker, the
-        // type-mismatch case ("Result-typed slot but non-Result join")
-        // becomes a typecheck-time error. Today the IR-shape check
-        // happens at phi-construction time and panics; an explicit
-        // diagnostic is slice 2's concern.
+        // Slice 1b (2026-05-20) introduced a per-slot tag-walk: chain
+        // of N `__par_err_check_<i>` blocks each loading the tag of
+        // slot `i` and branching on Err. Slice 2 (Phase 7 — Par
+        // codegen: cancellation and error propagation, 2026-05-21)
+        // replaces the walk with a single load of the parent-
+        // allocated `__par_earliest_err_idx` cell that branch fns
+        // CAS-min'd into on Err detect. Source-order semantics fall
+        // out for free: each branch's `array_index` matches its
+        // source-order branch index (slots are assigned in source
+        // order in step 4), and `atomicrmw umin` keeps the smallest.
+        // The cell's sentinel value `u32::MAX` means "no branch
+        // erred"; any value strictly less is a valid index into the
+        // `[N x Result_struct_ty]` slot array.
+        //
+        // IR shape: one `__par_err_check` BB (load idx, compare with
+        // sentinel, br to `__par_err_found` or `__par_compile_join`),
+        // one `__par_err_found` BB (GEP slot at loaded idx, load the
+        // Result, br to exit), `__par_compile_join` (evaluate user
+        // join), `__par_block_exit` (2-incoming phi). The phi type
+        // matches the shared Result struct (`{ i64, i64 }`); the join
+        // expression is assumed to produce a value of the same LLVM
+        // type — a typechecker hook to enforce this at the source
+        // level remains a follow-up.
         //
         // Skip the err-walk machinery when there are no Result slots
         // OR no join expression — for either, slice 1a's behavior is
         // already correct (slot-write + Err-triggers-cancel cascades
         // to siblings, no phi value to surface).
-        let has_result_slots = result_slots_info.is_some() && block.final_expr.is_some();
+        let has_result_slots = result_surface.is_some() && block.final_expr.is_some();
         if !has_result_slots {
             return if let Some(expr) = &block.final_expr {
                 self.compile_expr(expr)
@@ -286,39 +304,28 @@ impl<'ctx> super::Codegen<'ctx> {
             };
         }
 
-        let (slots_ptr, result_st) = result_slots_info.expect("has_result_slots gates on Some(_)");
+        let surface = result_surface.expect("has_result_slots gates on Some(_)");
+        let slots_ptr = surface.slots_ptr;
+        let result_st = surface.slot_struct_ty;
+        let earliest_err_idx_ptr = surface.earliest_err_idx_ptr;
         let join_expr = block
             .final_expr
             .as_ref()
             .expect("has_result_slots gates on Some(_)");
         let parent_fn = self.current_fn.expect("par-block must be inside a fn");
         let i64_t = self.context.i64_type();
+        let i32_t = self.context.i32_type();
         let zero_i64 = i64_t.const_zero();
+        let sentinel = i32_t.const_int(u32::MAX as u64, false);
 
-        // Order the result_slots walk by branch_index (source order).
-        // `result_slots` is built by iterating `block.stmts` in order
-        // above, so branch_index is already ascending — sort defensively
-        // in case a future refactor reorders the slot list.
-        let mut walk_order: Vec<&ResultSlot> = result_slots.iter().collect();
-        walk_order.sort_by_key(|s| s.branch_index);
-
-        // Allocate the BB skeleton: one `check` BB per slot, one
-        // `err_found` BB per slot, the `compile_join` BB, and the
-        // `exit` BB that hosts the phi. Allocate them up-front so the
-        // forward branches (`check_i` → `next_check`/`compile_join`)
-        // can target real blocks.
-        let check_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = (0..walk_order.len())
-            .map(|i| {
-                self.context
-                    .append_basic_block(parent_fn, &format!("__par_err_check_{i}"))
-            })
-            .collect();
-        let err_found_bbs: Vec<inkwell::basic_block::BasicBlock<'ctx>> = (0..walk_order.len())
-            .map(|i| {
-                self.context
-                    .append_basic_block(parent_fn, &format!("__par_err_found_{i}"))
-            })
-            .collect();
+        // BB skeleton: one check, one err_found, the compile_join,
+        // and the exit. Allocate up-front so forward branches resolve.
+        let check_bb = self
+            .context
+            .append_basic_block(parent_fn, "__par_err_check");
+        let err_found_bb = self
+            .context
+            .append_basic_block(parent_fn, "__par_err_found");
         let join_bb = self
             .context
             .append_basic_block(parent_fn, "__par_compile_join");
@@ -327,92 +334,57 @@ impl<'ctx> super::Codegen<'ctx> {
             .append_basic_block(parent_fn, "__par_block_exit");
 
         // Jump from the current BB (where step 6's let-bindings just
-        // landed) into the first check.
+        // landed) into the check.
+        self.builder.build_unconditional_branch(check_bb).unwrap();
+
+        // check BB: load the earliest-err-idx cell once, compare with
+        // the sentinel, branch. The load is unordered/monotonic
+        // because the `karac_par_run` join barrier already provides a
+        // happens-before edge from every branch's atomicrmw to here.
+        self.builder.position_at_end(check_bb);
+        let earliest_err_idx = self
+            .builder
+            .build_load(i32_t, earliest_err_idx_ptr, "__par_earliest_err_idx")
+            .unwrap()
+            .into_int_value();
+        let any_err = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::NE,
+                earliest_err_idx,
+                sentinel,
+                "__par_any_err",
+            )
+            .unwrap();
         self.builder
-            .build_unconditional_branch(check_bbs[0])
+            .build_conditional_branch(any_err, err_found_bb, join_bb)
             .unwrap();
 
-        // Per-slot phi entries: (full Result value loaded in
-        // err_found_<i>, err_found_<i> BB) — these feed the exit phi
-        // alongside the join expression's value.
-        let mut phi_incoming: Vec<(BasicValueEnum<'ctx>, inkwell::basic_block::BasicBlock<'ctx>)> =
-            Vec::with_capacity(walk_order.len() + 1);
-
-        // GEP element type for the dense [N x Result_struct_ty] array.
-        // Length is irrelevant to GEP element-typing (LLVM uses the
-        // pointer element type, not the array length); use 0 as a
-        // placeholder consistent with the branch-fn slot-write site.
+        // err_found BB: GEP into slots_ptr[earliest_err_idx] and load
+        // the full Result. Slot indices stored in the cell are u32;
+        // zext to i64 for the GEP index operand.
+        self.builder.position_at_end(err_found_bb);
         let arr_ty = result_st.array_type(0);
-
-        for (i, slot) in walk_order.iter().enumerate() {
-            self.builder.position_at_end(check_bbs[i]);
-            let arr_idx = i64_t.const_int(slot.array_index as u64, false);
-            let slot_ptr = unsafe {
-                self.builder
-                    .build_in_bounds_gep(
-                        arr_ty,
-                        slots_ptr,
-                        &[zero_i64, arr_idx],
-                        &format!("__par_err_walk_slot_{}_ptr", slot.binding_name),
-                    )
-                    .unwrap()
-            };
-            // Load only the tag (field 0 of the Result struct) — we
-            // don't need the full value here, just the discriminant.
-            // The full value is loaded inside `err_found_<i>` below
-            // and only on the err path, keeping the Ok path lean.
-            let tag_ptr = self
-                .builder
-                .build_struct_gep(
-                    result_st,
-                    slot_ptr,
-                    0,
-                    &format!("__par_err_walk_slot_{}_tag_ptr", slot.binding_name),
-                )
-                .unwrap();
-            let tag = self
-                .builder
-                .build_load(
-                    i64_t,
-                    tag_ptr,
-                    &format!("__par_err_walk_slot_{}_tag", slot.binding_name),
+        let idx_i64 = self
+            .builder
+            .build_int_z_extend(earliest_err_idx, i64_t, "__par_err_idx_i64")
+            .unwrap();
+        let slot_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(
+                    arr_ty,
+                    slots_ptr,
+                    &[zero_i64, idx_i64],
+                    "__par_err_slot_ptr",
                 )
                 .unwrap()
-                .into_int_value();
-            let is_err = self
-                .builder
-                .build_int_compare(
-                    inkwell::IntPredicate::EQ,
-                    tag,
-                    zero_i64,
-                    &format!("__par_err_walk_slot_{}_is_err", slot.binding_name),
-                )
-                .unwrap();
-            // Next destination on Ok: next check, or compile_join if
-            // this is the last slot.
-            let next_bb = if i + 1 < walk_order.len() {
-                check_bbs[i + 1]
-            } else {
-                join_bb
-            };
-            self.builder
-                .build_conditional_branch(is_err, err_found_bbs[i], next_bb)
-                .unwrap();
-
-            // err_found_<i>: load the full Result value and br to
-            // exit. Phi feeds the loaded value at the exit.
-            self.builder.position_at_end(err_found_bbs[i]);
-            let full_val = self
-                .builder
-                .build_load(
-                    result_st,
-                    slot_ptr,
-                    &format!("__par_err_walk_slot_{}_val", slot.binding_name),
-                )
-                .unwrap();
-            self.builder.build_unconditional_branch(exit_bb).unwrap();
-            phi_incoming.push((full_val, err_found_bbs[i]));
-        }
+        };
+        let err_val = self
+            .builder
+            .build_load(result_st, slot_ptr, "__par_err_slot_val")
+            .unwrap();
+        let err_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(exit_bb).unwrap();
 
         // compile_join BB: evaluate the user's join expression. The
         // builder's insertion block may advance through nested control
@@ -422,24 +394,15 @@ impl<'ctx> super::Codegen<'ctx> {
         let join_val = self.compile_expr(join_expr)?;
         let join_end_bb = self.builder.get_insert_block().unwrap();
         self.builder.build_unconditional_branch(exit_bb).unwrap();
-        phi_incoming.push((join_val, join_end_bb));
 
-        // Exit BB: phi-merge all incoming Result values. The phi's
-        // type matches the shared Result struct layout (`{ i64, i64 }`)
-        // — the join expression must produce a value of the same LLVM
-        // type. A future typechecker pass (slice 2) will enforce this
-        // at the source-language level; today, mismatches surface as
-        // LLVM-level verification failures from inkwell.
+        // Exit BB: 2-incoming phi (err-found, join). The phi's type
+        // matches the shared Result struct layout (`{ i64, i64 }`).
         self.builder.position_at_end(exit_bb);
         let phi = self
             .builder
             .build_phi(result_st, "__par_block_value")
             .unwrap();
-        let incoming_refs: Vec<(&dyn inkwell::values::BasicValue<'ctx>, _)> = phi_incoming
-            .iter()
-            .map(|(v, bb)| (v as &dyn inkwell::values::BasicValue<'ctx>, *bb))
-            .collect();
-        phi.add_incoming(&incoming_refs);
+        phi.add_incoming(&[(&err_val, err_end_bb), (&join_val, join_end_bb)]);
         Ok(phi.as_basic_value())
     }
 
@@ -559,6 +522,13 @@ impl<'ctx> super::Codegen<'ctx> {
         env_field_types.push(ptr_ty.into());
         let par_result_slots_idx = env_field_types.len();
         env_field_types.push(ptr_ty.into());
+        // Slice 2 (2026-05-21): parent-allocated `i32` cell — branch
+        // fns CAS-min their `array_index` here on Err detect so the
+        // parent can pick the source-order winner without walking
+        // every slot's tag. Cell pointer is null when no branch is
+        // Result-typed (same ABI uniformity as `__par_result_slots`).
+        let par_earliest_err_idx = env_field_types.len();
+        env_field_types.push(ptr_ty.into());
         let env_struct_ty = self.context.struct_type(&env_field_types, false);
 
         // 3. Allocate and populate the env struct in the outer function.
@@ -669,6 +639,34 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap()
             .into_struct_value();
+
+        // Slice 2 (2026-05-21): allocate the parent-side earliest-err
+        // index cell — an `i32` initialised to `u32::MAX` (sentinel
+        // for "no branch erred"). Branch fns do `atomicrmw umin` on
+        // it with their `array_index` when their let-bound Result is
+        // Err; the parent reads the cell once after `karac_par_run`
+        // returns to pick the source-order winner. Skipped when no
+        // branch is Result-typed (same null-ptr convention as
+        // `__par_result_slots`).
+        let i32_t = self.context.i32_type();
+        let sentinel_max_u32 = i32_t.const_int(u32::MAX as u64, false);
+        let earliest_err_idx_alloca: PointerValue<'ctx> = if result_slot_struct_ty.is_some() {
+            let a = self.create_entry_alloca(outer_fn, "__par_earliest_err_idx", i32_t.into());
+            self.builder.build_store(a, sentinel_max_u32).unwrap();
+            a
+        } else {
+            ptr_ty.const_null()
+        };
+        env_agg = self
+            .builder
+            .build_insert_value(
+                env_agg,
+                earliest_err_idx_alloca,
+                par_earliest_err_idx as u32,
+                "__par_env_earliest_err_idx",
+            )
+            .unwrap()
+            .into_struct_value();
         self.builder.build_store(env_alloca, env_agg).unwrap();
 
         // 4. Generate one branch function per statement.
@@ -706,6 +704,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 par_result_slots_idx,
                 result_slot_struct_ty,
                 branch_result_slot,
+                par_earliest_err_idx,
             )?;
             branch_fn_ptrs.push(fn_ptr);
         }
@@ -779,16 +778,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 slot_values.insert(slot.binding_name.clone(), val);
             }
         }
-        // Slice 1b: surface the parent-side result-slot array pointer +
-        // Result struct type so `compile_par_block` can walk the slots
-        // after the runtime barrier and short-circuit the par-block's
-        // value on the first Err. Empty `result_slots` → no array was
-        // allocated above, so the second tuple element is `None`.
-        let result_slots_info = match (result_slot_struct_ty, result_slots.is_empty()) {
-            (Some(rty), false) => Some((result_slots_alloca, rty)),
+        // Slice 1b/2: surface the parent-side Result state to
+        // `compile_par_block` — slot array pointer + slot struct type
+        // (1b) + earliest-err-idx pointer (2). When no branch is
+        // Result-typed neither the array nor the cell was allocated,
+        // so the surface is `None` and the parent skips the err-pick
+        // machinery entirely.
+        let result_surface = match (result_slot_struct_ty, result_slots.is_empty()) {
+            (Some(rty), false) => Some(ParResultSurface {
+                slots_ptr: result_slots_alloca,
+                slot_struct_ty: rty,
+                earliest_err_idx_ptr: earliest_err_idx_alloca,
+            }),
             _ => None,
         };
-        Ok((slot_values, result_slots_info))
+        Ok((slot_values, result_surface))
     }
 
     /// Generate the branch function for a single par-block statement.
@@ -831,6 +835,7 @@ impl<'ctx> super::Codegen<'ctx> {
         par_result_slots_idx: usize,
         result_slot_struct_ty: Option<StructType<'ctx>>,
         branch_result_slot: Option<ResultSlot>,
+        par_earliest_err_idx: usize,
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -1154,6 +1159,50 @@ impl<'ctx> super::Codegen<'ctx> {
                         let i8_t = self.context.i8_type();
                         let one_i8 = i8_t.const_int(1, false);
                         self.builder.build_store(cancel_ptr, one_i8).unwrap();
+
+                        // Slice 2 (2026-05-21): publish this branch's
+                        // `array_index` into the parent-side earliest-
+                        // err-idx cell. `atomicrmw umin` keeps the
+                        // smallest seen index, which by construction
+                        // matches source order (slots are assigned in
+                        // ascending branch-index order in
+                        // `compile_par_block` step 4). The sentinel
+                        // `u32::MAX` set at parent-alloca time is
+                        // strictly greater than every valid index, so
+                        // the first Err always wins the umin even when
+                        // multiple branches err concurrently. Ordering
+                        // is Monotonic — the `karac_par_run` join
+                        // barrier supplies the happens-before edge the
+                        // parent needs before its plain load in
+                        // `compile_par_block` step 7.
+                        let env_val_for_idx = self
+                            .builder
+                            .build_load::<BasicTypeEnum<'ctx>>(
+                                env_struct_ty.into(),
+                                env_ptr,
+                                "__env_for_earliest_err_idx",
+                            )
+                            .unwrap();
+                        let idx_cell_ptr_v = self
+                            .builder
+                            .build_extract_value(
+                                env_val_for_idx.into_struct_value(),
+                                par_earliest_err_idx as u32,
+                                "__par_earliest_err_idx_ptr",
+                            )
+                            .unwrap();
+                        let idx_cell_ptr = idx_cell_ptr_v.into_pointer_value();
+                        let i32_t = self.context.i32_type();
+                        let my_idx = i32_t.const_int(slot.array_index as u64, false);
+                        self.builder
+                            .build_atomicrmw(
+                                inkwell::AtomicRMWBinOp::UMin,
+                                idx_cell_ptr,
+                                my_idx,
+                                inkwell::AtomicOrdering::Monotonic,
+                            )
+                            .unwrap();
+
                         self.builder.build_unconditional_branch(cont_bb).unwrap();
                         self.builder.position_at_end(cont_bb);
                     }

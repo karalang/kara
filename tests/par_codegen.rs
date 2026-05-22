@@ -590,7 +590,7 @@ fn main() {
     /// labels, the compile-join label, the exit label, and the phi
     /// instruction with `__par_block_value` as its SSA name.
     #[test]
-    fn test_ir_par_block_result_typed_join_emits_err_walk_and_phi() {
+    fn test_ir_par_block_result_typed_join_emits_err_pick_and_phi() {
         let ir = ir_for(
             r#"
 fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
@@ -603,25 +603,34 @@ fn main() {
 }
 "#,
         );
-        // (a) Per-slot check + err-found BBs — two branches, two
-        // pairs of labels.
+        // Slice 2 (2026-05-21): single-load err-pick path replaces
+        // slice 1b's per-slot tag walk. One check + one err-found BB
+        // (no per-index suffix).
         assert!(
-            ir.contains("__par_err_check_0:"),
-            "expected __par_err_check_0 label; IR:\n{ir}"
+            ir.contains("__par_err_check:"),
+            "expected __par_err_check label; IR:\n{ir}"
         );
         assert!(
-            ir.contains("__par_err_check_1:"),
-            "expected __par_err_check_1 label; IR:\n{ir}"
+            ir.contains("__par_err_found:"),
+            "expected __par_err_found label; IR:\n{ir}"
+        );
+        // The slice-1b per-index labels must no longer appear — if
+        // they do, the parent reverted to the walk.
+        assert!(
+            !ir.contains("__par_err_check_0:"),
+            "slice 2 should not emit per-slot err-check labels; IR:\n{ir}"
         );
         assert!(
-            ir.contains("__par_err_found_0:"),
-            "expected __par_err_found_0 label; IR:\n{ir}"
+            !ir.contains("__par_err_found_0:"),
+            "slice 2 should not emit per-slot err-found labels; IR:\n{ir}"
         );
+        // Branch fns CAS-min into the parent's i32 cell. Pin the
+        // atomicrmw umin shape (`atomicrmw umin ptr ..., i32 ..., monotonic`).
         assert!(
-            ir.contains("__par_err_found_1:"),
-            "expected __par_err_found_1 label; IR:\n{ir}"
+            ir.contains("atomicrmw umin"),
+            "expected atomicrmw umin on the earliest-err-idx cell; IR:\n{ir}"
         );
-        // (b) Compile-join and exit BBs.
+        // Compile-join and exit BBs.
         assert!(
             ir.contains("__par_compile_join:"),
             "expected __par_compile_join label; IR:\n{ir}"
@@ -630,16 +639,16 @@ fn main() {
             ir.contains("__par_block_exit:"),
             "expected __par_block_exit label; IR:\n{ir}"
         );
-        // (c) Phi at exit, named `__par_block_value`, typed as the
-        // Result struct `{ i64, i64 }`. Three incoming entries — two
-        // err-found + one compile_join.
+        // Phi at exit, named `__par_block_value`. Two incoming
+        // entries — err-found + compile_join — vs slice 1b's
+        // N + 1.
         assert!(
             ir.contains("__par_block_value = phi"),
             "expected __par_block_value phi instruction; IR:\n{ir}"
         );
 
-        // (d) Negative side: a Result-typed-branch par-block WITHOUT a
-        // join expression should not emit the err-walk / phi — slice
+        // Negative side: a Result-typed-branch par-block WITHOUT a
+        // join expression should not emit the err-pick / phi — slice
         // 1a's behavior is preserved (par-block evaluates to unit).
         let no_join_ir = ir_for(
             r#"
@@ -653,8 +662,8 @@ fn main() {
 "#,
         );
         assert!(
-            !no_join_ir.contains("__par_err_check_"),
-            "no-join par-block should not emit err-walk BBs; IR:\n{no_join_ir}"
+            !no_join_ir.contains("__par_err_check"),
+            "no-join par-block should not emit err-pick BBs; IR:\n{no_join_ir}"
         );
         assert!(
             !no_join_ir.contains("__par_block_value = phi"),
@@ -729,6 +738,101 @@ fn main() {
                 "99",
                 "single-Err par-block should surface the slot's Err value, \
                  not the join expression's Ok; got {out:?}"
+            );
+        }
+    }
+
+    /// Slice 2 (2026-05-21). Source-order error reporting: when
+    /// multiple branches err, the par-block must surface the
+    /// source-order earliest one regardless of which branch's Err
+    /// landed in its slot first. Branch 0 returns Err(11) after
+    /// burning CPU; branch 2 returns Err(33) immediately. A naive
+    /// "first slot to be written wins" implementation would print
+    /// 33; the slice-2 atomicrmw-umin path must print 11.
+    ///
+    /// The artificial work in branch 0 (`spin_ok` returning Ok'd
+    /// values that get discarded) makes the order-of-completion
+    /// observably differ from source order — without it the test
+    /// could pass vacuously on a single-core scheduler that runs
+    /// branches sequentially.
+    #[test]
+    fn test_e2e_par_block_result_source_order_earliest_branch_wins() {
+        let out = run_program(
+            r#"
+fn maybe_err(v: i64) -> Result[i64, i64] { Err(v) }
+
+fn slow_err(v: i64) -> Result[i64, i64] {
+    let mut acc: i64 = 0_i64;
+    let mut i: i64 = 0_i64;
+    while i < 1000000_i64 {
+        acc = acc + i;
+        i = i + 1_i64;
+    }
+    if acc < 0_i64 {
+        Ok(acc)
+    } else {
+        Err(v)
+    }
+}
+
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = slow_err(11_i64);
+        let r2: Result[i64, i64] = maybe_err(33_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "11",
+                "source-order earliest branch (idx 0, Err(11)) must win \
+                 over later-source-order branch (idx 1, Err(33)) even \
+                 when the later branch lands in its slot first; \
+                 got {out:?}"
+            );
+        }
+    }
+
+    /// Slice 2 (2026-05-21). Companion to the above: when branch 0
+    /// returns Ok and only branch 1 (the second-source-order
+    /// Result-typed branch) errs, that branch's Err is what surfaces
+    /// — the sentinel-vs-min comparison must not spuriously pick the
+    /// Ok slot. Same shape as
+    /// `test_e2e_par_block_result_single_err_overrides_join` but with
+    /// the err on the later branch, sanity-checking the umin direction.
+    #[test]
+    fn test_e2e_par_block_result_later_branch_err_still_surfaces() {
+        let out = run_program(
+            r#"
+fn maybe_ok(v: i64) -> Result[i64, i64] { Ok(v) }
+fn maybe_err(v: i64) -> Result[i64, i64] { Err(v) }
+fn main() {
+    let r: Result[i64, i64] = par {
+        let r1: Result[i64, i64] = maybe_ok(10_i64);
+        let r2: Result[i64, i64] = maybe_ok(20_i64);
+        let r3: Result[i64, i64] = maybe_err(42_i64);
+        Ok(7_i64)
+    };
+    match r {
+        Ok(v) => println(v),
+        Err(e) => println(e),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(
+                out.trim(),
+                "42",
+                "only-late-branch Err must surface its Err value, not the \
+                 join expression's Ok; got {out:?}"
             );
         }
     }

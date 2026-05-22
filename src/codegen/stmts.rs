@@ -201,11 +201,13 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the per-branch Result-slot list is empty here. When
                 // slice 2 wires inferred Result types through the
                 // typechecker, this site folds in alongside.
-                // Slice 1b (2026-05-20) widened `emit_par_run`'s return
-                // type to also expose the parent-side Result-slot array
-                // pointer; auto-par never has Result-typed branches in
-                // slice 1, so the second tuple element is always `None`
-                // here and we discard it.
+                // Slice 1b / 2 (2026-05-20 / 2026-05-21) widened
+                // `emit_par_run`'s return type to expose the parent-
+                // side Result surface (slot array pointer, slot
+                // struct type, earliest-err-idx cell pointer); auto-
+                // par never has Result-typed branches in slice 1, so
+                // the second tuple element is always `None` here and
+                // we discard it.
                 let (slot_values, _) =
                     self.emit_par_run(&group_stmts, &group_span, &return_slots, &[])?;
                 // Slice A (sub-step g): bind each loaded slot value as a
