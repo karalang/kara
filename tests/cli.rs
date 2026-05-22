@@ -321,7 +321,7 @@ fn test_build_typecheck_error_does_not_fall_through_to_codegen() {
         "expected typecheck error in stderr, got: {stderr}"
     );
     assert!(
-        stderr.contains("no associated function 'from_utf8' on type 'String'"),
+        stderr.contains("no associated function 'from_utf16' on type 'String'"),
         "expected the new NoMethodFound diagnostic text, got: {stderr}"
     );
     assert!(

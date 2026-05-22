@@ -997,21 +997,60 @@ impl<'ctx> super::Codegen<'ctx> {
 
     // ── Cast ──────────────────────────────────────────────────────
 
+    /// Lower a Kāra `expr as Target` cast.
+    ///
+    /// `source_is_unsigned` drives the integer-widening lane: when the source
+    /// expression has an unsigned Kāra type (`u8` / `u16` / `u32` / `u64` /
+    /// `usize` / `bool` / `char`), widening lowers to `zext`; for signed
+    /// sources (default), widening lowers to `sext`. The caller is responsible
+    /// for computing the flag via `expr_is_unsigned_int` on the inner
+    /// expression — `compile_cast` itself has only the LLVM `IntValue`, which
+    /// doesn't carry Kāra-level signedness (`i8` and `u8` both lower to LLVM
+    /// `i8`).
+    ///
+    /// Pre-fix this used `build_int_cast`, which always sign-extends on
+    /// widening. The kata-91 hot-loop measurement (`(bytes[i] as i32) -
+    /// (zero as i32)` for `bytes: Vec[u8]`) showed `ldrsb`+`sxtb`+`and #0xff`
+    /// — a sign-extending load plus a redundant zero-mask — where rust
+    /// emitted a single `ldrb`. Two extra instructions per inner iter; same
+    /// missed optimization applies to every `(u_typed_indexed_value) as
+    /// wider_int` pattern in the language.
     pub(super) fn compile_cast(
         &self,
         val: BasicValueEnum<'ctx>,
         target: BasicTypeEnum<'ctx>,
+        source_is_unsigned: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         match (val, target) {
             (BasicValueEnum::IntValue(iv), BasicTypeEnum::IntType(tt)) => {
-                let result = self.builder.build_int_cast(iv, tt, "cast").unwrap();
+                let src_w = iv.get_type().get_bit_width();
+                let dst_w = tt.get_bit_width();
+                let result = if dst_w > src_w {
+                    if source_is_unsigned {
+                        self.builder.build_int_z_extend(iv, tt, "cast.zx").unwrap()
+                    } else {
+                        self.builder.build_int_s_extend(iv, tt, "cast.sx").unwrap()
+                    }
+                } else if dst_w < src_w {
+                    self.builder.build_int_truncate(iv, tt, "cast.tr").unwrap()
+                } else {
+                    iv
+                };
                 Ok(result.into())
             }
             (BasicValueEnum::IntValue(iv), BasicTypeEnum::FloatType(ft)) => {
-                let result = self
-                    .builder
-                    .build_signed_int_to_float(iv, ft, "cast")
-                    .unwrap();
+                // Signed/unsigned int-to-float branch on the source-type hint:
+                // `255u8 as f32` should yield 255.0, not -1.0 via sitofp on the
+                // bit-pattern. Symmetric to the int-widening path above.
+                let result = if source_is_unsigned {
+                    self.builder
+                        .build_unsigned_int_to_float(iv, ft, "cast")
+                        .unwrap()
+                } else {
+                    self.builder
+                        .build_signed_int_to_float(iv, ft, "cast")
+                        .unwrap()
+                };
                 Ok(result.into())
             }
             (BasicValueEnum::FloatValue(fv), BasicTypeEnum::IntType(it)) => {

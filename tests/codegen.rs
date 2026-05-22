@@ -744,6 +744,72 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_u8_cast_to_i32_zero_extends() {
+        // 0xff as u8 widened to i32 must yield 255, not -1. Pre-fix
+        // `compile_cast` used `build_int_cast` which sign-extends on widening;
+        // the load+cast path for `Vec[u8]` / `Slice[u8]` elements produced
+        // negative results for any byte ≥ 128. Hot-loop impact on kata-91
+        // (`(bytes[i] as i32) - (zero as i32)` for digit math): the extra
+        // sext+mask sequence cost ~2 inst/iter vs rust's single ldrb.
+        let out = run_program(
+            r#"
+fn main() {
+    let b: u8 = 255u8;
+    let x: i32 = b as i32;
+    println(x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "255");
+        }
+    }
+
+    #[test]
+    fn test_e2e_u8_slice_index_cast_to_i32_zero_extends() {
+        // Same fix exercised through the kata-91 shape — `bytes: Vec[u8]`,
+        // `bytes[i] as i32`. The `expr_is_unsigned_int` `Index` arm reads
+        // the element TypeExpr off `var_elem_type_exprs` and drives the
+        // zext-widening lane.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut bs: Vec[u8] = Vec.new();
+    bs.push(200u8);
+    let x: i32 = (bs[0] as i32) - (b'0' as i32);
+    println(x);
+}
+"#,
+        );
+        if let Some(out) = out {
+            // 200 - 48 ('0') = 152. Pre-fix the sext load + sext cast made
+            // bs[0] = -56 (i8) → -56 - 48 = -104.
+            assert_eq!(out.trim(), "152");
+        }
+    }
+
+    #[test]
+    fn test_ir_u8_cast_to_i32_emits_zext() {
+        // IR-level pin: the cast must lower to a zext, not a sext. ARM
+        // backend fuses `load i8` + `zext i8 to i32` into `ldrb` — that's
+        // the assembly-level win we're chasing in kata-91's hot loop.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let b: u8 = 200u8;
+    let x: i32 = b as i32;
+    println(x);
+}
+"#,
+        );
+        assert!(
+            ir.contains("zext i8") || ir.contains("zext nneg i8"),
+            "expected zext widening from i8 in IR, got no match in:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_e2e_print_u16_prints_unsigned() {
         let out = run_program("fn main() { let x: u16 = 60000u16; println(x); }");
         if let Some(out) = out {

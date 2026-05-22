@@ -1,13 +1,18 @@
-// Surfaced 2026-05-22 building the kata-91 bench mirror: `String.from_utf8`
-// is spec'd in design.md but not implemented in `runtime/stdlib/`. The
-// typechecker used to silently accept the call (`Type::Error` sentinel),
-// then `parsed.unwrap()` exploded in codegen with a misleading
-// "no handler for method 'unwrap' on variable 'parsed'" — sending future
-// debuggers chasing a phantom codegen bug. This snapshot pins the
-// improved diagnostic: typecheck rejects the call cleanly, and
+// Surfaced 2026-05-22 building the kata-91 bench mirror: an undeclared
+// `Type.method` call used to be silently accepted by the typechecker
+// (`Type::Error` sentinel), then `parsed.unwrap()` exploded in codegen
+// with a misleading "no handler for method 'unwrap' on variable 'parsed'"
+// — sending future debuggers chasing a phantom codegen bug. This snapshot
+// pins the improved diagnostic: typecheck rejects the call cleanly, and
 // `Pipeline::has_fatal_errors` stops the build before codegen runs.
+//
+// `String.from_utf8` was the original example; once it shipped as a real
+// stdlib intrinsic (commit `1b53e8d`), this snapshot migrated to the
+// still-unimplemented `String.from_utf16` so the regression guard keeps
+// teeth. Any name that resolves to no impl-block method or registered
+// `String.*` function would do.
 fn main() {
-    let buf: Vec[u8] = Vec.new();
-    let parsed = String.from_utf8(buf);
+    let buf: Vec[u16] = Vec.new();
+    let parsed = String.from_utf16(buf);
     let _ = parsed;
 }

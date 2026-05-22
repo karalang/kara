@@ -299,9 +299,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.compile_tuple_index(object, *index as usize)
             }
             ExprKind::Cast { expr: inner, ty } => {
+                // Compute the source-type signedness BEFORE compiling inner —
+                // `expr_is_unsigned_int` is a pure structural inspection (no
+                // state writes) so ordering doesn't matter for correctness,
+                // but reading the inner's shape before lowering keeps the
+                // dependency direction obvious. Drives sext vs zext in
+                // `compile_cast`'s widening lane.
+                let source_is_unsigned = self.expr_is_unsigned_int(inner);
                 let val = self.compile_expr(inner)?;
                 let target_ty = self.llvm_type_for_type_expr(ty);
-                self.compile_cast(val, target_ty)
+                self.compile_cast(val, target_ty, source_is_unsigned)
             }
             ExprKind::Match { scrutinee, arms } => self.compile_match(scrutinee, arms),
             ExprKind::For {
