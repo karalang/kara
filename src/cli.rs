@@ -2422,6 +2422,12 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // Lint-level slice 5 — appears on the errors path only
                 // when promoted via `#[deny(unfulfilled_lint_expectation)]`.
                 crate::typechecker::TypeErrorKind::UnfulfilledLintExpectation => "E0249",
+                // Module-level `let` / `let mut` slice 4 — see
+                // `docs/implementation_checklist/phase-8-stdlib-floor.md`
+                // mod-let entry. The const-init structural rule and the
+                // §1297 heap-String rejection both surface here.
+                crate::typechecker::TypeErrorKind::ModuleBindingEffectfulInit => "E0250",
+                crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

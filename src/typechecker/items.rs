@@ -42,6 +42,7 @@ impl<'a> super::TypeChecker<'a> {
                 Item::ImplBlock(imp) => self.check_impl_block(imp),
                 Item::TraitDef(t) => self.check_trait_def(t),
                 Item::ConstDecl(c) => self.check_const_decl(c),
+                Item::ModuleBinding(b) => self.check_module_binding(b),
                 Item::StructDef(s) => {
                     let gp = Self::generic_param_names(&s.generic_params);
                     self.validate_all_bounds(&s.generic_params, &s.where_clause, &gp);
@@ -1116,6 +1117,306 @@ impl<'a> super::TypeChecker<'a> {
         let declared_ty = self.lower_type_expr(&c.ty, &[]);
         let value_ty = self.infer_expr(&c.value);
         self.check_assignable(&declared_ty, &value_ty, c.value.span.clone());
+    }
+
+    /// Slice 4 of design.md § Module-Level Bindings (§1280-1297). Walks
+    /// the binding's initializer expression and rejects any sub-shape
+    /// that requires runtime evaluation, and rejects the bare `String`
+    /// declared type per §1297. Binding-type inference + the use-site
+    /// type-check are slice-5 work; this pass only enforces the
+    /// structural constant-init rule and the heap-type rejection.
+    fn check_module_binding(&mut self, b: &ModuleBinding) {
+        self.check_module_binding_init(&b.value, &b.name);
+
+        if let Some(ref ty_expr) = b.ty {
+            let declared = self.lower_type_expr(ty_expr, &[]);
+            if matches!(declared, Type::Str) {
+                self.type_error(
+                    format!(
+                        "error[E_MODULE_BINDING_HEAP_TYPE]: module-level binding '{}' \
+                         is declared with type 'String' which is heap-allocated; \
+                         module bindings live in the binary as constant data — \
+                         use 'StringSlice' for static string data",
+                        b.name,
+                    ),
+                    ty_expr.span.clone(),
+                    TypeErrorKind::ModuleBindingHeapType,
+                );
+            }
+        }
+    }
+
+    /// Recursive const-init structural walk for slice 4. Permits
+    /// literals, references to other bindings (any `Path`/`Identifier`
+    /// — the resolver already validated the reference resolves), and
+    /// composite forms built from permitted sub-expressions; rejects
+    /// every shape requiring runtime evaluation.
+    fn check_module_binding_init(&mut self, e: &Expr, binding_name: &str) {
+        match &e.kind {
+            // ── Always-permitted scalar literals ────────────────────
+            ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_) => {}
+
+            // f"..." builds a String at runtime — heap-allocating and
+            // therefore rejected.
+            ExprKind::InterpolatedStringLit(_) => {
+                self.reject_module_binding_init(e, binding_name, "string interpolation");
+            }
+
+            // ── References ──────────────────────────────────────────
+            // The resolver has already verified that the path/ident
+            // resolves to something visible; whether *that* something
+            // is itself a compile-time constant is checked at the
+            // resolved-symbol level by the rest of the typechecker
+            // (and ultimately at codegen, where the const-init lowering
+            // will fail loudly if a ref to a runtime entity slipped
+            // through). Paths to free functions are technically
+            // permitted as "function-pointer values" — the spec doesn't
+            // exclude that and it composes naturally with the
+            // `LazyLock.new(|| ...)` capture rule (slice 10).
+            ExprKind::Identifier(_) | ExprKind::Path { .. } => {}
+            ExprKind::SelfValue | ExprKind::SelfType => {
+                self.reject_module_binding_init(e, binding_name, "`self` / `Self` reference");
+            }
+
+            // ── Operators over permitted forms ──────────────────────
+            ExprKind::Binary { left, right, .. } => {
+                self.check_module_binding_init(left, binding_name);
+                self.check_module_binding_init(right, binding_name);
+            }
+            ExprKind::Unary { operand, .. } => {
+                self.check_module_binding_init(operand, binding_name);
+            }
+            ExprKind::NilCoalesce { left, right } => {
+                self.check_module_binding_init(left, binding_name);
+                self.check_module_binding_init(right, binding_name);
+            }
+
+            // ── Composite literals ──────────────────────────────────
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                for it in items {
+                    self.check_module_binding_init(it, binding_name);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { type_name, items } => {
+                // Only `Array[...]` is permitted at module scope; `Vec`,
+                // `Set`, `Map` allocate on the heap.
+                if type_name == "Array" {
+                    for it in items {
+                        self.check_module_binding_init(it, binding_name);
+                    }
+                } else {
+                    self.reject_module_binding_init(
+                        e,
+                        binding_name,
+                        &format!(
+                            "'{}[...]' collection literal (heap-allocated; \
+                             use 'Array[...]' for fixed-size data)",
+                            type_name,
+                        ),
+                    );
+                }
+            }
+            ExprKind::RepeatLiteral {
+                type_name,
+                value,
+                count,
+            } => match type_name.as_deref() {
+                // Bare `[v; n]` is permitted (the binding's declared
+                // type coerces it to `Array[T, N]` per §1288; if the
+                // declared type forces a `Vec`, slice 5 / the
+                // surrounding type-check will catch the heap form).
+                // Explicit `Array[v; n]` is also fine; explicit
+                // `Vec[v; n]` allocates on the heap and is rejected.
+                None | Some("Array") => {
+                    self.check_module_binding_init(value, binding_name);
+                    self.check_module_binding_init(count, binding_name);
+                }
+                _ => {
+                    self.reject_module_binding_init(
+                        e,
+                        binding_name,
+                        "repeat literal (only 'Array[v; n]' or bare '[v; n]' \
+                         in an 'Array'-typed binding is permitted at module scope)",
+                    );
+                }
+            },
+            ExprKind::MapLiteral(_) => {
+                self.reject_module_binding_init(e, binding_name, "Map literal (heap-allocated)");
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.check_module_binding_init(&f.value, binding_name);
+                }
+                if let Some(s) = spread {
+                    self.check_module_binding_init(s, binding_name);
+                }
+            }
+
+            // ── Calls: enum-variant constructors + recognized
+            // special forms only ────────────────────────────────────
+            ExprKind::Call { callee, args } => {
+                if self.module_binding_call_is_enum_variant(callee) {
+                    for a in args {
+                        self.check_module_binding_init(&a.value, binding_name);
+                    }
+                } else if !self.module_binding_call_is_special_form(callee, args, binding_name) {
+                    self.reject_module_binding_init(e, binding_name, "function call");
+                }
+            }
+
+            // ── Member access / index — permitted only insofar as the
+            // base is itself a permitted form ───────────────────────
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.check_module_binding_init(object, binding_name);
+            }
+            ExprKind::Index { object, index } => {
+                self.check_module_binding_init(object, binding_name);
+                self.check_module_binding_init(index, binding_name);
+            }
+            ExprKind::Cast { expr, .. } => {
+                self.check_module_binding_init(expr, binding_name);
+            }
+
+            // ── Always-rejected runtime-only shapes ─────────────────
+            ExprKind::MethodCall { .. } => {
+                self.reject_module_binding_init(e, binding_name, "method call");
+            }
+            ExprKind::OptionalChain { .. } => {
+                self.reject_module_binding_init(e, binding_name, "optional-chain call");
+            }
+            ExprKind::Closure { .. } => {
+                self.reject_module_binding_init(e, binding_name, "closure");
+            }
+            ExprKind::Question(_) => {
+                self.reject_module_binding_init(e, binding_name, "'?'-propagation");
+            }
+            ExprKind::Pipe { .. } | ExprKind::PipePlaceholder => {
+                self.reject_module_binding_init(e, binding_name, "pipe expression");
+            }
+            ExprKind::Block(_)
+            | ExprKind::If { .. }
+            | ExprKind::IfLet { .. }
+            | ExprKind::Match { .. }
+            | ExprKind::While { .. }
+            | ExprKind::WhileLet { .. }
+            | ExprKind::For { .. }
+            | ExprKind::Loop { .. }
+            | ExprKind::LabeledBlock { .. }
+            | ExprKind::Return(_)
+            | ExprKind::Break { .. }
+            | ExprKind::Continue { .. } => {
+                self.reject_module_binding_init(
+                    e,
+                    binding_name,
+                    "block or control-flow expression",
+                );
+            }
+            ExprKind::Range { .. } => {
+                self.reject_module_binding_init(e, binding_name, "range expression");
+            }
+            ExprKind::Unsafe(_) => {
+                self.reject_module_binding_init(e, binding_name, "'unsafe' block");
+            }
+            ExprKind::Try(_) => {
+                self.reject_module_binding_init(e, binding_name, "'try' block");
+            }
+            ExprKind::Seq(_) | ExprKind::Par(_) => {
+                self.reject_module_binding_init(e, binding_name, "'seq' / 'par' block");
+            }
+            ExprKind::Lock { .. } => {
+                self.reject_module_binding_init(e, binding_name, "'lock' block");
+            }
+            ExprKind::Providers { .. } => {
+                self.reject_module_binding_init(e, binding_name, "'providers' block");
+            }
+            // Compile-time intrinsic — evaluates to a `usize` at compile
+            // time, so it's permissible.
+            ExprKind::OffsetOf { .. } => {}
+            // Parser already emitted an error for this node; suppress
+            // the duplicate const-init rejection.
+            ExprKind::Error => {}
+        }
+    }
+
+    /// Recognize `EnumName.Variant(args...)` calls in init position.
+    /// Looks up the leading segment in the env's enum table to decide
+    /// — purely structural recognition isn't safe because the same
+    /// shape is also used by associated-fn calls like `Foo.bar()`.
+    fn module_binding_call_is_enum_variant(&self, callee: &Expr) -> bool {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return false;
+        };
+        if segments.len() != 2 {
+            return false;
+        }
+        let enum_name = &segments[0];
+        let variant_name = &segments[1];
+        let Some(info) = self.env.enums.get(enum_name) else {
+            return false;
+        };
+        info.variants.iter().any(|(vname, _)| vname == variant_name)
+    }
+
+    /// Recognize the compiler-recognized constant-init special forms
+    /// per design.md §1280-1297. Returns true if the call shape matches;
+    /// in that case sub-expression walks (for `Atomic.new(LIT)` /
+    /// `Mutex.new(LIT)`) have already been performed.
+    fn module_binding_call_is_special_form(
+        &mut self,
+        callee: &Expr,
+        args: &[CallArg],
+        binding_name: &str,
+    ) -> bool {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return false;
+        };
+        if segments.len() != 2 || segments[1] != "new" {
+            return false;
+        }
+
+        match segments[0].as_str() {
+            // The closure body is permitted to be arbitrary — it runs
+            // at first access, not at compile time. Slice 10 of the
+            // module-binding work will gate captures to other
+            // compile-time bindings only.
+            "LazyLock" => args.len() == 1 && matches!(args[0].value.kind, ExprKind::Closure { .. }),
+            "OnceLock" | "OnceCell" => args.is_empty(),
+            // Atomic.new / Mutex.new take a single argument that must
+            // itself be a permitted constant-init form.
+            "Atomic" | "Mutex" => {
+                if args.len() != 1 {
+                    return false;
+                }
+                self.check_module_binding_init(&args[0].value, binding_name);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn reject_module_binding_init(&mut self, e: &Expr, binding_name: &str, what: &str) {
+        self.type_error(
+            format!(
+                "error[E_MODULE_BINDING_EFFECTFUL_INIT]: module-level binding '{}' \
+                 initializer must be a compile-time constant expression; {} requires \
+                 runtime evaluation. Permitted forms: literals, references to other \
+                 module-level bindings, arithmetic / boolean / comparison operations \
+                 over permitted forms, struct / enum-variant constructors over \
+                 permitted forms, tuple and fixed-size 'Array' literals, and the \
+                 recognized special forms 'LazyLock.new(|| ...)', 'OnceLock.new()', \
+                 'OnceCell.new()', 'Atomic.new(LITERAL)', 'Mutex.new(LITERAL)'",
+                binding_name, what,
+            ),
+            e.span.clone(),
+            TypeErrorKind::ModuleBindingEffectfulInit,
+        );
     }
 
     // ── Block & Statement ───────────────────────────────────────

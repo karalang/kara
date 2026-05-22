@@ -18110,3 +18110,249 @@ fn test_slice_8ag_mut_ref_rejects_ref_source() {
         "ref Vec[i64] → mut ref Vec[i64] must still be rejected"
     );
 }
+
+// ── Category: Module-Level let / let mut — Slice 4 ──────────────
+// Const-init structural rule (design.md §1280-1297). See
+// `docs/implementation_checklist/phase-8-stdlib-floor.md` mod-let
+// entry, slice 4.
+
+#[test]
+fn test_module_binding_int_literal_const_init_ok() {
+    typecheck_ok("let MAX: i64 = 100;");
+}
+
+#[test]
+fn test_module_binding_arithmetic_const_init_ok() {
+    typecheck_ok("let TIMEOUT_MS: i64 = 60 * 1000;");
+}
+
+#[test]
+fn test_module_binding_references_another_binding_ok() {
+    typecheck_ok(
+        "let BASE: i64 = 100;
+         let DOUBLED: i64 = BASE + BASE;",
+    );
+}
+
+#[test]
+fn test_module_binding_bool_literal_ok() {
+    typecheck_ok("let DEBUG: bool = true;");
+}
+
+#[test]
+fn test_module_binding_string_literal_ok_with_string_slice_annotation() {
+    typecheck_ok("let APP_NAME: StringSlice = \"karac\";");
+}
+
+#[test]
+fn test_module_binding_tuple_literal_ok() {
+    typecheck_ok("let ORIGIN: (i64, i64) = (0, 0);");
+}
+
+#[test]
+fn test_module_binding_array_literal_ok() {
+    typecheck_ok("let LANES: Array[i64, 3] = [1, 2, 3];");
+}
+
+#[test]
+fn test_module_binding_array_repeat_ok() {
+    typecheck_ok("let mut SCRATCH: Array[u8, 256] = [0; 256];");
+}
+
+#[test]
+fn test_module_binding_struct_literal_ok() {
+    typecheck_ok(
+        "struct Point { x: i64, y: i64 }
+         let ORIGIN: Point = Point { x: 0, y: 0 };",
+    );
+}
+
+#[test]
+fn test_module_binding_unit_enum_variant_ok() {
+    typecheck_ok(
+        "enum Direction { North, South, East, West }
+         let HOME: Direction = Direction.North;",
+    );
+}
+
+#[test]
+fn test_module_binding_enum_variant_with_const_arg_ok() {
+    typecheck_ok(
+        "enum Tag { Active(i64), Inactive }
+         let DEFAULT_TAG: Tag = Tag.Active(42);",
+    );
+}
+
+// ── Negative: forbidden initializer shapes ──────────────────────
+
+#[test]
+fn test_module_binding_function_call_init_rejected() {
+    let errs = typecheck_errors(
+        "fn compute() -> i64 { 7 }
+         let LIMIT: i64 = compute();",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+        "expected ModuleBindingEffectfulInit, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_MODULE_BINDING_EFFECTFUL_INIT")),
+        "diagnostic should mention E_MODULE_BINDING_EFFECTFUL_INIT",
+    );
+}
+
+#[test]
+fn test_module_binding_method_call_init_rejected() {
+    let errs = typecheck_errors("let TRIMMED: StringSlice = \"x\".trim();");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+        "expected ModuleBindingEffectfulInit, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_module_binding_vec_new_init_rejected() {
+    let errs = typecheck_errors("let mut TODOS: Vec[i64] = Vec.new();");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+        "expected ModuleBindingEffectfulInit, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_module_binding_vec_prefix_literal_init_rejected() {
+    let errs = typecheck_errors("let NUMS: Vec[i64] = Vec[1, 2, 3];");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+        "expected ModuleBindingEffectfulInit, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_module_binding_heap_string_type_rejected() {
+    let errs = typecheck_errors("let HOST: String = \"localhost\";");
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingHeapType)),
+        "expected ModuleBindingHeapType, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+    assert!(
+        errs.iter()
+            .any(|e| e.message.contains("E_MODULE_BINDING_HEAP_TYPE")
+                && e.message.contains("StringSlice")),
+        "diagnostic should name the code and suggest StringSlice",
+    );
+}
+
+#[test]
+fn test_module_binding_closure_init_rejected() {
+    // A bare closure at the binding's RHS is not a recognized special
+    // form — only `LazyLock.new(|| ...)` is permitted to wrap a
+    // closure at module scope.
+    let errs = typecheck_errors("let RESULT: i64 = (|| 1)();");
+    // The Call-of-a-closure shape contains both a closure (rejected)
+    // and a call (rejected); either rejection satisfies the rule.
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_block_init_rejected() {
+    let errs = typecheck_errors("let TOTAL: i64 = { let x = 1; x + 2 };");
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_if_expr_init_rejected() {
+    let errs = typecheck_errors(
+        "let FLAG: bool = true;
+         let CHOICE: i64 = if FLAG { 1 } else { 2 };",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_pipe_init_rejected() {
+    let errs = typecheck_errors(
+        "fn double(n: i64) -> i64 { n * 2 }
+         let DOUBLED: i64 = 21 |> double(_);",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_range_init_rejected() {
+    let errs = typecheck_errors("let RNG: i64 = 0..10;");
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_repeated_field_walk_rejects_call_inside_struct() {
+    // Negative case: the const-init walker must recurse into struct
+    // field initializers — a call buried inside a struct literal must
+    // still be rejected.
+    let errs = typecheck_errors(
+        "struct Point { x: i64, y: i64 }
+         fn compute() -> i64 { 0 }
+         let ORIGIN: Point = Point { x: compute(), y: 0 };",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
+        "calls inside struct literals must still be rejected",
+    );
+}
+
+#[test]
+fn test_module_binding_call_inside_tuple_rejected() {
+    let errs = typecheck_errors(
+        "fn compute() -> i64 { 0 }
+         let PAIR: (i64, i64) = (compute(), 1);",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_call_inside_array_rejected() {
+    let errs = typecheck_errors(
+        "fn compute() -> i64 { 0 }
+         let ARR: Array[i64, 2] = [compute(), 1];",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}
+
+#[test]
+fn test_module_binding_interpolated_string_rejected() {
+    // Interpolated strings build a heap-allocated `String` at runtime;
+    // rejecting them is the spec-mandated behavior at module scope.
+    let errs = typecheck_errors(
+        "let VALUE: i64 = 42;
+         let MSG: StringSlice = f\"value is {VALUE}\";",
+    );
+    assert!(errs
+        .iter()
+        .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),);
+}

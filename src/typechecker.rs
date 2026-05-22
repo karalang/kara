@@ -526,6 +526,22 @@ pub enum TypeErrorKind {
     /// suppresses uniformly. `W0249` (warning path);
     /// `#[deny(unfulfilled_lint_expectation)]` promotes to `E0249`.
     UnfulfilledLintExpectation,
+    /// Slice 4 of design.md § Module-Level Bindings — the right-hand
+    /// side of a module-level `let` / `let mut` is not a compile-time
+    /// constant expression. Triggers on function calls (except the
+    /// recognized special forms `LazyLock.new(|| ...)`, `OnceLock.new()`,
+    /// `OnceCell.new()`, `Atomic.new(LITERAL)`, `Mutex.new(LITERAL)`),
+    /// method calls, closures, control-flow blocks, heap-allocating
+    /// collection literals (`Vec[...]`, `Map[...]`, `Set[...]`), and any
+    /// other expression shape that requires runtime evaluation. Code
+    /// `E_MODULE_BINDING_EFFECTFUL_INIT`.
+    ModuleBindingEffectfulInit,
+    /// Slice 4 of design.md § Module-Level Bindings (§1297) — the
+    /// declared type of a module-level binding is `String`, which is
+    /// heap-allocated and cannot live in the binary's read-only data
+    /// segment. The fix-it directs the programmer to `StringSlice`.
+    /// Code `E_MODULE_BINDING_HEAP_TYPE`.
+    ModuleBindingHeapType,
 }
 
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
@@ -594,7 +610,9 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::NonExhaustiveCrossPackageLiteral
         | TypeErrorKind::NonExhaustiveCrossPackageMatch
         | TypeErrorKind::NonExhaustiveCrossPackagePattern
-        | TypeErrorKind::MissingNonExhaustive => None,
+        | TypeErrorKind::MissingNonExhaustive
+        | TypeErrorKind::ModuleBindingEffectfulInit
+        | TypeErrorKind::ModuleBindingHeapType => None,
     }
 }
 
