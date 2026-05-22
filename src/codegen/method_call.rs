@@ -669,6 +669,50 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Non-identifier receiver of Vec / String type — e.g.
+        // `list_primes_under(n).len()`. Compile the receiver to a `{ptr,
+        // len, cap}` struct value, then service the read-only Vec methods
+        // (`len`, `is_empty`) via direct field extraction. Methods that
+        // would mutate the receiver (`push`, `sort`, etc.) don't make
+        // semantic sense on a temporary — the mutation would be lost when
+        // the temp goes out of scope at the end of the statement — so
+        // those keep falling through to the dispatch-fail Err below.
+        //
+        // For element-type-aware Vec methods (`contains`, `get`, `iter`),
+        // a follow-up slice can materialize the value to a temporary
+        // alloca + synthesize a name + register elem_ty from the typed
+        // AST. Today's narrow scope: just `len` and `is_empty`, which
+        // are element-type-agnostic.
+        if !matches!(&object.kind, ExprKind::Identifier(_)) && matches!(method, "len" | "is_empty")
+        {
+            let recv_val = self.compile_expr(object)?;
+            if let BasicValueEnum::StructValue(sv) = recv_val {
+                let vec_ty = self.vec_struct_type();
+                if sv.get_type() == vec_ty {
+                    let i64_t = self.context.i64_type();
+                    let len_val = self
+                        .builder
+                        .build_extract_value(sv, 1, "tmp.vec.len")
+                        .unwrap()
+                        .into_int_value();
+                    return Ok(match method {
+                        "len" => len_val.into(),
+                        "is_empty" => self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::EQ,
+                                len_val,
+                                i64_t.const_zero(),
+                                "tmp.vec.is_empty",
+                            )
+                            .unwrap()
+                            .into(),
+                        _ => unreachable!(),
+                    });
+                }
+            }
+        }
+
         let receiver_desc = match &object.kind {
             ExprKind::Identifier(name) => format!("variable '{}'", name),
             _ => "non-identifier receiver".to_string(),

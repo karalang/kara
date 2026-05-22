@@ -19500,4 +19500,65 @@ fn main() {
             "i64.parse should call the runtime extern:\n{ir}"
         );
     }
+
+    // ── Phase 4 (2026-05-21): Vec.len() / Vec.is_empty() on a call-result receiver ──
+    //
+    // Surfaced building LeetCode #204 (count-primes) kata: the natural
+    // form `return list_primes_under(n).len();` panicked with
+    // "no handler for method 'len' on non-identifier receiver". Method
+    // dispatch only covered `ExprKind::Identifier` receivers; function
+    // calls returning `Vec[T]` fell through to the dispatch-fail Err.
+    // Fix: direct struct-field extraction for the element-type-agnostic
+    // read-only methods (`len`, `is_empty`). Mutating methods (`push`,
+    // `sort`) stay rejected — they'd lose the mutation when the temp
+    // goes out of scope at end-of-statement.
+
+    #[test]
+    fn test_e2e_vec_len_on_function_call_receiver() {
+        let output = run_program(
+            "fn list_primes_under(n: i64) -> Vec[i64] {\n\
+                 let mut primes: Vec[i64] = Vec.new();\n\
+                 let mut k: i64 = 2i64;\n\
+                 while k < n {\n\
+                     let mut is_prime: bool = true;\n\
+                     let mut d: i64 = 2i64;\n\
+                     while (d * d) <= k {\n\
+                         if (k % d) == 0i64 { is_prime = false; }\n\
+                         d = d + 1i64;\n\
+                     }\n\
+                     if is_prime { primes.push(k); }\n\
+                     k = k + 1i64;\n\
+                 }\n\
+                 return primes;\n\
+             }\n\
+             fn main() {\n\
+                 println(list_primes_under(10i64).len());\n\
+                 println(list_primes_under(100i64).len());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        // LC anchor values: π(10) = 4, π(100) = 25.
+        assert_eq!(output, "4\n25\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_is_empty_on_function_call_receiver() {
+        let output = run_program(
+            "fn make_vec(n: i64) -> Vec[i64] {\n\
+                 let mut v: Vec[i64] = Vec.new();\n\
+                 let mut i: i64 = 0i64;\n\
+                 while i < n {\n\
+                     v.push(i);\n\
+                     i = i + 1i64;\n\
+                 }\n\
+                 return v;\n\
+             }\n\
+             fn main() {\n\
+                 if make_vec(0i64).is_empty() { println(1); } else { println(0); }\n\
+                 if make_vec(5i64).is_empty() { println(1); } else { println(0); }\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "1\n0\n");
+    }
 }
