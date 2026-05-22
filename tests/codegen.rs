@@ -19228,4 +19228,122 @@ fn main() {
             "i32 rvalue should alloca as i32, not as vec-struct:\n{ir}"
         );
     }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Phase 7 § match-on-String codegen (filed 2026-05-21 as `f793929`).
+    //
+    // Before the fix, `match s { "alpha" => ..., "beta" => ..., _ => ... }`
+    // with `s: String` compiled through the typechecker but panicked in
+    // codegen at `src/codegen/expr_ops.rs:1138` ("Found StructValue but
+    // expected the IntValue variant") — the literal-pattern arm emitted
+    // only a `*const i8` for the String pattern, then `compile_binop`
+    // (struct vs. ptr) fell into the int path and panicked on
+    // `lhs.into_int_value()`. The fix: build a full String struct
+    // `{ data, len, cap }` for the literal pattern (mirroring
+    // `ExprKind::StringLit` codegen in `src/codegen/exprs.rs:39-61`),
+    // which then routes both operands through `compile_string_binop`'s
+    // length-check + `memcmp` equality.
+    // ──────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_e2e_match_on_string_basic() {
+        // Positive case: each input routes to the matching arm; no
+        // pattern match falls through to the wildcard.
+        let output = run_program(
+            "fn classify(s: String) -> i64 {\n\
+                 match s {\n\
+                     \"alpha\" => 1,\n\
+                     \"beta\" => 2,\n\
+                     _ => 0,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(classify(\"alpha\"));\n\
+                 println(classify(\"beta\"));\n\
+                 println(classify(\"other\"));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output.trim(), "1\n2\n0");
+    }
+
+    #[test]
+    fn test_ir_match_on_string_uses_memcmp_not_int_cmp() {
+        // Regression guard against the int-path fall-through. The
+        // panic site used to be `lhs.into_int_value()` on the
+        // String struct; after the fix, codegen routes through
+        // `compile_string_binop` which emits `memcmp` calls for the
+        // per-arm equality test. Find at least one `memcmp` in the
+        // generated IR for the match body.
+        let ir = ir_for(
+            "fn pick(s: String) -> i64 {\n\
+                 match s {\n\
+                     \"x\" => 1,\n\
+                     _ => 0,\n\
+                 }\n\
+             }",
+        );
+        assert!(
+            ir.contains("call i32 @memcmp") || ir.contains("call ptr @memcmp"),
+            "match-on-String should emit memcmp via compile_string_binop:\n{ir}"
+        );
+    }
+
+    #[test]
+    fn test_e2e_match_on_string_function_return_scrutinee() {
+        // Non-identifier scrutinee: the scrutinee is a function-call
+        // result that returns a fresh owned String. Pins that the
+        // match codegen accepts this shape (the kata's natural form
+        // is `match req.path() { ... }`).
+        let output = run_program(
+            "fn label_for(n: i64) -> String {\n\
+                 match n {\n\
+                     1 => \"one\",\n\
+                     2 => \"two\",\n\
+                     _ => \"other\",\n\
+                 }\n\
+             }\n\
+             fn classify(n: i64) -> i64 {\n\
+                 match label_for(n) {\n\
+                     \"one\" => 10,\n\
+                     \"two\" => 20,\n\
+                     _ => 99,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(classify(1));\n\
+                 println(classify(2));\n\
+                 println(classify(5));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output.trim(), "10\n20\n99");
+    }
+
+    #[test]
+    fn test_e2e_match_on_string_routes_to_correct_arm() {
+        // Pin per-arm routing: each pattern must select its own
+        // body, not the next one. A regression where all arms
+        // shared a single body would still pass the basic test if
+        // the wildcard wasn't taken; this one asserts each output
+        // independently.
+        let output = run_program(
+            "fn handle(p: String) -> String {\n\
+                 match p {\n\
+                     \"/a\" => \"AAA\",\n\
+                     \"/b\" => \"BBB\",\n\
+                     \"/c\" => \"CCC\",\n\
+                     _ => \"404\",\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(handle(\"/a\"));\n\
+                 println(handle(\"/b\"));\n\
+                 println(handle(\"/c\"));\n\
+                 println(handle(\"/z\"));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output.trim(), "AAA\nBBB\nCCC\n404");
+    }
 }

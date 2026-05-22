@@ -285,12 +285,41 @@ impl<'ctx> super::Codegen<'ctx> {
                     LiteralPattern::Char(c) => {
                         self.context.i32_type().const_int(*c as u64, false).into()
                     }
-                    LiteralPattern::String(s) => self
-                        .builder
-                        .build_global_string_ptr(s, "spat")
-                        .unwrap()
-                        .as_pointer_value()
-                        .into(),
+                    // Build a full String struct `{ data, len, cap }` for
+                    // the literal pattern, matching `ExprKind::StringLit`'s
+                    // codegen (`src/codegen/exprs.rs:39-61`). The scrutinee
+                    // on this path is always a String struct value (matches
+                    // on String typecheck to `String == String`), so both
+                    // operands hit `compile_string_binop`'s `BinOp::Eq` arm
+                    // — length check + `memcmp` — instead of falling into
+                    // the int-path which would panic at
+                    // `expr_ops.rs:1138 lhs.into_int_value()`. `cap = 0`
+                    // marks the buffer as static (mirrors StringLit so the
+                    // pattern doesn't claim ownership of the .rodata bytes).
+                    LiteralPattern::String(s) => {
+                        let global = self.builder.build_global_string_ptr(s, "spat").unwrap();
+                        let str_ty = self.vec_struct_type();
+                        let i64_t = self.context.i64_type();
+                        let len = i64_t.const_int(s.len() as u64, false);
+                        let cap_zero = i64_t.const_int(0, false);
+                        let mut agg = str_ty.get_undef();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, global.as_pointer_value(), 0, "spat.data")
+                            .unwrap()
+                            .into_struct_value();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, len, 1, "spat.len")
+                            .unwrap()
+                            .into_struct_value();
+                        agg = self
+                            .builder
+                            .build_insert_value(agg, cap_zero, 2, "spat.cap")
+                            .unwrap()
+                            .into_struct_value();
+                        agg.into()
+                    }
                 };
                 self.compile_binop(&BinOp::Eq, scrut, lit_val)
             }
