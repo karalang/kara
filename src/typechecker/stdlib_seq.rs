@@ -272,12 +272,44 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Str
             }
+            "push_str" => {
+                // push_str(other: String) -> (). Mutating append; receiver
+                // must be a mutable binding (ownership.rs classifies this
+                // as MutRef so the let-mut / mut-ref check fires there).
+                // Codegen lives in src/codegen/vec_method.rs (`push_str` arm) —
+                // the typechecker arm only validates the arg shape and
+                // surfaces the unit return type.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'push_str' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Str | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'push_str' expects a String argument, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Unit
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name. `len` / `is_empty` / `contains` joined the
-            // enumerated list 2026-05-22; further runtime-only surface
-            // (e.g. `push_str`, `to_uppercase`, `split`) still falls
-            // through to the typo-suggestion path until per-method
-            // typechecker arms land — design.md § Method Resolution Step 7.
+            // enumerated list 2026-05-22; `push_str` joined 2026-05-23.
+            // Further runtime-only surface (e.g. `to_uppercase`, `split`)
+            // still falls through to the typo-suggestion path until
+            // per-method typechecker arms land — design.md § Method
+            // Resolution Step 7.
             _ => self.require_known_method(
                 "String",
                 method,
@@ -287,6 +319,7 @@ impl<'a> super::TypeChecker<'a> {
                     "contains",
                     "is_empty",
                     "len",
+                    "push_str",
                     "sorted",
                     "sorted_by",
                     "starts_with",
