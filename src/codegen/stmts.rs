@@ -206,6 +206,57 @@ impl<'ctx> super::Codegen<'ctx> {
             {
                 continue;
             }
+            // Codegen-time cost gate for the `karac_par_run` path
+            // (surfaced 2026-05-23 by the kata-2 bench). The analyzer's
+            // `is_trivial` check fires only when `all_pure ||
+            // non_constant_count <= 1` — so a 2-stmt group of two
+            // independent effectful calls with small per-branch work
+            // (kata-2's `let b = make_nines(n); let l1 =
+            // from_array(...);`) sails through with `is_trivial = false`
+            // even when each branch's resolved cost is well below the
+            // dispatch overhead. Without this gate the binary linked
+            // ~263 KiB of par-machinery for zero wall-time benefit.
+            //
+            // Two thresholds, both must clear for the gate to fire:
+            //   (a) total < PAR_RUN_DISPATCH_THRESHOLD_UNITS (500) —
+            //       the sum of estimated per-branch work is below the
+            //       dispatch break-even.
+            //   (b) min_per_branch >= PAR_RUN_VISIBILITY_THRESHOLD_UNITS
+            //       (50) — every branch has enough resolved structure
+            //       for the estimator to be confident. Thin
+            //       wrapper-fn-with-method-call branches (parallax's
+            //       `fn fetch_profile(uid) { UserDB.fetch_profile(uid) }`
+            //       shape, body cost ≈ 10) fall below this floor and
+            //       skip gating — their actual work lives inside the
+            //       impl method body which the estimator can't see,
+            //       and gating them would silently kill real
+            //       parallelism wins.
+            //
+            // The analyzer's per-group `is_trivial` stays unchanged —
+            // analyzer tests at tests/concurrency.rs:660-665 + 691-694
+            // (which assert 2-effectful-stmt groups are non-trivial)
+            // keep passing because the codegen-side gate is a separate
+            // skip condition, not a mutation of the analyzer's result.
+            //
+            // See docs/implementation_checklist/phase-7-codegen.md §
+            // "Auto-par `karac_par_run` (find_parallel_groups):
+            // per-stmt cost gate" for the design context.
+            let group_stmts: Vec<&Stmt> = group
+                .statement_indices
+                .iter()
+                .filter(|&&i| i < n)
+                .map(|&i| &body.stmts[i])
+                .collect();
+            let (total_cost, min_per_branch) = super::reduce::estimate_par_run_group_cost_units(
+                self.program_snapshot.as_deref(),
+                &group_stmts,
+            );
+            if total_cost > 0
+                && total_cost < super::reduce::PAR_RUN_DISPATCH_THRESHOLD_UNITS
+                && min_per_branch >= super::reduce::PAR_RUN_VISIBILITY_THRESHOLD_UNITS
+            {
+                continue;
+            }
             let Some(&min_idx) = group.statement_indices.iter().min() else {
                 continue;
             };

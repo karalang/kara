@@ -2426,6 +2426,94 @@ const ASSUMED_WORKER_COUNT: u64 = 8;
 const REDUCE_DISPATCH_THRESHOLD_UNITS: u64 =
     DISPATCH_OVERHEAD_PER_CALL_UNITS * ASSUMED_WORKER_COUNT;
 
+/// Threshold for the `karac_par_run` (parallel-group dispatch) gate.
+/// Sum of per-branch costs must exceed this for dispatch to win;
+/// otherwise the group falls back to sequential statement codegen.
+///
+/// **Calibration is separate from the reduce gate.** `REDUCE_DISPATCH_
+/// THRESHOLD_UNITS` (= 80K units) is calibrated for `iter_total ×
+/// per_iter_cost` where `iter_total` is in the millions (kata-7's
+/// 50M iters validates that scale). For par_run, the comparable
+/// metric is `sum_branch_costs` where N branches is small (2-4
+/// typically) and each branch represents a single statement evaluation
+/// — orders of magnitude smaller numbers. Reusing 80K here gated out
+/// every realistic par_run shape (including the existing
+/// `test_auto_par_*_emits_par_run` IR pins, whose fixture fns have
+/// trivial bodies like `{ 1 }`). The right calibration is closer to
+/// `DISPATCH_OVERHEAD_PER_CALL_UNITS / 20`, which puts the per-branch
+/// threshold (sum / N) at ~5x dispatch overhead for typical N=2-4 —
+/// enough to amortize while still catching kata-2's wasteful prologue
+/// group (cost ≈ 411 estimator units, well below 500).
+///
+/// Surfaced 2026-05-23 by the kata-2 (add-two-numbers) bench: the
+/// 2-stmt prologue group `let b = make_nines(n); let l1 =
+/// from_array(a.as_slice());` produced wasteful dispatch (+263 KiB
+/// binary, 0 wall benefit) because no codegen-time cost gate existed
+/// for the par_run path, only the analyzer-level `is_trivial` check
+/// which was correctly false (both stmts are effectful, both write to
+/// distinct allocator resources). See
+/// `docs/implementation_checklist/phase-7-codegen.md` § "Auto-par
+/// `karac_par_run` (find_parallel_groups): per-stmt cost gate" for
+/// the worked example.
+pub(super) const PAR_RUN_DISPATCH_THRESHOLD_UNITS: u64 = 500;
+
+/// Minimum per-branch cost for the par_run gate to fire. Below this,
+/// the estimator hasn't seen enough structure in the branch's
+/// resolved body to be confident the work is genuinely small — most
+/// commonly because the branch's top-level callee is a thin wrapper
+/// whose body is just a method call (e.g. parallax's
+/// `fn fetch_profile(uid) -> Profile with reads(UserDB) {
+/// UserDB.fetch_profile(uid) }`, body cost ≈ 10). For those shapes
+/// the gate stays *off* — the actual work lives inside the impl
+/// method body which the estimator can't see (`CostEstimator` only
+/// traces into free-fn callees by name, not into trait method impls;
+/// extending it needs typechecker-resolved receiver-type info, a
+/// separate slice). Kata-2's branches go through an inline-resolved
+/// free fn with a visible loop (cost ≈ 211 each); they sit safely
+/// above this threshold, so the gate can fire.
+pub(super) const PAR_RUN_VISIBILITY_THRESHOLD_UNITS: u64 = 50;
+
+/// Compute (total, min_per_branch) cost for a parallel group, used by
+/// the codegen-time par_run gate. The gate fires only when *both*
+/// thresholds clear: total below dispatch threshold AND every branch
+/// above the visibility threshold (i.e. the estimator saw real
+/// structure in every branch, not just a thin wrapper shell). Returns
+/// `(0, 0)` when no `Program` snapshot is available — the caller
+/// treats `(0, _)` as "no estimate" and skips the gate.
+///
+/// Mirrors `CostEstimator::estimate_body`'s per-stmt walk: each
+/// branch's cost is `estimate_stmt(stmt)` (which folds Let/Assign/
+/// CompoundAssign/Expr/LetUninit/Defer arms). The estimator inlines
+/// free-function callee bodies up to `INLINE_DEPTH_CAP` levels deep —
+/// same shape as the par_reduce gate's per-iter cost.
+pub(super) fn estimate_par_run_group_cost_units(
+    program: Option<&Program>,
+    group_stmts: &[&Stmt],
+) -> (u64, u64) {
+    let Some(program) = program else {
+        // No snapshot → can't estimate. `(0, 0)` is the sentinel; the
+        // caller treats it as "no estimate" and lets the par_run
+        // dispatch proceed (the analyzer-level `is_trivial` gate is
+        // still in force, plus the slice-2 group_defines_binding_used_
+        // outside drop).
+        return (0, 0);
+    };
+    let mut estimator = CostEstimator::new(program);
+    let mut total: u64 = 0;
+    let mut min_per_branch: u64 = u64::MAX;
+    for stmt in group_stmts {
+        let c = estimator.estimate_stmt(stmt);
+        total = total.saturating_add(c);
+        if c < min_per_branch {
+            min_per_branch = c;
+        }
+    }
+    if group_stmts.is_empty() {
+        return (0, 0);
+    }
+    (total, min_per_branch)
+}
+
 /// Try to const-evaluate the loop's iteration count = `end - lo` to a
 /// literal. Returns `None` for any non-literal shape on either bound
 /// (Identifier, expression involving captures, etc.) so the cost-model
