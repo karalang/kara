@@ -228,12 +228,29 @@ impl<'ctx> super::Codegen<'ctx> {
                 // For shared structs, the slot stores the heap-pointer
                 // handle; load it to get the receiver-pointer the field
                 // GEP indexes into. For plain structs, the slot itself
-                // IS the receiver pointer.
+                // IS the receiver pointer — UNLESS the binding is a
+                // `ref T` parameter, in which case the slot holds a
+                // pointer-to-struct (the caller's struct) and we need
+                // to dereference once to get to the struct, same shape
+                // as the shared-struct case. Without the deref, the
+                // GEP indexes into the alloca slot's first 8 bytes
+                // (which hold the pointer value) and reads junk past
+                // it — surfaces as a silent runtime segfault when the
+                // field's read kernel touches the resulting garbage
+                // (e.g. `karac_clone_String` dereferencing a bad
+                // `{ptr, len, cap}` triple). Bug from the helper-fn
+                // Json kata gap surfaced 2026-05-22.
                 let is_shared = self.shared_types.contains_key(&type_name);
-                let recv_ptr = if is_shared {
+                let is_ref_param = self.ref_params.contains_key(outer_name.as_str());
+                let recv_ptr = if is_shared || is_ref_param {
                     let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                    let load_name = if is_shared {
+                        "fr.shared.handle"
+                    } else {
+                        "fr.ref.deref"
+                    };
                     self.builder
-                        .build_load(ptr_ty, slot.ptr, "fr.shared.handle")
+                        .build_load(ptr_ty, slot.ptr, load_name)
                         .unwrap()
                         .into_pointer_value()
                 } else {

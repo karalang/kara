@@ -20567,6 +20567,44 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_field_receiver_method_through_ref_param() {
+        // `t.title.clone()` where `t: ref Todo` — codegen's
+        // field-receiver method dispatch in `calls.rs` was using
+        // `slot.ptr` directly as the GEP base for plain (non-shared)
+        // structs. For `ref T` parameters, `slot.ptr` is an alloca
+        // holding a pointer to the struct, not the struct itself, so
+        // the GEP read past the slot's 8-byte pointer into junk. The
+        // resulting bad String triple was then passed to
+        // `karac_clone_String`, which dereferenced it and segfaulted
+        // silently. Fix dereferences the ref-param slot before the
+        // GEP, mirroring the shared-struct handle pattern.
+        //
+        // Surfaced by the backend TODO API kata Slice 4 helper
+        // `todo_to_json(t: ref Todo) -> Json` that embeds
+        // `Json.String(t.title.clone())` in a returned Json.Object.
+        let output = run_program(
+            "struct Todo { id: i64, title: String, completed: bool }\n\
+             fn todo_to_json(t: ref Todo) -> Json {\n\
+                 let mut fields: Vec[(String, Json)] = Vec.new();\n\
+                 fields.push((\"id\", Json.Number(t.id as f64)));\n\
+                 fields.push((\"title\", Json.String(t.title.clone())));\n\
+                 fields.push((\"completed\", Json.Bool(t.completed)));\n\
+                 Json.Object(fields)\n\
+             }\n\
+             fn main() {\n\
+                 let t: Todo = Todo { id: 42, title: \"Learn Kara\", completed: true };\n\
+                 let j: Json = todo_to_json(t);\n\
+                 println(j.stringify());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(
+            output,
+            "{\"id\":42.0,\"title\":\"Learn Kara\",\"completed\":true}\n"
+        );
+    }
+
+    #[test]
     fn test_e2e_vec_prefix_literal_basic() {
         // `Vec[a, b, c]` at expression position now lowers via
         // `compile_vec_prefix_literal` — malloc + per-slot store +
