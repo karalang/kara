@@ -289,6 +289,9 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.compile_struct_init(name, fields)
             }
             ExprKind::ArrayLiteral(elems) => self.compile_array_literal(elems),
+            ExprKind::PrefixCollectionLiteral { type_name, items } if type_name == "Vec" => {
+                self.compile_vec_prefix_literal(items)
+            }
             ExprKind::RepeatLiteral {
                 type_name,
                 value,

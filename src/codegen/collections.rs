@@ -402,6 +402,124 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(agg.into())
     }
 
+    /// Compile a `Vec[a, b, c]` prefix literal at expression position.
+    /// Empty `Vec[]` returns the canonical `{null, 0, 0}` aggregate
+    /// (matches the `Vec.new()` shape and lets the typechecker's
+    /// expected-type carrier supply T). Non-empty: malloc a buffer of
+    /// `items.len() * sizeof(elem)`, store each compiled item into its
+    /// slot, return `{buf, len, len}` (cap equals len at construction —
+    /// subsequent pushes trigger grow when the (n+1)-th lands). The
+    /// element LLVM type is recovered from the first compiled item;
+    /// downstream `.push` / `.len` / `.remove` etc. all dispatch
+    /// through the same `{ptr, len, cap}` shape `Vec.new()` /
+    /// `Vec.with_capacity` produce.
+    ///
+    /// Surfaced as a v1 codegen gap by the backend TODO API kata
+    /// Slice 4: `compile_expr` had no `ExprKind::PrefixCollectionLiteral`
+    /// arm, so `Json.Array(Vec[a, b])` and even `let xs: Vec[i64] =
+    /// Vec[1, 2, 3];` fell through to `i64 0` at exprs.rs:345.
+    pub(super) fn compile_vec_prefix_literal(
+        &mut self,
+        items: &[Expr],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let vec_ty = self.vec_struct_type();
+
+        if items.is_empty() {
+            // Empty literal → `{null, 0, 0}` aggregate. Matches the
+            // runtime invariant the `Vec.new()` arm produces (and which
+            // the slice-a Vec.new() module-init codegen at `d92f3da`
+            // emits as `zeroinitializer`). No heap allocation needed.
+            let null_ptr = ptr_ty.const_null();
+            let zero = i64_t.const_int(0, false);
+            let mut agg = vec_ty.get_undef();
+            agg = self
+                .builder
+                .build_insert_value(agg, null_ptr, 0, "vec.lit.empty.data")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 1, "vec.lit.empty.len")
+                .unwrap()
+                .into_struct_value();
+            agg = self
+                .builder
+                .build_insert_value(agg, zero, 2, "vec.lit.empty.cap")
+                .unwrap()
+                .into_struct_value();
+            return Ok(agg.into());
+        }
+
+        // Compile every item up front so we can recover the LLVM
+        // element type from the first one. The compiled vals stay in
+        // SSA form; we store each into the heap buffer below. (Each
+        // compile_expr call may emit side-effecting IR — e.g.
+        // `String.clone()` allocates — so the order matters; we
+        // preserve source order.)
+        let vals: Vec<BasicValueEnum<'ctx>> = items
+            .iter()
+            .map(|e| self.compile_expr(e))
+            .collect::<Result<_, _>>()?;
+        let elem_ty = vals[0].get_type();
+        let n_const = i64_t.const_int(items.len() as u64, false);
+
+        // malloc(items.len() * sizeof(elem)). LLVM accepts a constant
+        // size here so the runtime allocator can fast-path the request,
+        // but the IR-shape stays identical to `Vec.with_capacity` /
+        // `Vec.filled` for codegen uniformity.
+        let elem_size = elem_ty.size_of().unwrap();
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(n_const, elem_size, "vec.lit.alloc_bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "vec.lit.buf")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        // Store each item at its source-order slot via GEP. Bit-copy
+        // semantics — for aggregate element types (Vec[Vec[T]], etc.)
+        // the per-slot store aliases the source's storage. Same
+        // limitation `Vec.filled` documents; nested-collection
+        // element types route through the existing track_vec_var
+        // machinery at the consuming binding site.
+        for (i, val) in vals.iter().enumerate() {
+            let idx = i64_t.const_int(i as u64, false);
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(elem_ty, buf, &[idx], &format!("vec.lit.elem.{}.ptr", i))
+                    .unwrap()
+            };
+            self.builder.build_store(elem_ptr, *val).unwrap();
+        }
+
+        // Build {data=buf, len=n, cap=n} aggregate. Cap equals len so
+        // the first subsequent push triggers grow; matches Vec.filled's
+        // shape.
+        let mut agg = vec_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, buf, 0, "vec.lit.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n_const, 1, "vec.lit.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n_const, 2, "vec.lit.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
+    }
+
     /// Let-binding fast path for `let buf: Array[T, N] = [zero; N]`.
     /// Returns `Some(Ok(()))` on success, `None` if the RHS doesn't match
     /// the literal-zero repeat pattern (caller falls through to the

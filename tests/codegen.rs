@@ -20567,6 +20567,64 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_prefix_literal_basic() {
+        // `Vec[a, b, c]` at expression position now lowers via
+        // `compile_vec_prefix_literal` — malloc + per-slot store +
+        // `{buf, n, n}` return. Previously fell through to `i64 0`
+        // because `ExprKind::PrefixCollectionLiteral` had no arm in
+        // `compile_expr`. Surfaced building the backend TODO API
+        // kata Slice 4.
+        let output = run_program(
+            "fn main() {\n\
+                 let xs: Vec[i64] = Vec[10, 20, 30];\n\
+                 println(xs.len());\n\
+                 println(xs[0]);\n\
+                 println(xs[1]);\n\
+                 println(xs[2]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3\n10\n20\n30\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_prefix_literal_as_enum_payload() {
+        // The original kata-surfaced shape: `Json.Array(Vec[a, b])`.
+        // Pre-fix: rendered as `[]` because the literal evaluated
+        // to a null Vec inside the variant payload. Post-fix: the
+        // payload's Vec carries its elements, `stringify()` walks
+        // them, output matches the expected JSON.
+        let output = run_program(
+            "fn main() {\n\
+                 let arr: Json = Json.Array(Vec[Json.Number(1.0), Json.Number(2.0)]);\n\
+                 println(arr.stringify());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "[1.0,2.0]\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_prefix_literal_push_after() {
+        // The cap-equals-len shape means the first subsequent push
+        // triggers grow. Verify the Vec is fully functional after
+        // construction via the literal — push, len, indexed read all
+        // continue to work uniformly with how Vec.new + push behaves.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[i64] = Vec[1, 2];\n\
+                 xs.push(3);\n\
+                 xs.push(4);\n\
+                 println(xs.len());\n\
+                 println(xs[2]);\n\
+                 println(xs[3]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "4\n3\n4\n");
+    }
+
+    #[test]
     fn test_e2e_enum_payload_bool_narrowing() {
         // `match Json.Bool(b) => b` from a function returning `bool` —
         // the variant-payload word is i64 in the word stream but the
