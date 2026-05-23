@@ -20483,6 +20483,90 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_remove_local() {
+        // `Vec.remove(idx)` on a local: returns the removed element,
+        // shifts the tail down by one, decrements len. v1 contract is
+        // unchecked (UB on OOB) — the test pins an in-bounds case.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(10);\n\
+                 xs.push(20);\n\
+                 xs.push(30);\n\
+                 let removed: i64 = xs.remove(1);\n\
+                 println(removed);\n\
+                 println(xs.len());\n\
+                 println(xs[0]);\n\
+                 println(xs[1]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "20\n2\n10\n30\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_remove_modbind() {
+        // Same as the local-Vec test but on a module-bound Vec —
+        // confirms the slice-b module-binding sibling dispatch in
+        // `compile_method_call` routes `remove` correctly through
+        // the same `compile_vec_method` arm.
+        let output = run_program(
+            "let mut XS: Vec[i64] = Vec.new();\n\
+             fn main() {\n\
+                 XS.push(10);\n\
+                 XS.push(20);\n\
+                 XS.push(30);\n\
+                 let removed: i64 = XS.remove(1);\n\
+                 println(removed);\n\
+                 println(XS.len());\n\
+                 println(XS[0]);\n\
+                 println(XS[1]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "20\n2\n10\n30\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_remove_first() {
+        // Remove the head — should memmove the entire tail down.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(1);\n\
+                 xs.push(2);\n\
+                 xs.push(3);\n\
+                 let _ = xs.remove(0);\n\
+                 println(xs[0]);\n\
+                 println(xs[1]);\n\
+                 println(xs.len());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "2\n3\n2\n");
+    }
+
+    #[test]
+    fn test_e2e_vec_remove_last() {
+        // Remove the last element — memmove count should be 0,
+        // len decrements, the previous element becomes the last.
+        let output = run_program(
+            "fn main() {\n\
+                 let mut xs: Vec[i64] = Vec.new();\n\
+                 xs.push(7);\n\
+                 xs.push(8);\n\
+                 xs.push(9);\n\
+                 let _ = xs.remove(2);\n\
+                 println(xs.len());\n\
+                 println(xs[0]);\n\
+                 println(xs[1]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "2\n7\n8\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_vec_indexed_read() {
         // Indexed read on a module-bound Vec — uses the slice-10
         // collections.rs module-binding fall-back at `compile_index`,

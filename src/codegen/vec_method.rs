@@ -534,6 +534,80 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            // `Vec.remove(idx) -> T` — remove the element at `idx`,
+            // shift the tail down by one, return the removed value.
+            // Mirrors the `pop_front` shape (load + memmove + len--)
+            // but at an arbitrary index. v1 matches Rust's contract:
+            // out-of-bounds idx is UB — no bounds check, no graceful
+            // Option. Callers ensure idx < len.
+            "remove" => {
+                if args.is_empty() {
+                    return Err("Vec.remove requires an index argument".to_string());
+                }
+                let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "remove.len.ptr")
+                    .unwrap();
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "remove.data.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "remove.len")
+                    .unwrap()
+                    .into_int_value();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "remove.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let one = i64_t.const_int(1, false);
+
+                // Load the element being removed (becomes the return value).
+                let elem_ptr = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[idx_val], "remove.elem.ptr")
+                        .unwrap()
+                };
+                let elem_val = self
+                    .builder
+                    .build_load(elem_ty, elem_ptr, "remove.elem")
+                    .unwrap();
+
+                // memmove(data + idx, data + idx + 1, (len - 1 - idx) * sizeof(elem))
+                let new_len = self
+                    .builder
+                    .build_int_sub(len, one, "remove.new_len")
+                    .unwrap();
+                let tail_count = self
+                    .builder
+                    .build_int_sub(new_len, idx_val, "remove.tail_count")
+                    .unwrap();
+                let elem_size = elem_ty.size_of().unwrap();
+                let tail_bytes = self
+                    .builder
+                    .build_int_mul(tail_count, elem_size, "remove.tail_bytes")
+                    .unwrap();
+                let next_idx = self
+                    .builder
+                    .build_int_add(idx_val, one, "remove.next_idx")
+                    .unwrap();
+                let src = unsafe {
+                    self.builder
+                        .build_gep(elem_ty, data, &[next_idx], "remove.shift.src")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memmove(elem_ptr, 8, src, 8, tail_bytes)
+                    .unwrap();
+
+                // Decrement len.
+                self.builder.build_store(len_ptr, new_len).unwrap();
+
+                Ok(elem_val)
+            }
             // `Vec.pop` / `VecDeque.pop_back` / `VecDeque.pop_front` —
             // return `Option[T]` per design.md. None when empty;
             // Some(elem) when non-empty. Multi-word payload via

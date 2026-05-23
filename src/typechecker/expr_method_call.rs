@@ -1184,6 +1184,43 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec[T].remove(idx: i64) -> T` — remove the element at `idx`,
+        // shift the tail down by one, return the removed value. v1
+        // matches Rust's contract: idx out-of-bounds is UB (no bounds
+        // check, no graceful Option). Callers ensure idx < len (the
+        // backend TODO API kata's DELETE handler at
+        // `kara-katas/backend/todo-api/main.kara` finds the index via
+        // `find_index_by_id` first, then removes — the index is
+        // known-good at the call). Mirrors the pop_front shape but
+        // at an arbitrary index instead of 0.
+        if method == "remove" && args.len() == 1 {
+            let element_ty = match &obj_ty {
+                Type::Named { name, args }
+                    if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                {
+                    Some(args[0].clone())
+                }
+                Type::Ref(inner) | Type::MutRef(inner) => match inner.as_ref() {
+                    Type::Named { name, args }
+                        if (name == "Vec" || name == "VecDeque") && args.len() == 1 =>
+                    {
+                        Some(args[0].clone())
+                    }
+                    _ => None,
+                },
+                _ => None,
+            };
+            if let Some(elem) = element_ty {
+                let arg_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(
+                    &Type::Int(IntSize::I64),
+                    &arg_ty,
+                    args[0].value.span.clone(),
+                );
+                return resolve_type_var_top(&elem, &self.env.substitutions);
+            }
+        }
+
         // `Vec[T].get_unchecked(i: i64) -> T` — unsafe direct-index read.
         // Skips the bounds check that `vec[i]` and `Vec.get(i)` emit; UB on
         // out-of-range index. Must be called inside `unsafe { ... }`; the
