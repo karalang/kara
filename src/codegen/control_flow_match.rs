@@ -625,6 +625,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 .first()
                 .copied()
                 .unwrap_or_else(|| i64_t.const_int(0, false));
+            // Bool-payload narrowing: variant payload words are i64
+            // in the word stream, but a `Json.Bool(b) => b` arm binding
+            // `b: bool` needs the value as i1 to match the function
+            // return type / downstream bool semantics. The typechecker
+            // records `"bool"` in `pattern_binding_types` for these
+            // sites; without the trunc, the LLVM verifier rejects
+            // `ret i64 %b` from a `fn -> bool`.
+            let key = (sub_pat.span.offset, sub_pat.span.length);
+            if matches!(
+                self.pattern_binding_types.get(&key).map(|s| s.as_str()),
+                Some("bool")
+            ) {
+                let bool_ty = self.context.bool_type();
+                let narrowed = self
+                    .builder
+                    .build_int_truncate(w, bool_ty, "pat.bool.tr")
+                    .unwrap();
+                return Ok(narrowed.into());
+            }
             return Ok(w.into());
         }
         // Tuple-typed binding (e.g. `Some(node)` where node: (i64, i64)):

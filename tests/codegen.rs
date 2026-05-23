@@ -20567,6 +20567,32 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_enum_payload_bool_narrowing() {
+        // `match Json.Bool(b) => b` from a function returning `bool` —
+        // the variant-payload word is i64 in the word stream but the
+        // binding's surface type is bool, so codegen needs to insert a
+        // `trunc i64 → i1` before binding. Without this, the LLVM
+        // verifier rejects `ret i64 0` from a `fn -> bool` arm body.
+        // Surfaced by the backend TODO API kata's `extract_completed`
+        // helper at `kara-katas/backend/todo-api/main.kara`.
+        let output = run_program(
+            "fn extract(j: Json) -> bool {\n\
+                 match j {\n\
+                     Json.Bool(b) => b,\n\
+                     _ => false,\n\
+                 }\n\
+             }\n\
+             fn main() {\n\
+                 println(extract(Json.Bool(true)));\n\
+                 println(extract(Json.Bool(false)));\n\
+                 println(extract(Json.Number(42.0)));\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "true\nfalse\nfalse\n");
+    }
+
+    #[test]
     fn test_e2e_modbind_vec_indexed_read() {
         // Indexed read on a module-bound Vec — uses the slice-10
         // collections.rs module-binding fall-back at `compile_index`,

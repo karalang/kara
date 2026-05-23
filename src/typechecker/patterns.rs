@@ -389,6 +389,12 @@ impl<'a> super::TypeChecker<'a> {
                 } else if let Type::Shared(type_name) = expected {
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                } else if matches!(expected, Type::Bool) {
+                    // Match-arm parallel to the `bind_pattern_types` bool
+                    // case — see that site for the trunc-narrowing
+                    // motivation.
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
                 }
                 // PB sibling slice (2026-05-09): mirror
                 // `bind_pattern_types`'s sibling-table write so direct
@@ -931,6 +937,17 @@ impl<'a> super::TypeChecker<'a> {
                     // bound shared-struct handle.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_name.clone());
+                } else if matches!(ty, Type::Bool) {
+                    // Enum-payload bool extraction (e.g. `Json.Bool(b) => b`):
+                    // the variant payload word is i64 in the word stream
+                    // but the binding's surface type is bool (i1). Without
+                    // this record, `reconstruct_payload_value` returns the
+                    // i64 word as-is and the function return path trips
+                    // the LLVM verifier ("ret i64 / expected i1"). Codegen
+                    // sees "bool" and inserts a `trunc i64 → i1` before
+                    // creating the binding's alloca.
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
                 }
                 // PB sibling slice (2026-05-09): record the inner element
                 // type for `Vec[T]` / `Slice[T]` bindings so codegen can
