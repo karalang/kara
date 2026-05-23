@@ -405,6 +405,33 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec.filled(n: i64, val: T) -> Vec[T]` — produces n copies of
+        // `val`. Codegen lives at src/codegen/assoc_call.rs:911 (malloc +
+        // fill-loop emitting the {data, len=n, cap=n} aggregate). Joins
+        // the `Vec.new` / `Vec.with_capacity` family for the same reason
+        // those are here — the `resolve_path_type` rejection of unknown
+        // `Type.method(...)` calls would otherwise bail out at typecheck
+        // before codegen can claim it. Unlike `Vec.with_capacity` we know
+        // the element type directly from `val`'s inferred type, so no
+        // fresh typevar / downstream-push pinning is needed.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Vec"
+                && segments[1] == "filled"
+                && args.len() == 2
+            {
+                let n_ty = self.infer_expr(&args[0].value);
+                self.check_assignable(&Type::Int(IntSize::I64), &n_ty, args[0].value.span.clone());
+                let elem_ty = self.infer_expr(&args[1].value);
+                let ty = Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem_ty],
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `Vec.with_capacity(n)` — pairs with the `Vec.new()` arm above.
         // Same fresh-typevar return so an untyped `let mut v =
         // Vec.with_capacity(8); v.push(x);` can pin `?T` from the
