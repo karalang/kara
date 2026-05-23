@@ -20415,6 +20415,47 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_ir_modbind_vec_new_emits_empty_aggregate() {
+        // `Vec.new()` at module scope lowers to the canonical empty-Vec
+        // `{ptr null, i64 0, i64 0}` aggregate matching the runtime
+        // invariant in `assoc_call.rs`'s shared `Vec/VecDeque && method
+        // == "new"` arm. LLVM prints an all-zero aggregate as
+        // `zeroinitializer` rather than the expanded field list, which
+        // is what we assert against. Mutable form → `internal global`;
+        // immutable form → `internal constant`.
+        let ir = ir_for(
+            "let mut TODOS: Vec[i64] = Vec.new();\n\
+             let EMPTY: Vec[i64] = Vec.new();\n\
+             fn main() {}",
+        );
+        assert!(
+            ir.contains("@TODOS = internal global { ptr, i64, i64 } zeroinitializer"),
+            "expected @TODOS Vec global as zeroinitializer, got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("@EMPTY = internal constant { ptr, i64, i64 } zeroinitializer"),
+            "expected @EMPTY Vec constant as zeroinitializer, got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_modbind_vecdeque_new_emits_empty_aggregate() {
+        // `VecDeque.new()` shares Vec's `{ptr, len, cap}` layout per
+        // `assoc_call.rs`; same const-init lowering applies.
+        let ir = ir_for(
+            "let mut QUEUE: VecDeque[i64] = VecDeque.new();\n\
+             fn main() {}",
+        );
+        assert!(
+            ir.contains("@QUEUE = internal global { ptr, i64, i64 } zeroinitializer"),
+            "expected @QUEUE VecDeque global as zeroinitializer, got:\n{}",
+            ir
+        );
+    }
+
     // ── Slice 10: composite-initializer codegen (design.md §1280-1297) ─
     //
     // Module-level `let X: T = INIT;` where INIT is a struct literal,

@@ -1497,6 +1497,14 @@ impl<'a> super::TypeChecker<'a> {
             // compile-time bindings only.
             "LazyLock" => args.len() == 1 && matches!(args[0].value.kind, ExprKind::Closure { .. }),
             "OnceLock" | "OnceCell" => args.is_empty(),
+            // `Vec.new()` / `VecDeque.new()` lower to the canonical empty
+            // `{ptr=null, len=0, cap=0}` aggregate at codegen — see
+            // `assoc_call.rs`'s shared `Vec/VecDeque && method == "new"` arm,
+            // and `module_bindings.rs`'s matching const-init lowering. The
+            // null-ptr-cap-0 representation is the runtime invariant for
+            // empty Vec, so no heap allocation is needed and the value is
+            // a true compile-time constant.
+            "Vec" | "VecDeque" => args.is_empty(),
             // Atomic.new / Mutex.new take a single argument that must
             // itself be a permitted constant-init form.
             "Atomic" | "Mutex" => {
@@ -1520,7 +1528,8 @@ impl<'a> super::TypeChecker<'a> {
                  over permitted forms, struct / enum-variant constructors over \
                  permitted forms, tuple and fixed-size 'Array' literals, and the \
                  recognized special forms 'LazyLock.new(|| ...)', 'OnceLock.new()', \
-                 'OnceCell.new()', 'Atomic.new(LITERAL)', 'Mutex.new(LITERAL)'",
+                 'OnceCell.new()', 'Atomic.new(LITERAL)', 'Mutex.new(LITERAL)', \
+                 'Vec.new()', 'VecDeque.new()'",
                 binding_name, what,
             ),
             e.span.clone(),

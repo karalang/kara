@@ -18242,12 +18242,30 @@ fn test_module_binding_method_call_init_rejected() {
 }
 
 #[test]
-fn test_module_binding_vec_new_init_rejected() {
-    let errs = typecheck_errors("let mut TODOS: Vec[i64] = Vec.new();");
+fn test_module_binding_vec_new_init_accepted() {
+    // `Vec.new()` / `VecDeque.new()` are permitted constant-init special
+    // forms at module scope — the empty-Vec runtime invariant is the
+    // `{ptr=null, len=0, cap=0}` aggregate, a true compile-time constant
+    // (see `src/codegen/module_bindings.rs::modbind_empty_vec_const`).
+    // Mirrors the existing `Atomic.new(LIT)` / `OnceLock.new()` positive
+    // surface.
+    typecheck_ok("let mut TODOS: Vec[i64] = Vec.new();");
+    typecheck_ok("let mut QUEUE: VecDeque[i64] = VecDeque.new();");
+    // Immutable form also accepted (slice 5's mutability check is
+    // orthogonal to the init shape).
+    typecheck_ok("let EMPTY: Vec[i64] = Vec.new();");
+}
+
+#[test]
+fn test_module_binding_vec_new_with_args_rejected() {
+    // `Vec.new(...)` with any argument is not a recognized constant-init
+    // form (the zero-arg shape is the only permitted entry; non-empty
+    // forms like `Vec.with_capacity(n)` allocate at runtime).
+    let errs = typecheck_errors("let mut TODOS: Vec[i64] = Vec.new(1);");
     assert!(
         errs.iter()
             .any(|e| matches!(e.kind, TypeErrorKind::ModuleBindingEffectfulInit)),
-        "expected ModuleBindingEffectfulInit, got: {:?}",
+        "expected ModuleBindingEffectfulInit for non-empty Vec.new(...), got: {:?}",
         errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
 }

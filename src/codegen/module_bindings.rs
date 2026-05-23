@@ -33,10 +33,16 @@
 //!   construction; payload variants are deferred to a follow-up
 //!   because their word-stream encoding requires builder ops that
 //!   const-init can't run (slice 10).
+//! - `Vec.new()` / `VecDeque.new()` zero-arg calls — emitted as the
+//!   canonical `{ptr=null, len=0, cap=0}` aggregate matching the
+//!   runtime invariant from `assoc_call.rs`'s shared `Vec/VecDeque
+//!   && method == "new"` arm. The empty-Vec representation is a
+//!   true compile-time constant; no heap allocation is required
+//!   until the first `push` at runtime.
 //!
 //! Deferred (slice 10 documents the position):
 //!
-//! - Compiler-recognised special forms (`LazyLock.new(…)`,
+//! - Compiler-recognised wrapper special forms (`LazyLock.new(…)`,
 //!   `OnceLock.new()`, `OnceCell.new()`, `Atomic.new(LITERAL)`,
 //!   `Mutex.new(LITERAL)`) — wait on the wrapper-type entries (each
 //!   primitive's own codegen surface lands its const-init lowering).
@@ -242,8 +248,45 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.modbind_struct_const(name, fields)
             }
             ExprKind::Path { segments, .. } => self.modbind_enum_unit_variant_const(segments),
+            // `Vec.new()` / `VecDeque.new()` — runtime invariant is the
+            // `{ptr=null, len=0, cap=0}` aggregate (see `assoc_call.rs`'s
+            // shared `Vec/VecDeque && method == "new"` arm); emit the
+            // matching LLVM const struct as the global's initializer. No
+            // heap allocation is needed and the value is a true
+            // compile-time constant. The typechecker accepts this shape
+            // via the same-named arm in
+            // `module_binding_call_is_special_form`.
+            ExprKind::Call { callee, args } if args.is_empty() => {
+                self.modbind_empty_vec_const(callee)
+            }
             _ => None,
         }
+    }
+
+    /// Recognise `Vec.new()` / `VecDeque.new()` in the call-callee
+    /// position and emit the canonical empty-Vec `{null, 0, 0}` const
+    /// struct. Returns `None` for any other callee shape so unrelated
+    /// zero-arg calls fall through to the outer `_ => None` rejection.
+    fn modbind_empty_vec_const(
+        &self,
+        callee: &Expr,
+    ) -> Option<(BasicTypeEnum<'ctx>, BasicValueEnum<'ctx>)> {
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 || segments[1] != "new" {
+            return None;
+        }
+        if segments[0] != "Vec" && segments[0] != "VecDeque" {
+            return None;
+        }
+        let vec_ty = self.vec_struct_type();
+        let null_ptr = self.context.ptr_type(AddressSpace::default()).const_null();
+        let zero = self.context.i64_type().const_int(0, false);
+        let agg = self
+            .context
+            .const_struct(&[null_ptr.into(), zero.into(), zero.into()], false);
+        Some((vec_ty.into(), agg.into()))
     }
 
     /// Tuple → anonymous LLVM struct constant. Each element is
