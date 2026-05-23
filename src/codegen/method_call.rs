@@ -508,6 +508,35 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // Module-binding receivers dispatch through the same Vec / Map / Set
+        // codegen paths as local Vec / Map / Set variables — the slice-10
+        // `reseed_module_binding_side_tables` registers `vec_elem_types` /
+        // `map_key_types` / `set_elem_types` for each module binding, and
+        // `get_data_ptr` falls back to the binding's global pointer when
+        // the name isn't a local. The typechecker's
+        // `path_call_method_dispatch` rewrite + the lowering pass already
+        // converted the `Call(Path([X, method]))` shape to `MethodCall(X,
+        // method)` for value-binding receivers, so the receiver-shape
+        // routing here is uniform with the local-variable case.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if !self.variables.contains_key(name.as_str())
+                && self.module_bindings.contains_key(name.as_str())
+            {
+                if self.vec_elem_types.contains_key(name.as_str()) {
+                    let data_ptr = self.get_data_ptr(name).unwrap();
+                    return self.compile_vec_method(name, data_ptr, method, args);
+                }
+                if self.map_key_types.contains_key(name.as_str()) {
+                    let name = name.clone();
+                    return self.compile_map_method(&name, method, args);
+                }
+                if self.set_elem_types.contains_key(name.as_str()) {
+                    let name = name.clone();
+                    return self.compile_set_method(&name, method, args);
+                }
+            }
+        }
+
         if let ExprKind::Identifier(name) = &object.kind {
             if let Some(slot) = self.variables.get(name.as_str()).copied() {
                 // Array methods (owned — slot.ty is ArrayType)

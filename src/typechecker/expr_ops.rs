@@ -385,6 +385,25 @@ impl<'a> super::TypeChecker<'a> {
             || crate::prelude::PRELUDE_TYPES.contains(&name)
     }
 
+    /// Predicate for the uppercase-receiver method-dispatch rewrite in
+    /// `infer_call`. Returns true when the first segment of a
+    /// `Path([X, method])` callee resolves as a value binding rather
+    /// than a Type-class root. Locals shadow types by Kara design
+    /// (the resolver's scope rule), so the `local_scope` lookup wins
+    /// against any same-named type unconditionally; module-level
+    /// bindings and `const` declarations live in `env.constants` and
+    /// participate when there is no same-named known type (the latter
+    /// guard preserves the existing `Vec.new()` / `String.from(...)`
+    /// associated-call dispatch). The shape `Vec[i64].new()` carries
+    /// `generic_args: Some(...)` so it routes through the UFCS path,
+    /// not this one; same for longer paths (`module.Sub.fn()`).
+    pub(super) fn path_first_segment_is_value_binding(&self, name: &str) -> bool {
+        if self.local_scope.lookup(name).is_some() {
+            return true;
+        }
+        self.env.constants.contains_key(name) && !self.is_known_type_name(name)
+    }
+
     // ── Binary / Unary Operators ────────────────────────────────
 
     pub(super) fn infer_binary(

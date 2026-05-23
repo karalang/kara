@@ -353,11 +353,56 @@ impl<'a> Lowerer<'a> {
             } => self
                 .rewrite_into_call(object, method, args, &expr.span)
                 .or_else(|| self.rewrite_try_into_call(object, method, args, &expr.span)),
-            ExprKind::Call { callee, args } => {
-                self.rewrite_bare_assoc_fn_call(callee, args, &expr.span)
-            }
+            ExprKind::Call { callee, args } => self
+                .rewrite_path_call_to_method_call(callee, args, &expr.span)
+                .or_else(|| self.rewrite_bare_assoc_fn_call(callee, args, &expr.span)),
             _ => None,
         }
+    }
+
+    /// Rewrite `Call(Path([X, method]), args)` to
+    /// `MethodCall { object: Identifier(X), method, args }` when the
+    /// typechecker flagged the call span in `path_call_method_dispatch`.
+    /// The parser produces the `Call(Path)` shape for any uppercase-leading
+    /// `X.method(args)` (see `src/parser/exprs.rs` 1298–1326); the
+    /// typechecker disambiguates against the env in `infer_call`'s
+    /// dispatch and routes value-binding receivers through
+    /// `infer_method_call`. This rewrite collapses the AST node to the
+    /// MethodCall shape downstream phases already handle, so codegen's
+    /// `compile_assoc_call` (which would otherwise try to dispatch
+    /// `X.method` as a Type-associated call and fall back to `const 0`)
+    /// never sees the value-binding case. Tried before
+    /// `rewrite_bare_assoc_fn_call` so the two patterns don't conflict
+    /// for shapes that the typechecker decided are method calls.
+    fn rewrite_path_call_to_method_call(
+        &self,
+        callee: &Expr,
+        args: &[CallArg],
+        span: &Span,
+    ) -> Option<ExprKind> {
+        if !self
+            .tc
+            .path_call_method_dispatch
+            .contains(&SpanKey::from_span(span))
+        {
+            return None;
+        }
+        let ExprKind::Path { segments, .. } = &callee.kind else {
+            return None;
+        };
+        if segments.len() != 2 {
+            return None;
+        }
+        let object = Box::new(Expr {
+            span: callee.span.clone(),
+            kind: ExprKind::Identifier(segments[0].clone()),
+        });
+        Some(ExprKind::MethodCall {
+            object,
+            method: segments[1].clone(),
+            turbofish: None,
+            args: args.to_vec(),
+        })
     }
 
     /// Rewrite a bare-identifier associated-function call (`name(args)`) to

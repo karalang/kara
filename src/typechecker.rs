@@ -742,6 +742,20 @@ pub struct TypeCheckResult {
     /// interpreter / codegen dispatches via the existing impl table without
     /// further special-casing.
     pub bare_assoc_fn_targets: HashMap<SpanKey, String>,
+    /// Call-expression spans for `Call(Path([X, method]))` shapes the
+    /// typechecker dispatched as method calls on a value binding (local-scope
+    /// or module-binding/const). The parser greedily wraps `X.method(args)`
+    /// in `Call(Path)` when `X` starts uppercase (see `src/parser/exprs.rs`
+    /// 1298–1326's "Type/Const-class idents root a path here" rule); the
+    /// parser cannot tell at parse time whether the leading segment is a
+    /// type or a value, so the typechecker disambiguates against the env
+    /// and re-routes through `infer_method_call` when it resolves as a
+    /// value. Lowering consults this set and rewrites the AST node to
+    /// `MethodCall(Identifier(X), method, args)` so downstream phases
+    /// (effect, ownership, codegen) see the uniform method-call shape and
+    /// don't need their own type-or-value disambiguation. Keyed by the
+    /// `Call` expression's span.
+    pub path_call_method_dispatch: HashSet<SpanKey>,
     /// Per-call-site generic-param substitutions: call-expression span → name
     /// → resolved type name. Concrete entries (`"Wrapper"`) come from the
     /// typechecker's solver; abstract entries (`"T"`) propagate the caller's
@@ -950,6 +964,10 @@ pub struct TypeChecker<'a> {
     /// these to `Target.name(args)` so the interpreter / codegen can dispatch
     /// through the existing `Type.method` impl table.
     pub(super) bare_assoc_fn_targets: HashMap<SpanKey, String>,
+    /// Call-expression spans rewritten from `Call(Path([X, method]))` to
+    /// method-call semantics when `X` resolves to a value binding. See the
+    /// public copy on `TypeCheckResult` for the consumer doc.
+    pub(super) path_call_method_dispatch: HashSet<SpanKey>,
     /// Per-call-site type substitutions: call-expression span → name → resolved
     /// type name (concrete struct/enum, or another generic param if the caller
     /// is itself generic and propagates the binding). Populated by `infer_call`
@@ -1097,6 +1115,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_captures: HashMap::new(),
             method_unwrap_inner_types: HashMap::new(),
             bare_assoc_fn_targets: HashMap::new(),
+            path_call_method_dispatch: HashSet::new(),
             call_type_subs: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
@@ -1204,6 +1223,7 @@ impl<'a> TypeChecker<'a> {
             impl_trait_captures: self.impl_trait_captures,
             method_unwrap_inner_types: self.method_unwrap_inner_types,
             bare_assoc_fn_targets: self.bare_assoc_fn_targets,
+            path_call_method_dispatch: self.path_call_method_dispatch,
             call_type_subs: self.call_type_subs,
             pattern_binding_types: self.pattern_binding_types,
             pattern_binding_inner_types: self.pattern_binding_inner_types,

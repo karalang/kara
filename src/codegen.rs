@@ -2599,21 +2599,33 @@ impl<'ctx> Codegen<'ctx> {
     /// For a variable that may be a ref param, return a pointer to the underlying data.
     /// Owned: returns the alloca directly (alloca holds the struct).
     /// Ref: loads the pointer from alloca then returns it (pointer to the caller's struct).
+    /// Module binding: returns the global's pointer (the global IS the storage,
+    /// equivalent to an owned alloca for dispatch-shape purposes — used by the
+    /// Vec/Map/Set method-call paths to dispatch on a global like `TODOS`).
     fn get_data_ptr(&self, name: &str) -> Option<PointerValue<'ctx>> {
-        let slot = self.variables.get(name)?;
-        if self.ref_params.contains_key(name) {
-            // Ref param: alloca holds a ptr → load it.
-            let ptr_ty = self.context.ptr_type(AddressSpace::default());
-            Some(
-                self.builder
-                    .build_load(ptr_ty, slot.ptr, &format!("{}.ref.ptr", name))
-                    .unwrap()
-                    .into_pointer_value(),
-            )
-        } else {
+        if let Some(slot) = self.variables.get(name) {
+            if self.ref_params.contains_key(name) {
+                // Ref param: alloca holds a ptr → load it.
+                let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                return Some(
+                    self.builder
+                        .build_load(ptr_ty, slot.ptr, &format!("{}.ref.ptr", name))
+                        .unwrap()
+                        .into_pointer_value(),
+                );
+            }
             // Owned: alloca IS the struct pointer.
-            Some(slot.ptr)
+            return Some(slot.ptr);
         }
+        // Module-binding fall-back. The global's pointer is the data
+        // pointer — the slice-10 codegen surface registers
+        // `vec_elem_types` / `map_key_types` / etc. for module bindings
+        // via `reseed_module_binding_side_tables`, so the dispatch
+        // tables key correctly on the binding's name; this helper
+        // supplies the matching data-pointer.
+        self.module_bindings
+            .get(name)
+            .map(|info| info.global.as_pointer_value())
     }
 
     fn create_entry_alloca(

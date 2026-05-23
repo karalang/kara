@@ -18271,6 +18271,102 @@ fn test_module_binding_vec_new_with_args_rejected() {
 }
 
 #[test]
+fn test_uppercase_local_method_dispatch() {
+    // Uppercase locals route through the parser's eager Path-consumption
+    // at `src/parser/exprs.rs` 1298–1326 (the comment says "Type/Const-class
+    // idents root a path here"), producing `Call(Path([F, double]))` for
+    // `F.double()`. The typechecker rewrite in `infer_call` disambiguates
+    // against the env and routes value-binding receivers through
+    // `infer_method_call`, matching the implicit method-call shape
+    // lowercase locals already get from the parser's postfix loop.
+    typecheck_ok(
+        "struct Foo { value: i64 }\n\
+         impl Foo {\n\
+             fn double(self) -> i64 { self.value * 2 }\n\
+         }\n\
+         fn main() {\n\
+             let F: Foo = Foo { value: 5 };\n\
+             let _ = F.double();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_uppercase_modbind_vec_method_dispatch() {
+    // Module-level `let mut TODOS: Vec[i64] = Vec.new(); TODOS.push(1);`
+    // is the canonical kata shape that closes the backend-kata Slice 4
+    // blocker. The typechecker's `infer_call` dispatch routes
+    // `TODOS.push(1)` through `infer_method_call` because `TODOS` resolves
+    // in `env.constants` and is not a known type name. Lowering rewrites
+    // the AST to `MethodCall(Identifier(TODOS), push, [1])` so codegen's
+    // existing Vec method-call dispatch fires.
+    typecheck_ok(
+        "let mut TODOS: Vec[i64] = Vec.new();\n\
+         fn main() {\n\
+             TODOS.push(1);\n\
+             TODOS.push(2);\n\
+             let _: i64 = TODOS.len();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_vec_new_type_assoc_call_still_resolves() {
+    // Regression guard for the typechecker dispatch's exclusion of
+    // known type names. `Vec.new()` continues to resolve as a Type-class
+    // associated call (returning `Vec[?T]`) because `Vec` is in
+    // `PRELUDE_TYPES` and so the `path_first_segment_is_value_binding`
+    // predicate excludes it. Without this guard, the new rewrite would
+    // shadow the existing `Vec.new()` / `String.from(x)` /
+    // `Map.new()` infrastructure.
+    typecheck_ok(
+        "fn main() {\n\
+             let v: Vec[i64] = Vec.new();\n\
+             let _ = v.len();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_uppercase_modbind_const_method_dispatch() {
+    // Same shape as the kata case but with an immutable `let` instead of
+    // `let mut`. Pins that the mutability bit doesn't affect method
+    // dispatch (the rewrite condition only depends on the value-binding
+    // classification — both `let` and `let mut` register the binding in
+    // `env.constants`).
+    typecheck_ok(
+        "struct Counter { n: i64 }\n\
+         impl Counter {\n\
+             fn value(self) -> i64 { self.n }\n\
+         }\n\
+         let COUNTER: Counter = Counter { n: 42 };\n\
+         fn main() {\n\
+             let _ = COUNTER.value();\n\
+         }",
+    );
+}
+
+#[test]
+fn test_unknown_type_method_rejection_still_fires() {
+    // Regression guard for `db573a4`. When the leading path segment IS a
+    // known type but the method doesn't exist, the
+    // `resolve_path_type`-driven `NoMethodFound` diagnostic continues to
+    // fire — the new rewrite only intercepts value-binding receivers, so
+    // unknown-method calls on real types stay on their existing path.
+    let errs = typecheck_errors(
+        "fn main() {\n\
+             let _: i64 = String.totally_made_up_method(5);\n\
+         }",
+    );
+    assert!(
+        errs.iter()
+            .any(|e| matches!(e.kind, TypeErrorKind::NoMethodFound)),
+        "expected NoMethodFound for unknown Type.method, got: {:?}",
+        errs.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn test_module_binding_vec_prefix_literal_init_rejected() {
     let errs = typecheck_errors("let NUMS: Vec[i64] = Vec[1, 2, 3];");
     assert!(

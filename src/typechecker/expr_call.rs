@@ -10,6 +10,7 @@
 //! Lives in a sibling `impl<'a> super::TypeChecker<'a>` block.
 
 use crate::ast::*;
+use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::inference::{expr_as_type_expr, is_literal_const_arg_expr};
@@ -140,6 +141,49 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Uppercase-receiver method-dispatch rewrite. The parser at
+        // `src/parser/exprs.rs` 1298–1326 greedily wraps `X.method(args)`
+        // in `Call(Path([X, method]))` whenever `X` starts uppercase —
+        // the parser can't tell at parse time whether `X` is a Type-class
+        // root (where the Call(Path) shape is right, e.g. `Vec.new()`,
+        // `String.from(x)`) or a value binding that shadows nothing
+        // (`let mut TODOS: Vec[i64] = Vec.new(); TODOS.push(1)`). Without
+        // this disambiguation, the value-binding case fell through to
+        // the default arm and emitted the misleading "type 'Vec[i64]'
+        // is not callable" diagnostic from `resolve_path_type`'s
+        // identifier fallback. Disambiguate against the env: when the
+        // leading segment resolves as a value binding (a local under
+        // `local_scope` OR a constant / module-binding in
+        // `env.constants` that is NOT also a known type name), route
+        // through `infer_method_call` with a synthesized identifier
+        // receiver and flag the span for the lowering pass to mutate
+        // the AST node to `MethodCall(Identifier(X), method, args)`.
+        // Local-shadows-type wins by construction — the local_scope
+        // lookup fires before the env-constants + not-type-name guard,
+        // so `let Foo = ...; Foo.bar()` (a local shadow of struct Foo)
+        // routes to method dispatch on the local. Generic-args (UFCS)
+        // and longer paths are deliberately excluded so `Vec[i64].new()`,
+        // `module.Sub.fn()`, and similar stay on their existing paths.
+        // Effect resources (`Clock`, `UserDB`, etc.) are not in
+        // `env.constants` and so naturally fall through to their
+        // ambient-resource dispatch — see `expr_ops.rs::resolve_path_type`.
+        if let ExprKind::Path {
+            segments,
+            generic_args: None,
+        } = &callee.kind
+        {
+            if segments.len() == 2 && self.path_first_segment_is_value_binding(&segments[0]) {
+                let synth_object = Expr {
+                    span: callee.span.clone(),
+                    kind: ExprKind::Identifier(segments[0].clone()),
+                };
+                let result = self.infer_method_call(&synth_object, &segments[1], args, span);
+                self.path_call_method_dispatch
+                    .insert(SpanKey::from_span(span));
+                return result;
+            }
+        }
+
         // Const generics slice 1b + 1c: explicit-generic-args call
         // shapes. Two forms reach here:
         //

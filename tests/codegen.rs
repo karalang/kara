@@ -20456,6 +20456,70 @@ fn main() {
         );
     }
 
+    #[test]
+    fn test_e2e_modbind_vec_push_then_len() {
+        // End-to-end pin for the uppercase-receiver method-dispatch fix —
+        // the backend kata's canonical shape. The parser produces
+        // `Call(Path([TODOS, push]))` because `TODOS` starts uppercase;
+        // the typechecker rewrite at `infer_call` re-routes through
+        // `infer_method_call`, lowering rewrites the AST to
+        // `MethodCall(Identifier(TODOS), push, ...)`, and codegen's
+        // method-call dispatch for module-binding receivers uses
+        // `get_data_ptr`'s module-binding fall-back to thread the
+        // global's pointer through `compile_vec_method`. Without any
+        // one of those three steps, the call falls through to a
+        // codegen error or compiles to a stub that no-ops.
+        let output = run_program(
+            "let mut TODOS: Vec[i64] = Vec.new();\n\
+             fn main() {\n\
+                 TODOS.push(10);\n\
+                 TODOS.push(20);\n\
+                 TODOS.push(30);\n\
+                 println(TODOS.len());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "3\n");
+    }
+
+    #[test]
+    fn test_e2e_modbind_vec_indexed_read() {
+        // Indexed read on a module-bound Vec — uses the slice-10
+        // collections.rs module-binding fall-back at `compile_index`,
+        // unaffected by the method-dispatch rewrite but co-tested
+        // because the kata Slice 4 needs both.
+        let output = run_program(
+            "let mut TODOS: Vec[i64] = Vec.new();\n\
+             fn main() {\n\
+                 TODOS.push(100);\n\
+                 TODOS.push(200);\n\
+                 println(TODOS[0]);\n\
+                 println(TODOS[1]);\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "100\n200\n");
+    }
+
+    #[test]
+    fn test_e2e_uppercase_local_struct_method() {
+        // Uppercase local struct receiver — non-module-binding case
+        // exercising the same parser path. The bug was wider than
+        // module bindings; any uppercase local also hits it.
+        let output = run_program(
+            "struct Counter { n: i64 }\n\
+             impl Counter {\n\
+                 fn doubled(self) -> i64 { self.n * 2 }\n\
+             }\n\
+             fn main() {\n\
+                 let C: Counter = Counter { n: 21 };\n\
+                 println(C.doubled());\n\
+             }",
+        )
+        .expect("compile + run failed");
+        assert_eq!(output, "42\n");
+    }
+
     // ── Slice 10: composite-initializer codegen (design.md §1280-1297) ─
     //
     // Module-level `let X: T = INIT;` where INIT is a struct literal,
