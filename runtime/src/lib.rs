@@ -268,8 +268,10 @@ impl Drop for FrameGuard {
 
 // ── Long-lived worker pool for `karac_par_run` ─────────────────────────────
 //
-// One global pool of N = `available_parallelism()` (floored at 2) worker
-// threads, lazy-initialized on the first call to `karac_par_run`. Replaces
+// One global pool of N = `resolve_pool_workers()` worker threads,
+// lazy-initialized on the first call to `karac_par_run`. The resolver
+// honors `KARAC_PAR_WORKERS=N` for explicit override (down to 1) and
+// falls back to `available_parallelism()` floored at 2 when unset. Replaces
 // the original per-call `thread::scope` + `s.spawn` impl, which created
 // fresh OS threads on every fan-out — diagnosed as the dominant Parallax
 // bench bottleneck (60 % of CPU in `mach_vm_protect` setting up pthread
@@ -350,12 +352,43 @@ struct Pool {
 
 static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
 
+/// Resolve the auto-par worker count.
+///
+/// Reads `KARAC_PAR_WORKERS` if set to a positive integer and honors that
+/// value exactly (down to 1 — same posture as Rayon's `RAYON_NUM_THREADS`,
+/// OpenMP's `OMP_NUM_THREADS`, Go's `GOMAXPROCS`). On a missing or
+/// unparseable value, falls back to `available_parallelism()` floored at
+/// 2 — the historical default. Floor on the auto-detect path is preserved
+/// because the work-helping `dispatch_and_wait` pattern (slice 3b.7) was
+/// validated against multi-worker pools; with N=1 it degrades cleanly
+/// (single-worker fast path in `karac_par_reduce`, sequential branch
+/// execution in `karac_par_run`), so honoring an explicit N=1 from the
+/// env is safe.
+///
+/// Invalid values (0, negative, non-numeric) silently bypass to the
+/// auto-detect default — same permissive parse posture as `KARAC_AUTO_PAR`
+/// and `KARAC_OPT_LEVEL`. Read on each call rather than cached: pool
+/// construction goes through `OnceLock::get_or_init` so it's read once
+/// there anyway, and `karac_par_reduce`'s per-call read is cheap libc
+/// getenv that lets a user override the count for a single command-line
+/// invocation without rebuilding.
+fn resolve_pool_workers() -> usize {
+    if let Ok(s) = std::env::var("KARAC_PAR_WORKERS") {
+        if let Ok(n) = s.parse::<usize>() {
+            if n >= 1 {
+                return n;
+            }
+        }
+    }
+    thread::available_parallelism()
+        .map(|n| n.get())
+        .unwrap_or(4)
+        .max(2)
+}
+
 fn pool() -> &'static Arc<Pool> {
     POOL.get_or_init(|| {
-        let n = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(4)
-            .max(2);
+        let n = resolve_pool_workers();
         let pool = Arc::new(Pool {
             queue: Mutex::new(VecDeque::new()),
             cv: Condvar::new(),
@@ -746,11 +779,13 @@ pub unsafe extern "C" fn karac_par_reduce(
 
     // Worker count: cap at `iter_total` so each worker gets at least one
     // iteration, and at least 1 so the single-thread fast path below
-    // doesn't divide by zero.
-    let pool_workers = thread::available_parallelism()
-        .map(|n| n.get())
-        .unwrap_or(2)
-        .max(2);
+    // doesn't divide by zero. `resolve_pool_workers` honors
+    // `KARAC_PAR_WORKERS` when set so the dispatch math matches the
+    // actual `pool()` worker count — without this, an env override
+    // would cap `pool_workers` here at the auto-detect value while
+    // `pool()` spawned a different count, and the per-worker slot
+    // allocation below would mis-size.
+    let pool_workers = resolve_pool_workers();
     let n_workers = pool_workers.min(desc.iter_total).max(1);
 
     // Slice 3b.8 (2026-05-20): runtime-side cost gate. Even when the
@@ -4132,13 +4167,15 @@ mod tests {
 
     /// A reduction whose iter range is exactly the pool worker count: one
     /// iteration per worker, the closing edge of the "below pool size"
-    /// fast path becoming the multi-worker general path.
+    /// fast path becoming the multi-worker general path. Reads
+    /// `resolve_pool_workers()` so the test tracks any `KARAC_PAR_WORKERS`
+    /// override the harness sets — without that, the test would compute
+    /// `n` from auto-detect and `karac_par_reduce` would use the env value,
+    /// and the assertion `expected == sum(0..n)` would diverge from the
+    /// runtime's actual chunk count.
     #[test]
     fn test_par_reduce_iter_equals_pool_size_add() {
-        let n = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(2)
-            .max(2);
+        let n = super::resolve_pool_workers();
         let total = run_reduce(n, init_i64_zero, worker_sum_range, combine_i64_add);
         let expected: i64 = (0..n as i64).sum();
         assert_eq!(total, expected);
@@ -4242,15 +4279,102 @@ mod tests {
     fn test_par_reduce_runtime_gate_sentinel_zero_bypasses_gate() {
         let (sink, calls) = run_reduce_with_per_iter(100, 0);
         assert_eq!(sink, (0..100i64).sum::<i64>());
-        let pool_workers = thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(2)
-            .max(2);
+        // Reads `resolve_pool_workers()` (not direct auto-detect) so the
+        // test tracks the env var when it's set in the harness; otherwise
+        // the assertion's `expected_calls` would diverge from the actual
+        // dispatch count under `KARAC_PAR_WORKERS=N`.
+        let pool_workers = super::resolve_pool_workers();
         let expected_calls = pool_workers.min(100);
         assert_eq!(
             calls, expected_calls,
             "per_iter=0 sentinel should bypass the gate; got {calls} calls, expected dispatch \
              across {expected_calls} workers"
         );
+    }
+
+    // ─── KARAC_PAR_WORKERS env override ──────────────────────────────
+    //
+    // Tests serialize on `PAR_WORKERS_ENV_LOCK` (peer of
+    // `FRAME_TRACKING_ENV_LOCK` above) so cargo-parallel runs don't
+    // race on the env var. Each test snapshots the prior value at
+    // entry, mutates, runs the assertion, and restores — a panicking
+    // assert leaves the mutex poisoned, which subsequent tests handle
+    // via `.lock().unwrap_or_else(|p| p.into_inner())`.
+    //
+    // The pool is initialised lazily via `OnceLock`, so testing the
+    // pool-construction path here would only fire once per process
+    // and the env mutation would silently lose afterward. Tests
+    // exercise `resolve_pool_workers()` directly (the helper both
+    // `pool()` and `karac_par_reduce` call) — this verifies the
+    // env-aware shape without coupling to the pool's lazy-init
+    // lifecycle.
+
+    static PAR_WORKERS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn with_par_workers_env<F: FnOnce() -> R, R>(value: Option<&str>, body: F) -> R {
+        let _guard = PAR_WORKERS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        let prior = std::env::var("KARAC_PAR_WORKERS").ok();
+        match value {
+            Some(v) => std::env::set_var("KARAC_PAR_WORKERS", v),
+            None => std::env::remove_var("KARAC_PAR_WORKERS"),
+        }
+        let result = body();
+        match prior {
+            Some(v) => std::env::set_var("KARAC_PAR_WORKERS", v),
+            None => std::env::remove_var("KARAC_PAR_WORKERS"),
+        }
+        result
+    }
+
+    /// `KARAC_PAR_WORKERS=N` for a valid positive integer is honored
+    /// exactly. Tested at N=4 (typical container-quota override) and
+    /// N=1 (the lowest legal value — `pool()` uses this to drive
+    /// `karac_par_reduce`'s single-worker fast path).
+    #[test]
+    fn test_resolve_pool_workers_honors_explicit_count() {
+        with_par_workers_env(Some("4"), || {
+            assert_eq!(super::resolve_pool_workers(), 4);
+        });
+        with_par_workers_env(Some("1"), || {
+            assert_eq!(super::resolve_pool_workers(), 1);
+        });
+    }
+
+    /// `KARAC_PAR_WORKERS=0` is invalid (the `n >= 1` guard rejects
+    /// it) and falls back to the auto-detect default. Same shape as
+    /// passing an unparseable value.
+    #[test]
+    fn test_resolve_pool_workers_invalid_value_falls_back_to_auto() {
+        let auto = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .max(2);
+
+        with_par_workers_env(Some("0"), || {
+            assert_eq!(super::resolve_pool_workers(), auto);
+        });
+        with_par_workers_env(Some("bogus"), || {
+            assert_eq!(super::resolve_pool_workers(), auto);
+        });
+        with_par_workers_env(Some(""), || {
+            assert_eq!(super::resolve_pool_workers(), auto);
+        });
+    }
+
+    /// With the env var unset, the resolver returns the auto-detect
+    /// value floored at 2 — same shape as the pre-`KARAC_PAR_WORKERS`
+    /// behaviour. Pins back-compat.
+    #[test]
+    fn test_resolve_pool_workers_unset_returns_auto_floored() {
+        let auto = thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(4)
+            .max(2);
+        with_par_workers_env(None, || {
+            assert_eq!(super::resolve_pool_workers(), auto);
+            assert!(super::resolve_pool_workers() >= 2);
+        });
     }
 }
