@@ -166,4 +166,27 @@ impl TcpStream {
     {
         Result.Err(TcpError.Other(-1))
     }
+
+    // Loop `write` until all `buf.len()` bytes have been pushed (or
+    // an unrecoverable error fires). Absorbs partial writes (the
+    // single-syscall `write` may return fewer bytes than asked) and
+    // retries on `TcpError.Interrupted` (EINTR). Returns `Ok(total)`
+    // — total always equals `buf.len()` on success — or
+    // `Err(TcpError.Other(errno))` on the first unrecoverable error.
+    //
+    // Stub body never executes — codegen replaces via
+    // `lower_tcp_stream_write_all`. The lowering builds the loop in
+    // LLVM IR directly because pure-kara stdlib function bodies
+    // don't currently reach the codegen pass (only `#[compiler_builtin]`
+    // methods do — same situation as stdlib enums that need explicit
+    // seeding in `seed_builtin_enum_layouts`). When the
+    // codegen-compiles-stdlib gap closes, this method can be
+    // rewritten as pure kara source matching the surface contract
+    // above.
+    #[compiler_builtin]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
 }

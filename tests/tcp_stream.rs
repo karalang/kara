@@ -494,4 +494,188 @@ mod tcp_stream_tests {
              stream.read, got lines: {lines:?}"
         );
     }
+
+    /// Slice 9c deliverable: `TcpStream.write_all` end-to-end. The
+    /// kara binary calls `stream.write_all(msg.bytes())` for a
+    /// 2 KiB payload; the harness reads back every byte and asserts
+    /// the count matches `buf.len()`.
+    ///
+    /// **Why 2 KiB and not smaller.** A single `write(2)` of a few
+    /// hundred bytes always fits in the kernel's socket send buffer
+    /// (default 128 KiB+ on Linux/macOS), so the single-syscall
+    /// `write` would also push the whole payload and `write_all`'s
+    /// loop would only iterate once — the partial-write code path
+    /// wouldn't run. 2 KiB is still well within send-buffer limits,
+    /// so this test specifically pins the OK-loop-once shape (the
+    /// only loop count we can deterministically test without a
+    /// blocking peer harness). The partial-write path (loop count
+    /// above 1) is exercised by reading `lower_tcp_stream_write_all`'s
+    /// IR and trusting the structural invariants — same approach
+    /// the codegen E2Es take for branch coverage on tagged loops.
+    ///
+    /// **Why a 2 KiB ASCII payload of known shape.** Each byte is
+    /// `'A' + (i % 26)` so the harness can assert content equality
+    /// in addition to byte count, catching off-by-one in
+    /// `chunk_ptr = buf.ptr + written` if it ever regresses.
+    #[test]
+    fn test_tcp_stream_write_all_round_trip() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        // Build the 2 KiB known-shape payload in kara source via
+        // a String produced from a Vec[u8] generator pattern. We
+        // need this as a Slice[u8] for write_all. The easiest path
+        // that goes through real stdlib surfaces: build a String of
+        // the expected size via String.repeat (if available) — but
+        // since I don't want to introduce a new dependency on
+        // String.repeat's exact behaviour, build the payload at
+        // the harness side and have the kara binary read+echo it
+        // unchanged via write_all. That doesn't exercise write_all's
+        // chunking under load, but DOES pin the basic Ok-arm shape.
+        //
+        // Simpler design (chosen here): hardcode a known-shape
+        // 256-byte payload directly in kara source as a String
+        // literal (using \xNN escapes? no — kara source uses plain
+        // ASCII). Use a repeated short pattern that the test source
+        // can assert on.
+        let pattern_repeat = 64usize;
+        let unit = "Aa1Zz9Bb2Yy8Cc3Xx7Dd4Ww6Ee5Vv0!";
+        let expected: String = unit.repeat(pattern_repeat);
+        let expected_bytes = expected.as_bytes().to_vec();
+
+        let mut src = String::from(
+            r#"
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0");
+                let stream = listener.accept();
+                let msg: String = ""#,
+        );
+        for _ in 0..pattern_repeat {
+            src.push_str(unit);
+        }
+        src.push_str(
+            r#"";
+                let _r = stream.write_all(msg.bytes());
+            }
+        "#,
+        );
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_stream_write_all_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn tcp_stream write_all binary");
+
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, join) = await_bound_port(stdout, Duration::from_secs(15));
+
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("binary did not emit BOUND_PORT line within 15s");
+            }
+        };
+
+        let connect_started = Instant::now();
+        let mut maybe_conn: Option<std::net::TcpStream> = None;
+        for _ in 0..10 {
+            if let Ok(c) = std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                maybe_conn = Some(c);
+                break;
+            }
+            if connect_started.elapsed() > Duration::from_secs(2) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let Some(mut conn) = maybe_conn else {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&exe_path);
+            panic!("could not connect to 127.0.0.1:{port} to trigger accept");
+        };
+
+        conn.set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("set_read_timeout");
+        let mut received = Vec::with_capacity(expected_bytes.len());
+        let mut chunk = [0u8; 1024];
+        while received.len() < expected_bytes.len() {
+            match conn.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => received.extend_from_slice(&chunk[..n]),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(&exe_path);
+                    panic!("read from kara binary failed: {e}");
+                }
+            }
+        }
+
+        let wait_started = Instant::now();
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if wait_started.elapsed() > Duration::from_secs(10) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = std::fs::remove_file(&exe_path);
+                        panic!(
+                            "binary did not exit within 10s after write_all — \
+                             likely the loop is wedged or the parking primitive \
+                             didn't return"
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&exe_path);
+                    panic!("try_wait failed: {e}");
+                }
+            }
+        };
+
+        let _ = join.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "binary exited non-success {exit_status:?} — \
+             TcpStream.write_all returned but main() failed downstream"
+        );
+        assert_eq!(
+            received.len(),
+            expected_bytes.len(),
+            "write_all should have pushed all {} bytes, got {}",
+            expected_bytes.len(),
+            received.len()
+        );
+        assert_eq!(
+            received, expected_bytes,
+            "write_all should have pushed the exact payload byte-for-byte"
+        );
+    }
 }

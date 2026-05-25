@@ -69,6 +69,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 return self.lower_tcp_stream_write(self_val, buf_val);
             }
+            if key == "TcpStream.write_all" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_tcp_stream_write_all(self_val, buf_val);
+            }
         }
 
         // Phase 6 line 26 slice 8g: method-call network-boundary intercept.

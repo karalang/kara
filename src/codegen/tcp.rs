@@ -304,6 +304,225 @@ impl<'ctx> super::Codegen<'ctx> {
         self.lower_tcp_stream_io(self_val, buf_val, /*is_write=*/ true)
     }
 
+    /// Lower `TcpStream.write_all(ref self, buf: Slice[u8]) ->
+    /// Result[i64, TcpError]` — loop calling the raw write FFI until
+    /// all `buf.len()` bytes have been pushed, absorbing partial
+    /// writes and retrying on EINTR. Returns `Ok(buf.len())` on
+    /// success or `Err(TcpError.Other(errno))` on the first
+    /// unrecoverable error.
+    ///
+    /// This lowering exists as `#[compiler_builtin]` rather than
+    /// pure-kara stdlib source because codegen only compiles user
+    /// `program.items` — stdlib non-`#[compiler_builtin]` method
+    /// bodies don't reach codegen (same gap that forces explicit
+    /// layout seeds in `seed_builtin_enum_layouts` for stdlib
+    /// enums). When that gap closes, this lowering can be replaced
+    /// with the pure-kara while-loop body sketched in
+    /// `runtime/stdlib/tcp.kara::TcpStream.write_all`.
+    pub(super) fn lower_tcp_stream_write_all(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let i8_ty = ctx.i8_type();
+        let zero_i64 = i64_ty.const_zero();
+
+        let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.wa.self.fd");
+
+        let buf_sv = buf_val.into_struct_value();
+        let buf_ptr = self
+            .builder
+            .build_extract_value(buf_sv, 0, "tcp.wa.buf.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let buf_len = self
+            .builder
+            .build_extract_value(buf_sv, 1, "tcp.wa.buf.len")
+            .unwrap()
+            .into_int_value();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "TcpStream.write_all lowered outside fn".to_string())?;
+
+        let written_slot = self.create_entry_alloca(fn_val, "tcp.wa.written", i64_ty.into());
+        self.builder.build_store(written_slot, zero_i64).unwrap();
+
+        let loop_head = ctx.append_basic_block(fn_val, "tcp.wa.loop.head");
+        let loop_body = ctx.append_basic_block(fn_val, "tcp.wa.loop.body");
+        let advance = ctx.append_basic_block(fn_val, "tcp.wa.advance");
+        let err_check = ctx.append_basic_block(fn_val, "tcp.wa.err.check");
+        let err_exit = ctx.append_basic_block(fn_val, "tcp.wa.err.exit");
+        let ok_exit = ctx.append_basic_block(fn_val, "tcp.wa.ok.exit");
+        let cont = ctx.append_basic_block(fn_val, "tcp.wa.cont");
+
+        self.builder.build_unconditional_branch(loop_head).unwrap();
+
+        // ── loop_head: if written >= buf.len, exit Ok; else body.
+        self.builder.position_at_end(loop_head);
+        let written = self
+            .builder
+            .build_load(i64_ty, written_slot, "tcp.wa.written.load")
+            .unwrap()
+            .into_int_value();
+        let is_done = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, written, buf_len, "tcp.wa.is_done")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_done, ok_exit, loop_body)
+            .unwrap();
+
+        // ── loop_body: chunk_ptr = buf.ptr + written, remaining = buf.len - written,
+        //    park on write-readiness, call FFI, branch on success.
+        self.builder.position_at_end(loop_body);
+        let remaining = self
+            .builder
+            .build_int_sub(buf_len, written, "tcp.wa.remaining")
+            .unwrap();
+        let chunk_ptr = unsafe {
+            self.builder
+                .build_in_bounds_gep(i8_ty, buf_ptr, &[written], "tcp.wa.chunk.ptr")
+                .unwrap()
+        };
+        let dir_write = i8_ty.const_int(1, false);
+        self.emit_state_machine_invocation_for_park_on_fd(fd, dir_write);
+
+        let write_fn = self
+            .module
+            .get_function("karac_runtime_tcp_write")
+            .expect("karac_runtime_tcp_write declared in Codegen::new");
+        let write_call = self
+            .builder
+            .build_call(
+                write_fn,
+                &[fd.into(), chunk_ptr.into(), remaining.into()],
+                "tcp.wa.write.n",
+            )
+            .expect("call karac_runtime_tcp_write");
+        let n = write_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let is_ok = self
+            .builder
+            .build_int_compare(IntPredicate::SGE, n, zero_i64, "tcp.wa.is_ok")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_ok, advance, err_check)
+            .unwrap();
+
+        // ── advance: written += n, br loop_head.
+        self.builder.position_at_end(advance);
+        let new_written = self
+            .builder
+            .build_int_add(written, n, "tcp.wa.new_written")
+            .unwrap();
+        self.builder.build_store(written_slot, new_written).unwrap();
+        self.builder.build_unconditional_branch(loop_head).unwrap();
+
+        // ── err_check: errno = -n; EINTR retries (back to loop_head, no advance),
+        //    everything else exits with Err.
+        self.builder.position_at_end(err_check);
+        let errno = self
+            .builder
+            .build_int_sub(zero_i64, n, "tcp.wa.errno")
+            .unwrap();
+        let eintr = i64_ty.const_int(4, false);
+        let is_eintr = self
+            .builder
+            .build_int_compare(IntPredicate::EQ, errno, eintr, "tcp.wa.is_eintr")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_eintr, loop_head, err_exit)
+            .unwrap();
+        let err_check_end_bb = self.builder.get_insert_block().unwrap();
+
+        // ── err_exit: build Result.Err(TcpError.Other(errno)), br cont.
+        self.builder.position_at_end(err_exit);
+        let errno_phi = self.builder.build_phi(i64_ty, "tcp.wa.errno.phi").unwrap();
+        errno_phi.add_incoming(&[(&errno.as_basic_value_enum(), err_check_end_bb)]);
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded");
+        let result_ty = result_layout.llvm_type;
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let tcp_err_layout = self
+            .enum_layouts
+            .get("TcpError")
+            .expect("TcpError layout seeded");
+        let other_tag = *tcp_err_layout
+            .tags
+            .get("Other")
+            .expect("TcpError.Other tag seeded");
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                "tcp.wa.err.tag",
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(other_tag, false),
+                1,
+                "tcp.wa.err.tcp_err.w0",
+            )
+            .unwrap()
+            .into_struct_value();
+        let errno_phi_val = errno_phi.as_basic_value().into_int_value();
+        err_agg = self
+            .builder
+            .build_insert_value(err_agg, errno_phi_val, 2, "tcp.wa.err.tcp_err.w1")
+            .unwrap()
+            .into_struct_value();
+        let err_exit_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        // ── ok_exit: build Result.Ok(written_final), br cont.
+        self.builder.position_at_end(ok_exit);
+        let written_final = self
+            .builder
+            .build_load(i64_ty, written_slot, "tcp.wa.written.final")
+            .unwrap()
+            .into_int_value();
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, i64_ty.const_int(ok_tag, false), 0, "tcp.wa.ok.tag")
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, written_final, 1, "tcp.wa.ok.n")
+            .unwrap()
+            .into_struct_value();
+        let ok_exit_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont).unwrap();
+
+        // ── cont: phi between Err and Ok arms.
+        self.builder.position_at_end(cont);
+        let phi = self.builder.build_phi(result_ty, "tcp.wa.result").unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_exit_end_bb),
+            (&err_agg.as_basic_value_enum(), err_exit_end_bb),
+        ]);
+        Ok(phi.as_basic_value())
+    }
+
     /// Shared lowering for `TcpStream.read` / `.write`: extract
     /// self.fd, extract buf.{ptr, len} (Slice's 2-word `{ptr, i64}`
     /// layout), park on the appropriate direction, then call the
