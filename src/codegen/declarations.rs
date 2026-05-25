@@ -22,6 +22,44 @@ use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
 
+/// Phase 6 line 17 slice 6: name of the compiler-recognised leaf
+/// parking primitive. Codegen overrides this function's state-machine
+/// emission to do the actual `register_fd` + `take_wakeups` dance,
+/// bypassing the body-split walker (the kara-source body is empty —
+/// effectcheck still classifies it as a network-yield leaf via the
+/// declared `sends(Network) receives(Network)` effects). User-level
+/// stdlib types (`TcpListener`, `TcpStream`, …) call this from their
+/// bodies; effect inference then propagates the network-yield
+/// classification up the call graph through the existing
+/// `callee_network_yield_effect` machinery.
+pub(super) const KARAC_PARK_ON_FD: &str = "karac_park_on_fd";
+
+/// Synthesize a `StateStructLayout` for `karac_park_on_fd` from its
+/// declared parameters. The standard layout-builder
+/// (`cli::build_state_struct_layouts`) only emits an entry for
+/// functions whose body contains at least one yield-point sub-call,
+/// which excludes leaf primitives like `karac_park_on_fd` whose body
+/// is empty (it IS the yield, not a function that contains one). The
+/// trailing parked-task fields are appended in
+/// `emit_state_struct_type_for_key`, not here, to keep the layout
+/// table's shape kara-source-faithful.
+pub(super) fn synthesize_park_on_fd_layout(program: &Program) -> Option<StateStructLayout> {
+    let func = find_function_ast(program, KARAC_PARK_ON_FD)?;
+    let mut fields = Vec::with_capacity(func.params.len());
+    for param in &func.params {
+        let name = match &param.pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => continue,
+        };
+        let type_name = match &param.ty.kind {
+            TypeKind::Path(p) => p.segments.last().cloned(),
+            _ => None,
+        };
+        fields.push(StateStructField { name, type_name });
+    }
+    Some(StateStructLayout { fields })
+}
+
 /// Decide whether a shared-struct field's source type is `Option[T]` where
 /// `T` is itself a (known) shared struct — the precondition for niche-opt
 /// storage of the field as a single nullable pointer instead of the
@@ -403,6 +441,24 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.emit_state_struct_type_for_key(program, fn_key, fn_key, layout);
         }
+        // Phase 6 line 17 slice 6: synthesize and emit the state struct
+        // for the leaf parking primitive `karac_park_on_fd`. The
+        // standard `cli::build_state_struct_layouts` pass skips
+        // leaf-effect functions whose body has no yield-point sub-call
+        // (empty body — they ARE the yield), so the parking primitive
+        // never lands in `state_struct_layouts`. Emit it here when its
+        // declaration is present in the program, with a layout
+        // synthesised from its declared parameters.
+        if !self.state_struct_types.contains_key(KARAC_PARK_ON_FD) {
+            if let Some(layout) = synthesize_park_on_fd_layout(program) {
+                self.emit_state_struct_type_for_key(
+                    program,
+                    KARAC_PARK_ON_FD,
+                    KARAC_PARK_ON_FD,
+                    &layout,
+                );
+            }
+        }
     }
 
     /// Slice 8v Phase 2: per-key state-struct LLVM type emission. The
@@ -480,6 +536,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Phase 6 line 17 slice 6: trailing parked-task fields for the
+        // leaf parking primitive. `KaracParkedTask` is two consecutive
+        // pointers (`{poll_fn, state}`) — the runtime side reads it as
+        // `*const KaracParkedTask` at the wakeup-dispatch boundary. Two
+        // separate `ptr` fields, not a nested struct: the GEP-to-first-
+        // field address equals the struct address under opaque pointers
+        // with no padding between same-aligned fields, and avoiding a
+        // named struct type keeps the IR text noise-free. Only the
+        // parking primitive's state struct gets these — higher-level
+        // state machines route their suspension through their callees'
+        // parked tasks (chain composes via Pending propagation through
+        // the existing caller intercept). Constructor initialises both
+        // fields; the poll-fn's state_0 GEPs the field address and
+        // passes it to `register_fd`.
+        if emit_key == KARAC_PARK_ON_FD {
+            let ptr_ty: BasicTypeEnum<'ctx> = self.context.ptr_type(AddressSpace::default()).into();
+            fields.push(ptr_ty); // poll_fn ptr
+            fields.push(ptr_ty); // state ptr
+        }
         let st = self
             .context
             .opaque_struct_type(&format!("kara.state.{}", emit_key));
@@ -544,6 +619,18 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.emit_state_machine_poll_fn_for_key(program, fn_key, fn_key);
         }
+        // Phase 6 line 17 slice 6: emit the poll function for the leaf
+        // parking primitive. Mirrors the synthetic state-struct +
+        // constructor emission above; the per-key helper detects
+        // `emit_key == KARAC_PARK_ON_FD` and emits a hand-rolled body
+        // (state_0 = register_fd + Pending; state_1 = take_wakeups +
+        // Ready) instead of running the body-split walker against the
+        // empty kara-source body.
+        if self.state_struct_types.contains_key(KARAC_PARK_ON_FD)
+            && !self.state_machine_poll_fns.contains_key(KARAC_PARK_ON_FD)
+        {
+            self.emit_state_machine_poll_fn_for_key(program, KARAC_PARK_ON_FD, KARAC_PARK_ON_FD);
+        }
     }
 
     /// Slice 8v Phase 2: per-key poll-fn emission. The base-name pass
@@ -583,6 +670,40 @@ impl<'ctx> super::Codegen<'ctx> {
             // suite will surface the divergence before users do.
             None => return,
         };
+        // Phase 6 line 17 slice 6: get-or-add the poll function. The
+        // `karac_park_on_fd` constructor (`emit_state_machine_state_constructor_for_key`)
+        // forward-declares this symbol so it can take its address for
+        // the parked-task field at construction time, ahead of the
+        // poll-fn pass that emits the body here. `set_linkage` is
+        // idempotent — re-applying `Internal` to an already-Internal
+        // function is a no-op. Non-parking-primitive callers reach
+        // this with no pre-existing declaration, so the
+        // `unwrap_or_else` path runs and creates the function fresh.
+        let poll_name = format!("__kara_poll_{emit_key}");
+        let poll_fn = self
+            .module
+            .get_function(&poll_name)
+            .unwrap_or_else(|| self.module.add_function(&poll_name, fn_type, None));
+        // `Internal` rather than `Private`: both restrict visibility
+        // to the current module, but `Internal` is the conventional
+        // LLVM choice for codegen-synthesized helpers (the function
+        // appears as `define internal i8 @__kara_poll_<fn_key>`),
+        // while `Private` is reserved for symbols the linker should
+        // strip outright. Caller-side wiring loads the FunctionValue
+        // through the side-table; the symbol need not be link-visible.
+        poll_fn.set_linkage(Linkage::Internal);
+        // Phase 6 line 17 slice 6: leaf parking primitive. Bypasses
+        // the body-split walker — the kara-source body is empty (it
+        // IS the yield, not a function that contains one). Hand-rolled
+        // 2-state body emitted by the helper: state_0 registers the
+        // fd with the event loop and returns Pending; state_1 blocks
+        // on `take_wakeups` and returns Ready when a wakeup arrives.
+        if emit_key == KARAC_PARK_ON_FD {
+            self.emit_park_on_fd_poll_body(poll_fn, state_struct);
+            self.state_machine_poll_fns
+                .insert(emit_key.to_string(), poll_fn);
+            return;
+        }
         let layout = match program.state_struct_layouts.get(ast_key) {
             Some(l) => l,
             None => return,
@@ -857,17 +978,6 @@ impl<'ctx> super::Codegen<'ctx> {
                 terminal_return = recognize_body_arg(final_expr, &current_names);
             }
         }
-        let poll_name = format!("__kara_poll_{emit_key}");
-        let poll_fn = self.module.add_function(&poll_name, fn_type, None);
-        // `Internal` rather than `Private`: both restrict visibility
-        // to the current module, but `Internal` is the conventional
-        // LLVM choice for codegen-synthesized helpers (the function
-        // appears as `define internal i8 @__kara_poll_<fn_key>`),
-        // while `Private` is reserved for symbols the linker should
-        // strip outright. Caller-side wiring in slice 7+ will load
-        // the FunctionValue through the side-table; the symbol need
-        // not be link-visible.
-        poll_fn.set_linkage(Linkage::Internal);
 
         // Save outer builder position — slice 6 is invoked before
         // function-body lowering runs, so there's no insert block
@@ -1307,6 +1417,194 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert(emit_key.to_string(), poll_fn);
     }
 
+    /// Phase 6 line 17 slice 6: hand-rolled poll-function body for the
+    /// leaf parking primitive `karac_park_on_fd(fd: i32, direction: u8)`.
+    ///
+    /// State-struct layout (synthesized by
+    /// `synthesize_park_on_fd_layout` + the
+    /// `emit_state_struct_type_for_key` trailing-field push):
+    ///   - field 0: `i32` tag
+    ///   - field 1: `i32` fd (captured param)
+    ///   - field 2: `i8`  direction (captured param)
+    ///   - field 3: `ptr` parked_task.poll_fn
+    ///   - field 4: `ptr` parked_task.state
+    ///
+    /// Emitted body:
+    ///   entry:
+    ///     call karac_runtime_event_loop_start_background_thread()  ; idempotent
+    ///     %tag = load i32, %state[0]
+    ///     switch %tag, [0 → state_0, 1 → state_1], default → unreachable
+    ///   state_0:
+    ///     %fd  = load i32, %state[1]
+    ///     %dir = load i8,  %state[2]
+    ///     %parked = gep %state[3]                  ; &state.parked_task
+    ///     call karac_runtime_event_loop_register_fd(%fd, %dir, %parked)
+    ///     store i32 1, %state[0]                   ; advance tag
+    ///     ret i8 0                                 ; Pending
+    ///   state_1:
+    ///     %wakeup_buf = alloca { i64, ptr, i8 }, align 8
+    ///     call karac_runtime_event_loop_take_wakeups(%wakeup_buf, 1, -1)
+    ///     ret i8 1                                 ; Ready
+    ///
+    /// `start_background_thread` is idempotent at the runtime layer
+    /// (the runtime tracks a global `OnceLock`-style flag), so calling
+    /// it at every state_0 invocation is correct and cheap. The
+    /// alternative — a one-shot ctor — adds a module-init dependency
+    /// surface that v1 doesn't otherwise need.
+    ///
+    /// The `take_wakeups` buffer's contents are intentionally
+    /// discarded: at the v1 single-task model, the only fd
+    /// registration in flight is ours, so any wakeup is ours. Multi-
+    /// task v2+ extensions will route the buffer through a
+    /// dispatcher that matches the wakeup's `parked` pointer back to
+    /// the right state machine.
+    pub(super) fn emit_park_on_fd_poll_body(
+        &mut self,
+        poll_fn: FunctionValue<'ctx>,
+        state_struct: StructType<'ctx>,
+    ) {
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let saved_bb = self.builder.get_insert_block();
+        let entry = self.context.append_basic_block(poll_fn, "entry");
+        let state_0_bb = self.context.append_basic_block(poll_fn, "state_0");
+        let state_1_bb = self.context.append_basic_block(poll_fn, "state_1");
+        let default_bb = self.context.append_basic_block(poll_fn, "tag_unreachable");
+
+        self.builder.position_at_end(entry);
+        // Idempotent bootstrap of the runtime's background poller +
+        // dispatcher. Runs every poll-fn invocation (cheap second-call
+        // path inside the runtime); avoids a separate module-init
+        // ctor.
+        if let Some(start_bg) = self
+            .module
+            .get_function("karac_runtime_event_loop_start_background_thread")
+        {
+            self.builder
+                .build_call(start_bg, &[], "kara.park.bg_start")
+                .expect("call karac_runtime_event_loop_start_background_thread");
+        }
+        let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let tag_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 0, "kara.park.tag_ptr")
+            .expect("GEP tag field for park-on-fd");
+        let tag = self
+            .builder
+            .build_load(i32_ty, tag_ptr, "kara.park.tag")
+            .expect("load tag for park-on-fd")
+            .into_int_value();
+        self.builder
+            .build_switch(
+                tag,
+                default_bb,
+                &[
+                    (i32_ty.const_int(0, false), state_0_bb),
+                    (i32_ty.const_int(1, false), state_1_bb),
+                ],
+            )
+            .expect("switch on park-on-fd tag");
+
+        // state_0: register the fd with the event loop, advance the
+        // tag, return Pending. After the caller's spin loop observes
+        // Pending and re-invokes the poll fn, control routes to state_1.
+        self.builder.position_at_end(state_0_bb);
+        let fd_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 1, "kara.park.fd_ptr")
+            .expect("GEP fd field");
+        let fd = self
+            .builder
+            .build_load(i32_ty, fd_ptr, "kara.park.fd")
+            .expect("load fd from state struct");
+        let dir_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 2, "kara.park.dir_ptr")
+            .expect("GEP direction field");
+        let dir = self
+            .builder
+            .build_load(i8_ty, dir_ptr, "kara.park.dir")
+            .expect("load direction from state struct");
+        // GEP to field 3 (first of the two parked_task ptrs). Under
+        // opaque pointers with no padding between same-aligned ptr
+        // fields, this address is byte-identical to `&parked_task`
+        // (the `{ptr, ptr}` struct's first field) — which is what the
+        // runtime reads as `*const KaracParkedTask`.
+        let parked_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 3, "kara.park.parked_ptr")
+            .expect("GEP parked_task field");
+        let register_fd_fn = self
+            .module
+            .get_function("karac_runtime_event_loop_register_fd")
+            .expect("karac_runtime_event_loop_register_fd declared in Codegen::new");
+        self.builder
+            .build_call(
+                register_fd_fn,
+                &[fd.into(), dir.into(), parked_ptr.into()],
+                "kara.park.register_token",
+            )
+            .expect("call karac_runtime_event_loop_register_fd");
+        // Advance tag → state_1 for the next poll-fn invocation.
+        self.builder
+            .build_store(tag_ptr, i32_ty.const_int(1, false))
+            .expect("store tag = 1");
+        self.builder
+            .build_return(Some(&i8_ty.const_int(0, false)))
+            .expect("return Pending from state_0");
+
+        // state_1: block on take_wakeups (with -1 = block indefinitely)
+        // until any wakeup arrives, then return Ready. The caller's
+        // poll loop sees Ready and breaks. At v1 single-task model,
+        // the only fd registered is ours so any wakeup is ours.
+        self.builder.position_at_end(state_1_bb);
+        // KaracWakeup is `#[repr(C)] { token: u64, parked: *mut c_void,
+        // direction: u8 }`. Inline struct type — no need for a named
+        // module-level type since this is the only use site.
+        let wakeup_ty = self
+            .context
+            .struct_type(&[i64_ty.into(), ptr_ty.into(), i8_ty.into()], false);
+        let wakeup_buf = self
+            .builder
+            .build_alloca(wakeup_ty, "kara.park.wakeup_buf")
+            .expect("alloca KaracWakeup buffer");
+        let take_wakeups_fn = self
+            .module
+            .get_function("karac_runtime_event_loop_take_wakeups")
+            .expect("karac_runtime_event_loop_take_wakeups declared in Codegen::new");
+        let blocking_timeout = i64_ty.const_int(u64::MAX, false); // -1 as i64
+        let max_wakeups = i64_ty.const_int(1, false);
+        self.builder
+            .build_call(
+                take_wakeups_fn,
+                &[
+                    wakeup_buf.into(),
+                    max_wakeups.into(),
+                    blocking_timeout.into(),
+                ],
+                "kara.park.wakeup_count",
+            )
+            .expect("call karac_runtime_event_loop_take_wakeups");
+        // Discard wakeup contents — v1 single-task model means the
+        // wakeup is unambiguously ours. Just return Ready so the
+        // caller's poll loop terminates.
+        self.builder
+            .build_return(Some(&i8_ty.const_int(1, false)))
+            .expect("return Ready from state_1");
+
+        self.builder.position_at_end(default_bb);
+        self.builder
+            .build_unreachable()
+            .expect("unreachable park-on-fd tag default");
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
     // ── State-struct constructor helper (line 26 slice 8c) ─────────────
 
     /// Emit one constructor helper per network-boundary function:
@@ -1339,6 +1637,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 continue;
             }
             self.emit_state_machine_state_constructor_for_key(fn_key);
+        }
+        // Phase 6 line 17 slice 6: emit the constructor for the leaf
+        // parking primitive. Matches the synthetic state-struct
+        // emission above.
+        if self.state_struct_types.contains_key(KARAC_PARK_ON_FD)
+            && !self
+                .state_machine_state_constructors
+                .contains_key(KARAC_PARK_ON_FD)
+        {
+            self.emit_state_machine_state_constructor_for_key(KARAC_PARK_ON_FD);
         }
     }
 
@@ -1390,6 +1698,55 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder
             .build_store(tag_ptr, i32_ty.const_int(0, false))
             .expect("store tag = 0 init");
+
+        // Phase 6 line 17 slice 6: initialise the trailing parked-task
+        // fields for `karac_park_on_fd` so the runtime's
+        // wakeup-dispatch path can follow `parked.poll_fn(parked.state,
+        // null)` after a wakeup arrives. The poll function is emitted
+        // in a later pass (`emit_state_machine_poll_fns`, after
+        // user-function declarations) — forward-declare it here as a
+        // bare signature so `get_function` returns a value to take the
+        // pointer of; the body lands later, at which point the
+        // poll-fn pass uses `get_function` to reuse the forward
+        // declaration rather than create a duplicate symbol.
+        if emit_key == KARAC_PARK_ON_FD {
+            let poll_name = format!("__kara_poll_{emit_key}");
+            let poll_fn = self.module.get_function(&poll_name).unwrap_or_else(|| {
+                let i8_ty = self.context.i8_type();
+                let fn_ty = i8_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+                let f = self.module.add_function(&poll_name, fn_ty, None);
+                f.set_linkage(Linkage::Internal);
+                f
+            });
+            // The two parked-task fields are appended immediately after
+            // the captured-local fields. `karac_park_on_fd` returns
+            // unit, so no terminal return field intervenes.
+            let n_captured = state_struct
+                .count_fields()
+                .checked_sub(3)
+                .expect("park_on_fd state struct = tag + N captured + 2 parked");
+            let poll_field_idx = 1 + n_captured;
+            let state_field_idx = poll_field_idx + 1;
+            let poll_field_ptr = self
+                .builder
+                .build_struct_gep(
+                    state_struct,
+                    state_ptr,
+                    poll_field_idx,
+                    "parked.poll_fn.ptr",
+                )
+                .expect("GEP parked_task.poll_fn field");
+            self.builder
+                .build_store(poll_field_ptr, poll_fn.as_global_value().as_pointer_value())
+                .expect("store parked_task.poll_fn");
+            let state_field_ptr = self
+                .builder
+                .build_struct_gep(state_struct, state_ptr, state_field_idx, "parked.state.ptr")
+                .expect("GEP parked_task.state field");
+            self.builder
+                .build_store(state_field_ptr, state_ptr)
+                .expect("store parked_task.state (self-reference)");
+        }
 
         self.builder
             .build_return(Some(&state_ptr))

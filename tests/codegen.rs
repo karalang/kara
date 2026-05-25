@@ -20911,4 +20911,167 @@ fn main() {
             assert_eq!(lines, vec!["before", "in-block", "inner-defer", "after"]);
         }
     }
+
+    // ── Phase 6 line 17 slice 6: karac_park_on_fd leaf parking primitive ──
+    //
+    // The leaf primitive recognised by codegen. When effectcheck classifies
+    // it as a network-yield callee (via the declared
+    // `sends(Network) receives(Network)` effects), the state-machine
+    // emission pass overrides its body with a hand-rolled 2-state
+    // machine: state_0 registers the fd with the event loop and returns
+    // Pending; state_1 blocks on `take_wakeups` until a wakeup arrives
+    // and returns Ready. The state struct gains a trailing
+    // `KaracParkedTask { poll_fn, state }` field; the constructor
+    // initialises both pointers so the runtime's wakeup-dispatch path
+    // can follow `parked.poll_fn(parked.state, null)` on readiness.
+
+    fn park_on_fd_source() -> &'static str {
+        "effect resource Network;
+         pub fn karac_park_on_fd(fd: i32, direction: u8) \
+             with sends(Network) receives(Network) {}
+         fn driver(socket_fd: i32) { karac_park_on_fd(socket_fd, 0); }"
+    }
+
+    #[test]
+    fn test_park_on_fd_state_struct_emitted_with_parked_task_trailing_fields() {
+        // `%kara.state.karac_park_on_fd` carries the layout
+        // `{ i32 tag, i32 fd, i8 direction, ptr poll_fn, ptr state }`.
+        // The two trailing ptrs are the `KaracParkedTask` storage; the
+        // constructor inits them and the runtime's dispatcher reads them
+        // back through the address stashed at register-fd time.
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.karac_park_on_fd = type {"))
+            .unwrap_or_else(|| panic!("missing karac_park_on_fd state struct in IR:\n{ir}"));
+        assert!(
+            line.contains("i32") && line.matches("ptr").count() >= 2,
+            "state struct must carry tag (i32) + 2 trailing parked-task ptrs: {line}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_constructor_initializes_parked_task_pointers() {
+        // The constructor `__kara_state_new_karac_park_on_fd` must
+        // store the poll-fn pointer into the parked_task.poll_fn slot
+        // (field 3) and the state pointer (self-reference) into
+        // parked_task.state (field 4).
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let ctor_body = function_body(&ir, "__kara_state_new_karac_park_on_fd")
+            .expect("constructor body must be present in IR");
+        assert!(
+            ctor_body.contains("parked.poll_fn.ptr"),
+            "constructor must GEP parked_task.poll_fn field:\n{ctor_body}"
+        );
+        assert!(
+            ctor_body.contains("parked.state.ptr"),
+            "constructor must GEP parked_task.state field:\n{ctor_body}"
+        );
+        assert!(
+            ctor_body.contains("@__kara_poll_karac_park_on_fd"),
+            "constructor must store poll-fn address into parked_task:\n{ctor_body}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_poll_fn_emits_register_fd_call_in_state_0() {
+        // state_0 calls `karac_runtime_event_loop_register_fd(fd, dir,
+        // &parked_task)` then stores `tag = 1` and returns Pending.
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
+            .expect("poll-fn body must be present");
+        assert!(
+            body.contains("@karac_runtime_event_loop_register_fd"),
+            "state_0 must call karac_runtime_event_loop_register_fd:\n{body}"
+        );
+        assert!(
+            body.contains("kara.park.parked_ptr"),
+            "state_0 must GEP &parked_task field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_poll_fn_emits_take_wakeups_call_in_state_1() {
+        // state_1 calls `karac_runtime_event_loop_take_wakeups(buf, 1, -1)`
+        // — blocking wait — then returns Ready.
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
+            .expect("poll-fn body must be present");
+        assert!(
+            body.contains("@karac_runtime_event_loop_take_wakeups"),
+            "state_1 must call karac_runtime_event_loop_take_wakeups:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_poll_fn_starts_background_thread_in_entry() {
+        // Entry block calls `karac_runtime_event_loop_start_background_thread`
+        // before dispatching on the tag — idempotent bootstrap so the
+        // runtime's poller + dispatcher are guaranteed to be running by
+        // the time register_fd is called.
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
+            .expect("poll-fn body must be present");
+        assert!(
+            body.contains("@karac_runtime_event_loop_start_background_thread"),
+            "poll-fn entry must call start_background_thread (idempotent bootstrap):\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_caller_routes_through_state_machine_intercept() {
+        // The driver that calls `karac_park_on_fd(socket_fd, 0)` should
+        // route through the slice-8d caller intercept: allocate the
+        // state struct via `__kara_state_new_karac_park_on_fd` then
+        // enter the `kara.poll_loop` shape. This verifies the leaf
+        // primitive participates in the existing state-machine
+        // composition path — its caller looks identical to a caller of
+        // any other network-boundary fn.
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let driver = function_body(&ir, "driver").expect("driver body must be present");
+        assert!(
+            driver.contains("@__kara_state_new_karac_park_on_fd"),
+            "driver must invoke state-struct constructor for karac_park_on_fd:\n{driver}"
+        );
+        assert!(
+            driver.contains("@__kara_poll_karac_park_on_fd"),
+            "driver must invoke poll-fn for karac_park_on_fd:\n{driver}"
+        );
+        assert!(
+            driver.contains("kara.poll_loop"),
+            "driver must enter the state-machine poll loop:\n{driver}"
+        );
+    }
+
+    /// Locate a function definition body by name and return its lines
+    /// from the opening `{` (exclusive) through the closing `}`.
+    /// Returns `None` if the function is not defined in the IR. Counts
+    /// braces to handle nested blocks; LLVM IR doesn't currently emit
+    /// braces inside function bodies except as block delimiters, but
+    /// the counting approach future-proofs against any inline-asm or
+    /// metadata strings that might include them.
+    fn function_body(ir: &str, name: &str) -> Option<String> {
+        let needle = format!("@{name}(");
+        let mut found_define = false;
+        let mut depth = 0i32;
+        let mut body = String::new();
+        for line in ir.lines() {
+            if !found_define {
+                if line.starts_with("define ") && line.contains(&needle) {
+                    found_define = true;
+                    depth = line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                    continue;
+                }
+            } else {
+                body.push_str(line);
+                body.push('\n');
+                depth += line.matches('{').count() as i32;
+                depth -= line.matches('}').count() as i32;
+                if depth <= 0 {
+                    return Some(body);
+                }
+            }
+        }
+        None
+    }
 }

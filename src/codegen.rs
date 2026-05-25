@@ -1363,6 +1363,56 @@ impl<'ctx> Codegen<'ctx> {
             module.add_function("strlen", strlen_type, Some(Linkage::External));
         }
 
+        // ── Phase 6 line 17 slice 6 — network-event-loop FFI surface ──────
+        //
+        // Externs consumed by the `karac_park_on_fd` leaf-primitive poll
+        // function (emitted in `emit_state_machine_poll_fn_for_key`'s
+        // special-case branch). The runtime side lives in
+        // `runtime/src/event_loop.rs`; signatures pinned by the
+        // `karac_park_on_fd_*_signature_pinned` tests in the codegen
+        // module test block.
+        let register_fd_ty = i64_type.fn_type(
+            &[
+                context.i32_type().into(), // raw_fd
+                context.i8_type().into(),  // direction (0=Read, 1=Write, 2=ReadWrite)
+                ptr_type.into(),           // parked task pointer (opaque)
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_event_loop_register_fd",
+            register_fd_ty,
+            Some(Linkage::External),
+        );
+        // `take_wakeups(out_buf, max_wakeups, timeout_nanos) -> count`.
+        // `karac_park_on_fd`'s state_1 calls this with `timeout_nanos = -1`
+        // to block until any wakeup arrives. v1 single-task model: the
+        // only fd registered is ours, so any wakeup is ours.
+        let take_wakeups_ty = i64_type.fn_type(
+            &[
+                ptr_type.into(), // out_buf: *mut KaracWakeup
+                i64_type.into(), // max_wakeups
+                i64_type.into(), // timeout_nanos (-1 = block)
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_event_loop_take_wakeups",
+            take_wakeups_ty,
+            Some(Linkage::External),
+        );
+        // Idempotent bootstrap. `karac_park_on_fd`'s state_0 calls this
+        // before `register_fd` so the background poller is guaranteed to
+        // be running before any fd is registered. The runtime is the
+        // authority on idempotency — second call returns 0 without
+        // re-spawning.
+        let start_bg_ty = context.i32_type().fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_event_loop_start_background_thread",
+            start_bg_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized
