@@ -36,6 +36,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .cloned();
         self.emit_branch_cancel_check("mcall", callee_key.as_deref());
 
+        // Phase 6 line 17 — stdlib `TcpListener.accept(ref self)`
+        // compiler-builtin dispatch. Routes through
+        // `lower_tcp_listener_accept` in `src/codegen/tcp.rs`, which
+        // emits a `karac_park_on_fd(self.fd, 0u8)` state-machine
+        // invocation followed by a `karac_runtime_tcp_accept(self.fd)`
+        // call for the raw `accept(2)`. Runs ahead of the state-
+        // machine intercept below so the compiler-builtin shape
+        // takes precedence over the generic network-boundary lowering
+        // (the baked stdlib's `accept` body is a `-1` stub — without
+        // this arm, the generic dispatch would emit a call into a
+        // non-existent symbol).
+        if let Some(ref key) = callee_key {
+            if key == "TcpListener.accept" {
+                let self_val = self.compile_expr(object)?;
+                return self.lower_tcp_listener_accept(self_val);
+            }
+        }
+
         // Phase 6 line 26 slice 8g: method-call network-boundary intercept.
         // Mirrors slice 8d's free-function intercept (`compile_call`) for
         // `obj.method(args)` shapes where the resolved `Type.method` key

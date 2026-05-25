@@ -341,6 +341,18 @@ impl<'ctx> super::Codegen<'ctx> {
         // 0 → `Ok(())`, non-zero → `Err(HttpError { message })` with a
         // pinned message string per non-zero code (matches the runtime
         // crate's return-code table).
+        // Phase 6 line 17 — `TcpListener.bind(addr) -> TcpListener`.
+        // Routes through the codegen lowering in `src/codegen/tcp.rs`
+        // which extracts the kara `String` `{ptr, len}` from the
+        // addr arg and feeds them into the runtime FFI
+        // `karac_runtime_tcp_bind(addr_ptr, addr_len) -> i32`, then
+        // wraps the returned fd into a fresh `TcpListener { fd }`
+        // struct value. The `:0` ephemeral-port + BOUND_PORT-print
+        // convention lives runtime-side (see `karac_runtime_tcp_bind`).
+        if type_name == "TcpListener" && method == "bind" && _args.len() == 1 {
+            let addr_val = self.compile_expr(&_args[0].value)?;
+            return self.lower_tcp_listener_bind(addr_val);
+        }
         if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
             {
                 let addr_val = self.compile_expr(&_args[0].value)?;

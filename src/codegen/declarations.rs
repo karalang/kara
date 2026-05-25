@@ -34,30 +34,37 @@ use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout
 /// `callee_network_yield_effect` machinery.
 pub(super) const KARAC_PARK_ON_FD: &str = "karac_park_on_fd";
 
-/// Synthesize a `StateStructLayout` for `karac_park_on_fd` from its
-/// declared parameters. The standard layout-builder
-/// (`cli::build_state_struct_layouts`) only emits an entry for
-/// functions whose body contains at least one yield-point sub-call,
-/// which excludes leaf primitives like `karac_park_on_fd` whose body
-/// is empty (it IS the yield, not a function that contains one). The
-/// trailing parked-task fields are appended in
-/// `emit_state_struct_type_for_key`, not here, to keep the layout
-/// table's shape kara-source-faithful.
-pub(super) fn synthesize_park_on_fd_layout(program: &Program) -> Option<StateStructLayout> {
-    let func = find_function_ast(program, KARAC_PARK_ON_FD)?;
-    let mut fields = Vec::with_capacity(func.params.len());
-    for param in &func.params {
-        let name = match &param.pattern.kind {
-            PatternKind::Binding(n) => n.clone(),
-            _ => continue,
-        };
-        let type_name = match &param.ty.kind {
-            TypeKind::Path(p) => p.segments.last().cloned(),
-            _ => None,
-        };
-        fields.push(StateStructField { name, type_name });
-    }
-    Some(StateStructLayout { fields })
+/// Synthesize a `StateStructLayout` for `karac_park_on_fd`. The
+/// standard layout-builder (`cli::build_state_struct_layouts`) only
+/// emits an entry for functions whose body contains at least one
+/// yield-point sub-call, which excludes leaf primitives like
+/// `karac_park_on_fd` whose body is empty (it IS the yield, not a
+/// function that contains one). The trailing parked-task fields are
+/// appended in `emit_state_struct_type_for_key`, not here, to keep
+/// the layout table's shape kara-source-faithful.
+///
+/// **Always synthesises the canonical `{fd: i32, direction: u8}` layout**
+/// regardless of whether the function is declared in the program AST.
+/// Stdlib `TcpListener.accept` / `TcpStream.read` / `TcpStream.write`
+/// codegen lowerings (assoc_call.rs) emit calls into `karac_park_on_fd`
+/// without the function appearing in user source — the symbol exists
+/// only via this synthesis. User-source declarations of
+/// `karac_park_on_fd` produce the same canonical layout (the kara
+/// signature is pinned by the runtime FFI it routes through), so the
+/// hardcoded shape is faithful to both surfaces.
+pub(super) fn synthesize_park_on_fd_layout(_program: &Program) -> Option<StateStructLayout> {
+    Some(StateStructLayout {
+        fields: vec![
+            StateStructField {
+                name: "fd".to_string(),
+                type_name: Some("i32".to_string()),
+            },
+            StateStructField {
+                name: "direction".to_string(),
+                type_name: Some("u8".to_string()),
+            },
+        ],
+    })
 }
 
 /// Decide whether a shared-struct field's source type is `Option[T]` where

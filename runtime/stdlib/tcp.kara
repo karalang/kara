@@ -1,0 +1,89 @@
+// runtime/stdlib/tcp.kara
+//
+// Phase 6 line 17 — TCP listener stdlib surface. First M1 stdlib
+// type to compose through the parking primitive (Slice 6 / Slice 7).
+//
+// **v1 surface (minimum-viable):**
+//   - `TcpListener.bind(addr: String) -> TcpListener` — binds to
+//     `addr` (`"127.0.0.1:0"` for ephemeral, `"127.0.0.1:8080"` for
+//     fixed). Prints `BOUND_PORT=<n>\n` to stdout when port is `:0`
+//     (matches `Server.serve_static`'s smoke-test convention).
+//   - `TcpListener.accept(ref self) -> i32` — yields the calling
+//     thread to the scheduler via `karac_park_on_fd(self.fd, 0u8)`
+//     until the listener is readable, then performs the raw
+//     `accept(2)` and returns the new connection's raw fd.
+//
+// **What's deferred to follow-on slices (not in this entry):**
+//   - `TcpStream` wrapper type around accepted fds + `read` / `write`
+//     methods (the same `emit_state_machine_invocation_for_park_on_fd`
+//     codegen helper will be reused).
+//   - Error handling — `bind` returning `Result[TcpListener, IoError]`
+//     and `accept` returning `Result[i32, IoError]`. v1 returns -1 on
+//     error (matching the raw FFI shape); the Result wrapping is a
+//     thin layer once a real consumer needs structured errors.
+//   - Drop semantics — `TcpListener` doesn't auto-close the fd on
+//     drop today. The test programs are short-lived (the kernel reaps
+//     fds on process exit). User-Drop dispatch in the typechecker /
+//     codegen is the precondition for adding close-on-drop, mirroring
+//     `Pool[T]`'s same deferral.
+//   - `local_addr()` / `port()` getter — for now the BOUND_PORT
+//     stdout convention covers the smoke-test readback need; once a
+//     real consumer wants programmatic access, an accessor that
+//     calls `getsockname(2)` through a new runtime FFI lands.
+//
+// **Effect set.** `bind` has no declared effect — binding a socket
+// is a one-shot syscall that doesn't park, doesn't read, doesn't
+// write. `accept` declares `sends(Network) receives(Network)` per
+// the v1 convention (`Network` unifies inbound + outbound); the
+// state-machine transform sees the effect set and the embedded
+// `karac_park_on_fd` call in the codegen lowering routes through
+// the slice 6/8 parking primitive, so callers of `listener.accept()`
+// can themselves be state-machine-transformed and the per-
+// connection task can park-and-resume rather than thread-block.
+
+// `TcpListener` carries the bound listener's raw fd. Codegen
+// reads field 0 in `lower_tcp_listener_accept` to feed
+// `karac_park_on_fd` + `karac_runtime_tcp_accept`. v1 keeps fd
+// public-visible (no field-privacy marker) on the same theory as
+// `Pool { handle_id }` — direct construction by user code is
+// possible but pointless without a kernel-side bound socket
+// matching the fd.
+struct TcpListener {
+    fd: i32,
+}
+
+impl TcpListener {
+    // Bind to `addr` (e.g. `"127.0.0.1:0"`) and return a
+    // `TcpListener` wrapping the bound fd. Returns a `TcpListener
+    // { fd: -1 }` on bind failure — v1 minimum-viable error shape;
+    // callers can check `listener.fd >= 0` to detect failure. The
+    // structured-error path (`Result[TcpListener, IoError]`) lands
+    // in a follow-on slice once a real consumer needs it.
+    //
+    // **BOUND_PORT convention.** When the requested address ends
+    // in `:0`, the runtime prints `BOUND_PORT=<port>\n` to stdout
+    // before returning so smoke tests can read back the assigned
+    // ephemeral port.
+    #[compiler_builtin]
+    fn bind(addr: String) -> TcpListener {
+        TcpListener { fd: -1 }
+    }
+
+    // Wait for the listener to become readable, then accept the
+    // next pending connection and return its raw fd. Returns -1
+    // on accept failure.
+    //
+    // **Parking convention.** The codegen lowering emits a
+    // `karac_park_on_fd(self.fd, 0u8)` invocation BEFORE the raw
+    // `accept(2)` — the yield happens at the kara state-machine
+    // level so the parent function (if itself a `with sends(Network)
+    // receives(Network)` function) composes through the slice 6/8
+    // parking machinery. A future `TcpStream.read` / `.write` /
+    // `WebSocket.recv` / `.send` will use the same
+    // `emit_state_machine_invocation_for_park_on_fd` codegen
+    // helper to thread its yield point through the same primitive.
+    #[compiler_builtin]
+    fn accept(ref self) -> i32 with sends(Network) receives(Network) {
+        -1
+    }
+}

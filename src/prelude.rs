@@ -102,6 +102,10 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // handler-dispatch path.
     "Server",
     "Request",
+    // Phase 6 line 17 — `TcpListener` stdlib type, composes through
+    // the `karac_park_on_fd` parking primitive. v1 surface is bind +
+    // accept; TcpStream + read/write land in a follow-on slice.
+    "TcpListener",
     "Base64",
     "Hex",
     "Url",
@@ -418,6 +422,9 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     ("stats.kara", include_str!("../runtime/stdlib/stats.kara")),
     ("regex.kara", include_str!("../runtime/stdlib/regex.kara")),
     ("http.kara", include_str!("../runtime/stdlib/http.kara")),
+    // Phase 6 line 17 — `TcpListener` stdlib type composing through
+    // the `karac_park_on_fd` leaf parking primitive (Slice 6 + 7).
+    ("tcp.kara", include_str!("../runtime/stdlib/tcp.kara")),
     (
         "encoding.kara",
         include_str!("../runtime/stdlib/encoding.kara"),

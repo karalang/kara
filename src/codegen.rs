@@ -56,6 +56,7 @@ mod stmts;
 mod synth;
 mod synth_display;
 mod synth_drop;
+mod tcp;
 mod types_lowering;
 mod vec_method;
 
@@ -1410,6 +1411,37 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_event_loop_start_background_thread",
             start_bg_ty,
+            Some(Linkage::External),
+        );
+
+        // ── stdlib TcpListener codegen-side wiring (Phase 6 line 17) ──────
+        //
+        // `karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i32`
+        // — backs `TcpListener.bind(addr: String) -> TcpListener`. Returns
+        // the listener fd; -1 on UTF-8 / parse / bind failure. Prints
+        // `BOUND_PORT=<n>` to stdout when the requested address ends in
+        // `:0` (ephemeral-port convention).
+        let tcp_bind_ty = context
+            .i32_type()
+            .fn_type(&[ptr_type.into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_tcp_bind",
+            tcp_bind_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tcp_accept(listener_fd: i32) -> i32` — backs
+        // the *raw* accept(2) inside `TcpListener.accept`'s codegen
+        // lowering. Caller (codegen) is responsible for parking via
+        // `karac_park_on_fd` BEFORE invoking this — the FFI itself is
+        // pure-syscall (no event-loop interaction). Returns the new
+        // connection fd; -1 on failure (incl. EAGAIN, which signals
+        // a missed-wakeup bug).
+        let tcp_accept_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into()], false);
+        module.add_function(
+            "karac_runtime_tcp_accept",
+            tcp_accept_ty,
             Some(Linkage::External),
         );
 

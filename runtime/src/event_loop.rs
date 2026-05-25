@@ -877,6 +877,103 @@ pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
     listener.into_raw_fd()
 }
 
+// ── TCP listener FFI (stdlib `TcpListener.bind` / `.accept`) ──────────────
+//
+// Two always-on FFIs (no feature gate) backing `runtime/stdlib/tcp.kara`'s
+// `TcpListener.bind(addr) -> TcpListener` and `TcpListener.accept(self)
+// -> i32`. The codegen lowering for `TcpListener.accept` calls
+// `karac_park_on_fd(self.fd, 0u8)` *before* invoking
+// `karac_runtime_tcp_accept` so the parking happens at the kara state-
+// machine level; this FFI does the *raw* accept(2) only — no parking,
+// no event-loop interaction.
+//
+// **BOUND_PORT convention.** When the address is `127.0.0.1:0` (or any
+// other ephemeral-port form), `karac_runtime_tcp_bind` emits a
+// `BOUND_PORT=<n>\n` line to stdout before returning, matching the
+// established v1 convention from `Server.serve_static`. Smoke tests
+// read the port back from stdout.
+
+/// Bind a TCP listener on `addr` (e.g. `"127.0.0.1:0"` for ephemeral-
+/// port binding). On success, print `BOUND_PORT=<port>` to stdout if
+/// the bound port was ephemeral (caller asked for `:0`), then return
+/// the raw fd via `IntoRawFd::into_raw_fd` (no destructor — the fd
+/// outlives this call so the caller can park-and-accept against it).
+///
+/// `addr_ptr` + `addr_len` are a borrowed byte slice (Kāra `String`
+/// shape — not null-terminated). Returns -1 on UTF-8 / parse / bind
+/// failure.
+///
+/// Unix-only — matches the `#[cfg(unix)]` gate on the rest of the
+/// raw-fd FFI surface. Windows IOCP integration is a separate slice.
+///
+/// # Safety
+///
+/// `addr_ptr` must point to a readable buffer of at least `addr_len`
+/// bytes (`addr_ptr` + `addr_len` describing a `&[u8]` that lives for
+/// the duration of the call) OR `addr_ptr` may be null in which case
+/// `addr_len` must be `0` (the function returns -1 in this case).
+/// The buffer is read once during the call and not retained.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i32 {
+    use std::os::unix::io::IntoRawFd;
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr = match std::str::from_utf8(bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let listener = match std::net::TcpListener::bind(addr) {
+        Ok(l) => l,
+        Err(_) => return -1,
+    };
+    // Only print BOUND_PORT for ephemeral-port binds; a fixed-port
+    // bind doesn't need the readback since the caller already knows
+    // the port. Treat `addr` ending in `:0` (or `:00...`) as the
+    // ephemeral marker — the cheapest correct check is to look at
+    // the bound port relative to the requested port.
+    if addr.rsplit(':').next() == Some("0") {
+        if let Ok(local) = listener.local_addr() {
+            println!("BOUND_PORT={}", local.port());
+            use std::io::Write;
+            let _ = std::io::stdout().flush();
+        }
+    }
+    listener.into_raw_fd()
+}
+
+/// Raw `accept(2)` on a listener fd. Does NOT park — the caller is
+/// expected to have already parked via `karac_park_on_fd(listener_fd,
+/// 0)` so the listener is known readable. Returns the new connection
+/// fd on success, -1 on failure (incl. `EAGAIN` / `EWOULDBLOCK` —
+/// which signals the readiness assumption was wrong).
+///
+/// The accepted socket is returned via `IntoRawFd::into_raw_fd` (no
+/// destructor — caller owns the close on drop).
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if listener_fd < 0 {
+        return -1;
+    }
+    // SAFETY: the listener_fd must come from a successful
+    // `karac_runtime_tcp_bind` call (or equivalent). We construct a
+    // borrowed TcpListener via from_raw_fd, accept() through it, then
+    // immediately into_raw_fd() to give the fd back without running
+    // the destructor (the listener stays open for further accepts).
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+    let result = match listener.accept() {
+        Ok((conn, _addr)) => conn.into_raw_fd(),
+        Err(_) => -1,
+    };
+    // Release ownership of the listener fd back to the caller.
+    let _ = listener.into_raw_fd();
+    result
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's
