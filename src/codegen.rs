@@ -2472,11 +2472,31 @@ impl<'ctx> Codegen<'ctx> {
     /// **Section name handling.** ELF accepts `.kara_jit_template`
     /// verbatim; Mach-O caps section names at 16 chars and uses a
     /// `__SEGMENT,__SECTION` form, so the codegen picks
-    /// `__KARA,__jittmpl` (segment 6 chars, section 8 chars) on Apple
+    /// `__TEXT,__jittmpl` (segment 5 chars, section 8 chars) on Apple
     /// targets. The platform branch reflects the karac binary's host
     /// triple (matches `create_target_machine` which uses the default
     /// triple); cross-compile to a non-host object format would need
     /// to widen this surface.
+    ///
+    /// **Why `__TEXT` and not a fresh `__KARA` segment.** Mach-O
+    /// segments are page-aligned in the file, so a fresh segment for a
+    /// 4-byte payload still costs one full page — 16 KiB on macOS,
+    /// paid by every kara binary forever. Parking the manifest inside
+    /// `__TEXT` (which every binary already carries with room to
+    /// spare) reclaims those 16 KiB at zero functional cost: the
+    /// section identifier stays `__jittmpl`, JIT-discovery readers
+    /// still find the symbol by `nm` or by walking `__TEXT`'s
+    /// sections. When post-v1 JIT actually ships, *that* karac version
+    /// adds whatever segment shape the JIT-payload needs at the
+    /// emission site — additive segment additions don't break v1
+    /// readers, and anyone running post-v1 JIT necessarily has
+    /// post-v1 karac and is rebuilding their `.kara` sources anyway
+    /// (no mainstream toolchain promises in-place binary augmentation
+    /// across compiler upgrades). The original v1 ship (`82d53e5`,
+    /// 2026-05-18) parked the manifest in `__KARA` to pre-reserve
+    /// segment shape — measurement against kata-88's bench (2026-05-25)
+    /// caught the 16-KiB-per-binary tax and the segment promise was
+    /// re-scoped to "ships when JIT does."
     ///
     /// **Target gating.** v1 emits unconditionally — the 4-byte
     /// marker has no measurable cost regardless of profile. The
@@ -2503,7 +2523,7 @@ impl<'ctx> Codegen<'ctx> {
         manifest.set_initializer(&i8_ty.const_array(&bytes));
         manifest.set_linkage(inkwell::module::Linkage::External);
         let section_name = if cfg!(target_vendor = "apple") {
-            "__KARA,__jittmpl"
+            "__TEXT,__jittmpl"
         } else {
             ".kara_jit_template"
         };

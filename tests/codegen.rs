@@ -14134,10 +14134,12 @@ fn main() {}
             initializer_ok,
             "expected version=0 / empty initializer for manifest; got:\n{ir}",
         );
-        // Section name — picks `__KARA,__jittmpl` on Apple targets
-        // (Mach-O 16-char limit) and `.kara_jit_template` elsewhere.
+        // Section name — picks `__TEXT,__jittmpl` on Apple targets
+        // (Mach-O 16-char limit; parked inside `__TEXT` instead of a
+        // fresh segment so the 4-byte payload doesn't cost a full
+        // 16 KiB page per binary) and `.kara_jit_template` elsewhere.
         let section_name = if cfg!(target_vendor = "apple") {
-            "__KARA,__jittmpl"
+            "__TEXT,__jittmpl"
         } else {
             ".kara_jit_template"
         };
@@ -14206,12 +14208,43 @@ fn main() {}
             .output()
             .expect("nm should be on PATH");
         let nm_exe_stdout = String::from_utf8_lossy(&nm_exe.stdout);
-        let _ = std::fs::remove_file(&obj_path);
-        let _ = std::fs::remove_file(&exe_path);
         assert!(
             nm_exe_stdout.contains("karac_jit_template_manifest"),
             "expected manifest symbol in linked executable; nm stdout:\n{nm_exe_stdout}",
         );
+
+        // Layer 4 (Mach-O only) — the manifest must live inside
+        // `__TEXT`, not a fresh `__KARA` segment. Regression guard for
+        // the 2026-05-25 fix that reclaimed 16 KiB per binary by
+        // parking the 4-byte manifest in `__TEXT` instead of letting
+        // it allocate its own page-aligned segment. If anyone moves
+        // the manifest back into a custom segment, the `__KARA`
+        // segment will reappear in `otool -l` and this assertion
+        // catches it. Soft-skip if `otool` isn't on PATH (e.g. CI
+        // running ELF cross-compile).
+        if cfg!(target_vendor = "apple") {
+            if let Ok(otool) = std::process::Command::new("otool")
+                .arg("-l")
+                .arg(&exe_path)
+                .output()
+            {
+                let otool_stdout = String::from_utf8_lossy(&otool.stdout);
+                assert!(
+                    !otool_stdout.contains("segname __KARA"),
+                    "manifest must live in `__TEXT`, not a fresh `__KARA` \
+                     segment (fresh segments cost 16 KiB per binary for a \
+                     4-byte payload). otool -l stdout:\n{otool_stdout}",
+                );
+                assert!(
+                    otool_stdout.contains("sectname __jittmpl"),
+                    "expected `__jittmpl` section in linked binary; otool -l \
+                     stdout:\n{otool_stdout}",
+                );
+            }
+        }
+
+        let _ = std::fs::remove_file(&obj_path);
+        let _ = std::fs::remove_file(&exe_path);
     }
 
     /// 'push_back'" message because `vec_elem_types` was unset
