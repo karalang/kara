@@ -416,24 +416,44 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     /// Find the discriminant tag for a variant name across all registered enums.
+    /// Prefers user-declared enums over the seeded built-ins (`Option`,
+    /// `Result`, `Json`, `TcpError`, …) when the variant name collides
+    /// (e.g. user `MyIoErr.Other` vs seeded `TcpError.Other`). Without
+    /// the preference, HashMap iteration order picks one at random — the
+    /// 2026-05-25 codegen-suite intermittent-hang investigation found
+    /// that the match-dispatch site sometimes loaded the wrong enum's
+    /// tag, sending all comparisons down the wildcard `_` arm.
     pub(super) fn enum_tag_for_variant(&self, variant_name: &str) -> Option<u64> {
-        for layout in self.enum_layouts.values() {
+        let mut user_hit: Option<u64> = None;
+        let mut seed_hit: Option<u64> = None;
+        for (en, layout) in &self.enum_layouts {
             if let Some(&tag) = layout.tags.get(variant_name) {
-                return Some(tag);
+                if self.seeded_enum_names.contains(en) {
+                    seed_hit.get_or_insert(tag);
+                } else {
+                    user_hit.get_or_insert(tag);
+                }
             }
         }
-        None
+        user_hit.or(seed_hit)
     }
 
     /// Find the LLVM struct type for the enum containing a given variant.
+    /// Same user-vs-seed preference as `enum_tag_for_variant`.
     #[allow(dead_code)]
     pub(super) fn enum_type_for_variant(&self, variant_name: &str) -> Option<StructType<'ctx>> {
-        for layout in self.enum_layouts.values() {
+        let mut user_hit: Option<StructType<'ctx>> = None;
+        let mut seed_hit: Option<StructType<'ctx>> = None;
+        for (en, layout) in &self.enum_layouts {
             if layout.tags.contains_key(variant_name) {
-                return Some(layout.llvm_type);
+                if self.seeded_enum_names.contains(en) {
+                    seed_hit.get_or_insert(layout.llvm_type);
+                } else {
+                    user_hit.get_or_insert(layout.llvm_type);
+                }
             }
         }
-        None
+        user_hit.or(seed_hit)
     }
 
     /// Compound-payload enum codegen (tuple-destructure helper) —

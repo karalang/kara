@@ -608,11 +608,26 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Call { callee, .. } = &value.kind {
             match &callee.kind {
                 ExprKind::Identifier(n) => {
-                    // Bare-name variant constructor.
+                    // Bare-name variant constructor. Prefer user-declared
+                    // enums over seeded built-ins (Option / Result / Json
+                    // / TcpError) when the variant name collides — same
+                    // disambiguation as `try_compile_enum_variant`. Without
+                    // this preference, HashMap iteration order picks a
+                    // seeded enum's layout non-deterministically for a
+                    // user-defined variant with the same name.
+                    let mut user_match: Option<String> = None;
+                    let mut seed_match: Option<String> = None;
                     for (en, layout) in &self.enum_layouts {
                         if layout.tags.contains_key(n) {
-                            return Some(en.clone());
+                            if self.seeded_enum_names.contains(en) {
+                                seed_match.get_or_insert_with(|| en.clone());
+                            } else {
+                                user_match.get_or_insert_with(|| en.clone());
+                            }
                         }
+                    }
+                    if let Some(name) = user_match.or(seed_match) {
+                        return Some(name);
                     }
                 }
                 ExprKind::Path { segments, .. } => {

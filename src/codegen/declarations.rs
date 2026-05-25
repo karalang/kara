@@ -2747,6 +2747,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
+            self.seeded_enum_names.insert("Option".to_string());
         }
 
         // std.json `Json` enum — baked stdlib in `runtime/stdlib/json.kara`
@@ -2824,6 +2825,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
+            self.seeded_enum_names.insert("Json".to_string());
         }
 
         // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
@@ -2870,6 +2872,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
+            self.seeded_enum_names.insert("TcpError".to_string());
         }
 
         // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3 }
@@ -2932,6 +2935,7 @@ impl<'ctx> super::Codegen<'ctx> {
                     is_shared: false,
                 },
             );
+            self.seeded_enum_names.insert("Result".to_string());
         }
     }
 

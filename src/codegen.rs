@@ -351,6 +351,18 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) union_field_types: HashMap<String, Vec<(String, BasicTypeEnum<'ctx>)>>,
     /// Enum layouts for tagged-union codegen (enum name → layout).
     pub(crate) enum_layouts: HashMap<String, EnumLayout<'ctx>>,
+    /// Names of enums seeded by `seed_builtin_enum_layouts` (`Option`,
+    /// `Result`, `Json`, `TcpError`, …) — used by the variant-name →
+    /// enum-name disambiguation in `try_compile_enum_variant` /
+    /// `infer_enum_from_value` to prefer user-declared enums when a
+    /// variant name appears in both. Without this set, HashMap iteration
+    /// order non-deterministically picks a seeded layout for a
+    /// user-defined variant with the same name (e.g. `MyIoErr.Other`
+    /// vs `TcpError.Other`), producing a wrong-shape value at the
+    /// constructor site and emitting `unreachable` for downstream
+    /// dispatch — surfaced 2026-05-25 by the codegen suite's
+    /// intermittent hang investigation.
+    pub(crate) seeded_enum_names: HashSet<String>,
     /// Nested loop stack — innermost frame is last.
     pub(crate) loop_stack: Vec<LoopFrame<'ctx>>,
     // ── Generic monomorphization ──────────────────────────────────
@@ -1773,6 +1785,7 @@ impl<'ctx> Codegen<'ctx> {
             union_types: HashMap::new(),
             union_field_types: HashMap::new(),
             enum_layouts: HashMap::new(),
+            seeded_enum_names: HashSet::new(),
             loop_stack: Vec::new(),
             generic_fns: HashMap::new(),
             generated_monos: HashSet::new(),

@@ -17,7 +17,7 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
-use super::state::VarSlot;
+use super::state::{EnumLayout, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn bind_pattern_values(
@@ -270,18 +270,34 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 let offsets: Vec<(usize, usize)> = self
                     .enum_layouts
-                    .values()
-                    .find(|l| {
+                    .iter()
+                    .find(|(_, l)| {
                         l.tags.contains_key(variant_name)
                             && scrut_struct_ty
                                 .as_ref()
                                 .map(|t| &l.llvm_type == t)
                                 .unwrap_or(true)
                     })
+                    .map(|(_, l)| l)
                     .or_else(|| {
-                        self.enum_layouts
-                            .values()
-                            .find(|l| l.tags.contains_key(variant_name))
+                        // Type-match miss — fall back to variant-name
+                        // lookup, but prefer user-declared enums over
+                        // seeded built-ins (Option/Result/Json/TcpError)
+                        // when the name collides. Without this, HashMap
+                        // iteration order picks a seeded layout
+                        // non-deterministically.
+                        let mut user_hit: Option<&EnumLayout<'ctx>> = None;
+                        let mut seed_hit: Option<&EnumLayout<'ctx>> = None;
+                        for (en, l) in &self.enum_layouts {
+                            if l.tags.contains_key(variant_name) {
+                                if self.seeded_enum_names.contains(en) {
+                                    seed_hit.get_or_insert(l);
+                                } else {
+                                    user_hit.get_or_insert(l);
+                                }
+                            }
+                        }
+                        user_hit.or(seed_hit)
                     })
                     .and_then(|l| l.field_word_offsets.get(variant_name).cloned())
                     .unwrap_or_else(|| (0..patterns.len()).map(|i| (i, 1)).collect());

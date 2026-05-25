@@ -676,19 +676,26 @@ impl<'ctx> super::Codegen<'ctx> {
     ) -> Result<Option<BasicValueEnum<'ctx>>, String> {
         // Find which enum this variant belongs to. Prefer
         // user-declared enums over the seeded built-ins (`Option`,
-        // `Result`) when a variant name (`Some` / `None` / `Ok` /
-        // `Err`) collides — without this preference, HashMap
-        // iteration order non-deterministically picks the wider seeded
-        // `Option` layout for a user-defined `MyOption.Some(...)`
-        // construction, producing a {i64,i64,i64,i64} value where
-        // the user fn expects {i64, i64}. Symmetric to the destructure
-        // disambiguation in `bind_pattern_values`.
+        // `Result`, `Json`, `TcpError`, …) when a variant name
+        // collides — without this preference, HashMap iteration order
+        // non-deterministically picks a seeded layout for a
+        // user-defined variant with the same name (e.g.
+        // `MyIoErr.Other` vs the seeded `TcpError.Other`), producing
+        // a wrong-shape value at the constructor site and emitting
+        // `unreachable` for downstream dispatch. The 2026-05-25
+        // codegen-suite hang investigation surfaced the original
+        // hard-coded `Option`/`Result` workaround missing the newer
+        // `Json` and `TcpError` seeds — replaced with the
+        // `seeded_enum_names` set so any future seeded enum is
+        // classified correctly without per-name maintenance.
+        // Symmetric to the destructure disambiguation in
+        // `bind_pattern_values`.
         let enum_name = {
             let mut user_match: Option<String> = None;
             let mut seed_match: Option<String> = None;
             for (en, layout) in &self.enum_layouts {
                 if layout.tags.contains_key(name) {
-                    if en == "Option" || en == "Result" {
+                    if self.seeded_enum_names.contains(en) {
                         seed_match.get_or_insert_with(|| en.clone());
                     } else {
                         user_match.get_or_insert_with(|| en.clone());
@@ -1405,7 +1412,7 @@ impl<'ctx> super::Codegen<'ctx> {
         for (enum_name, layout) in &self.enum_layouts {
             if let Some(&tag) = layout.tags.get(name) {
                 if layout.field_counts.get(name).copied().unwrap_or(0) == 0 {
-                    if enum_name == "Option" || enum_name == "Result" {
+                    if self.seeded_enum_names.contains(enum_name) {
                         seed_pick.get_or_insert((enum_name.clone(), tag, layout));
                     } else {
                         user_pick.get_or_insert((enum_name.clone(), tag, layout));

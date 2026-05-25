@@ -12307,6 +12307,84 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_enum_variant_name_collision_with_seeded_other_is_deterministic() {
+        // Regression gate for the 2026-05-25 codegen-suite intermittent
+        // hang. Variant-name → enum-name lookups at four codegen sites
+        // (constructor in `try_compile_enum_variant` + `try_unit_enum_variant`,
+        // match-dispatch tag in `enum_tag_for_variant`, RHS-typing in
+        // `infer_enum_from_value`) previously iterated `self.enum_layouts`
+        // (HashMap) with only a hard-coded `Option`/`Result` carve-out
+        // for the user-vs-seed preference. When a user enum's variant
+        // name collided with a *seeded* built-in (e.g., `MyIoErr.Other`
+        // colliding with `TcpError.Other`), HashMap iteration order
+        // sometimes picked the seeded layout — producing a wrong-shape
+        // enum value at construction and the wrong tag at match
+        // dispatch. The downstream symptom was a binary whose `main`
+        // ended in LLVM's `unreachable` (lowered to `brk #0x1` on macOS
+        // arm64); under `cargo test`'s parallel spawn pattern, the
+        // brk-trapped child looped forever instead of terminating (the
+        // libtest parent intercepts `EXC_BREAKPOINT` Mach exceptions).
+        // The fix replaces the hard-coded name list with a
+        // `seeded_enum_names: HashSet<String>` populated by
+        // `seed_builtin_enum_layouts`.
+        //
+        // This test compiles the same `Other`-named-variant program 20
+        // times in-process and asserts every IR is byte-identical. With
+        // the fix the variant-to-enum lookup is deterministic, so the
+        // IR is too. Pre-fix, two distinct IR shapes appeared
+        // intermittently (hash 03264… vs ea8b…). Catches any future
+        // regression at the IR level without needing to disassemble
+        // binaries or depend on cargo-test scheduling to surface a
+        // race.
+        use karac::codegen::compile_to_ir_with_options;
+        const SRC: &str = r#"
+enum MyIoErr {
+    NotFound,
+    PermissionDenied,
+    Other(String),
+}
+fn main() {
+    let e = MyIoErr.Other("disk full");
+    match e {
+        Other(msg) => println(msg),
+        _ => println("wrong variant"),
+    }
+}
+"#;
+        let mut irs: Vec<String> = Vec::with_capacity(20);
+        for _ in 0..20 {
+            let mut parsed = karac::parse(SRC);
+            assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+            let resolved = karac::resolve(&parsed.program);
+            let typed = karac::typecheck(&parsed.program, &resolved);
+            karac::lower(&mut parsed.program, &typed);
+            let ir = compile_to_ir_with_options(&parsed.program, None, None, None, None)
+                .expect("ir gen");
+            irs.push(ir);
+        }
+        let first = &irs[0];
+        for (i, ir) in irs.iter().enumerate().skip(1) {
+            assert_eq!(
+                ir, first,
+                "IR diverged at iter {i} — variant-name disambiguation \
+                 regressed; the user-vs-seed preference in \
+                 `seeded_enum_names` is leaking through."
+            );
+        }
+        // Sanity: the IR should print "disk full" through the proper
+        // String-payload destructure, not "wrong variant" via the `_`
+        // arm. Look for `%.*s\n` (the printf format for length-prefixed
+        // string output) — pre-fix the wrong path emitted `%lld\n`
+        // because the codegen mis-typed the payload as i64.
+        assert!(
+            first.contains("\"%.*s\\0A\\00\""),
+            "expected IR to emit length-prefixed string printf for \
+             `Other(msg) => println(msg)`; got an integer-format-string \
+             instead (the wrong-enum-layout symptom)"
+        );
+    }
+
     // ── Compound-payload enum drop-path: non-ASAN regressions ─────────
     //
     // DP slice (Phase 7.2 — 2026-05-09) lights up scope-exit cleanup for
