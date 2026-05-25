@@ -13,20 +13,24 @@
 //     `karac_park_on_fd(self.fd, 0u8)` until the listener is
 //     readable, then performs the raw `accept(2)` and wraps the
 //     resulting fd in a `TcpStream` struct.
-//   - `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` — parks
-//     on read-readiness, then performs `read(2)` into `buf`'s
-//     backing buffer up to `buf.len` bytes. Returns the byte count;
-//     -1 on error.
-//   - `TcpStream.write(ref self, buf: Slice[u8]) -> i64` — parks on
-//     write-readiness, then performs `write(2)` from `buf`'s
-//     backing buffer. Returns the byte count; -1 on error.
+//   - `TcpStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]`
+//     parks on read-readiness, then performs `read(2)` into `buf`'s
+//     backing buffer up to `buf.len` bytes. Returns `Ok(n)` on
+//     success (n>=0; n=0 = clean EOF) or `Err(TcpError)` on syscall
+//     failure. `TcpError.Interrupted` for EINTR, `TcpError.Other(errno)`
+//     for everything else.
+//   - `TcpStream.write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//     parks on write-readiness, then performs `write(2)` from `buf`'s
+//     backing buffer. Returns `Ok(n)` on success or `Err(TcpError)`
+//     on syscall failure (same variants as `read`).
 //
 // **What's deferred to follow-on slices (not in this entry):**
-//   - Error handling — `bind` returning `Result[TcpListener, IoError]`,
-//     `accept` returning `Result[TcpStream, IoError]`, `read` /
-//     `write` returning `Result[i64, IoError]`. v1 returns -1 on
-//     error (matching the raw FFI shape); the Result wrapping is a
-//     thin layer once a real consumer needs structured errors.
+//   - Error handling — `bind` returning `Result[TcpListener, TcpError]`,
+//     `accept` returning `Result[TcpStream, TcpError]`. v1 `bind` /
+//     `accept` still return raw wrappers with `fd: -1` on failure
+//     (same deferral discipline as previous slice; consolidated
+//     Result wrapping across all four methods lands when a real
+//     consumer needs the structured-error path on bind/accept).
 //   - Drop semantics — `TcpListener` / `TcpStream` don't auto-close
 //     the fd on drop today. The test programs are short-lived (the
 //     kernel reaps fds on process exit). User-Drop dispatch in the
@@ -47,6 +51,35 @@
 // the slice 6/8 parking primitive, so any caller of these methods
 // can itself be state-machine-transformed and the per-connection
 // task can park-and-resume rather than thread-block.
+
+// TCP-specific I/O error variants. Distinct from the generic
+// `IoError` (which is shaped around filesystem/UTF-8 concerns)
+// because TCP read/write surface a different family of failure
+// modes — most importantly `Interrupted` (EINTR), which a
+// `write_all` loop (slice 9c) needs to recognise as a retry-now
+// signal rather than a fatal error.
+//
+// **v1 variant set.** Two variants, intentionally minimal:
+//   - `Interrupted` — EINTR; syscall was interrupted by a signal,
+//     caller may retry without backoff.
+//   - `Other(errno)` — any other syscall failure; the raw errno
+//     value is preserved for caller inspection. EAGAIN /
+//     EWOULDBLOCK lands here (the parking primitive's readiness
+//     check should prevent this in practice, but the variant
+//     surfaces the case if it ever occurs). ECONNRESET / EPIPE
+//     also land here in v1.
+//
+// **Why not richer variants in v1?** Granular variants like
+// `WouldBlock` / `ConnectionReset` / `BrokenPipe` would require
+// per-errno codegen branching (currently 5+ targets per platform)
+// and the v1 demand from M1 / M2 milestone code is "can I retry"
+// vs "did something fatal happen" — which `Interrupted` vs
+// `Other` already answers. Richer variants are an additive,
+// non-breaking change when a real consumer needs them.
+enum TcpError {
+    Interrupted,
+    Other(i32),
+}
 
 // `TcpListener` carries the bound listener's raw fd. Codegen
 // reads field 0 in `lower_tcp_listener_accept` to feed
@@ -110,21 +143,27 @@ impl TcpListener {
 impl TcpStream {
     // Park on read-readiness of `self.fd`, then perform `read(2)`
     // into `buf`'s backing buffer (up to `buf.len` bytes).
-    // Returns the byte count read; -1 on error or EOF (v1 collapses
-    // the two — a Result-returning variant lands once a real
-    // consumer needs to distinguish). The park step uses
-    // `direction = 0u8` (Read).
+    // Returns `Ok(n)` with the byte count (0 = clean EOF) or
+    // `Err(TcpError)` on syscall failure (Interrupted for EINTR,
+    // Other(errno) otherwise). The park step uses `direction = 0u8`
+    // (Read). The stub body below is never executed — codegen
+    // replaces the call via `lower_tcp_stream_read`.
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> i64 with sends(Network) receives(Network) {
-        -1
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
     }
 
     // Park on write-readiness of `self.fd`, then perform `write(2)`
-    // from `buf`'s backing buffer (`buf.len` bytes). Returns the
-    // byte count written; -1 on error. The park step uses
+    // from `buf`'s backing buffer (`buf.len` bytes). Returns `Ok(n)`
+    // with the byte count written or `Err(TcpError)` on syscall
+    // failure (same variants as `read`). The park step uses
     // `direction = 1u8` (Write).
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> i64 with sends(Network) receives(Network) {
-        -1
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
     }
 }

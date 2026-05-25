@@ -2826,6 +2826,52 @@ impl<'ctx> super::Codegen<'ctx> {
             );
         }
 
+        // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
+        // into `runtime/stdlib/tcp.kara` so the typechecker sees it
+        // via `STDLIB_PROGRAMS`; codegen's `declare_enums` only walks
+        // the user's `program.items` (mirroring the Json comment
+        // below), so without this seed the `TcpError.Interrupted /
+        // .Other(errno)` variant construction in
+        // `lower_tcp_stream_io`'s Err arm would fall through to the
+        // `i64 0` placeholder and break match-extraction on the user
+        // side.
+        //
+        // Variant layout (2 i64 words total — tag + single payload):
+        //   Interrupted (tag=0) — 0 payload words
+        //   Other       (tag=1) — 1 payload word  (i32 errno widened to i64)
+        //
+        // All fields are pure integers, no heap-owning state — drop
+        // kinds are uniformly None. Future enrichment with
+        // String/Vec-carrying variants (e.g. an `Other(message:
+        // String)` shape) would need the corresponding VecOrString
+        // drop kinds.
+        if !self.enum_layouts.contains_key("TcpError") {
+            let tcp_error_type = self.context.struct_type(&[i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Interrupted".to_string(), 0u64);
+            tags.insert("Other".to_string(), 1u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Interrupted".to_string(), 0usize);
+            field_counts.insert("Other".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Interrupted".to_string(), Vec::new());
+            field_word_offsets.insert("Other".to_string(), vec![(0, 1usize)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Interrupted".to_string(), Vec::new());
+            field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::None]);
+            self.enum_layouts.insert(
+                "TcpError".to_string(),
+                EnumLayout {
+                    llvm_type: tcp_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+        }
+
         // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3 }
         // — Err(tag=0) | Ok(tag=1), payload occupies w0..w3.
         //

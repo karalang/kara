@@ -338,25 +338,28 @@ mod tcp_stream_tests {
         (port, handle)
     }
 
-    /// Slice 9a deliverable: read-direction E2E. The kara program
-    /// binds an ephemeral listener, accepts a connection, constructs
-    /// a 64-byte mutable buffer (`Array[u8, 64]` zero-initialised),
-    /// passes it as `mut buf` so the call-site marker coerces to
-    /// `mut Slice[u8]` (design.md Feature 4 Part 1½ Rule 1), calls
-    /// `stream.read(mut buf)`, then prints the returned byte count.
-    /// The harness connects, pushes a known payload, waits for the
-    /// binary to exit, and asserts the printed count is positive.
+    /// Slice 9a + 9b deliverable: read-direction E2E with Result
+    /// unwrapping. The kara program binds an ephemeral listener,
+    /// accepts a connection, constructs a 64-byte mutable buffer
+    /// (`Array[u8, 64]` zero-initialised), passes it as `mut buf` so
+    /// the call-site marker coerces to `mut Slice[u8]` (design.md
+    /// Feature 4 Part 1½ Rule 1), calls `stream.read(mut buf)`, then
+    /// matches on the returned `Result[i64, TcpError]` — printing the
+    /// byte count on `Ok(n)` or `-1` on `Err(_)`. The harness
+    /// connects, pushes a known payload, waits for the binary to
+    /// exit, and asserts the printed line is a positive integer.
     ///
     /// The byte-count assertion is the tightest portable invariant —
-    /// asserting on exact byte values would race against
-    /// `read(2)`'s partial-read semantics (the kernel might return
-    /// the bytes in one chunk or several), and slice 9 ships
-    /// single-syscall reads (no `read_exact` looping wrapper —
-    /// that's slice 9c). Positive count proves: (1) parking through
-    /// `karac_park_on_fd` returned, (2) `karac_runtime_tcp_read`
-    /// executed the syscall on the borrowed fd, (3) the FFI's i64
-    /// return value flowed back through the slice-9 codegen lowering
-    /// into the kara `let n` binding.
+    /// asserting on exact byte values would race against `read(2)`'s
+    /// partial-read semantics (the kernel might return the bytes in
+    /// one chunk or several), and slice 9 ships single-syscall reads
+    /// (no `read_exact` looping wrapper — that's slice 9c). Positive
+    /// count proves: (1) parking through `karac_park_on_fd` returned,
+    /// (2) `karac_runtime_tcp_read` executed the syscall on the
+    /// borrowed fd, (3) the FFI's i64 return value flowed through
+    /// `wrap_tcp_io_result` into a `Result.Ok(n)` aggregate, (4) the
+    /// `match` arm in user-source extracted `n` cleanly through
+    /// `reconstruct_payload_value`.
     #[test]
     fn test_tcp_stream_read_round_trip() {
         let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
@@ -374,8 +377,10 @@ mod tcp_stream_tests {
                 let listener = TcpListener.bind("127.0.0.1:0");
                 let stream = listener.accept();
                 let mut buf: Array[u8, 64] = [0u8; 64];
-                let n = stream.read(mut buf);
-                println(n);
+                match stream.read(mut buf) {
+                    Ok(n) => println(n),
+                    Err(_) => println(-1),
+                }
             }
         "#;
 

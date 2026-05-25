@@ -988,9 +988,13 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
 /// Does NOT park — the caller (codegen lowering for `TcpStream.read`)
 /// is expected to have already parked via
 /// `karac_park_on_fd(stream_fd, 0)` so the connection is known
-/// read-ready. Returns the byte count read; 0 on clean EOF; -1 on
-/// error (incl. `EAGAIN` / `EWOULDBLOCK` — which signals the
-/// readiness assumption was wrong).
+/// read-ready. Returns the byte count read on success (0 on clean
+/// EOF) or `-errno` on syscall failure — slice 9b's `Result[i64,
+/// TcpError]` wrapping decodes the negative return into the
+/// matching `TcpError` variant (Interrupted for EINTR=4,
+/// Other(errno) otherwise). `EAGAIN` / `EWOULDBLOCK` surface as
+/// `-EAGAIN` here too (the readiness assumption was wrong); the
+/// parking primitive's readiness check should normally prevent it.
 ///
 /// Unix-only.
 ///
@@ -1023,7 +1027,14 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
     let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
     let result = match stream.read(buf) {
         Ok(n) => n as i64,
-        Err(_) => -1,
+        Err(e) => {
+            let errno = e.raw_os_error().unwrap_or(1);
+            if errno > 0 {
+                -(errno as i64)
+            } else {
+                -1
+            }
+        }
     };
     // Release ownership of the stream fd back to the caller.
     let _ = stream.into_raw_fd();
@@ -1034,12 +1045,15 @@ pub unsafe extern "C" fn karac_runtime_tcp_read(
 /// buffer. Does NOT park — the caller (codegen lowering for
 /// `TcpStream.write`) is expected to have already parked via
 /// `karac_park_on_fd(stream_fd, 1)` so the connection is known
-/// write-ready. Returns the byte count written; -1 on error.
+/// write-ready. Returns the byte count written on success or
+/// `-errno` on syscall failure — symmetric with `tcp_read`. Slice
+/// 9b's `Result[i64, TcpError]` wrapping decodes the negative
+/// return into the matching `TcpError` variant.
 ///
 /// v1 issues a single `write(2)` call — partial writes return the
 /// short count, the caller can loop if needed. A future
-/// `write_all` variant can wrap the loop once a real consumer
-/// needs the convenience.
+/// `write_all` variant (slice 9c) wraps the loop using the
+/// Interrupted/Other distinction from `TcpError`.
 ///
 /// Unix-only.
 ///
@@ -1072,7 +1086,14 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
     let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
     let result = match stream.write(buf) {
         Ok(n) => n as i64,
-        Err(_) => -1,
+        Err(e) => {
+            let errno = e.raw_os_error().unwrap_or(1);
+            if errno > 0 {
+                -(errno as i64)
+            } else {
+                -1
+            }
+        }
     };
     // Release ownership of the stream fd back to the caller.
     let _ = stream.into_raw_fd();

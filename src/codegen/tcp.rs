@@ -20,15 +20,18 @@
 //!   read / write methods (and future `WebSocket.recv` / `.send`)
 //!   reuse.
 //!
-//! - `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` — parks on
-//!   `self.fd` for read-readiness (`direction = 0u8`), then calls
-//!   `karac_runtime_tcp_read(self.fd, buf.ptr, buf.len) -> i64` for
-//!   the raw `read(2)`. Returns the byte count; -1 on error.
+//! - `TcpStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]`
+//!   parks on `self.fd` for read-readiness (`direction = 0u8`), then
+//!   calls `karac_runtime_tcp_read(self.fd, buf.ptr, buf.len) -> i64`
+//!   for the raw `read(2)`. The FFI returns the byte count on success
+//!   (>= 0) or `-errno` on failure; `wrap_tcp_io_result` branches on
+//!   the sign and packs the result into `Result.Ok(n)` or
+//!   `Result.Err(TcpError.{Interrupted | Other(errno)})`.
 //!
-//! - `TcpStream.write(ref self, buf: Slice[u8]) -> i64` — parks on
-//!   `self.fd` for write-readiness (`direction = 1u8`), then calls
-//!   `karac_runtime_tcp_write(self.fd, buf.ptr, buf.len) -> i64` for
-//!   the raw `write(2)`. Returns the byte count; -1 on error.
+//! - `TcpStream.write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//!   parks on `self.fd` for write-readiness (`direction = 1u8`), then
+//!   calls `karac_runtime_tcp_write(self.fd, buf.ptr, buf.len) -> i64`
+//!   for the raw `write(2)`. Same Result wrapping as `read`.
 //!
 //! **karac_park_on_fd is emitted unconditionally** in every kara
 //! binary (see `declarations.rs::synthesize_park_on_fd_layout`). The
@@ -40,7 +43,7 @@
 //! lowering surface and the existing power-user surface (where a
 //! user declares the primitive in their own source).
 
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValue, BasicValueEnum};
 use inkwell::{AddressSpace, IntPredicate};
 
 use super::declarations::KARAC_PARK_ON_FD;
@@ -359,7 +362,180 @@ impl<'ctx> super::Codegen<'ctx> {
                 },
             )
             .unwrap_or_else(|_| panic!("call {fn_name}"));
-        Ok(io_call.try_as_basic_value().unwrap_basic())
+        let n = io_call.try_as_basic_value().unwrap_basic().into_int_value();
+        self.wrap_tcp_io_result(n, is_write)
+    }
+
+    /// Wrap an `i64 n` (the raw return from `karac_runtime_tcp_read /
+    /// _tcp_write`) in `Result[i64, TcpError]`. The runtime FFIs
+    /// return the byte count (>= 0) on success and `-errno` on
+    /// syscall failure; this lowering branches on the sign, builds
+    /// the matching variant, and phi-merges.
+    ///
+    /// Error classification uses errno=4 (EINTR; POSIX-standardised
+    /// across Linux/macOS/BSD/Solaris) — that single value picks the
+    /// `TcpError.Interrupted` variant, everything else lands in
+    /// `TcpError.Other(errno)`. The classification is a `select` pair
+    /// (no extra basic blocks) since the constructed TcpError value
+    /// is only used in the Err arm anyway.
+    fn wrap_tcp_io_result(
+        &mut self,
+        n: inkwell::values::IntValue<'ctx>,
+        is_write: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let label_prefix = if is_write { "tcp.write" } else { "tcp.read" };
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded by seed_builtin_enum_layouts");
+        let result_ty = result_layout.llvm_type;
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+
+        let tcp_err_layout = self
+            .enum_layouts
+            .get("TcpError")
+            .expect("TcpError layout seeded by seed_builtin_enum_layouts");
+        let interrupted_tag = *tcp_err_layout
+            .tags
+            .get("Interrupted")
+            .expect("TcpError.Interrupted tag seeded");
+        let other_tag = *tcp_err_layout
+            .tags
+            .get("Other")
+            .expect("TcpError.Other tag seeded");
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "tcp io Result wrapping outside fn".to_string())?;
+        let ok_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+        let err_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.err"));
+        let cont_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.cont"));
+
+        let zero_i64 = i64_ty.const_zero();
+        let is_success = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGE,
+                n,
+                zero_i64,
+                &format!("{label_prefix}.is_ok"),
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_success, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok arm: Result.Ok(n) — tag at field 0, i64 payload at field 1.
+        self.builder.position_at_end(ok_bb);
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(
+                ok_agg,
+                i64_ty.const_int(ok_tag, false),
+                0,
+                &format!("{label_prefix}.ok.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, n, 1, &format!("{label_prefix}.ok.n"))
+            .unwrap()
+            .into_struct_value();
+        let ok_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err arm: classify errno, build TcpError, wrap in Result.Err.
+        // TcpError occupies 2 words {tag, payload_word}; both go into
+        // Result's fields 1 and 2.
+        self.builder.position_at_end(err_bb);
+        let errno = self
+            .builder
+            .build_int_sub(zero_i64, n, &format!("{label_prefix}.errno"))
+            .unwrap();
+        let eintr = i64_ty.const_int(4, false);
+        let is_eintr = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                errno,
+                eintr,
+                &format!("{label_prefix}.is_eintr"),
+            )
+            .unwrap();
+        let tcp_err_word_0 = self
+            .builder
+            .build_select(
+                is_eintr,
+                i64_ty.const_int(interrupted_tag, false),
+                i64_ty.const_int(other_tag, false),
+                &format!("{label_prefix}.tcp_err.tag"),
+            )
+            .unwrap()
+            .into_int_value();
+        let tcp_err_word_1 = self
+            .builder
+            .build_select(
+                is_eintr,
+                zero_i64,
+                errno,
+                &format!("{label_prefix}.tcp_err.errno"),
+            )
+            .unwrap()
+            .into_int_value();
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                &format!("{label_prefix}.err.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                tcp_err_word_0,
+                1,
+                &format!("{label_prefix}.err.tcp_err.w0"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                tcp_err_word_1,
+                2,
+                &format!("{label_prefix}.err.tcp_err.w1"),
+            )
+            .unwrap()
+            .into_struct_value();
+        let err_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Continuation: phi between Ok and Err arms.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, &format!("{label_prefix}.result"))
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_end_bb),
+            (&err_agg.as_basic_value_enum(), err_end_bb),
+        ]);
+        Ok(phi.as_basic_value())
     }
 
     /// Extract the single `i32 fd` field from a `TcpListener` /
