@@ -4844,6 +4844,39 @@ fn test_string_clone_preserves_value() {
 }
 
 #[test]
+fn test_string_push_char_ascii() {
+    // Interpreter mirror of the codegen String.push(char) arm.
+    // `karac run` was the panic surface that surfaced the
+    // method_call_seq.rs dispatch gap; this regression test makes the
+    // arm load-bearing for the kata 71 follow-up.
+    let output = run("fn main() {\n\
+             let mut s: String = \"\";\n\
+             s.push('h');\n\
+             s.push('i');\n\
+             println(s);\n\
+             println(s.len());\n\
+         }");
+    assert_eq!(output, "hi\n2\n");
+}
+
+#[test]
+fn test_string_push_str_interpreter_dispatch() {
+    // `push_str` typecheck + codegen shipped 2026-05-23, but the
+    // interpreter dispatch arm was missing — `karac run` would panic
+    // on the unreachable arm with "method 'push_str' not found on type
+    // 'String'". This regression makes sure the same Kāra source runs
+    // through both backends with identical output.
+    let output = run("fn main() {\n\
+             let mut s: String = \"\";\n\
+             s.push_str(\"foo\");\n\
+             s.push_str(\"bar\");\n\
+             println(s);\n\
+             println(s.len());\n\
+         }");
+    assert_eq!(output, "foobar\n6\n");
+}
+
+#[test]
 fn test_map_clone_preserves_entries() {
     let output = run("fn main() {\n\
              let m: Map[String, i64] = Map.new();\n\

@@ -9176,6 +9176,43 @@ fn test_string_substring_rejects_non_int_arg() {
 }
 
 #[test]
+fn test_string_push_char_accepts() {
+    // `String.push(c: char) -> ()`. Shipped 2026-05-25 as the kata-71
+    // follow-up — the O(n²) f-string self-append shape it was working
+    // around (out = f"{out}{c}") drops to amortized O(1) per call.
+    let result = typecheck_ok(
+        r#"fn f() {
+            let mut s: String = "";
+            s.push('a');
+            s.push('b');
+        }"#,
+    );
+    assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
+}
+
+#[test]
+fn test_string_push_char_rejects_zero_args() {
+    let errors = typecheck_errors(r#"fn f() { let mut s: String = ""; s.push(); }"#);
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::WrongNumberOfArgs),
+        "Expected WrongNumberOfArgs for push with no args, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_string_push_rejects_non_char_arg() {
+    let errors = typecheck_errors(r#"fn f() { let mut s: String = ""; s.push("a"); }"#);
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "Expected TypeMismatch for push with String arg, got: {:?}",
+        errors
+    );
+}
+
+#[test]
 fn test_i64_parse_returns_option_i64() {
     // `i64.parse(s: String) -> Option[i64]`. Match-destructuring on
     // Some(n: i64) and None confirms the typechecker treats the

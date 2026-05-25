@@ -192,6 +192,49 @@ impl<'a> super::Interpreter<'a> {
                     try_write_or_panic(rc, &label).push(val);
                     return Some(Value::Unit);
                 }
+                // String.push(char): append a single Unicode scalar's
+                // UTF-8 bytes to the receiver. Receiver must be a named
+                // binding so we can rebind it through `env.set` — the
+                // codegen path mutates the {ptr,len,cap} struct in place,
+                // the interpreter mirrors that semantically by rebuilding
+                // the String. Tree-walk perf isn't a v1 goal so the O(L)
+                // per call here doesn't repeat the kata-71 O(n²)
+                // observation that motivated the surface.
+                if let Value::String(s) = &obj {
+                    let val = args.first().map(|arg| self.eval_expr_inner(&arg.value));
+                    let c = match val {
+                        Some(Value::Char(c)) => c,
+                        _ => return Some(Value::Unit),
+                    };
+                    let mut next = s.clone();
+                    next.push(c);
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::String(next));
+                    }
+                    return Some(Value::Unit);
+                }
+            }
+            // String.push_str(other: String): mutating-append other's
+            // bytes to the receiver. Codegen path lives in
+            // src/codegen/vec_method.rs (push_str arm) — same shape as
+            // Vec.extend_from_slice. Surfaced as a gap during the kata 71
+            // push(char) work — push_str typechecked + codegened cleanly
+            // but the interpreter `karac run` path was missing dispatch
+            // and panicked on the unreachable arm.
+            "push_str" => {
+                if let Value::String(s) = &obj {
+                    let val = args.first().map(|arg| self.eval_expr_inner(&arg.value));
+                    let other = match val {
+                        Some(Value::String(other)) => other,
+                        _ => return Some(Value::Unit),
+                    };
+                    let mut next = s.clone();
+                    next.push_str(&other);
+                    if let ExprKind::Identifier(name) = &object.kind {
+                        self.env.set(name, Value::String(next));
+                    }
+                    return Some(Value::Unit);
+                }
             }
             // `extend_from_slice(other: Slice[T] / Vec[T] / Array[T,N])`
             // — bulk-append source elements to self. Mirrors codegen's

@@ -303,9 +303,43 @@ impl<'a> super::TypeChecker<'a> {
                 }
                 Type::Unit
             }
+            "push" => {
+                // push(c: char) -> (). Mutating append of a single Unicode
+                // scalar value, UTF-8 encoded into the receiver's byte
+                // buffer (1–4 bytes per call). Peer of `push_str` and
+                // analog of Rust's `String::push`. Surfaced 2026-05-25
+                // by kata-katas/leetcode/71-simplify-path, whose natural
+                // shape is per-output-char append — using `f"{out}{c}"`
+                // self-append was O(n²); push(c) is amortized O(1) per
+                // call.
+                if args.len() != 1 {
+                    self.type_error(
+                        format!("'push' expects 1 argument, found {}", args.len()),
+                        span.clone(),
+                        TypeErrorKind::WrongNumberOfArgs,
+                    );
+                    for arg in args {
+                        self.infer_expr(&arg.value);
+                    }
+                } else {
+                    let arg_ty = self.infer_expr(&args[0].value);
+                    if !matches!(arg_ty, Type::Char | Type::Error) {
+                        self.type_error(
+                            format!(
+                                "'push' expects a Char argument, found '{}'",
+                                type_display(&arg_ty)
+                            ),
+                            args[0].value.span.clone(),
+                            TypeErrorKind::TypeMismatch,
+                        );
+                    }
+                }
+                Type::Unit
+            }
             // Unknown string method — typo-suggestion diagnostic if close to
             // a known name. `len` / `is_empty` / `contains` joined the
-            // enumerated list 2026-05-22; `push_str` joined 2026-05-23.
+            // enumerated list 2026-05-22; `push_str` joined 2026-05-23;
+            // `push` joined 2026-05-25 (kata 71 follow-up).
             // Further runtime-only surface (e.g. `to_uppercase`, `split`)
             // still falls through to the typo-suggestion path until
             // per-method typechecker arms land — design.md § Method
@@ -319,6 +353,7 @@ impl<'a> super::TypeChecker<'a> {
                     "contains",
                     "is_empty",
                     "len",
+                    "push",
                     "push_str",
                     "sorted",
                     "sorted_by",

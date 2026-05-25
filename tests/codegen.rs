@@ -5254,6 +5254,82 @@ fn main() {
         }
     }
 
+    // String.push(char) — codegen path. Lowering lives in
+    // `compile_vec_method`'s String-gated push arm and reuses
+    // `emit_codepoint_to_utf8` for the 1–4-byte UTF-8 encoding. The
+    // ASCII case below exercises the common 1-byte path (every per-char
+    // append in kata-katas/leetcode/71-simplify-path lands here); the
+    // multi-byte case verifies the encoder dispatch + variable-length
+    // memcpy. Each push amortizes O(1) via the power-of-two cap
+    // growth, mirroring `push_str`'s geometry.
+
+    #[test]
+    fn test_e2e_string_push_char_ascii() {
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: String = "";
+    s.push('h');
+    s.push('e');
+    s.push('l');
+    s.push('l');
+    s.push('o');
+    println(s);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["hello", "5"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_push_char_multibyte_utf8() {
+        // 'é' = 2 bytes, '日' = 3 bytes, '🦀' = 4 bytes → 9 byte len.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: String = "";
+    s.push('é');
+    s.push('日');
+    s.push('🦀');
+    println(s);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["é日🦀", "9"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_string_push_char_mixed_with_push_str() {
+        // Mixed seq of push(char) + push_str(&str) — exercises the
+        // shared {ptr,len,cap} growth + the alternating UTF-8 byte
+        // sequence vs raw bytes paths.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut s: String = "";
+    s.push_str("kara");
+    s.push('-');
+    s.push_str("rust");
+    s.push('!');
+    println(s);
+    println(s.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["kara-rust!", "10"]);
+        }
+    }
+
     // ── char print / f-string char-arm ────────────────────────────
     //
     // Pre-fix state: `ExprKind::CharLit` fell through `compile_expr`'s

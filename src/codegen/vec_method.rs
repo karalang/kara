@@ -283,6 +283,170 @@ impl<'ctx> super::Codegen<'ctx> {
                     .unwrap();
                 Ok(result)
             }
+            // String.push(char): same {ptr,len,cap} layout as Vec but the
+            // arg is a Unicode scalar that needs UTF-8 encoding before the
+            // append. Routed here based on `string_vars` membership — the
+            // disambiguator between String and Vec[u8], which share the
+            // i8 element width but differ semantically on iteration and
+            // method surface. Surfaced 2026-05-25 by
+            // kata-katas/leetcode/71-simplify-path; the existing
+            // `out = f"{out}{c}"` self-append was O(n²) per call. This
+            // arm gives the natural `out.push(c)` a 1–4-byte memcpy + an
+            // amortized power-of-two growth, matching `push_str` and
+            // analog of Rust's `String::push`. The encoding shape reuses
+            // `emit_codepoint_to_utf8` (already in use by print /
+            // f-string lowering, runtime.rs § Codepoint utilities).
+            "push" if self.string_vars.contains(var_name) => {
+                if args.is_empty() {
+                    return Err("String.push requires a Char argument".to_string());
+                }
+                let cp_val = self.compile_expr(&args[0].value)?;
+                let cp = cp_val.into_int_value();
+                let (enc_buf, enc_len) = self.emit_codepoint_to_utf8(cp);
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "spush.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "spush.len.ptr")
+                    .unwrap();
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 2, "spush.cap.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "spush.data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "spush.len")
+                    .unwrap()
+                    .into_int_value();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "spush.cap")
+                    .unwrap()
+                    .into_int_value();
+
+                // Required capacity = len + enc_len. enc_len ∈ [1,4]; the
+                // grow path doubles capacity so amortized cost is O(1)
+                // per push despite the byte-level memcpy.
+                let new_len = self
+                    .builder
+                    .build_int_add(len, enc_len, "spush.new_len")
+                    .unwrap();
+                let fn_val = self.current_fn.unwrap();
+                let grow_bb = self.context.append_basic_block(fn_val, "spush.grow");
+                let copy_bb = self.context.append_basic_block(fn_val, "spush.copy");
+                let needs_grow = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, new_len, cap, "spush.needs_grow")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(needs_grow, grow_bb, copy_bb)
+                    .unwrap();
+
+                // Grow: new_cap = max(new_len, max(4, cap * 2)) — same
+                // geometry as `push_str`.
+                self.builder.position_at_end(grow_bb);
+                let two = i64_t.const_int(2, false);
+                let four = i64_t.const_int(4, false);
+                let doubled = self
+                    .builder
+                    .build_int_mul(cap, two, "spush.doubled")
+                    .unwrap();
+                let cmp1 = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, doubled, four, "spush.cmp1")
+                    .unwrap();
+                let growth_min = self
+                    .builder
+                    .build_select(cmp1, doubled, four, "spush.growth_min")
+                    .unwrap()
+                    .into_int_value();
+                let cmp2 = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::UGT,
+                        new_len,
+                        growth_min,
+                        "spush.cmp2",
+                    )
+                    .unwrap();
+                let new_cap = self
+                    .builder
+                    .build_select(cmp2, new_len, growth_min, "spush.new_cap")
+                    .unwrap()
+                    .into_int_value();
+                let new_data = self
+                    .builder
+                    .build_call(self.malloc_fn, &[new_cap.into()], "spush.new_data")
+                    .unwrap()
+                    .try_as_basic_value()
+                    .unwrap_basic()
+                    .into_pointer_value();
+                // Copy old data (`len` bytes).
+                self.builder
+                    .build_memcpy(new_data, 1, data, 1, len)
+                    .unwrap();
+                // Free old heap buffer if any (`cap > 0` guard mirrors
+                // push_str — static-literal Strings have cap == 0 and
+                // their ptr is in the read-only string pool).
+                let zero_val = i64_t.const_int(0, false);
+                let was_heap = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::UGT, cap, zero_val, "spush.was_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "spush.free");
+                let after_free_bb = self.context.append_basic_block(fn_val, "spush.after_free");
+                self.builder
+                    .build_conditional_branch(was_heap, free_bb, after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(free_bb);
+                self.builder
+                    .build_call(self.free_fn, &[data.into()], "")
+                    .unwrap();
+                self.builder
+                    .build_unconditional_branch(after_free_bb)
+                    .unwrap();
+                self.builder.position_at_end(after_free_bb);
+
+                self.builder.build_store(data_ptr_ptr, new_data).unwrap();
+                self.builder.build_store(cap_ptr, new_cap).unwrap();
+                self.builder.build_unconditional_branch(copy_bb).unwrap();
+
+                // Copy encoded bytes (1–4) into data + len.
+                self.builder.position_at_end(copy_bb);
+                let cur_data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "spush.cur_data")
+                    .unwrap()
+                    .into_pointer_value();
+                let cur_len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "spush.cur_len")
+                    .unwrap()
+                    .into_int_value();
+                let dest = unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), cur_data, &[cur_len], "spush.dest")
+                        .unwrap()
+                };
+                self.builder
+                    .build_memcpy(dest, 1, enc_buf, 1, enc_len)
+                    .unwrap();
+                let updated_len = self
+                    .builder
+                    .build_int_add(cur_len, enc_len, "spush.updated_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, updated_len).unwrap();
+
+                Ok(i64_t.const_int(0, false).into())
+            }
             // VecDeque codegen alias: `push_back` is identical to Vec
             // `push` (append at index `len`); the VecDeque interpreter
             // ship at `4227e21` documented this front/back-shared
