@@ -8,6 +8,15 @@ publish = false
 name = "karac_runtime"
 crate-type = ["staticlib"]
 
+[features]
+# Test-only FFI surface for `tests/park_and_wake.rs`. Adds
+# `karac_runtime_test_bind_and_print_port`, which binds a TCP socket
+# on 127.0.0.1:0, prints `BOUND_PORT=<n>` to stdout, and returns the
+# raw fd. Lets a kara binary exercise the parking primitive end-to-end
+# without a real stdlib `TcpListener` (M1 work). Disabled by default;
+# the test harness builds the runtime with `--features test-helpers`.
+test-helpers = []
+
 [dependencies]
 # Slice F (`std.json`): backing impl for `karac_runtime_json_parse` /
 # `karac_runtime_json_stringify`. Locked design choice (iii) — use

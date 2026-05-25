@@ -831,6 +831,52 @@ pub extern "C" fn karac_runtime_event_loop_shutdown_background_thread() -> i32 {
     0
 }
 
+// ── Test-only FFI (Phase 6 line 17 park-and-wake E2E) ─────────────────────
+//
+// `karac_runtime_test_bind_and_print_port` exists so a kara binary can
+// exercise the parking primitive (`karac_park_on_fd`) end-to-end
+// without a real stdlib `TcpListener` (M1 stdlib work). It binds a TCP
+// listener on 127.0.0.1:0, prints `BOUND_PORT=<n>` to stdout (the
+// `tests/http_server.rs` precedent for port-readback), and returns the
+// raw fd — leaking the listener so the fd stays open for the parking
+// primitive to register against. The test harness reads the port,
+// connects to it from a worker thread to trigger readability, and
+// asserts the binary returns Ready and exits cleanly. Behind a cargo
+// feature so the symbol never lands in production binaries; the test
+// harness builds with `--features test-helpers`.
+
+/// Bind a TCP listener on 127.0.0.1:0, print `BOUND_PORT=<port>` to
+/// stdout, leak the listener (so the fd outlives this call), and
+/// return the raw fd. Returns -1 on failure.
+///
+/// Unix-only — matches the `karac_runtime_event_loop_register_fd` /
+/// `_deregister_fd` `#[cfg(unix)]` gate (raw-fd model). Windows IOCP
+/// integration is a separate slice (different fd model).
+#[cfg(all(unix, feature = "test-helpers"))]
+#[no_mangle]
+pub extern "C" fn karac_runtime_test_bind_and_print_port() -> i32 {
+    use std::os::unix::io::IntoRawFd;
+    let listener = match std::net::TcpListener::bind("127.0.0.1:0") {
+        Ok(l) => l,
+        Err(_) => return -1,
+    };
+    let port = match listener.local_addr() {
+        Ok(addr) => addr.port(),
+        Err(_) => return -1,
+    };
+    println!("BOUND_PORT={port}");
+    // Flush so the harness's BufReader sees the line promptly; the
+    // binary will immediately call `karac_park_on_fd` after this and
+    // block in `take_wakeups`, so without a flush the line could sit
+    // in the stdout buffer indefinitely.
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    // IntoRawFd consumes the listener and returns the raw fd without
+    // running the destructor — equivalent to mem::forget + as_raw_fd
+    // but with no double-ownership window.
+    listener.into_raw_fd()
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's
