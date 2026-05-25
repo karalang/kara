@@ -3536,6 +3536,96 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_reduction_per_iter_drops_emitted_in_worker_body() {
+        // Regression guard for the par_reduce per-iteration heap leak.
+        // `let result = <call returning Vec[T]>` inside the reduction
+        // body must drop `result` at the end of each iteration — without
+        // a per-iteration cleanup frame in `emit_reduce_worker_fn`, the
+        // drop registers against the worker's top frame which only drains
+        // at `exit_bb`, so every iteration's heap allocation leaks until
+        // the last one (whose `result` ptr is what the single exit-time
+        // drop runs on). Peak RSS on kata 6 (zigzag conversion) hit
+        // 498 MiB pre-fix vs 1.5 MiB on the seq lane; post-fix 6 MiB
+        // (worker stacks + per-worker partial accumulators).
+        //
+        // Structural check: the worker's `loop.body` block must contain
+        // at least one `call .* @free` (drop call) before its back-edge
+        // `br label %loop.cond`. The leaky shape had `@free` only inside
+        // `loop.exit` (after the back-edge), so this fact pins the fix.
+        let src = r#"
+fn make_vec(n: i64) -> Vec[i64] {
+    let mut v: Vec[i64] = Vec.with_capacity(n);
+    let mut i = 0i64;
+    while i < n {
+        v.push(i);
+        i = i + 1;
+    }
+    v
+}
+fn main() {
+    let mut sum = 0i64;
+    let mut k = 0i64;
+    while k < 1000i64 {
+        let result = make_vec(64);
+        sum = sum + result.len();
+        k = k + 1;
+    }
+    println(sum);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let effects = karac::effectcheck(&parsed.program);
+        let analysis = karac::concurrency_analyze(&parsed.program, &effects);
+        let ir = karac::codegen::compile_to_ir_with_options(
+            &parsed.program,
+            None,
+            Some(&analysis),
+            None,
+            None,
+        )
+        .expect("codegen failed");
+
+        let worker = extract_first_reduce_worker_body(&ir);
+        // The worker must contain a `loop.body` block AND a back-edge
+        // `br label %loop.cond`. Without the auto-par dispatch firing
+        // there'd be no worker fn at all — `extract_first_reduce_worker_body`
+        // would have panicked above.
+        assert!(
+            worker.contains("loop.body:"),
+            "worker fn missing loop.body block; worker:\n{worker}"
+        );
+        assert!(
+            worker.contains("br label %loop.cond"),
+            "worker fn missing back-edge to loop.cond; worker:\n{worker}"
+        );
+
+        // Find the byte offset of the back-edge to loop.cond and the
+        // offset of `loop.body:`. The leak-fix's per-iteration drop must
+        // appear in the IR text BETWEEN those two — that's the slice
+        // emitted inside `loop.body` after `compile_block(body)` and
+        // before the back-edge `br`. The leak shape would have any
+        // `@free` calls only in `loop.exit:` (after the back-edge).
+        let body_start = worker
+            .find("loop.body:")
+            .expect("loop.body label not found above");
+        let backedge_pos = worker[body_start..]
+            .find("br label %loop.cond")
+            .map(|p| body_start + p)
+            .expect("loop.cond back-edge not found inside loop.body");
+        let body_slice = &worker[body_start..backedge_pos];
+        assert!(
+            body_slice.contains("call void @free("),
+            "expected at least one `call void @free(...)` between `loop.body:` \
+             and the back-edge `br label %loop.cond` (per-iter cleanup drain) — \
+             this is the leak-fix invariant. body_slice:\n{body_slice}"
+        );
+    }
+
+    #[test]
     fn test_ir_reduction_mut_capture_stays_runtime() {
         // `let mut n = 8i64;` mut → const-prop must not apply (could
         // be reassigned). Worker should still read `n` from the env

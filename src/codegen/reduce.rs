@@ -1105,6 +1105,18 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         self.builder.position_at_end(body_bb);
+        // Per-iteration scope frame so body-local lets (e.g. `let result =
+        // convert_off(...)` returning a `Vec[char]`) drop at end of each
+        // iteration. Without this, every `let` inside the loop body
+        // registers cleanup against the worker's top frame (pushed at the
+        // start of this fn, drained once at `exit_bb`) — every iteration's
+        // heap allocations pile up and only the last iteration's value
+        // gets dropped. Surfaced on the kata 6 (zigzag conversion) bench
+        // whose `convert_off` returns a `Vec[char]` each of 10K iterations:
+        // peak RSS climbed to 498 MiB vs 1.5 MiB on the seq lane. Mirrors
+        // the per-iteration frame discipline in `compile_while` /
+        // `compile_loop` / `compile_for_range`.
+        self.scope_cleanup_actions.push(Vec::new());
         // Compile the body in the worker fn's scope. `self.variables` now
         // binds the accumulator + loop var + captures to the worker's
         // local allocas, so the body's compile output reads/writes them
@@ -1122,9 +1134,11 @@ impl<'ctx> super::Codegen<'ctx> {
         // builder positioned in a different basic block (nested control
         // flow). If the current block already has a terminator (e.g. a
         // body-internal `break` or `return` — both rejected upstream),
-        // skip the back-edge. Otherwise emit `k = k + 1; br cond`.
+        // skip the back-edge. Otherwise drain the per-iteration cleanup
+        // frame before emitting `k = k + 1; br cond`.
         let current_bb = self.builder.get_insert_block().unwrap();
         if current_bb.get_terminator().is_none() {
+            self.drain_top_frame_with_emit();
             let k_cur = self
                 .builder
                 .build_load(acc_int_ty, k_alloca, "k.cur")
@@ -1136,6 +1150,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 .unwrap();
             self.builder.build_store(k_alloca, k_next).unwrap();
             self.builder.build_unconditional_branch(cond_bb).unwrap();
+        } else {
+            // Body-terminator path (rejected upstream today; defensive in
+            // case future shapes admit it). The terminator path already
+            // walked its own cleanup via emit_scope_cleanup, so just pop
+            // the per-iteration frame to balance the stack.
+            self.scope_cleanup_actions.pop();
         }
 
         self.builder.position_at_end(exit_bb);
