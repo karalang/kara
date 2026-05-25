@@ -56,6 +56,41 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // Same check-mode short-circuit for `Vec.with_capacity(n)` /
+            // `VecDeque.with_capacity(n)`. The synth-mode arm in
+            // `expr_call.rs` returns `Vec[?T]` so an untyped
+            // `let mut v = Vec.with_capacity(8); v.push(x);` can pin from
+            // the downstream push; but at an annotated check-mode position
+            // (`let mut v: Vec[char] = Vec.with_capacity(8);`) the fresh
+            // typevar doesn't unify against the declared element type and
+            // `types_compatible` rejects with "expected Vec<char>, found
+            // Vec<?T0>". Adopt the expected type directly here, then
+            // typecheck the capacity arg as i64. Latent since the
+            // `with_capacity` arm landed; surfaced by the CLI typecheck-
+            // error gate added at db573a4 (the in-tree codegen tests don't
+            // gate on typecheck errors so they pass past this).
+            if args.len() == 1 {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2 && segments[1] == "with_capacity" {
+                        let collection = segments[0].as_str();
+                        let matches_expected = match (collection, expected) {
+                            ("Vec", Type::Named { name, .. }) => name == "Vec",
+                            ("VecDeque", Type::Named { name, .. }) => name == "VecDeque",
+                            _ => false,
+                        };
+                        if matches_expected {
+                            let cap_ty = self.infer_expr(&args[0].value);
+                            self.check_assignable(
+                                &Type::Int(IntSize::I64),
+                                &cap_ty,
+                                args[0].value.span.clone(),
+                            );
+                            self.record_expr_type(&expr.span, expected);
+                            return expected.clone();
+                        }
+                    }
+                }
+            }
         }
 
         // Empty prefix-literal (`Vec[]` / `Array[]` / `Set[]` / `Map[]`) at

@@ -18728,3 +18728,32 @@ fn declared_assoc_method_on_string_still_resolves() {
          }",
     );
 }
+
+#[test]
+fn vec_with_capacity_typed_let_propagates_expected_element_type() {
+    // Regression guard: `let mut v: Vec[T] = Vec.with_capacity(n);` was
+    // rejected at typecheck with "expected Vec<T>, found Vec<?T0>" because
+    // the `Vec.with_capacity(n)` arm in `infer_call` returns `Vec[?T]`
+    // (fresh typevar) so untyped-let `let v = Vec.with_capacity(8); v.push(x)`
+    // could pin from the downstream push — but at an annotated check-mode
+    // position the synth-mode typevar wasn't unified against the declared
+    // element type. The Let arm's `check_expr(value, &declared)` flowed
+    // through `types_compatible` which structurally-compared the typevar.
+    // Fix: parallel `with_capacity` arm in `check_expr` mirrors the existing
+    // `Vec.new()` check-mode short-circuit, adopting the expected type when
+    // the surface names line up. Latent since the `with_capacity` arm
+    // landed; surfaced when the CLI typecheck-error gate at db573a4 stopped
+    // letting CLI builds proceed past the typechecker. In-tree codegen tests
+    // never caught it because `run_program` doesn't gate on typecheck
+    // errors — they pass past the error straight into codegen.
+    typecheck_ok(
+        "fn main() {
+             let mut v: Vec[char] = Vec.with_capacity(5);
+             v.push('a');
+             let mut w: Vec[i64] = Vec.with_capacity(10);
+             w.push(42i64);
+             let mut d: VecDeque[i64] = VecDeque.with_capacity(8);
+             d.push_back(1i64);
+         }",
+    );
+}
