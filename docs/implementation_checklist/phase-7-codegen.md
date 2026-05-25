@@ -746,3 +746,79 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
   Once all five land, the actual phase-6 line 17 slice 9d (close-on-drop for TcpStream / TcpListener) is trivial — `impl Drop for TcpStream { fn drop(mut ref self) { karac_runtime_tcp_close(self.fd); } }` + a ~10-line `karac_runtime_tcp_close(fd: i32) -> i32` FFI in `runtime/src/event_loop.rs` wrapping `libc::close`. Same shape unblocks Pool, FileHandle, and every future stdlib type with owned-resource semantics.
 
   **Decision (2026-05-25).** Filed but not picked up. v1 staging makes this likely a P1 slice (post-M1 launch, pre-M2 polish) — the leak is unbounded but slow (one fd per connection, kernel reaps at process exit), so the production demos don't gate on it. When picked up, sequence is 1 → 2 → 3 → 4 → 5 strictly (each prereq depends on the previous's surface); estimated 7-10 person-days end-to-end. Cross-link: downstream consumers when this slice closes are phase-6 line 17 slice 9d (TcpStream / TcpListener close-on-drop), `runtime/stdlib/pool.kara` (`PooledConnection[T]` auto-return), and any FileHandle work.
+
+- [ ] **`karac test` per-test timeout (P0 — v1).** **Filed 2026-05-25.** Defensive guardrail against a hung user test hanging the whole `karac test` suite. Today `karac test` runs each `_test.kara` block sequentially through the interpreter (per [phase-4 CR-24 follow-up line ~320](phase-4-interpreter.md)) with no per-test timeout; a runaway loop or deadlock in one test leaves the runner blocked indefinitely with no recovery short of SIGINT. The motivating incident was symmetric on the karac-rust side: `cargo test --features llvm --test codegen` hung 30+ min on one flaky concurrent-`Command::output()` before the user manually interrupted (resolved via `tests/codegen.rs::output_with_hang_watchdog`, commit `62af025`). The same defense belongs at the `karac test` surface so user tests get the same unblockable-suite guarantee.
+
+  **Shape.**
+  1. [ ] **Default timeout: 30 s per test.** Generous enough for slow integration tests; tight enough that a runaway loop surfaces in seconds, not hours. On timeout: SIGKILL the test process (or interpreter task, if running in-process), mark as failed with a JSONL event of shape `{"event":"test_failed","name":"…","reason":"timed_out","timeout_s":30,"elapsed_s":30}` so downstream consumers can distinguish from assertion failures. Suite continues.
+  2. [ ] **`kara.toml` package-level override.** `[test] timeout_seconds = N` in the manifest sets the default for the whole package. Read at `karac test` invocation by `src/manifest.rs` (extends the existing `[package]` surface from phase-4 CR-24 slice 2). Numeric only, no unit suffix — matches the kara.toml minimal-surface stance.
+  3. [ ] **Per-test attribute override.** `#[test(timeout_seconds = 5)]` on the test block parses through the existing `#[test(requires=[...])]` modifier path. Override precedence: per-test > kara.toml > default 30 s.
+  4. [ ] **Test-runner integration.** `cmd_test` in `src/cli.rs` wraps each test-block invocation in a watchdog. For interpreter-mode tests (today), the watchdog is a tokio timer that aborts the test task; for codegen-mode tests (when [phase-4 CR-24 deferred coverage entry](phase-4-interpreter.md) lights up actual binary spawning), the watchdog SIGKILLs the test binary by PID.
+
+  **Why this is P0 for v1.** Every mature test runner ships per-test timeouts (Rust's libtest via `--ensure-time`, Go's `-timeout`, pytest's `pytest-timeout`); v1 launching without one would be a conspicuous regression. Cost is small — ~50 LOC plus the tokio plumbing already in the runtime.
+
+  **Out of scope.** Distinguishing "test is genuinely slow" from "test is hung" without false positives. The per-test override is the escape hatch.
+
+  **Cross-link.** Pairs with `karac run --timeout` (entry below) and `KARAC_DEADLOCK_CHECK` (entry below) — same family (hang prevention), different scope (test-runner vs CLI vs runtime).
+
+- [ ] **`karac run --timeout DURATION` CLI flag (P0 — v1).** **Filed 2026-05-25.** Opt-in wall-clock cap for ad-hoc `karac run` invocations. **No default** — `karac run` legitimately targets long-running services (web servers, daemons, REPLs, batch jobs) where any default timeout would be paternalistic and silently break real workloads. The flag covers the orthogonal case: "I expect this to finish in N seconds; fail loudly if it doesn't" (CI smoke tests, scripted invocations, exploratory `karac run examples/foo.kara` where forgetting about a runaway costs real laptop battery).
+
+  **Shape.**
+  1. [ ] **Flag parsing.** `--timeout 60s` / `--timeout 5m` / `--timeout 100ms` accepted via a small duration parser (likely `humantime`, already an indirect dep via tokio). Reject negative / zero / unparseable with a new diagnostic at the CLI surface.
+  2. [ ] **Timeout enforcement (interpreter mode).** Wrap `run_interpreter(...)` in `tokio::time::timeout(d, …)`. On timeout, the interpreter task is aborted at its next await point; for long-running pure-CPU loops without `.await`, a check-on-loop-back-edge tick (already present for cancellation in auto-par scheduling) checks the deadline.
+  3. [ ] **Timeout enforcement (compiled mode, post-v1 if `karac run --binary` ships).** Spawn the binary as subprocess; watchdog SIGTERM at deadline, SIGKILL 15 s later if still alive.
+  4. [ ] **Exit code.** On timeout, exit with code **124** to match GNU `timeout(1)` so existing shell pipelines compose. Print `karac: timed out after 60s` to stderr.
+
+  **Cost.** Small — under 100 LOC including parser + tests + interpreter integration. Mostly CLI plumbing.
+
+  **Out of scope.** SIGTERM grace period configuration (always 15 s for v1, matches GNU). Per-thread timeouts inside the user's kara program (use `defer` + an atomic deadline if needed).
+
+  **Cross-link.** Pairs with `karac test` per-test timeout (entry above) and `KARAC_DEADLOCK_CHECK` (entry below).
+
+- [ ] **`KARAC_DEADLOCK_CHECK` opt-in runtime deadlock detector (P1 — v1.x is fine).** **Filed 2026-05-25.** Runtime-side "all workers asleep" detection, modeled on Go's `panic: all goroutines are asleep - deadlock!`. Off by default — a long-blocked HTTP handler is not a deadlock — but on by default under `karac test` and recommended in CI. When enabled, the runtime spawns a watchdog thread that samples worker states periodically; if **all** workers are blocked on locks/channels AND the scheduler ready queue has been empty for K consecutive samples, dump per-worker backtraces and abort with `runtime: deadlock detected — N workers parked, no progress for K×N ms`.
+
+  **Shape.**
+  1. [ ] **Env-var gating.** `KARAC_DEADLOCK_CHECK=1` at process startup spawns the watchdog. Unset / `0` / absent → no watchdog, zero overhead in the hot path. Symmetric with `KARAC_PAR_WORKERS` (commit `d33b389`) and `KARAC_AUTO_PAR` conventions.
+  2. [ ] **Watchdog mechanism.** Single dedicated OS thread. Reads worker-state atomics every N ms (default 100 ms). Each worker maintains a small state enum — `Running`, `ParkedOnMutex(id)`, `ParkedOnChannel(id)`, `ParkedOnFd(fd)`, `Idle` — already partially tracked by the auto-par scheduler. If for K consecutive ticks (default 50 = 5 s wall) every worker is in a `Parked*` state AND the scheduler ready queue is empty, fire the dump+abort path.
+  3. [ ] **Backtrace dump.** Walk each worker's call stack via the `backtrace` crate (already an indirect dep) and write to stderr in a structured envelope (JSONL when `KARAC_OUTPUT=jsonl`, plain otherwise). Include the resource each parked worker is waiting on (mutex id, channel id, fd) and the source span of the wait site where the runtime can recover it.
+  4. [ ] **Abort semantics.** Exit code **134** (SIGABRT) to match standard "process aborted by runtime" convention. The runtime's existing atexit error-trace printer (`KARAC_ERROR_TRACE_FORMAT`, commit `42c0e8d`) catches the abort path so the dump composes with existing JSON/JSONL output modes.
+  5. [ ] **`karac test` default-on.** `cmd_test` in `src/cli.rs` sets `KARAC_DEADLOCK_CHECK=1` in the child env unless explicitly overridden — same default-on-but-overridable shape as Go's testing runtime. This is the load-bearing default; explicit `karac run` invocations stay off-by-default so production binaries don't pay even the (small) opt-in overhead unintentionally.
+
+  **Cost when disabled.** Zero — no atomic increments, no hot-path instrumentation, no allocator overhead. The state atomics already exist for auto-par scheduling.
+
+  **Cost when enabled.** One OS thread + one atomic-load-per-worker per sample tick. At 100 ms sampling with 18 workers (Apple M5 Pro reference target), that's 180 atomic loads/sec — well below noise.
+
+  **Why P1, not P0.** Reasonable people can ship v1 without this if `karac test` per-test timeout covers the test-side hang surface and `karac run --timeout` covers the dev-side surface. Production users running long-lived services don't hit this gap until they actually have a deadlock — at which point they SIGINT, reproduce in dev with `KARAC_DEADLOCK_CHECK=1`, and get the dump. Shipping in v1.x rather than v1 is acceptable.
+
+  **Out of scope.** Lock-order violation detection (TSAN territory; a separate slice). Detecting livelock (workers running but making no observable progress) — much harder, requires program-counter sampling.
+
+  **Cross-link.** Pairs with `karac test` per-test timeout and `karac run --timeout` (entries above) — same family, different scope.
+
+- [ ] **Investigate the concurrent `Command::output()` deadlock in `tests/codegen.rs` parallel runs.** **Filed 2026-05-25.** Commit `62af025` installed a per-spawn watchdog that converts the hang into a clean test failure, but the root cause was never identified. Symptoms: full `cargo test --features llvm --test codegen` ran 30+ minutes with one child kara binary (`/tmp/karac_e2e_<pid>_<id>`) consuming 50% CPU and never exiting; the *same binary* spawned standalone or via a tiny single-test runner exited in 105 ms. Serial run via `cargo test --features llvm --test codegen -- --test-threads=1` completed all 785 tests in 113 s with zero failures. Reproducer (pre-`62af025`): just run `cargo test --features llvm --test codegen` with default parallelism on M5 Pro and wait. Hang location varies (libtest scheduling is non-deterministic) but always at the `Command::new(exe).output()` site inside `run_program_capturing_inner` or one of its peers.
+
+  **Hypotheses to test.**
+  1. **FD exhaustion under load.** Hundreds of concurrent test binaries × stdin+stdout+stderr pipes; `ulimit -n` on M5 Pro is high (10240) but the test pool can still hit it under stress. Check `lsof -p <cargo_test_pid>` near the hang point.
+  2. **posix_spawn race on macOS.** std uses posix_spawn by default since Rust 1.66; concurrent spawns from many threads might hit a libc bug. Try forcing fork+exec via `Command::new(...).spawn()` configured to avoid posix_spawn, or replicate the hang with a tiny Rust binary that spawns N children in parallel from M threads.
+  3. **libtest stdout-capture interaction.** libtest captures each test's stdout/stderr by replacing global stdio handles per test; a child spawned during that swap might inherit a corrupted handle. Try `cargo test --features llvm --test codegen -- --nocapture` and see if disabling capture eliminates the hang.
+  4. **Watchdog masks the trigger.** Now that `output_with_hang_watchdog` is in place, the symptom may no longer reproduce because the watchdog kills the hung child before any cascade. Disable the watchdog locally and try to reproduce on demand.
+
+  **Why this matters.** The watchdog is defensive; the suite is unblockable but slow (~84 s with watchdog vs the original ~85 s parallel run when it didn't hang — basically unchanged). If the root cause is reproducible and fixable, no flake risk remains. If it's a libc / libtest bug, file upstream and document the workaround in `CLAUDE.md`.
+
+  **Priority.** Low — suite is unblockable, dev iteration unaffected. Pick up when there's a quiet afternoon or when the same hang shape resurfaces in CI under different load profiles.
+
+  **Cross-link.** Commit `62af025` (test-harness watchdog landing). Entry below ("Mirror watchdog into …") is independent — it can ship without root-causing this.
+
+- [ ] **Mirror `output_with_hang_watchdog` into `par_codegen.rs`, `parallax.rs`, `parallax_lite.rs`, `cli.rs`.** **Filed 2026-05-25.** Companion to commit `62af025`. The codegen suite shipped a per-spawn hang watchdog (`tests/codegen.rs::output_with_hang_watchdog`), but four other test files still call `Command::new(exe).output()` directly and have identical exposure to the same concurrent-spawn deadlock:
+
+  - `tests/par_codegen.rs` — parallel codegen end-to-end tests (highest exposure; intentionally runs heavy par workloads)
+  - `tests/parallax.rs` — parallax runtime tests
+  - `tests/parallax_lite.rs` — parallax-lite runtime tests
+  - `tests/cli.rs` — CLI end-to-end tests
+
+  **Shape.** Lift `output_with_hang_watchdog` into a shared helper module under `tests/common/spawn.rs` (Rust's integration-test layout requires the `mod common;` workaround; precedent in the codebase if any exists, otherwise establish one). Each test file's spawn sites route through it. Per-file timeout configurability is the only twist: par_codegen tests legitimately run for 5–15 s of real workload, so they need a longer default (60 s) than the 15 s codegen default; CLI tests are short and can match codegen's 15 s.
+
+  **Why not bundled into `62af025`.** Scope discipline — that commit was for the surface that *observably* hung. Each of the four files needs its own per-file timeout calibration; bundling would have ballooned both the diff and the review surface without surfacing any new design decision. Tracked here so the lesson doesn't get lost.
+
+  **Priority.** Medium — the codegen suite was the one observed to hang, but the other four are structurally similar and one of them will eventually hang under enough load. Land before any large refactor that touches the test harness so the mirror is a one-shot, not a one-per-file scattershot.
+
+  **Cross-link.** Commit `62af025`. Entry above (root-cause investigation) is the parent of this work in spirit but doesn't gate it — the watchdog mirror is defensive, root-causing is investigative.
