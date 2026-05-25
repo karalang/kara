@@ -1,38 +1,43 @@
-//! Phase 6 line 17 slice 9 — stdlib `TcpStream` E2E test.
+//! Phase 6 line 17 slice 9 + 9a — stdlib `TcpStream` E2E tests.
 //!
-//! Compiles a kara program that uses the real stdlib `TcpStream`
-//! surface — `TcpListener.bind("127.0.0.1:0")`, `listener.accept()`,
-//! then `stream.write(msg.bytes())` — runs the binary, connects to
-//! the listener from the harness thread, reads the bytes the binary
-//! wrote, and asserts they match.
+//! Two co-located tests pin both directions of the read/write
+//! round-trip:
 //!
-//! **What this exercises that the slice-8 `tests/tcp_listener.rs`
+//! - `test_tcp_stream_write_round_trip` (slice 9): kara binary calls
+//!   `stream.write(msg.bytes())` after `bind` + `accept`; harness
+//!   reads the bytes back from the TCP connection.
+//! - `test_tcp_stream_read_round_trip` (slice 9a): kara binary
+//!   constructs `let mut buf: Array[u8, N] = [0u8; N]` and calls
+//!   `stream.read(mut buf)`; harness connects, writes a known
+//!   payload, and asserts the binary observed the read returning a
+//!   positive count.
+//!
+//! **What this pins that the slice-8 `tests/tcp_listener.rs`
 //! didn't.** Slice 8 only exercised `bind` + `accept` — the park
 //! happens on read-readiness of the listener fd, the syscall is a
-//! one-shot `accept(2)`, and the test's success criteria is that
-//! the binary exits 0 after the accept call returns. Slice 9 adds
-//! `TcpStream.read` / `.write`, each of which composes another
-//! park-and-syscall pair through the same
-//! `emit_state_machine_invocation_for_park_on_fd` codegen helper.
-//! This test pins the `write` direction end-to-end: the kara
-//! binary's `write` call must park on write-readiness of the
-//! connection fd, then call `karac_runtime_tcp_write` to push the
-//! bytes — the harness reads them back from the TCP connection.
+//! one-shot `accept(2)`, and the success criterion is that the
+//! binary exits 0 after the accept call returns. Slices 9 + 9a add
+//! `TcpStream.read` / `.write`, each composing a park-and-syscall
+//! pair through the same `emit_state_machine_invocation_for_park_on_fd`
+//! codegen helper. Together they pin both directions end-to-end:
+//! the write test verifies the binary parks on write-readiness then
+//! calls `karac_runtime_tcp_write`; the read test verifies the
+//! binary parks on read-readiness then calls `karac_runtime_tcp_read`
+//! after the harness pushes bytes onto the connection.
 //!
-//! **read direction.** Wired in `src/codegen/tcp.rs` via
-//! `lower_tcp_stream_read` (the same helper, different direction
-//! discriminant), but not exercised in this E2E. The user-facing
-//! signature `read(ref self, buf: mut Slice[u8]) -> i64` requires
-//! the caller to construct a `mut Slice[u8]` — typically via
-//! `mut some_array` or `mut some_vec`. The buffer-construction
-//! shape from user-source baked-stdlib types is best exercised by
-//! a real consumer (e.g. an echo-server kara program) that lands
-//! when one is needed; the unit-shape correctness of the codegen
-//! lowering is proved by the build + linkage passes.
+//! **Slice 9a also validates the `mut buf` call-site coercion.**
+//! User-source `Array[u8, N]` literals + repeat-init (`[0u8; N]`) +
+//! the `mut buf` call-site marker (design.md Feature 4 Part 1½
+//! Rule 1) flow through the existing typechecker + codegen path to
+//! land as a `mut Slice[u8]` argument — the codegen path for
+//! `lower_tcp_stream_read` extracts `{ptr, len}` from the slice and
+//! invokes the read FFI through the parking state machine. This is
+//! the first stdlib type to exercise that coercion path through a
+//! real network FFI.
 
 #[cfg(all(unix, feature = "llvm"))]
 mod tcp_stream_tests {
-    use std::io::{BufRead, BufReader, Read};
+    use std::io::{BufRead, BufReader, Read, Write};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::sync::{Mutex, Once};
@@ -288,6 +293,200 @@ mod tcp_stream_tests {
         assert!(
             payload.contains("hello from kara"),
             "expected to receive `hello from kara` from binary, got: {payload:?}"
+        );
+    }
+
+    /// Variant of `await_bound_port` that also captures every line
+    /// emitted *after* the `BOUND_PORT=<n>` line. The slice-9a read
+    /// test asserts on a `println(n)` line that the kara binary
+    /// emits after `stream.read` returns; the original helper drops
+    /// post-port lines on the floor, so this variant keeps them in a
+    /// `Vec<String>` returned via the join handle's exit value.
+    fn await_bound_port_collect_lines(
+        stdout: std::process::ChildStdout,
+        timeout: Duration,
+    ) -> (Option<u16>, std::thread::JoinHandle<Vec<String>>) {
+        let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
+        let handle = std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            let mut line = String::new();
+            let mut port_sent = false;
+            let mut collected: Vec<String> = Vec::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line) {
+                    Ok(0) => break,
+                    Ok(_) => {
+                        let trimmed = line.trim().to_string();
+                        if !port_sent {
+                            if let Some(rest) = trimmed.strip_prefix("BOUND_PORT=") {
+                                if let Ok(p) = rest.parse::<u16>() {
+                                    let _ = port_tx.send(p);
+                                    port_sent = true;
+                                    continue;
+                                }
+                            }
+                        }
+                        collected.push(trimmed);
+                    }
+                    Err(_) => break,
+                }
+            }
+            collected
+        });
+        let port = port_rx.recv_timeout(timeout).ok();
+        (port, handle)
+    }
+
+    /// Slice 9a deliverable: read-direction E2E. The kara program
+    /// binds an ephemeral listener, accepts a connection, constructs
+    /// a 64-byte mutable buffer (`Array[u8, 64]` zero-initialised),
+    /// passes it as `mut buf` so the call-site marker coerces to
+    /// `mut Slice[u8]` (design.md Feature 4 Part 1½ Rule 1), calls
+    /// `stream.read(mut buf)`, then prints the returned byte count.
+    /// The harness connects, pushes a known payload, waits for the
+    /// binary to exit, and asserts the printed count is positive.
+    ///
+    /// The byte-count assertion is the tightest portable invariant —
+    /// asserting on exact byte values would race against
+    /// `read(2)`'s partial-read semantics (the kernel might return
+    /// the bytes in one chunk or several), and slice 9 ships
+    /// single-syscall reads (no `read_exact` looping wrapper —
+    /// that's slice 9c). Positive count proves: (1) parking through
+    /// `karac_park_on_fd` returned, (2) `karac_runtime_tcp_read`
+    /// executed the syscall on the borrowed fd, (3) the FFI's i64
+    /// return value flowed back through the slice-9 codegen lowering
+    /// into the kara `let n` binding.
+    #[test]
+    fn test_tcp_stream_read_round_trip() {
+        let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            fn main() {
+                let listener = TcpListener.bind("127.0.0.1:0");
+                let stream = listener.accept();
+                let mut buf: Array[u8, 64] = [0u8; 64];
+                let n = stream.read(mut buf);
+                println(n);
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_stream_read_e2e_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn tcp_stream_read binary");
+
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, join) = await_bound_port_collect_lines(stdout, Duration::from_secs(15));
+
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("binary did not emit BOUND_PORT line within 15s");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+
+        let connect_started = Instant::now();
+        let mut maybe_conn: Option<std::net::TcpStream> = None;
+        for _ in 0..10 {
+            if let Ok(c) = std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                maybe_conn = Some(c);
+                break;
+            }
+            if connect_started.elapsed() > Duration::from_secs(2) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let Some(mut conn) = maybe_conn else {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&exe_path);
+            panic!("could not connect to 127.0.0.1:{port} to trigger accept");
+        };
+
+        // Push the payload after the accept's park-wake has had a
+        // chance to fire. We don't close the write half — the kara
+        // `read` is a single-syscall (slice 9 ships no read_exact),
+        // so any byte arriving on the connection unblocks the park
+        // and returns a positive count to user-space.
+        let payload = b"ping\n";
+        if let Err(e) = conn.write_all(payload) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&exe_path);
+            panic!("could not write payload to connection: {e}");
+        }
+        let _ = conn.flush();
+
+        let wait_started = Instant::now();
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if wait_started.elapsed() > Duration::from_secs(10) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = std::fs::remove_file(&exe_path);
+                        panic!(
+                            "binary did not exit within 10s after harness \
+                             wrote {n} bytes — TcpStream.read did not return. \
+                             Likely the parking round-trip through \
+                             karac_park_on_fd(direction=0) or the \
+                             karac_runtime_tcp_read FFI is broken.",
+                            n = payload.len()
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&exe_path);
+                    panic!("try_wait failed: {e}");
+                }
+            }
+        };
+
+        drop(conn);
+        let lines = join.join().expect("stdout-drain thread panicked");
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "binary exited non-success {exit_status:?} — \
+             TcpStream.read returned but main() failed downstream. \
+             Lines after BOUND_PORT: {lines:?}"
+        );
+
+        let count: Option<i64> = lines.iter().find_map(|l| l.parse::<i64>().ok());
+        assert!(
+            matches!(count, Some(n) if n > 0),
+            "expected positive byte count from `println(n)` after \
+             stream.read, got lines: {lines:?}"
         );
     }
 }
