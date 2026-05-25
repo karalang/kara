@@ -570,6 +570,68 @@ fn main() {
     // ── End-to-end execution tests ────────────────────────────────
     // These compile → link → run and verify stdout.
 
+    /// Spawn a built kara test binary and capture stdout+stderr, with a
+    /// per-spawn hang watchdog.
+    ///
+    /// The test suite spawns hundreds of these concurrently under
+    /// `cargo test`'s default parallelism, and `Command::output()` was
+    /// observed to deadlock under that load on 2026-05-25 (one child
+    /// hung indefinitely in the full suite but the same binary ran fine
+    /// standalone, and `--test-threads=1` ran all 785 tests to
+    /// completion in 113 s). Without a watchdog one hung child hangs
+    /// the whole suite indefinitely; with it, the hang fails its own
+    /// test with a clear message after the timeout, the rest of the
+    /// suite continues, and the developer doesn't have to manually
+    /// interrupt cargo test to recover. 15 s is generous — the slowest
+    /// legitimate test program is well under 1 s.
+    ///
+    /// Returns `None` on spawn/wait failure (matches the existing
+    /// soft-skip pattern for environments without a working linker).
+    /// Panics on timeout — a hung child is a real bug, not an env issue.
+    fn output_with_hang_watchdog(mut cmd: std::process::Command) -> Option<std::process::Output> {
+        use std::process::Stdio;
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        const TIMEOUT: Duration = Duration::from_secs(15);
+
+        let child = cmd
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .ok()?;
+        let pid = child.id();
+
+        let (tx, rx) = mpsc::channel::<()>();
+        let watchdog = std::thread::spawn(move || {
+            if rx.recv_timeout(TIMEOUT).is_err() {
+                eprintln!(
+                    "FATAL: test child (pid {pid}) hung for >{}s — killing. \
+                     Likely a concurrent Command::output() deadlock under \
+                     cargo test parallelism. Re-run with `--test-threads=1` \
+                     to isolate, or run the failing test alone.",
+                    TIMEOUT.as_secs(),
+                );
+                let _ = std::process::Command::new("kill")
+                    .args(["-9", &pid.to_string()])
+                    .status();
+                true
+            } else {
+                false
+            }
+        });
+
+        let result = child.wait_with_output().ok();
+        let _ = tx.send(());
+        let killed = watchdog.join().unwrap_or(false);
+
+        if killed {
+            panic!("test child binary hung — see stderr above for diagnostics");
+        }
+        result
+    }
+
     fn run_program(src: &str) -> Option<String> {
         run_program_capturing(src).map(|c| c.stdout)
     }
@@ -627,7 +689,7 @@ fn main() {
         }
         link_executable(&obj_path, &exe_path).ok()?;
 
-        let output = std::process::Command::new(&exe_path).output().ok()?;
+        let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
 
         let _ = std::fs::remove_file(&obj_path);
         let _ = std::fs::remove_file(&exe_path);
@@ -667,7 +729,7 @@ fn main() {
         }
         link_executable(&obj_path, &exe_path).ok()?;
 
-        let output = std::process::Command::new(&exe_path).output().ok()?;
+        let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
 
         let _ = std::fs::remove_file(&obj_path);
         let _ = std::fs::remove_file(&exe_path);
@@ -7414,7 +7476,7 @@ fn main() {
         for (k, v) in env {
             cmd.env(k, v);
         }
-        let output = cmd.output().ok()?;
+        let output = output_with_hang_watchdog(cmd)?;
 
         let _ = std::fs::remove_file(&obj_path);
         let _ = std::fs::remove_file(&exe_path);
@@ -10904,15 +10966,15 @@ fn main() {{
             return;
         };
         let cal_t0 = Instant::now();
-        let _ = std::process::Command::new(&cal_exe).output();
+        let _ = output_with_hang_watchdog(std::process::Command::new(&cal_exe));
         let per_branch = cal_t0.elapsed();
 
         // Run the parallel binary, measure wall-clock, capture stdout.
         let par_t0 = Instant::now();
-        let par_out = match std::process::Command::new(&exe_path).output() {
-            Ok(o) => o,
-            Err(e) => {
-                eprintln!("[slice-A E2E] failed to exec parallel binary: {e}");
+        let par_out = match output_with_hang_watchdog(std::process::Command::new(&exe_path)) {
+            Some(o) => o,
+            None => {
+                eprintln!("[slice-A E2E] failed to exec parallel binary");
                 let _ = std::fs::remove_file(&obj_path);
                 let _ = std::fs::remove_file(&exe_path);
                 let _ = std::fs::remove_file(&cal_obj);
@@ -13664,7 +13726,7 @@ fn main() {
             // Link or exec failure → soft skip (matches the rest of the
             // codegen E2E suite — runtime archive may be missing in CI).
             link_executable(&obj_path, &exe_path).ok()?;
-            let output = std::process::Command::new(&exe_path).output().ok()?;
+            let output = output_with_hang_watchdog(std::process::Command::new(&exe_path))?;
             let _ = std::fs::remove_file(&obj_path);
             let _ = std::fs::remove_file(&exe_path);
             Some(String::from_utf8_lossy(&output.stdout).to_string())
