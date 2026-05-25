@@ -1444,6 +1444,36 @@ impl<'ctx> Codegen<'ctx> {
             tcp_accept_ty,
             Some(Linkage::External),
         );
+        // `karac_runtime_tcp_read(stream_fd: i32, buf_ptr: *mut u8,
+        // buf_len: i64) -> i64` — backs the *raw* read(2) inside
+        // `TcpStream.read`'s codegen lowering. Caller (codegen) is
+        // responsible for parking via `karac_park_on_fd(stream_fd, 0)`
+        // BEFORE invoking this. Returns byte count read; 0 on EOF;
+        // -1 on error.
+        let tcp_read_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tcp_read",
+            tcp_read_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tcp_write(stream_fd: i32, buf_ptr: *const u8,
+        // buf_len: i64) -> i64` — backs the *raw* write(2) inside
+        // `TcpStream.write`'s codegen lowering. Caller (codegen) is
+        // responsible for parking via `karac_park_on_fd(stream_fd, 1)`
+        // BEFORE invoking this. Returns byte count written; -1 on
+        // error.
+        let tcp_write_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tcp_write",
+            tcp_write_ty,
+            Some(Linkage::External),
+        );
 
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //

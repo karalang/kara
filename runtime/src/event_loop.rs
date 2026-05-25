@@ -974,6 +974,111 @@ pub extern "C" fn karac_runtime_tcp_accept(listener_fd: i32) -> i32 {
     result
 }
 
+// ── TCP stream read/write FFI (stdlib `TcpStream.read` / `.write`) ────────
+//
+// Always-on FFIs (no feature gate) backing `runtime/stdlib/tcp.kara`'s
+// `TcpStream.read(self, mut Slice[u8]) -> i64` and
+// `TcpStream.write(self, Slice[u8]) -> i64`. Same convention as
+// `karac_runtime_tcp_accept`: the codegen lowering parks via
+// `karac_park_on_fd(self.fd, direction)` BEFORE invoking these — so the
+// FFIs themselves are pure-syscall (no parking, no event-loop
+// interaction). Returns byte count on success; -1 on failure.
+
+/// Raw `read(2)` on a connection fd into the caller-provided buffer.
+/// Does NOT park — the caller (codegen lowering for `TcpStream.read`)
+/// is expected to have already parked via
+/// `karac_park_on_fd(stream_fd, 0)` so the connection is known
+/// read-ready. Returns the byte count read; 0 on clean EOF; -1 on
+/// error (incl. `EAGAIN` / `EWOULDBLOCK` — which signals the
+/// readiness assumption was wrong).
+///
+/// Unix-only.
+///
+/// # Safety
+///
+/// `buf_ptr` must point to a writable buffer of at least `buf_len`
+/// bytes that lives for the duration of the call OR `buf_ptr` may be
+/// null in which case `buf_len` must be `0` (the function returns 0
+/// in this case). The buffer is written to once during the call and
+/// not retained.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_read(
+    stream_fd: i32,
+    buf_ptr: *mut u8,
+    buf_len: i64,
+) -> i64 {
+    use std::io::Read;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if stream_fd < 0 {
+        return -1;
+    }
+    if buf_ptr.is_null() || buf_len <= 0 {
+        return 0;
+    }
+    let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
+    // SAFETY: the stream_fd must come from a successful
+    // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
+    // TcpStream wrapper avoids destructor while reading.
+    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
+    let result = match stream.read(buf) {
+        Ok(n) => n as i64,
+        Err(_) => -1,
+    };
+    // Release ownership of the stream fd back to the caller.
+    let _ = stream.into_raw_fd();
+    result
+}
+
+/// Raw `write(2)` on a connection fd from the caller-provided
+/// buffer. Does NOT park — the caller (codegen lowering for
+/// `TcpStream.write`) is expected to have already parked via
+/// `karac_park_on_fd(stream_fd, 1)` so the connection is known
+/// write-ready. Returns the byte count written; -1 on error.
+///
+/// v1 issues a single `write(2)` call — partial writes return the
+/// short count, the caller can loop if needed. A future
+/// `write_all` variant can wrap the loop once a real consumer
+/// needs the convenience.
+///
+/// Unix-only.
+///
+/// # Safety
+///
+/// `buf_ptr` must point to a readable buffer of at least `buf_len`
+/// bytes that lives for the duration of the call OR `buf_ptr` may
+/// be null in which case `buf_len` must be `0` (the function
+/// returns 0 in this case). The buffer is read once during the
+/// call and not retained.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tcp_write(
+    stream_fd: i32,
+    buf_ptr: *const u8,
+    buf_len: i64,
+) -> i64 {
+    use std::io::Write;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if stream_fd < 0 {
+        return -1;
+    }
+    if buf_ptr.is_null() || buf_len <= 0 {
+        return 0;
+    }
+    let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
+    // SAFETY: the stream_fd must come from a successful
+    // `karac_runtime_tcp_accept` call (or equivalent). Borrowed
+    // TcpStream wrapper avoids destructor while writing.
+    let mut stream = std::net::TcpStream::from_raw_fd(stream_fd);
+    let result = match stream.write(buf) {
+        Ok(n) => n as i64,
+        Err(_) => -1,
+    };
+    // Release ownership of the stream fd back to the caller.
+    let _ = stream.into_raw_fd();
+    result
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's

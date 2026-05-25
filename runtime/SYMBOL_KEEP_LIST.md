@@ -110,6 +110,10 @@ transform (phase 6 line 18). Unix-only on the fd-registration entries;
 | `karac_runtime_scheduler_start_dispatcher` | `extern "C" fn() -> i32` | Slice 4. Spawn the scheduler dispatcher thread; auto-starts the background poller if not running. Idempotent. |
 | `karac_runtime_scheduler_shutdown_dispatcher` | `extern "C" fn() -> i32` | Slice 4. Signal the dispatcher to stop, join the thread, clear the global slot. -1 if not running. Does NOT stop the poller. |
 | `karac_runtime_scheduler_stats_snapshot` | `unsafe extern "C" fn(out: *mut KaracSchedulerStats) -> i32` | Slice 5. Read the dispatcher's atomic counters (polls / ready_observations / err_observations / pending_observations) into a caller-allocated buffer. -1 if not running. |
+| `karac_runtime_tcp_bind` (unix) | `unsafe extern "C" fn(addr_ptr: *const u8, addr_len: i64) -> i32` | Slice 8. Backs `TcpListener.bind(addr)`. Binds a TCP listener, prints `BOUND_PORT=<n>` for ephemeral binds, returns the raw fd. -1 on error. |
+| `karac_runtime_tcp_accept` (unix) | `extern "C" fn(listener_fd: i32) -> i32` | Slice 8. Backs `TcpListener.accept(self)`'s syscall step (after codegen-emitted park). Raw `accept(2)` — no parking, no event-loop interaction. Returns new connection fd; -1 on error. |
+| `karac_runtime_tcp_read` (unix) | `unsafe extern "C" fn(stream_fd: i32, buf_ptr: *mut u8, buf_len: i64) -> i64` | Slice 9. Backs `TcpStream.read(self, buf)`'s syscall step (after codegen-emitted park). Raw `read(2)`. Returns byte count; 0 on EOF; -1 on error. |
+| `karac_runtime_tcp_write` (unix) | `unsafe extern "C" fn(stream_fd: i32, buf_ptr: *const u8, buf_len: i64) -> i64` | Slice 9. Backs `TcpStream.write(self, buf)`'s syscall step (after codegen-emitted park). Raw `write(2)`. Returns byte count; -1 on error. |
 
 Repr-C type also exported: `KaracSchedulerStats { polls: u64, ready_observations: u64, err_observations: u64, pending_observations: u64 }` — written by `karac_runtime_scheduler_stats_snapshot` into the caller-allocated buffer.
 
@@ -168,7 +172,7 @@ an explicit keep-list at the codegen end.
 
 ## Summary
 
-- **Total `#[no_mangle]` exports (2026-05-17 audit):** 47.
+- **Total `#[no_mangle]` exports (2026-05-25 audit):** 51.
   - 4 carried over from 2026-05-07: `karac_par_run`, `karac_error_trace_push`, `karac_error_trace_clear`, `karac_string_clone`.
   - 15 `karac_map_*` (unchanged from 2026-05-07).
   - 18 added 2026-05-07 → 2026-05-12: 5 `karac_provider_*`, `karac_runtime_get_current_frame`, `karac_runtime_for_each_active_frame`, `karac_runtime_has_debug_metadata`, `karac_runtime_list_par_blocks_into`, 4 `karac_runtime_http_*` getters/setters, 2 `karac_runtime_serve_http*`, 4 `karac_runtime_json_*`, `karac_vec_sort_by`.
@@ -176,6 +180,8 @@ an explicit keep-list at the codegen end.
   - 3 added 2026-05-17 (slice 3): `karac_runtime_event_loop_start_background_thread`, `karac_runtime_event_loop_take_wakeups`, `karac_runtime_event_loop_shutdown_background_thread` — phase 6 line 17 slice 3 (background poller thread + wakeup queue).
   - 2 added 2026-05-17 (slice 4): `karac_runtime_scheduler_start_dispatcher`, `karac_runtime_scheduler_shutdown_dispatcher` — phase 6 line 17 slice 4 (scheduler dispatcher thread that drives parked tasks on wakeup).
   - 1 added 2026-05-17 (slice 5): `karac_runtime_scheduler_stats_snapshot` — phase 6 line 17 slice 5 (atomic-counter snapshot for diagnostics + tests).
+  - 2 added 2026-05-25 (slice 8): `karac_runtime_tcp_bind` (unix), `karac_runtime_tcp_accept` (unix) — phase 6 line 17 slice 8 (stdlib `TcpListener` syscall surface).
+  - 2 added 2026-05-25 (slice 9): `karac_runtime_tcp_read` (unix), `karac_runtime_tcp_write` (unix) — phase 6 line 17 slice 9 (stdlib `TcpStream` syscall surface).
 - **Total libc `extern "C"` imports:** 1 (`atexit`).
 - **Total private `extern "C"` callbacks:** 1 (`print_trace_at_exit`, registered with `atexit`).
 - **`#[used]` / `#[link_section(…)]` / `#[ctor]` / `#[dtor]`:** none.

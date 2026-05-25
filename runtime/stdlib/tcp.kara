@@ -1,31 +1,37 @@
 // runtime/stdlib/tcp.kara
 //
-// Phase 6 line 17 — TCP listener stdlib surface. First M1 stdlib
-// type to compose through the parking primitive (Slice 6 / Slice 7).
+// Phase 6 line 17 — TCP stdlib surface. M1 stdlib types composing
+// through the parking primitive (Slice 6 / Slice 7).
 //
-// **v1 surface (minimum-viable):**
+// **v1 surface:**
 //   - `TcpListener.bind(addr: String) -> TcpListener` — binds to
 //     `addr` (`"127.0.0.1:0"` for ephemeral, `"127.0.0.1:8080"` for
 //     fixed). Prints `BOUND_PORT=<n>\n` to stdout when port is `:0`
 //     (matches `Server.serve_static`'s smoke-test convention).
-//   - `TcpListener.accept(ref self) -> i32` — yields the calling
-//     thread to the scheduler via `karac_park_on_fd(self.fd, 0u8)`
-//     until the listener is readable, then performs the raw
-//     `accept(2)` and returns the new connection's raw fd.
+//   - `TcpListener.accept(ref self) -> TcpStream` — yields the
+//     calling thread to the scheduler via
+//     `karac_park_on_fd(self.fd, 0u8)` until the listener is
+//     readable, then performs the raw `accept(2)` and wraps the
+//     resulting fd in a `TcpStream` struct.
+//   - `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` — parks
+//     on read-readiness, then performs `read(2)` into `buf`'s
+//     backing buffer up to `buf.len` bytes. Returns the byte count;
+//     -1 on error.
+//   - `TcpStream.write(ref self, buf: Slice[u8]) -> i64` — parks on
+//     write-readiness, then performs `write(2)` from `buf`'s
+//     backing buffer. Returns the byte count; -1 on error.
 //
 // **What's deferred to follow-on slices (not in this entry):**
-//   - `TcpStream` wrapper type around accepted fds + `read` / `write`
-//     methods (the same `emit_state_machine_invocation_for_park_on_fd`
-//     codegen helper will be reused).
-//   - Error handling — `bind` returning `Result[TcpListener, IoError]`
-//     and `accept` returning `Result[i32, IoError]`. v1 returns -1 on
+//   - Error handling — `bind` returning `Result[TcpListener, IoError]`,
+//     `accept` returning `Result[TcpStream, IoError]`, `read` /
+//     `write` returning `Result[i64, IoError]`. v1 returns -1 on
 //     error (matching the raw FFI shape); the Result wrapping is a
 //     thin layer once a real consumer needs structured errors.
-//   - Drop semantics — `TcpListener` doesn't auto-close the fd on
-//     drop today. The test programs are short-lived (the kernel reaps
-//     fds on process exit). User-Drop dispatch in the typechecker /
-//     codegen is the precondition for adding close-on-drop, mirroring
-//     `Pool[T]`'s same deferral.
+//   - Drop semantics — `TcpListener` / `TcpStream` don't auto-close
+//     the fd on drop today. The test programs are short-lived (the
+//     kernel reaps fds on process exit). User-Drop dispatch in the
+//     typechecker / codegen is the precondition for adding
+//     close-on-drop, mirroring `Pool[T]`'s same deferral.
 //   - `local_addr()` / `port()` getter — for now the BOUND_PORT
 //     stdout convention covers the smoke-test readback need; once a
 //     real consumer wants programmatic access, an accessor that
@@ -33,13 +39,14 @@
 //
 // **Effect set.** `bind` has no declared effect — binding a socket
 // is a one-shot syscall that doesn't park, doesn't read, doesn't
-// write. `accept` declares `sends(Network) receives(Network)` per
-// the v1 convention (`Network` unifies inbound + outbound); the
-// state-machine transform sees the effect set and the embedded
+// write. `accept` / `read` / `write` each declare
+// `sends(Network) receives(Network)` per the v1 convention
+// (`Network` unifies inbound + outbound); the state-machine
+// transform sees the effect set and the embedded
 // `karac_park_on_fd` call in the codegen lowering routes through
-// the slice 6/8 parking primitive, so callers of `listener.accept()`
-// can themselves be state-machine-transformed and the per-
-// connection task can park-and-resume rather than thread-block.
+// the slice 6/8 parking primitive, so any caller of these methods
+// can itself be state-machine-transformed and the per-connection
+// task can park-and-resume rather than thread-block.
 
 // `TcpListener` carries the bound listener's raw fd. Codegen
 // reads field 0 in `lower_tcp_listener_accept` to feed
@@ -49,6 +56,18 @@
 // possible but pointless without a kernel-side bound socket
 // matching the fd.
 struct TcpListener {
+    fd: i32,
+}
+
+// `TcpStream` wraps an accepted (or connected) socket fd. Same
+// layout discipline as `TcpListener` — the single `i32 fd` field
+// lets codegen reach the underlying descriptor via
+// `extract_value` (struct-value receiver) or `struct_gep`
+// (ref-self pointer receiver). `read` / `write` codegen
+// lowerings extract `self.fd`, park on the appropriate
+// direction, then call into the raw `karac_runtime_tcp_read` /
+// `_write` FFIs for the syscall.
+struct TcpStream {
     fd: i32,
 }
 
@@ -70,20 +89,42 @@ impl TcpListener {
     }
 
     // Wait for the listener to become readable, then accept the
-    // next pending connection and return its raw fd. Returns -1
-    // on accept failure.
+    // next pending connection and return a `TcpStream` wrapping
+    // its raw fd. Returns a `TcpStream { fd: -1 }` on accept
+    // failure.
     //
     // **Parking convention.** The codegen lowering emits a
     // `karac_park_on_fd(self.fd, 0u8)` invocation BEFORE the raw
     // `accept(2)` — the yield happens at the kara state-machine
     // level so the parent function (if itself a `with sends(Network)
     // receives(Network)` function) composes through the slice 6/8
-    // parking machinery. A future `TcpStream.read` / `.write` /
-    // `WebSocket.recv` / `.send` will use the same
+    // parking machinery. `TcpStream.read` / `.write` use the same
     // `emit_state_machine_invocation_for_park_on_fd` codegen
-    // helper to thread its yield point through the same primitive.
+    // helper to thread their yield points through the same primitive.
     #[compiler_builtin]
-    fn accept(ref self) -> i32 with sends(Network) receives(Network) {
+    fn accept(ref self) -> TcpStream with sends(Network) receives(Network) {
+        TcpStream { fd: -1 }
+    }
+}
+
+impl TcpStream {
+    // Park on read-readiness of `self.fd`, then perform `read(2)`
+    // into `buf`'s backing buffer (up to `buf.len` bytes).
+    // Returns the byte count read; -1 on error or EOF (v1 collapses
+    // the two — a Result-returning variant lands once a real
+    // consumer needs to distinguish). The park step uses
+    // `direction = 0u8` (Read).
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> i64 with sends(Network) receives(Network) {
+        -1
+    }
+
+    // Park on write-readiness of `self.fd`, then perform `write(2)`
+    // from `buf`'s backing buffer (`buf.len` bytes). Returns the
+    // byte count written; -1 on error. The park step uses
+    // `direction = 1u8` (Write).
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> i64 with sends(Network) receives(Network) {
         -1
     }
 }

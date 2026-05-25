@@ -1,6 +1,6 @@
-//! Codegen for stdlib `TcpListener` (`runtime/stdlib/tcp.kara`).
+//! Codegen for stdlib `TcpListener` / `TcpStream` (`runtime/stdlib/tcp.kara`).
 //!
-//! Two `#[compiler_builtin]` methods:
+//! Four `#[compiler_builtin]` methods:
 //!
 //! - `TcpListener.bind(addr: String) -> TcpListener` — calls
 //!   `karac_runtime_tcp_bind(addr_ptr, addr_len) -> i32`, then wraps
@@ -9,16 +9,26 @@
 //!   address ends in `:0` (ephemeral-port convention, matching
 //!   `Server.serve_static`).
 //!
-//! - `TcpListener.accept(ref self) -> i32` — Path A (per the Slice 6
-//!   design call): parks via `karac_park_on_fd(self.fd, 0u8)` so the
-//!   yield happens at the kara state-machine level, then calls
+//! - `TcpListener.accept(ref self) -> TcpStream` — Path A (per the
+//!   Slice 6 design call): parks via `karac_park_on_fd(self.fd, 0u8)`
+//!   so the yield happens at the kara state-machine level, then calls
 //!   `karac_runtime_tcp_accept(self.fd)` for the raw `accept(2)` to
-//!   pick up the now-readable connection. The returned i32 is the new
-//!   connection's raw fd (-1 on error). The parking step composes
-//!   through the same `emit_state_machine_invocation_for_park_on_fd`
-//!   helper that future stdlib yielding methods
-//!   (`TcpStream.read` / `.write`, `WebSocket.recv` / `.send`, …)
-//!   will reuse.
+//!   pick up the now-readable connection. The returned i32 fd is
+//!   wrapped in a fresh `TcpStream { fd }` struct value. The parking
+//!   step composes through the same
+//!   `emit_state_machine_invocation_for_park_on_fd` helper that the
+//!   read / write methods (and future `WebSocket.recv` / `.send`)
+//!   reuse.
+//!
+//! - `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` — parks on
+//!   `self.fd` for read-readiness (`direction = 0u8`), then calls
+//!   `karac_runtime_tcp_read(self.fd, buf.ptr, buf.len) -> i64` for
+//!   the raw `read(2)`. Returns the byte count; -1 on error.
+//!
+//! - `TcpStream.write(ref self, buf: Slice[u8]) -> i64` — parks on
+//!   `self.fd` for write-readiness (`direction = 1u8`), then calls
+//!   `karac_runtime_tcp_write(self.fd, buf.ptr, buf.len) -> i64` for
+//!   the raw `write(2)`. Returns the byte count; -1 on error.
 //!
 //! **karac_park_on_fd is emitted unconditionally** in every kara
 //! binary (see `declarations.rs::synthesize_park_on_fd_layout`). The
@@ -213,41 +223,17 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(listener_val.into_struct_value().into())
     }
 
-    /// Lower `TcpListener.accept(ref self) -> i32` to: park on the
-    /// listener's fd (via `karac_park_on_fd(self.fd, 0u8)`), then
-    /// call `karac_runtime_tcp_accept(self.fd)` for the raw accept(2).
-    /// Returns the new connection fd (-1 on error).
+    /// Lower `TcpListener.accept(ref self) -> TcpStream` to: park on
+    /// the listener's fd (via `karac_park_on_fd(self.fd, 0u8)`), call
+    /// `karac_runtime_tcp_accept(self.fd)` for the raw accept(2), then
+    /// wrap the returned i32 fd in a `TcpStream { fd }` struct value.
+    /// On accept failure the FFI returns -1, surfacing as
+    /// `TcpStream { fd: -1 }`.
     pub(super) fn lower_tcp_listener_accept(
         &mut self,
         self_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        // Extract self.fd. `ref self` lowers as a pointer in the
-        // owned-receiver case (the caller passes the struct value
-        // through); for the simplest v1 surface we accept either the
-        // struct value directly or a pointer to it.
-        let fd = if self_val.is_pointer_value() {
-            let listener_ty = self
-                .context
-                .struct_type(&[self.context.i32_type().into()], false);
-            let fd_ptr = self
-                .builder
-                .build_struct_gep(
-                    listener_ty,
-                    self_val.into_pointer_value(),
-                    0,
-                    "tcp.accept.self.fd.ptr",
-                )
-                .expect("GEP fd field of TcpListener via ref self pointer");
-            self.builder
-                .build_load(self.context.i32_type(), fd_ptr, "tcp.accept.self.fd")
-                .expect("load fd from TcpListener via ref self")
-                .into_int_value()
-        } else {
-            self.builder
-                .build_extract_value(self_val.into_struct_value(), 0, "tcp.accept.self.fd")
-                .expect("extract fd from TcpListener struct value")
-                .into_int_value()
-        };
+        let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.accept.self.fd");
 
         // Park on the listener's fd for readability (direction = 0
         // = Read). This is the kara-level state-machine yield point;
@@ -271,6 +257,137 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_call(accept_fn, &[fd.into()], "tcp.accept.conn_fd")
             .expect("call karac_runtime_tcp_accept");
-        Ok(accept_call.try_as_basic_value().unwrap_basic())
+        let conn_fd = accept_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Wrap the connection fd in a fresh `TcpStream { fd }` struct
+        // value — same single-i32-field layout as TcpListener; built
+        // via insert_value on undef so the result is an SSA struct
+        // value (matching how `lower_tcp_listener_bind` returns).
+        let stream_ty = self
+            .context
+            .struct_type(&[self.context.i32_type().into()], false);
+        let undef = stream_ty.get_undef();
+        let stream_val = self
+            .builder
+            .build_insert_value(undef, conn_fd, 0, "tcp.stream.val")
+            .expect("insert fd into TcpStream struct value");
+        Ok(stream_val.into_struct_value().into())
+    }
+
+    /// Lower `TcpStream.read(ref self, buf: mut Slice[u8]) -> i64` to:
+    /// park on `self.fd` for read-readiness, then call
+    /// `karac_runtime_tcp_read(self.fd, buf.ptr, buf.len)` for the raw
+    /// `read(2)`. Returns the byte count read (-1 on error, 0 on EOF).
+    pub(super) fn lower_tcp_stream_read(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_tcp_stream_io(self_val, buf_val, /*is_write=*/ false)
+    }
+
+    /// Lower `TcpStream.write(ref self, buf: Slice[u8]) -> i64` to:
+    /// park on `self.fd` for write-readiness, then call
+    /// `karac_runtime_tcp_write(self.fd, buf.ptr, buf.len)` for the
+    /// raw `write(2)`. Returns the byte count written (-1 on error).
+    pub(super) fn lower_tcp_stream_write(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_tcp_stream_io(self_val, buf_val, /*is_write=*/ true)
+    }
+
+    /// Shared lowering for `TcpStream.read` / `.write`: extract
+    /// self.fd, extract buf.{ptr, len} (Slice's 2-word `{ptr, i64}`
+    /// layout), park on the appropriate direction, then call the
+    /// corresponding raw-syscall FFI.
+    fn lower_tcp_stream_io(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+        is_write: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fd = self.extract_fd_from_tcp_struct(self_val, "tcp.io.self.fd");
+
+        // Slice[u8] layout matches `slice_struct_type()` in
+        // `types_lowering.rs`: `{ ptr data, i64 len }`. The bytes/len
+        // we hand to the FFI are just the two fields. `mut Slice` has
+        // the same physical layout — mutability is a type-system
+        // concept only.
+        let buf_sv = buf_val.into_struct_value();
+        let buf_ptr = self
+            .builder
+            .build_extract_value(buf_sv, 0, "tcp.io.buf.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let buf_len = self
+            .builder
+            .build_extract_value(buf_sv, 1, "tcp.io.buf.len")
+            .unwrap()
+            .into_int_value();
+
+        // Park on the stream fd for the right direction.
+        let direction = self
+            .context
+            .i8_type()
+            .const_int(if is_write { 1 } else { 0 }, false);
+        self.emit_state_machine_invocation_for_park_on_fd(fd, direction);
+
+        // Raw syscall.
+        let fn_name = if is_write {
+            "karac_runtime_tcp_write"
+        } else {
+            "karac_runtime_tcp_read"
+        };
+        let io_fn = self
+            .module
+            .get_function(fn_name)
+            .unwrap_or_else(|| panic!("{fn_name} declared in Codegen::new"));
+        let io_call = self
+            .builder
+            .build_call(
+                io_fn,
+                &[fd.into(), buf_ptr.into(), buf_len.into()],
+                if is_write {
+                    "tcp.write.n"
+                } else {
+                    "tcp.read.n"
+                },
+            )
+            .unwrap_or_else(|_| panic!("call {fn_name}"));
+        Ok(io_call.try_as_basic_value().unwrap_basic())
+    }
+
+    /// Extract the single `i32 fd` field from a `TcpListener` /
+    /// `TcpStream` struct receiver. Handles both struct-value (owned /
+    /// move) and pointer (ref self) receiver shapes.
+    fn extract_fd_from_tcp_struct(
+        &self,
+        self_val: BasicValueEnum<'ctx>,
+        name_hint: &str,
+    ) -> inkwell::values::IntValue<'ctx> {
+        if self_val.is_pointer_value() {
+            let struct_ty = self
+                .context
+                .struct_type(&[self.context.i32_type().into()], false);
+            let ptr_hint = format!("{name_hint}.ptr");
+            let fd_ptr = self
+                .builder
+                .build_struct_gep(struct_ty, self_val.into_pointer_value(), 0, &ptr_hint)
+                .expect("GEP fd field of Tcp struct via ref self pointer");
+            self.builder
+                .build_load(self.context.i32_type(), fd_ptr, name_hint)
+                .expect("load fd from Tcp struct via ref self")
+                .into_int_value()
+        } else {
+            self.builder
+                .build_extract_value(self_val.into_struct_value(), 0, name_hint)
+                .expect("extract fd from Tcp struct value")
+                .into_int_value()
+        }
     }
 }

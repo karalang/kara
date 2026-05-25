@@ -102,10 +102,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // handler-dispatch path.
     "Server",
     "Request",
-    // Phase 6 line 17 — `TcpListener` stdlib type, composes through
-    // the `karac_park_on_fd` parking primitive. v1 surface is bind +
-    // accept; TcpStream + read/write land in a follow-on slice.
+    // Phase 6 line 17 — `TcpListener` + `TcpStream` stdlib types,
+    // composing through the `karac_park_on_fd` parking primitive.
+    // Surface: `TcpListener.bind` / `.accept` (slice 8), and
+    // `TcpStream.read` / `.write` (slice 9).
     "TcpListener",
+    "TcpStream",
     "Base64",
     "Hex",
     "Url",

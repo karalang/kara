@@ -1,34 +1,38 @@
-//! Phase 6 line 17 — stdlib `TcpListener` E2E test.
+//! Phase 6 line 17 slice 9 — stdlib `TcpStream` E2E test.
 //!
-//! Compiles a kara program that uses the real stdlib `TcpListener`
-//! type — `TcpListener.bind("127.0.0.1:0")` followed by
-//! `listener.accept()` — runs the binary, connects to the listener
-//! from the harness thread, and asserts the binary observes the
-//! accepted connection (printing a positive fd) and exits cleanly.
+//! Compiles a kara program that uses the real stdlib `TcpStream`
+//! surface — `TcpListener.bind("127.0.0.1:0")`, `listener.accept()`,
+//! then `stream.write(msg.bytes())` — runs the binary, connects to
+//! the listener from the harness thread, reads the bytes the binary
+//! wrote, and asserts they match.
 //!
-//! **What this exercises that Slice 7's `tests/park_and_wake.rs`
-//! didn't.** Slice 7 used a test-only runtime FFI
-//! (`karac_runtime_test_bind_and_print_port`) + a direct
-//! `karac_park_on_fd` call from user source — proving the parking
-//! wiring works in isolation. This test exercises the same wiring
-//! through the *real stdlib surface*: `TcpListener.bind` /
-//! `.accept` calls flow through the compiler-builtin codegen
-//! lowering (`src/codegen/tcp.rs`), which composes the parking
-//! state-machine via the reusable
-//! `emit_state_machine_invocation_for_park_on_fd` helper. Same
-//! park/wake substrate, exercised through the production surface
-//! that future stdlib types (`TcpStream` / `WebSocket`) will reuse.
+//! **What this exercises that the slice-8 `tests/tcp_listener.rs`
+//! didn't.** Slice 8 only exercised `bind` + `accept` — the park
+//! happens on read-readiness of the listener fd, the syscall is a
+//! one-shot `accept(2)`, and the test's success criteria is that
+//! the binary exits 0 after the accept call returns. Slice 9 adds
+//! `TcpStream.read` / `.write`, each of which composes another
+//! park-and-syscall pair through the same
+//! `emit_state_machine_invocation_for_park_on_fd` codegen helper.
+//! This test pins the `write` direction end-to-end: the kara
+//! binary's `write` call must park on write-readiness of the
+//! connection fd, then call `karac_runtime_tcp_write` to push the
+//! bytes — the harness reads them back from the TCP connection.
 //!
-//! **Subprocess + port-from-stdout pattern.** Same harness shape as
-//! `tests/park_and_wake.rs` and `tests/http_server.rs`. The
-//! `BOUND_PORT=<n>` line is emitted by the runtime side of
-//! `karac_runtime_tcp_bind` when the requested address ends in
-//! `:0`. No `test-helpers` feature gate needed — `TcpListener` is a
-//! real production type, the runtime FFIs are always-on.
+//! **read direction.** Wired in `src/codegen/tcp.rs` via
+//! `lower_tcp_stream_read` (the same helper, different direction
+//! discriminant), but not exercised in this E2E. The user-facing
+//! signature `read(ref self, buf: mut Slice[u8]) -> i64` requires
+//! the caller to construct a `mut Slice[u8]` — typically via
+//! `mut some_array` or `mut some_vec`. The buffer-construction
+//! shape from user-source baked-stdlib types is best exercised by
+//! a real consumer (e.g. an echo-server kara program) that lands
+//! when one is needed; the unit-shape correctness of the codegen
+//! lowering is proved by the build + linkage passes.
 
 #[cfg(all(unix, feature = "llvm"))]
-mod tcp_listener_tests {
-    use std::io::{BufRead, BufReader};
+mod tcp_stream_tests {
+    use std::io::{BufRead, BufReader, Read};
     use std::path::{Path, PathBuf};
     use std::process::{Command, Stdio};
     use std::sync::{Mutex, Once};
@@ -44,9 +48,9 @@ mod tcp_listener_tests {
     static mut RUNTIME_PATH: Option<PathBuf> = None;
 
     /// Build the runtime static library (production profile, no
-    /// `--features test-helpers` — `TcpListener` is real stdlib, the
+    /// `--features test-helpers` — `TcpStream` is real stdlib, the
     /// FFIs it depends on are always-on). Mirrors
-    /// `tests/http_server.rs::runtime_path`.
+    /// `tests/tcp_listener.rs::runtime_path`.
     #[allow(static_mut_refs)]
     fn runtime_path() -> Option<PathBuf> {
         RUNTIME_BUILT.call_once(|| {
@@ -89,7 +93,7 @@ mod tcp_listener_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let obj = format!("/tmp/karac_tcp_e2e_{pid}_{nanos}.o");
+        let obj = format!("/tmp/karac_tcp_stream_e2e_{pid}_{nanos}.o");
         compile_to_object_with_options(&parsed.program, &obj, None, None, None, None)
             .map_err(|e| format!("codegen failed: {e}"))?;
         link_executable(&obj, exe_path.to_str().unwrap())
@@ -132,13 +136,14 @@ mod tcp_listener_tests {
         (port, handle)
     }
 
-    /// Primary deliverable: a kara program that calls
-    /// `TcpListener.bind("127.0.0.1:0")` then `listener.accept()`,
-    /// printing the accepted connection's fd. Harness connects to
-    /// the bound port to trigger an accept, then asserts the binary
-    /// exits 0 within a timeout.
+    /// Primary deliverable: a kara program that binds an ephemeral
+    /// TCP listener, accepts a connection, writes a fixed payload to
+    /// the stream via `stream.write(msg.bytes())`, then exits. The
+    /// harness connects to the bound port to trigger the accept, then
+    /// reads the bytes the binary wrote and asserts they match the
+    /// payload. Exit-success is also asserted.
     #[test]
-    fn test_tcp_listener_bind_accept_round_trip() {
+    fn test_tcp_stream_write_round_trip() {
         let _guard = TCP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let Some(rt) = runtime_path() else {
             eprintln!(
@@ -149,23 +154,18 @@ mod tcp_listener_tests {
         };
         std::env::set_var("KARAC_RUNTIME", &rt);
 
-        // Real stdlib surface — no inline `extern` block. The
-        // `TcpListener` / `TcpStream` types come from baked
-        // `runtime/stdlib/tcp.kara`. `bind` returns a `TcpListener
-        // { fd: i32 }` struct value; `accept` returns a `TcpStream
-        // { fd: i32 }` struct via the codegen-emitted park-and-accept
-        // sequence (slice 9 changed accept's return type from `i32`
-        // to `TcpStream`). The binding name `_stream` keeps the
-        // accept call's effect (the park-and-syscall round-trip)
-        // observable to the test harness through the binary's exit
-        // status — we don't need to inspect the stream further at
-        // this layer (the read/write surface lives in the slice-9
-        // `tests/tcp_stream.rs` E2E).
+        // Real stdlib surface — `TcpStream` from baked
+        // `runtime/stdlib/tcp.kara`. `String.bytes()` returns
+        // `Slice[u8]` zero-copy over the String's underlying buffer
+        // (the well-trodden pattern from design.md § Character type).
+        // `write` parks on write-readiness then calls the raw
+        // syscall.
         let src = r#"
             fn main() {
                 let listener = TcpListener.bind("127.0.0.1:0");
-                let _stream = listener.accept();
-                println(0);
+                let stream = listener.accept();
+                let msg: String = "hello from kara\n";
+                let _n = stream.write(msg.bytes());
             }
         "#;
 
@@ -174,7 +174,7 @@ mod tcp_listener_tests {
             .duration_since(std::time::UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_e2e_{pid}_{nanos}"));
+        let exe_path = PathBuf::from(format!("/tmp/karac_tcp_stream_e2e_{pid}_{nanos}"));
 
         if let Err(e) = compile_and_link(src, &exe_path) {
             panic!("compile/link failed: {e}");
@@ -185,7 +185,7 @@ mod tcp_listener_tests {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()
-            .expect("failed to spawn tcp_listener binary");
+            .expect("failed to spawn tcp_stream binary");
 
         let stdout = child.stdout.take().expect("child stdout missing");
         let (port_opt, join) = await_bound_port(stdout, Duration::from_secs(15));
@@ -201,14 +201,16 @@ mod tcp_listener_tests {
         };
         assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
 
-        // Connect to trigger an accept. Retry briefly to absorb the
-        // race between bind's BOUND_PORT print and the parking
-        // primitive's fd-registration (same pattern as park_and_wake).
+        // Connect to trigger an accept; once connected we expect the
+        // binary to write its payload onto the connection. Use a
+        // brief retry to absorb the race between bind's BOUND_PORT
+        // print and the parking primitive's fd-registration (same
+        // pattern as `tests/tcp_listener.rs`).
         let connect_started = Instant::now();
-        let mut connected = false;
+        let mut maybe_conn: Option<std::net::TcpStream> = None;
         for _ in 0..10 {
-            if std::net::TcpStream::connect(format!("127.0.0.1:{port}")).is_ok() {
-                connected = true;
+            if let Ok(c) = std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                maybe_conn = Some(c);
                 break;
             }
             if connect_started.elapsed() > Duration::from_secs(2) {
@@ -216,14 +218,41 @@ mod tcp_listener_tests {
             }
             std::thread::sleep(Duration::from_millis(50));
         }
-        if !connected {
+        let Some(mut conn) = maybe_conn else {
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&exe_path);
             panic!("could not connect to 127.0.0.1:{port} to trigger accept");
-        }
+        };
 
-        // Wait for the binary to print the connection fd and exit.
+        // Read what the binary writes. Read timeout is a defense
+        // against the binary hanging in the park (e.g., a missed
+        // wakeup); 10s is generous given the round trip is
+        // sub-second under normal load.
+        conn.set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("set_read_timeout");
+        let mut buf = Vec::with_capacity(64);
+        let mut chunk = [0u8; 64];
+        loop {
+            match conn.read(&mut chunk) {
+                Ok(0) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                Err(e) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = std::fs::remove_file(&exe_path);
+                    panic!("read from kara binary failed: {e}");
+                }
+            }
+            if buf.ends_with(b"\n") {
+                break;
+            }
+        }
+        let payload = String::from_utf8_lossy(&buf).to_string();
+
+        // Wait for the binary to exit. The write() syscall returns
+        // immediately (the connection is already accepted by this
+        // point), so the child should exit promptly.
         let wait_started = Instant::now();
         let exit_status = loop {
             match child.try_wait() {
@@ -234,9 +263,9 @@ mod tcp_listener_tests {
                         let _ = child.wait();
                         let _ = std::fs::remove_file(&exe_path);
                         panic!(
-                            "binary did not exit within 10s after connect — \
-                             accept did not return. Likely the parking \
-                             round-trip through TcpListener.accept is broken."
+                            "binary did not exit within 10s after write — \
+                             the write call did not return (parking through \
+                             TcpStream.write may be broken)"
                         );
                     }
                     std::thread::sleep(Duration::from_millis(50));
@@ -254,7 +283,11 @@ mod tcp_listener_tests {
         assert!(
             exit_status.success(),
             "binary exited non-success {exit_status:?} — \
-             TcpListener.accept returned but main() failed downstream"
+             TcpStream.write returned but main() failed downstream"
+        );
+        assert!(
+            payload.contains("hello from kara"),
+            "expected to receive `hello from kara` from binary, got: {payload:?}"
         );
     }
 }
