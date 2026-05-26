@@ -3607,6 +3607,67 @@ fn main() {
         );
     }
 
+    // ── Prereq.5 user-`impl Drop` dispatch — edge cases ──
+    //
+    // Drop ordering: when multiple bindings with user Drop coexist in
+    // the same scope, the cleanup-action stack drains LIFO at scope
+    // exit per design.md § Drop ordering within a branch. The
+    // `scope_cleanup_actions` `.iter().rev()` drain in
+    // `emit_scope_cleanup` implements this; this test pins the
+    // ordering at the IR level so a future refactor that breaks LIFO
+    // surfaces here.
+
+    #[test]
+    fn test_ir_multiple_user_drops_drain_lifo_at_scope_exit() {
+        let ir = ir_for(
+            r#"
+struct A { tag: i64 }
+struct B { tag: i64 }
+impl Drop for A {
+    fn drop(mut ref self) {}
+}
+impl Drop for B {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let a = A { tag: 1 };
+    let b = B { tag: 2 };
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        let a_idx = main_body
+            .find("call void @karac_drop_A(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected @karac_drop_A call in main; body was:\n{}",
+                    main_body
+                )
+            });
+        let b_idx = main_body
+            .find("call void @karac_drop_B(")
+            .unwrap_or_else(|| {
+                panic!(
+                    "expected @karac_drop_B call in main; body was:\n{}",
+                    main_body
+                )
+            });
+        // LIFO: b (declared second) drops FIRST; a (declared first)
+        // drops LAST. So @karac_drop_B's call site must appear at a
+        // smaller string offset than @karac_drop_A's.
+        assert!(
+            b_idx < a_idx,
+            "expected LIFO drop ordering — `@karac_drop_B` should appear \
+             before `@karac_drop_A` in main (last-declared, first-dropped); \
+             B at {}, A at {}; body was:\n{}",
+            b_idx,
+            a_idx,
+            main_body
+        );
+    }
+
     #[test]
     fn test_ir_no_wrapper_without_impl_drop() {
         // No `impl Drop` → no entry in `program.drop_method_keys` →
