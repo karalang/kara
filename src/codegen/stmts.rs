@@ -1842,18 +1842,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 Ok(())
             }
             StmtKind::ErrDefer { binding, body } => {
-                // Slice 2: param-less `errdefer { ... }` only. The
-                // binding form `errdefer(e) { ... }` falls through to
-                // the catch-all below and stays a no-op until slice 4
-                // wires the bind-payload-then-emit dispatch — mirrors
-                // slice 1's deferral of block-scoped defer to slice 1.5.
-                if binding.is_none() {
-                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
-                        frame.push(super::state::CleanupAction::UserErrDefer {
-                            binding: binding.clone(),
-                            body: body.clone(),
-                        });
-                    }
+                // Slice 2 shipped the no-binding form; slice 4 (Phase 7
+                // § *defer / errdefer codegen*) lifts the
+                // `binding.is_none()` gate so the binding form
+                // `errdefer(e) { ... }` also lands on the unified
+                // `scope_cleanup_actions` frame. Emission of the
+                // binding form's payload-bind-then-run dispatch happens
+                // in `emit_cleanup_action_at`'s
+                // `UserErrDefer { binding: Some(_), .. }` arm, which
+                // reads `pending_errdefer_payload` (staged by each
+                // error-exit site immediately before
+                // `emit_scope_cleanup_for_error_path`).
+                if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                    frame.push(super::state::CleanupAction::UserErrDefer {
+                        binding: binding.clone(),
+                        body: body.clone(),
+                    });
                 }
                 Ok(())
             }

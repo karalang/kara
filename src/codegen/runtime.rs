@@ -17,7 +17,7 @@ use inkwell::types::{BasicTypeEnum, StructType};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::{AddressSpace, AtomicOrdering, AtomicRMWBinOp, IntPredicate};
 
-use super::state::CleanupAction;
+use super::state::{CleanupAction, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Allocate a new RC heap object: `malloc(sizeof(heap_type))`, store refcount = 1.
@@ -904,19 +904,62 @@ impl<'ctx> super::Codegen<'ctx> {
         ptr_ty: inkwell::types::PointerType<'ctx>,
         i64_t: inkwell::types::IntType<'ctx>,
     ) {
-        let body_clone = match &self.scope_cleanup_actions[frame_idx][action_idx] {
-            CleanupAction::UserDefer(block) => Some(block.clone()),
-            // Slice 2: errdefer body is routed through the same
-            // frame-pushing block emission as user-defer — same
-            // runtime-reachability + nested-defer-scoping shape. Slice 4
-            // will extend this branch to bind the Err payload into the
-            // body's scope when `binding` is `Some(_)`; today only the
-            // no-binding variant reaches here (the binding form falls
-            // through to the catch-all in `compile_stmt`).
-            CleanupAction::UserErrDefer { body, .. } => Some(body.clone()),
+        // Slice 4 (Phase 7 § *defer / errdefer codegen*): split the
+        // body extraction so the errdefer binding name can be threaded
+        // through to the bind-then-emit dispatch below. `UserDefer` has
+        // no binding; `UserErrDefer` carries `Option<String>` — `None`
+        // is slice 2's no-binding form (no extra setup), `Some(name)`
+        // is slice 4's binding form (allocate, store staged payload,
+        // register in `variables`, emit, restore).
+        let body_and_binding = match &self.scope_cleanup_actions[frame_idx][action_idx] {
+            CleanupAction::UserDefer(block) => Some((block.clone(), None)),
+            CleanupAction::UserErrDefer { binding, body } => Some((body.clone(), binding.clone())),
             _ => None,
         };
-        if let Some(block) = body_clone {
+        if let Some((block, binding)) = body_and_binding {
+            // Slice 4: bind the staged Err payload into the body's
+            // scope when this is a binding-form errdefer. The payload
+            // was staged into `self.pending_errdefer_payload` by the
+            // error-exit site (`compile_question`'s `fail_bb`,
+            // `ExprKind::Return(Err(...))`, or `compile_function`'s
+            // tail `Err(...)` emitter) immediately before
+            // `emit_scope_cleanup_for_error_path` ran. Allocate an
+            // entry-block alloca of the payload's LLVM type, store
+            // the staged value, save the prior `variables[name]` (if
+            // any) for restoration after the body emits, then insert
+            // the new slot so the body's compile_expr reads of `e`
+            // resolve to a fresh load of the bound payload.
+            //
+            // When the binding is present but no payload is staged
+            // (`pending_errdefer_payload` is `None`), the body still
+            // emits — without the binding — so an `errdefer(e)` that
+            // never sees a runtime error path stays consistent with
+            // the no-binding form's drain semantics. In practice all
+            // three error-exit sites stage before calling the
+            // error-path drain, so the unstaged case is unreachable
+            // from a well-formed program; the conservative branch
+            // here keeps emission non-fatal.
+            let saved_binding: Option<(String, Option<VarSlot<'ctx>>)> =
+                if let Some(name) = &binding {
+                    if let Some(payload) = self.pending_errdefer_payload {
+                        let payload_ty = payload.get_type();
+                        let alloca = self.create_entry_alloca(fn_val, name, payload_ty);
+                        self.builder.build_store(alloca, payload).unwrap();
+                        let prior = self.variables.get(name).copied();
+                        self.variables.insert(
+                            name.clone(),
+                            VarSlot {
+                                ptr: alloca,
+                                ty: payload_ty,
+                            },
+                        );
+                        Some((name.clone(), prior))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
             // Slice 1.5: route the defer body through the frame-pushing
             // variant so a nested `defer` inside this body scopes to the
             // defer body itself (drains at end-of-defer-body) instead of
@@ -927,6 +970,22 @@ impl<'ctx> super::Codegen<'ctx> {
             // same path so a `defer` inside an errdefer body scopes the
             // same way.
             let _ = self.compile_block_with_frame(&block);
+            // Restore any prior binding the errdefer's `e` shadowed.
+            // Removing the slot rather than leaving it in `variables`
+            // is required: the alloca is live only for the duration of
+            // this body's compile, and a subsequent unrelated reference
+            // to the same name (in a later errdefer body or the same
+            // body re-entered) must not pick up a stale slot.
+            if let Some((name, prior)) = saved_binding {
+                match prior {
+                    Some(slot) => {
+                        self.variables.insert(name, slot);
+                    }
+                    None => {
+                        self.variables.remove(&name);
+                    }
+                }
+            }
             return;
         }
         let action_ref = &self.scope_cleanup_actions[frame_idx][action_idx];

@@ -525,6 +525,18 @@ pub(super) struct Codegen<'ctx> {
     /// Per-scope cleanup stack.  Each inner `Vec` is one scope frame; entries
     /// are emitted in reverse-push order at scope exit (innermost first).
     pub(crate) scope_cleanup_actions: Vec<Vec<CleanupAction<'ctx>>>,
+    /// Phase 7 § *defer / errdefer codegen* slice 4. Staging slot for the
+    /// about-to-be-returned Err payload, set by each error-exit site
+    /// (`compile_question`'s `fail_bb`, `ExprKind::Return(Err(...))`, and
+    /// the function-tail `Err(...)` emitter) immediately before calling
+    /// `emit_scope_cleanup_for_error_path`, and cleared on return. Read
+    /// by `emit_cleanup_action_at`'s `UserErrDefer { binding: Some(name),
+    /// .. }` arm: allocates an entry alloca of the payload's LLVM type,
+    /// stores the staged value, and registers `name` in `self.variables`
+    /// for the duration of the body's `compile_block_with_frame` call.
+    /// `None` means no payload is currently staged — only the no-binding
+    /// form errdefer can fire (the binding form is gated on `is_some`).
+    pub(crate) pending_errdefer_payload: Option<inkwell::values::BasicValueEnum<'ctx>>,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload
@@ -1878,6 +1890,7 @@ impl<'ctx> Codegen<'ctx> {
             var_option_shared_heap: HashMap::new(),
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
+            pending_errdefer_payload: None,
             pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),

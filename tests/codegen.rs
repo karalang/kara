@@ -21381,6 +21381,111 @@ fn main() {
         );
     }
 
+    // --- Phase 7 § *defer / errdefer codegen* slice 4: errdefer(e) binding form ---
+    //
+    // Slice 4 lifts the `binding.is_none()` gate in `compile_stmt`'s
+    // ErrDefer arm so `errdefer(e) { ... }` also lands on the unified
+    // `scope_cleanup_actions` frame. The binding-form dispatch in
+    // `emit_cleanup_action_at`'s UserErrDefer branch reads
+    // `pending_errdefer_payload` (staged by each error-exit site
+    // immediately before `emit_scope_cleanup_for_error_path`),
+    // allocates an entry-block alloca of the payload's LLVM type,
+    // stores the staged value, and registers the binding in
+    // `self.variables` for the duration of the body's
+    // `compile_block_with_frame` call. After the body emits, the prior
+    // `variables[name]` (if any) is restored; otherwise the slot is
+    // removed.
+    //
+    // Three staging sites stage `pending_errdefer_payload`:
+    //   1. `compile_question`'s `fail_bb` — stages `w0` (the i64-wide
+    //      payload word extracted from the result struct's field 1).
+    //   2. `ExprKind::Return(Err(arg))` in `compile_expr` — re-compiles
+    //      `arg` to get the source-level value (rather than peeling
+    //      fields off the constructed Err struct).
+    //   3. Function-tail `Err(arg)` in `compile_function` — same shape
+    //      as the explicit-return site.
+    //
+    // Out of scope for slice 4 (deferred):
+    //   - Wider E payloads (`Result[T, String]`, `Result[T, struct]`):
+    //     today the `?` site extracts only `w0` (one i64), so the
+    //     binding form sees a coerced i64 word rather than the
+    //     reconstructed source-level value when E is multi-word. The
+    //     explicit-return and tail-Err paths re-compile the inner Err
+    //     arg directly, so they work for any payload type; the `?`
+    //     path is the residual gap.
+    //   - Double-evaluation of side-effecting payload expressions in
+    //     the explicit-return and tail-Err sites: `return Err(expensive())`
+    //     calls `expensive()` once for the return-struct construction
+    //     and again to stage the binding-form payload. Acceptable for
+    //     v1's narrow common case (typed `i64` / identifier payloads)
+    //     but pinned as a known limitation.
+
+    #[test]
+    fn test_e2e_errdefer_with_binding_on_explicit_return_err() {
+        // Mirrors interpreter `test_errdefer_with_binding_sees_err_payload`
+        // (`tests/interpreter.rs:1288`). The `errdefer(e) { println(e); }`
+        // body binds `e` to the about-to-be-returned Err payload from
+        // `return Err(7_i64)`. Without slice 4, the binding form was
+        // gated out at `compile_stmt`; with slice 4 wired, the binding
+        // is registered into `self.variables` during the body's
+        // emission and the print resolves to the staged payload.
+        let out = run_program(
+            r#"
+fn body() -> Result[i64, i64] {
+    errdefer(e) { println(e); }
+    return Err(7_i64);
+}
+fn main() {
+    match body() {
+        Ok(_) => println(0_i64),
+        Err(_) => println(1_i64),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // errdefer(e) prints the bound 7, then the caller's
+            // Err arm prints 1.
+            assert_eq!(lines, vec!["7", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_errdefer_with_binding_on_question_propagation() {
+        // Pin the `?` site's payload staging: when `boom()?`
+        // propagates an Err, the `errdefer(e) { ... }` in the caller's
+        // scope binds `e` to the i64 payload word (`w0`) extracted
+        // from the propagated result struct. Distinguishes the `?`-
+        // failure path from the explicit-return path covered above —
+        // they share the same `emit_scope_cleanup_for_error_path`
+        // drain but stage the payload from different sources
+        // (`compile_question`'s `w0` vs `compile_expr`'s recompiled
+        // Err arg).
+        let out = run_program(
+            r#"
+fn boom() -> Result[i64, i64] { Err(99_i64) }
+fn caller() -> Result[i64, i64] {
+    errdefer(e) { println(e); }
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println(0_i64),
+        Err(_) => println(2_i64),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // errdefer(e) prints the bound 99 (the propagated payload),
+            // then the caller's Err arm prints 2.
+            assert_eq!(lines, vec!["99", "2"]);
+        }
+    }
+
     // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
     //
     // Real LLVM globals — immutable `let X: T = INIT` lowers to

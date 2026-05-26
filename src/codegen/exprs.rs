@@ -294,7 +294,27 @@ impl<'ctx> super::Codegen<'ctx> {
                     }
                     let v = self.compile_expr(e)?;
                     if is_error_exit {
+                        // Slice 4 (Phase 7 § *defer / errdefer codegen*):
+                        // stage the Err payload for any in-scope
+                        // binding-form errdefer. `Self::err_payload_from_value`
+                        // extracts the first argument of a syntactic
+                        // `Err(arg)` call (already compiled into `v`'s
+                        // source). For `return None` / non-error returns
+                        // this is `None`, and the error-path drain runs
+                        // without any binding-form errdefer payload
+                        // available — the no-binding form still fires.
+                        let staged = Self::err_payload_from_value(e).and_then(|payload_expr| {
+                            // The payload's value is already inside `v`
+                            // (the constructed Err struct). Re-compile
+                            // the payload arg to get the inner LLVM
+                            // value at its source-level type — cheaper
+                            // and more accurate than peeling fields off
+                            // the constructed enum struct.
+                            self.compile_expr(payload_expr).ok()
+                        });
+                        self.pending_errdefer_payload = staged;
                         self.emit_scope_cleanup_for_error_path();
+                        self.pending_errdefer_payload = None;
                     } else {
                         self.emit_scope_cleanup();
                     }
@@ -603,7 +623,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // `run_cleanup` on `ExitPath::Err` would.
         self.builder.position_at_end(fail_bb);
         self.emit_error_trace_push(outer_span);
+        // Slice 4 (Phase 7 § *defer / errdefer codegen*): stage the
+        // about-to-be-returned Err payload so any in-scope binding-form
+        // errdefer (`errdefer(e) { ... }`) can bind `e` during its
+        // phase-1 emission inside `emit_scope_cleanup_for_error_path`.
+        // The payload here is `w0` — the i64-wide payload word extracted
+        // from the result struct's field 1. For `Result[T, E]` with E
+        // narrower than i64 in source (e.g. `Result[T, i64]`,
+        // `Result[T, i32]`), the binding form sees the i64-coerced word
+        // directly; wider E payloads (struct, String) need a reshape
+        // before reaching the binding — tracked as a follow-up at the
+        // bottom of the slice notes.
+        self.pending_errdefer_payload = Some(w0);
         self.emit_scope_cleanup_for_error_path();
+        self.pending_errdefer_payload = None;
 
         // Cross-error-type conversion: when the typechecker recorded a target
         // type for this `?` site, look up the LLVM function `Target.from` and
@@ -710,6 +743,30 @@ impl<'ctx> super::Codegen<'ctx> {
             ExprKind::Identifier(name) => name == "None",
             _ => false,
         }
+    }
+
+    /// Slice 4 (Phase 7 § *defer / errdefer codegen*). For a syntactic
+    /// `Err(arg)` expression, return the inner `arg` so the caller can
+    /// re-compile it to obtain the source-typed payload value for an
+    /// `errdefer(e) { ... }` binding. Returns `None` for `None` and any
+    /// other shape (including no-arg `Err`, which is an arity error the
+    /// typechecker rejects before reaching codegen). Mirrors the call-
+    /// recognition gate used by `is_error_exit_value`: both `Err`-as-
+    /// identifier and `Path([..., "Err"])` callee shapes are accepted.
+    pub(super) fn err_payload_from_value(expr: &Expr) -> Option<&Expr> {
+        if let ExprKind::Call { callee, args } = &expr.kind {
+            let is_err_ctor = match &callee.kind {
+                ExprKind::Path { segments, .. } => segments.last().is_some_and(|s| s == "Err"),
+                ExprKind::Identifier(name) => name == "Err",
+                _ => false,
+            };
+            if is_err_ctor {
+                if let Some(arg) = args.first() {
+                    return Some(&arg.value);
+                }
+            }
+        }
+        None
     }
 
     /// Emit a call to `karac_error_trace_push(file, file_len, line, col)`

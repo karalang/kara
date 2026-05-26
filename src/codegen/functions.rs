@@ -414,7 +414,28 @@ impl<'ctx> super::Codegen<'ctx> {
                 .as_deref()
                 .is_some_and(Self::is_error_exit_value);
             if tail_is_error_exit {
+                // Slice 4 (Phase 7 § *defer / errdefer codegen*): stage
+                // the tail-Err payload so an in-scope `errdefer(e) {
+                // ... }` can bind `e`. The tail expr has already been
+                // compiled into `result` by `compile_function_body`
+                // above, but we still re-compile the inner Err arg here
+                // because `result` is the constructed Err struct
+                // (`{i64 tag, i64 w0, ...}`) — the binding wants the
+                // pre-construction payload value at its source-level
+                // type. Re-compiling the inner expression is cheap
+                // (literals / identifiers); side-effecting payload
+                // expressions ARE evaluated twice, which is acceptable
+                // for v1's narrow common case but tracked as a known
+                // limitation at the bottom of the slice notes.
+                let staged = func
+                    .body
+                    .final_expr
+                    .as_deref()
+                    .and_then(Self::err_payload_from_value)
+                    .and_then(|payload_expr| self.compile_expr(payload_expr).ok());
+                self.pending_errdefer_payload = staged;
                 self.emit_scope_cleanup_for_error_path();
+                self.pending_errdefer_payload = None;
             } else {
                 self.emit_scope_cleanup();
             }
