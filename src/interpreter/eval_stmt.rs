@@ -398,9 +398,14 @@ impl<'a> super::Interpreter<'a> {
                     let _ = self.eval_block_inner(body);
                 }
                 CleanupAction::Drop { name } => {
-                    // The drop itself is a no-op until user-`impl Drop`
-                    // dispatch lands. The trace records the firing for
-                    // sub-step 3 (NLL placement) test verification.
+                    // Phase 7 user-`impl Drop` dispatch Prereq.4 — fire
+                    // the user-defined drop body BEFORE recording the
+                    // trace so observable side effects (e.g. println
+                    // from `fn drop()`) are visible to the test. The
+                    // helper is a no-op when the binding's type has
+                    // no user `impl Drop`, preserving the
+                    // no-impl-Drop behaviour at this drain.
+                    self.invoke_user_drop_if_applicable(name);
                     self.drop_trace.push(name.clone());
                 }
             }
@@ -433,11 +438,67 @@ impl<'a> super::Interpreter<'a> {
             if should_fire {
                 let action = cleanup.remove(i);
                 if let CleanupAction::Drop { name } = action {
+                    // Phase 7 user-`impl Drop` dispatch Prereq.4 — fire
+                    // the user body at NLL endpoint before pushing the
+                    // trace record, mirroring the scope-exit drain
+                    // arm in `run_cleanup`.
+                    self.invoke_user_drop_if_applicable(&name);
                     self.drop_trace.push(name);
                 }
             } else {
                 i += 1;
             }
+        }
+    }
+
+    /// Phase 7 user-`impl Drop` dispatch Prereq.4 — invoke the
+    /// user-defined `<Type>.drop` method body on a binding before its
+    /// `CleanupAction::Drop` slot drains. No-op when the binding doesn't
+    /// resolve to a `Value::Struct`, when its type isn't in
+    /// `program.drop_method_keys`, or when the method symbol isn't
+    /// present in the environment (the typechecker's `drop_method_keys`
+    /// is the authoritative gate — only validated impls reach it, so
+    /// the env lookup should always succeed when the gate fires).
+    /// Mirrors the codegen drain at `src/codegen/runtime.rs`'s
+    /// `CleanupAction::UserDrop` arm: the user body runs, then field
+    /// cleanup follows (the interpreter's value model already releases
+    /// heap-owned fields when the binding's `Value::Struct` is dropped
+    /// at scope-exit Rust-level GC).
+    fn invoke_user_drop_if_applicable(&mut self, name: &str) {
+        let value = match self.env.get(name) {
+            Some(v) => v,
+            None => return,
+        };
+        let type_name = match &value {
+            Value::Struct { name, .. } => name.clone(),
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        let method_key = format!("{}.drop", type_name);
+        let func = match self.env.get(&method_key) {
+            Some(f) => f,
+            None => return,
+        };
+        if let Value::Function {
+            param_patterns,
+            body,
+            closure_env,
+            ..
+        } = func
+        {
+            self.env.push_scope();
+            if let Some(ref captured) = closure_env {
+                for (k, v) in captured {
+                    self.env.define(k.clone(), v.clone());
+                }
+            }
+            if let Some(self_pat) = param_patterns.first() {
+                self.bind_pattern(self_pat, value);
+            }
+            let _ = self.eval_block_inner(&body);
+            self.env.pop_scope();
         }
     }
 

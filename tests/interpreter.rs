@@ -1375,6 +1375,89 @@ fn drops_in(source: &str) -> Vec<String> {
     drops
 }
 
+// ── Prereq.4 user-`impl Drop` dispatch — interpreter parity ──
+//
+// Mirrors codegen's Prereq.3 wiring: when a binding's `CleanupAction::Drop`
+// drains at NLL endpoint OR scope exit, the user-defined `<Type>.drop`
+// body fires before the trace records the name. Codegen invokes
+// `karac_drop_<Type>` (which calls `<Type>.drop` then field cleanup);
+// the interpreter directly invokes `<Type>.drop` from the drain.
+
+#[test]
+fn test_user_drop_body_fires_at_nll_endpoint() {
+    // Foo's last use is `let n = f.x` (stmt 2). The user drop fires
+    // at NLL endpoint — immediately after that statement, before the
+    // subsequent println — so the output sequence is:
+    //   stmt 1: println(0)          → "0\n"
+    //   stmt 2: let n = f.x         → no output
+    //           [NLL drop fires]    → "42\n"
+    //   stmt 3: println(99)         → "99\n"
+    let (output, drops) = run_program_with_drops(
+        "struct Foo { x: i64 }\n\
+         impl Drop for Foo {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.x);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let f = Foo { x: 42 };\n\
+             println(0);\n\
+             let n = f.x;\n\
+             println(99);\n\
+         }",
+    );
+    assert_eq!(
+        output,
+        vec!["0\n".to_string(), "42\n".to_string(), "99\n".to_string()],
+        "expected NLL drop ordering (println(0), drop body 42, println(99)); got {:?}",
+        output
+    );
+    // drop_trace still records both bindings — the mechanism that
+    // codegen / interpreter use to know WHEN a drop fires is
+    // unchanged; Prereq.4 only adds the side effect of running the
+    // user body at the same point. `n` drops too (also a binding
+    // and `let _ = ...` would suppress; here we keep the binding so
+    // both drops fire).
+    assert_eq!(drops, vec!["f".to_string(), "n".to_string()]);
+}
+
+#[test]
+fn test_user_drop_body_does_not_fire_when_no_impl_drop() {
+    let (output, drops) = run_program_with_drops(
+        "struct Foo { x: i64 }\n\
+         fn main() {\n\
+             let f = Foo { x: 42 };\n\
+             println(0);\n\
+         }",
+    );
+    // No `impl Drop` for Foo → no body to fire. Output contains only
+    // main's explicit println. drop_trace still records "f" — the
+    // NLL placement mechanism is independent of whether a user body
+    // exists.
+    assert_eq!(output, vec!["0\n".to_string()]);
+    assert_eq!(drops, vec!["f".to_string()]);
+}
+
+#[test]
+fn test_user_drop_body_can_read_struct_fields() {
+    // Sanity-check that `self.field` access works inside the drop
+    // body. `Foo.drop` reads two fields and prints their sum.
+    let (output, _drops) = run_program_with_drops(
+        "struct Foo { a: i64, b: i64 }\n\
+         impl Drop for Foo {\n\
+             fn drop(mut ref self) {\n\
+                 println(self.a + self.b);\n\
+             }\n\
+         }\n\
+         fn main() {\n\
+             let f = Foo { a: 10, b: 32 };\n\
+         }",
+    );
+    // f's NLL endpoint is right after `let f = ...` (no later use),
+    // so the drop body fires immediately, printing 42 (=10+32).
+    assert_eq!(output, vec!["42\n".to_string()]);
+}
+
 #[test]
 fn test_nll_drop_fires_after_last_use_not_at_scope_exit() {
     // Per design.md § Drop ordering within a branch: NLL drops fire
