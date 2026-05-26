@@ -1614,6 +1614,30 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Phase 6 line 17 slice 9e.4 — client-side masked send FFIs.
+        // Same ABI as the unmasked text/binary send FFIs (3-arg
+        // `(fd, ptr, len)` returning i64); the runtime helper
+        // generates the mask key per-call and writes a MASK=1
+        // frame.
+        let ws_send_text_masked_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_send_text_masked",
+            ws_send_text_masked_ty,
+            Some(Linkage::External),
+        );
+        let ws_send_binary_masked_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_send_binary_masked",
+            ws_send_binary_masked_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized

@@ -929,6 +929,31 @@ impl<'ctx> super::Codegen<'ctx> {
         self.lower_websocket_io(self_val, buf_val, "karac_runtime_ws_recv_binary", false)
     }
 
+    /// Slice 9e.4 — client-side masked text send. Routes to the
+    /// masked-send FFI which generates a random 4-byte mask key
+    /// and emits a MASK=1 frame per RFC 6455 §5.1.
+    pub(super) fn lower_websocket_send_text_masked(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        msg_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(self_val, msg_val, "karac_runtime_ws_send_text_masked", true)
+    }
+
+    /// Slice 9e.4 — client-side masked binary send.
+    pub(super) fn lower_websocket_send_binary_masked(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        msg_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(
+            self_val,
+            msg_val,
+            "karac_runtime_ws_send_binary_masked",
+            true,
+        )
+    }
+
     /// Shared lowering for `WebSocket.{send,recv}_{text,binary}`
     /// — near-verbatim mirror of `lower_tcp_stream_io`. Extract
     /// `self.fd` plus `slice.{ptr, len}`, park on the right

@@ -242,6 +242,68 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 17 slice 9e.4 — client-side masked send ────────
+
+    #[test]
+    fn test_ir_websocket_send_text_masked_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "client-msg";
+    let _ = ws.send_text_masked(msg.bytes());
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_send_text_masked("),
+            "main should call `karac_runtime_ws_send_text_masked`; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before send_text_masked; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_send_binary_masked_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "bin";
+    let _ = ws.send_binary_masked(msg.bytes());
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_send_binary_masked("),
+            "main should call `karac_runtime_ws_send_binary_masked`; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_masked_send_ffis_declared() {
+        let ir = ir_for("fn main() {}");
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_send_text_masked(i32, ptr, i64)"),
+            "expected ws_send_text_masked FFI declaration; IR:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_send_binary_masked(i32, ptr, i64)"),
+            "expected ws_send_binary_masked FFI declaration; IR:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_ir_websocket_binary_ffis_declared() {
         let ir = ir_for("fn main() {}");

@@ -1267,6 +1267,152 @@ pub unsafe extern "C" fn karac_runtime_ws_send_binary(
     ws_send_data_frame(fd, msg_ptr, msg_len, 0x2)
 }
 
+/// Slice 9e.4 — client-side masked send. RFC 6455 §5.1 requires
+/// client→server frames to be masked; v1 server-only methods
+/// (`send_text` / `send_binary`) use the unmasked convention.
+/// These dedicated masked variants are for kara binaries acting
+/// as WebSocket clients.
+///
+/// The 4-byte mask key is read from `/dev/urandom` per RFC 6455
+/// §10.3 (must be unpredictable to prevent cache poisoning). If
+/// `/dev/urandom` is unavailable (very unlikely on Unix; rare
+/// in containers / chroot environments), the FFI falls back to
+/// the system clock's nanos field hashed with a small LCG —
+/// not cryptographically strong but better than fail-closed at
+/// the connection layer.
+///
+/// # Safety
+///
+/// Same constraints as `karac_runtime_ws_send_text` — `msg_ptr`
+/// must point to `msg_len` valid bytes when `msg_len > 0`; `fd`
+/// must be a kernel-side socket descriptor.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_text_masked(
+    fd: i32,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x1)
+}
+
+/// BINARY counterpart to `karac_runtime_ws_send_text_masked`.
+///
+/// # Safety
+///
+/// Same constraints as the text variant.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_binary_masked(
+    fd: i32,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    ws_send_masked_data_frame(fd, msg_ptr, msg_len, 0x2)
+}
+
+/// Read 4 bytes of cryptographically-strong randomness for the
+/// client-side mask key. `/dev/urandom` is the unix-portable
+/// path; fall back to a clock-derived seed if reading fails
+/// (defensive — keep the connection alive over fail-closed).
+#[cfg(unix)]
+fn ws_generate_mask_key() -> [u8; 4] {
+    use std::io::Read;
+    let mut key = [0u8; 4];
+    if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
+        if f.read_exact(&mut key).is_ok() {
+            return key;
+        }
+    }
+    // Fallback: time-derived LCG mix. Not cryptographically
+    // strong but harder to predict than a hardcoded constant.
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0xDEADBEEFCAFEBABE);
+    let mut x = nanos.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
+    for k in key.iter_mut() {
+        x = x.wrapping_mul(0x5DEECE66D).wrapping_add(0xB);
+        *k = (x >> 24) as u8;
+    }
+    key
+}
+
+/// Write a single masked client→server data frame: FIN=1,
+/// opcode, MASK=1, mask key, masked payload. The mask key is
+/// generated per-call via `ws_generate_mask_key`. Returns
+/// `payload.len()` on success, -1 on write failure.
+#[cfg(unix)]
+fn ws_write_masked_frame(stream: &mut std::net::TcpStream, opcode: u8, payload: &[u8]) -> bool {
+    use std::io::Write;
+    debug_assert!(opcode <= 0x0F);
+    // Header: 1 fin/opcode + 1 mask/len-marker + up to 8 extended-len + 4 mask key.
+    let mut header: [u8; 14] = [0; 14];
+    header[0] = 0x80 | opcode; // FIN=1
+    let len = payload.len();
+    let header_len: usize = if len < 126 {
+        header[1] = 0x80 | (len as u8); // MASK=1
+        2
+    } else if len < 65536 {
+        header[1] = 0x80 | 126;
+        let be = (len as u16).to_be_bytes();
+        header[2] = be[0];
+        header[3] = be[1];
+        4
+    } else {
+        header[1] = 0x80 | 127;
+        let be = (len as u64).to_be_bytes();
+        header[2..10].copy_from_slice(&be);
+        10
+    };
+    let mask_key = ws_generate_mask_key();
+    header[header_len..header_len + 4].copy_from_slice(&mask_key);
+    let total_header_len = header_len + 4;
+    if stream.write_all(&header[..total_header_len]).is_err() {
+        return false;
+    }
+    if !payload.is_empty() {
+        // Mask into a scratch buffer (payload is `&[u8]`; we
+        // can't mutate the caller's buffer). For modest message
+        // sizes a single allocation is fine; v2 may want a
+        // chunked masker for huge payloads.
+        let masked: Vec<u8> = payload
+            .iter()
+            .enumerate()
+            .map(|(i, b)| b ^ mask_key[i % 4])
+            .collect();
+        if stream.write_all(&masked).is_err() {
+            return false;
+        }
+    }
+    true
+}
+
+/// Shared body for masked text + binary send.
+#[cfg(unix)]
+unsafe fn ws_send_masked_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: u8) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if fd < 0 || msg_len < 0 {
+        return -1;
+    }
+    if msg_ptr.is_null() && msg_len > 0 {
+        return -1;
+    }
+    let mut stream = std::net::TcpStream::from_raw_fd(fd);
+    let payload: &[u8] = if msg_len > 0 {
+        std::slice::from_raw_parts(msg_ptr, msg_len as usize)
+    } else {
+        &[]
+    };
+    let result = if ws_write_masked_frame(&mut stream, opcode, payload) {
+        msg_len
+    } else {
+        -1
+    };
+    let _ = stream.into_raw_fd();
+    result
+}
+
 /// Shared body for text + binary send. `opcode` is `0x1` (text) or
 /// `0x2` (binary); the helper builds an unmasked single-frame
 /// (FIN=1) payload write.
@@ -1317,12 +1463,19 @@ unsafe fn ws_send_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: 
 /// - All control frames must satisfy FIN=1 and payload length ≤
 ///   125 per RFC 6455 §5.5; violations → -1.
 ///
-/// v1 limitations (deferred to slice 9e.4 or follow-on):
-/// fragmentation (FIN=0 + opcode-0 continuation frames) is NOT
-/// supported — fragmented data frames return -1. Client-side
-/// masking on `send_*` is also deferred (the recv path here
-/// already validates MASK=1 client→server per RFC 6455 §5.1,
-/// matching the v1 server-only convention).
+/// Slice 9e.4 — fragmentation reassembly per RFC 6455 §5.4. A
+/// data message can span multiple frames: the first frame carries
+/// the message opcode (text 0x1 / binary 0x2) with FIN=0; zero or
+/// more continuation frames follow with opcode=0x0 and FIN=0; the
+/// final continuation frame has opcode=0x0 and FIN=1. Each
+/// fragment's payload is appended (after unmasking) to the
+/// caller's `out_ptr` buffer; the loop returns the accumulated
+/// byte count when FIN=1 closes the message. Total reassembled
+/// length is bounded by `out_max_len` — exceeding it returns -1.
+/// Control frames (ping/pong/close) MAY be interleaved between
+/// data fragments per §5.4 and continue to be handled
+/// transparently inside the loop without affecting the data
+/// reassembly state.
 #[cfg(unix)]
 unsafe fn ws_recv_data_frame(
     fd: i32,
@@ -1340,10 +1493,16 @@ unsafe fn ws_recv_data_frame(
 
     let mut stream = std::net::TcpStream::from_raw_fd(fd);
     let result = (|| -> i64 {
-        // Loop reading frames until a data frame matching
-        // `accept_opcode` arrives. Control frames are handled
-        // internally per RFC 6455 §5.5 and don't terminate the
-        // loop.
+        // Reassembly state. `accumulated` is the running byte
+        // count written into `out_ptr`. `in_fragment` flips to
+        // true once we've consumed a FIN=0 data frame; while set,
+        // we expect continuation frames (opcode 0x0) until a
+        // FIN=1 continuation closes the message. Before
+        // `in_fragment` is set, a FIN=1 data frame with
+        // `opcode == accept_opcode` returns immediately
+        // (single-frame message — the slice 9e.3 fast path).
+        let mut accumulated: u64 = 0;
+        let mut in_fragment = false;
         loop {
             let mut header2 = [0u8; 2];
             match ws_read_exact_or_eof(&mut stream, &mut header2) {
@@ -1361,11 +1520,6 @@ unsafe fn ws_recv_data_frame(
                 return -1;
             }
 
-            // Decode extended payload length. Control frames
-            // (opcode >= 0x8) MUST have length ≤ 125 (RFC 6455
-            // §5.5), so they always use the inline 7-bit form;
-            // we still go through the same decoder for uniformity
-            // and reject extended-length control frames below.
             let payload_len: u64 = match len7 {
                 0..=125 => len7,
                 126 => {
@@ -1392,8 +1546,10 @@ unsafe fn ws_recv_data_frame(
 
             let is_control = opcode >= 0x8;
             if is_control {
-                // RFC 6455 §5.5: control frames must be FIN=1 with
-                // length ≤ 125.
+                // RFC 6455 §5.5: control frames MUST be FIN=1 with
+                // length ≤ 125. They may be interleaved with data
+                // fragments per §5.4, so we handle them without
+                // touching the reassembly state.
                 if !fin || payload_len > 125 {
                     return -1;
                 }
@@ -1407,51 +1563,65 @@ unsafe fn ws_recv_data_frame(
                 }
                 match opcode {
                     0x8 => {
-                        // Close — send back an empty close frame
-                        // (§5.5.1's handshake) and signal clean
-                        // shutdown to the caller.
                         let _ = ws_write_unmasked_frame(&mut stream, 0x8, &[]);
                         return 0;
                     }
                     0x9 => {
-                        // Ping — respond with a pong carrying the
-                        // same payload (§5.5.2) and continue.
                         if !ws_write_unmasked_frame(&mut stream, 0xA, slice) {
                             return -1;
                         }
                         continue;
                     }
                     0xA => {
-                        // Pong — discard and continue.
                         continue;
                     }
-                    _ => return -1, // reserved control opcode
+                    _ => return -1,
                 }
             }
 
-            // Data frame. v1 doesn't yet handle fragmentation, so
-            // require FIN=1 (rejecting opcode-0 continuation
-            // frames and FIN=0 starts).
-            if !fin || opcode == 0x0 {
-                return -1;
-            }
-            if opcode != accept_opcode {
-                return -1;
-            }
-            if payload_len > out_max_len as u64 {
-                return -1;
-            }
-            if payload_len > 0 {
-                let payload_usize = payload_len as usize;
-                let out_slice = std::slice::from_raw_parts_mut(out_ptr, payload_usize);
-                if !ws_read_exact_or_eof(&mut stream, out_slice).unwrap_or(false) {
+            // Data frame. RFC 6455 §5.4 fragmentation:
+            //   - First frame of a message: opcode = data
+            //     opcode (text=0x1, binary=0x2); FIN may be 0
+            //     or 1.
+            //   - Continuation frames: opcode = 0x0; FIN may
+            //     be 0 (more to come) or 1 (final fragment).
+            //   - Mixing: if we've started a fragmented data
+            //     message, the next data frame MUST be a
+            //     continuation; conversely a continuation
+            //     frame is only legal mid-fragment.
+            if in_fragment {
+                if opcode != 0x0 {
                     return -1;
                 }
-                for (i, byte) in out_slice.iter_mut().enumerate() {
+            } else if opcode != accept_opcode {
+                return -1;
+            }
+
+            // Bounds check: accumulated + payload_len must fit
+            // in the caller's buffer. Overflow-safe via saturating
+            // u64 add (out_max_len is i64 but ≥ 0).
+            let new_total = accumulated.saturating_add(payload_len);
+            if new_total > out_max_len as u64 {
+                return -1;
+            }
+
+            if payload_len > 0 {
+                let off = accumulated as usize;
+                let payload_usize = payload_len as usize;
+                let frag_slice = std::slice::from_raw_parts_mut(out_ptr.add(off), payload_usize);
+                if !ws_read_exact_or_eof(&mut stream, frag_slice).unwrap_or(false) {
+                    return -1;
+                }
+                for (i, byte) in frag_slice.iter_mut().enumerate() {
                     *byte ^= mask_key[i % 4];
                 }
             }
-            return payload_len as i64;
+            accumulated = new_total;
+
+            if fin {
+                return accumulated as i64;
+            }
+            in_fragment = true;
         }
     })();
     let _ = stream.into_raw_fd();
@@ -3444,22 +3614,18 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn test_ws_recv_text_rejects_fragmented_data_frame_in_v1() {
-        // RFC 6455 §5.4 fragmentation: opcode 0x1 with FIN=0 is
-        // the start of a fragmented text message; opcode 0x0 is
-        // a continuation. v1 (slice 9e.3) doesn't support
-        // fragmentation reassembly — both return -1. Lifted in
-        // slice 9e.4.
+    fn test_ws_recv_text_rejects_orphan_continuation_frame() {
+        // Slice 9e.4 lifted the "fragmented frames return -1"
+        // gate from slice 9e.3, but a continuation frame (opcode
+        // 0x0) is only legal mid-fragment. A continuation
+        // arriving outside an in-progress fragmented message is
+        // a protocol violation per RFC 6455 §5.4.
         use std::io::Write;
         let (server_fd, mut client) = loopback_pair();
-        // FIN=0, opcode=0x1.
+        // FIN=1, opcode=0x0 (continuation) without a preceding
+        // FIN=0 data frame — illegal.
         let payload = b"abc";
-        let mut frame: Vec<u8> = Vec::new();
-        frame.push(0x01); // FIN=0, opcode=0x1
-        frame.push(0x80 | (payload.len() as u8));
-        let mask_key = [0u8; 4];
-        frame.extend_from_slice(&mask_key);
-        frame.extend_from_slice(payload);
+        let frame = encode_masked_client_frame(0x0, payload);
         client.write_all(&frame).expect("write frame");
         let mut out = [0u8; 16];
         let n = unsafe {
@@ -3467,5 +3633,280 @@ mod tests {
         };
         assert_eq!(n, -1);
         close_fd(server_fd);
+    }
+
+    /// Encode a masked client→server frame with explicit FIN bit.
+    /// Slice-9e.4 fragmentation tests need to control FIN
+    /// separately from opcode.
+    fn encode_masked_client_frame_with_fin(opcode: u8, payload: &[u8], fin: bool) -> Vec<u8> {
+        debug_assert!(opcode <= 0x0F);
+        let len = payload.len();
+        let mut frame: Vec<u8> = Vec::with_capacity(2 + 4 + len);
+        let fin_bit = if fin { 0x80 } else { 0x00 };
+        frame.push(fin_bit | opcode);
+        if len < 126 {
+            frame.push(0x80 | (len as u8));
+        } else if len < 65536 {
+            frame.push(0x80 | 126);
+            frame.extend_from_slice(&(len as u16).to_be_bytes());
+        } else {
+            frame.push(0x80 | 127);
+            frame.extend_from_slice(&(len as u64).to_be_bytes());
+        }
+        let mask_key = [0xA5u8, 0x37, 0x91, 0x4C];
+        frame.extend_from_slice(&mask_key);
+        for (i, b) in payload.iter().enumerate() {
+            frame.push(b ^ mask_key[i % 4]);
+        }
+        frame
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_reassembles_multi_fragment_message() {
+        // RFC 6455 §5.4: a text message split into three frames
+        // — first(FIN=0, op=0x1), continuation(FIN=0, op=0x0),
+        // final(FIN=1, op=0x0). recv_text should reassemble into
+        // a single payload.
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        let f1 = encode_masked_client_frame_with_fin(0x1, b"Hel", false);
+        let f2 = encode_masked_client_frame_with_fin(0x0, b"lo, ", false);
+        let f3 = encode_masked_client_frame_with_fin(0x0, b"world!", true);
+        let mut all = Vec::new();
+        all.extend_from_slice(&f1);
+        all.extend_from_slice(&f2);
+        all.extend_from_slice(&f3);
+        client.write_all(&all).expect("write fragments");
+
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, 13, "reassembled len = 3 + 4 + 6");
+        assert_eq!(&out[..13], b"Hello, world!");
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_fragmentation_with_interleaved_ping() {
+        // RFC 6455 §5.4 allows control frames to be interleaved
+        // between data fragments. The FFI should auto-respond to
+        // the ping without disrupting the in-progress fragment
+        // reassembly.
+        use std::io::{Read, Write};
+        let (server_fd, mut client) = loopback_pair();
+        let f1 = encode_masked_client_frame_with_fin(0x1, b"foo", false);
+        let ping = encode_masked_client_frame_with_fin(0x9, b"hi", true);
+        let f2 = encode_masked_client_frame_with_fin(0x0, b"bar", true);
+        let mut all = Vec::new();
+        all.extend_from_slice(&f1);
+        all.extend_from_slice(&ping);
+        all.extend_from_slice(&f2);
+        client.write_all(&all).expect("write frames");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, 6, "reassembled len = 3 + 3");
+        assert_eq!(&out[..6], b"foobar");
+
+        // The interleaved ping should have produced a pong
+        // response on the client side.
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut pong_buf = [0u8; 8];
+        let mut got = 0;
+        while got < 4 {
+            let m = client.read(&mut pong_buf[got..]).expect("read pong");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert_eq!(pong_buf[0], 0x8A);
+        assert_eq!(pong_buf[1], 0x02);
+        assert_eq!(&pong_buf[2..4], b"hi");
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_fragmentation_overflows_buffer_returns_minus_one() {
+        // Reassembled total exceeds caller's buffer → -1.
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        let f1 = encode_masked_client_frame_with_fin(0x1, b"first", false);
+        let f2 = encode_masked_client_frame_with_fin(0x0, b"second", true);
+        let mut all = Vec::new();
+        all.extend_from_slice(&f1);
+        all.extend_from_slice(&f2);
+        client.write_all(&all).expect("write fragments");
+
+        // 8-byte buffer can't hold "firstsecond" (11 bytes).
+        let mut out = [0u8; 8];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_rejects_mid_fragment_non_continuation() {
+        // After a FIN=0 data start, the next data frame MUST be
+        // a continuation (opcode 0x0). A new text frame (opcode
+        // 0x1) interleaved during a fragmented message is a
+        // protocol violation.
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        let f1 = encode_masked_client_frame_with_fin(0x1, b"abc", false);
+        // A new text frame instead of a continuation — illegal.
+        let f2 = encode_masked_client_frame_with_fin(0x1, b"def", true);
+        let mut all = Vec::new();
+        all.extend_from_slice(&f1);
+        all.extend_from_slice(&f2);
+        client.write_all(&all).expect("write frames");
+        let mut out = [0u8; 32];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_binary_reassembles_fragmented_message() {
+        // Same fragmentation behaviour applies to recv_binary
+        // (the shared `ws_recv_data_frame` helper switches on
+        // `accept_opcode` for the start frame only).
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        let f1 = encode_masked_client_frame_with_fin(0x2, &[0xDE, 0xAD], false);
+        let f2 = encode_masked_client_frame_with_fin(0x0, &[0xBE, 0xEF], true);
+        let mut all = Vec::new();
+        all.extend_from_slice(&f1);
+        all.extend_from_slice(&f2);
+        client.write_all(&all).expect("write fragments");
+
+        let mut out = [0u8; 16];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_binary(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, 4);
+        assert_eq!(&out[..4], &[0xDE, 0xAD, 0xBE, 0xEF]);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_send_text_masked_encodes_mask1_frame() {
+        // Send a masked client-side text frame; client side
+        // (acting as the WebSocket peer here) validates the
+        // wire format and unmasks the payload.
+        use std::io::Read;
+        let (server_fd, mut client) = loopback_pair();
+        let payload = b"client-message";
+        let n = unsafe {
+            super::karac_runtime_ws_send_text_masked(
+                server_fd,
+                payload.as_ptr(),
+                payload.len() as i64,
+            )
+        };
+        assert_eq!(n, payload.len() as i64);
+
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let total = 2 + 4 + payload.len(); // header + mask + payload
+        let mut buf = vec![0u8; total + 4];
+        let mut got = 0;
+        while got < total {
+            let m = client.read(&mut buf[got..]).expect("read frame");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert!(got >= total, "expected ≥{} bytes; got {}", total, got);
+        assert_eq!(buf[0], 0x81, "FIN=1 + opcode=0x1 (text)");
+        assert_eq!(buf[1], 0x80 | (payload.len() as u8), "MASK=1 + inline len");
+        let mask_key = [buf[2], buf[3], buf[4], buf[5]];
+        let mut unmasked: Vec<u8> = buf[6..6 + payload.len()].to_vec();
+        for (i, b) in unmasked.iter_mut().enumerate() {
+            *b ^= mask_key[i % 4];
+        }
+        assert_eq!(&unmasked[..], payload);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_send_binary_masked_uses_opcode_2() {
+        use std::io::Read;
+        let (server_fd, mut client) = loopback_pair();
+        let payload = b"\x01\x02\x03";
+        let n = unsafe {
+            super::karac_runtime_ws_send_binary_masked(
+                server_fd,
+                payload.as_ptr(),
+                payload.len() as i64,
+            )
+        };
+        assert_eq!(n, payload.len() as i64);
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = [0u8; 16];
+        let want = 2 + 4 + payload.len();
+        let mut got = 0;
+        while got < want {
+            let m = client.read(&mut buf[got..]).expect("read frame");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert_eq!(buf[0], 0x82, "FIN=1 + opcode=0x2 (binary)");
+        assert_eq!(buf[1], 0x80 | (payload.len() as u8), "MASK=1 + inline len");
+        // Validate via unmask round-trip.
+        let mask_key = [buf[2], buf[3], buf[4], buf[5]];
+        let mut unmasked: Vec<u8> = buf[6..6 + payload.len()].to_vec();
+        for (i, b) in unmasked.iter_mut().enumerate() {
+            *b ^= mask_key[i % 4];
+        }
+        assert_eq!(&unmasked[..], payload);
+        close_fd(server_fd);
+    }
+
+    #[test]
+    fn test_ws_generate_mask_key_is_nonzero_and_varies() {
+        // Defensive: the mask key generator should produce
+        // non-zero values most of the time, and successive calls
+        // should differ. Don't strictly require non-zero on
+        // every call (4 bytes of zero is technically valid,
+        // just extremely unlikely from /dev/urandom or LCG); use
+        // a small sample to assert variance.
+        let mut all_same_as_first = true;
+        let first = super::ws_generate_mask_key();
+        for _ in 0..8 {
+            let next = super::ws_generate_mask_key();
+            if next != first {
+                all_same_as_first = false;
+                break;
+            }
+        }
+        assert!(
+            !all_same_as_first,
+            "mask key generator returned the same 4 bytes 9 times in a row — \
+             not random; got {:?}",
+            first
+        );
     }
 }

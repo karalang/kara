@@ -123,6 +123,27 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 return self.lower_websocket_recv_binary(self_val, buf_val);
             }
+            // Phase 6 line 17 slice 9e.4 — client-side masked send
+            // for kara binaries acting as WebSocket clients
+            // (RFC 6455 §5.1 client→server frames require MASK=1).
+            if key == "WebSocket.send_text_masked" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_websocket_send_text_masked(self_val, buf_val);
+            }
+            if key == "WebSocket.send_binary_masked" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_websocket_send_binary_masked(self_val, buf_val);
+            }
         }
 
         // Phase 6 line 26 slice 8g: method-call network-boundary intercept.

@@ -192,6 +192,35 @@ impl WebSocket {
     {
         Result.Err(TcpError.Other(-1))
     }
+
+    // Slice 9e.4 — client-side masked send. RFC 6455 §5.1
+    // requires client→server frames to carry MASK=1 + a 4-byte
+    // mask key + masked payload. The default `send_text` /
+    // `send_binary` methods above are server-side (MASK=0); use
+    // these `_masked` variants when the kara binary is acting as
+    // a WebSocket CLIENT (e.g., outbound connection to a remote
+    // WebSocket service). The 4-byte mask key is generated
+    // per-call by the runtime (cryptographically-strong via
+    // `/dev/urandom`, with a clock-derived LCG fallback when
+    // `/dev/urandom` is unavailable).
+    //
+    // Reception of client→server frames already requires MASK=1
+    // since slice 9e.1, so a kara WebSocket server that receives
+    // from these client-shaped peers continues to work without
+    // surface changes.
+    #[compiler_builtin]
+    fn send_text_masked(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn send_binary_masked(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
 }
 
 // Close-on-drop. Same pattern as `TcpStream` / `TcpListener` (slice 9d).
