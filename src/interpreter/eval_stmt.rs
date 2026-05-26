@@ -93,6 +93,19 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
                 return Err(cf);
             }
+            // Move-suppression for user-Drop bindings: when the let
+            // statement's RHS is an Identifier whose value is a
+            // user-Drop struct, the source binding's value has moved
+            // into the destination. Suppress the source's Drop action
+            // so its user body doesn't fire at scope exit (the
+            // destination's drop fires on the same logical value
+            // instead, exactly once). Sibling of codegen's
+            // `suppress_user_drop_for_var` in `src/codegen/runtime.rs`.
+            // Pre-existing non-user-Drop bindings still get their
+            // drop_trace records — gated on `drop_method_keys` so the
+            // NLL placement / scope-exit ordering tests for plain
+            // bindings stay unchanged.
+            self.suppress_let_rebind_user_drop(stmt, &mut cleanup);
             // After a successful let-binding, push a Drop slot for each
             // name the pattern introduced.
             push_drops_for_stmt(stmt, &mut cleanup);
@@ -500,6 +513,36 @@ impl<'a> super::Interpreter<'a> {
             let _ = self.eval_block_inner(&body);
             self.env.pop_scope();
         }
+    }
+
+    /// Move-suppression for `let g = f;` patterns where `f` is a
+    /// binding whose type has a user `impl Drop`. The source `f`'s
+    /// CleanupAction::Drop is removed from the current cleanup frame
+    /// so its user-body doesn't fire at scope exit (the destination
+    /// `g` will fire its drop on the same logical value instead).
+    /// No-op when the let statement isn't `Binding = Identifier` or
+    /// when the source type isn't user-Drop — non-user-Drop bindings
+    /// keep their existing drop_trace records.
+    fn suppress_let_rebind_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+        let source_name = match &stmt.kind {
+            StmtKind::Let { value, .. } => match &value.kind {
+                ExprKind::Identifier(n) => n.clone(),
+                _ => return,
+            },
+            _ => return,
+        };
+        // Only suppress when the source's value has a user impl Drop.
+        let type_name = match self.env.get(&source_name) {
+            Some(Value::Struct { name, .. }) => name.clone(),
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        cleanup.retain(|action| match action {
+            CleanupAction::Drop { name } => name != &source_name,
+            _ => true,
+        });
     }
 
     #[allow(clippy::result_large_err)]

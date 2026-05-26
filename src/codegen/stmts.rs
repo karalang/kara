@@ -1397,10 +1397,32 @@ impl<'ctx> super::Codegen<'ctx> {
                             .as_deref()
                             .map(|p| p.drop_method_keys.contains_key(&struct_name))
                             .unwrap_or(false);
+                        // Move-suppression: when the RHS is an
+                        // Identifier, the source binding's value has
+                        // been moved into the destination. The source
+                        // is logically dead from this point forward;
+                        // firing its UserDrop at scope exit would
+                        // double-drop the same logical value
+                        // (double-close fds, double-call user Drop
+                        // body). Suppress the source's UserDrop action
+                        // BEFORE registering the destination's so the
+                        // search doesn't find the freshly-pushed
+                        // duplicate when the source name happens to
+                        // collide with the destination name in
+                        // shadowing patterns. Only applies to the
+                        // user-Drop path — the existing StructDrop /
+                        // FreeVecBuffer suppression is a broader
+                        // concern tracked separately in
+                        // phase-7-codegen.md.
+                        if has_user_drop {
+                            if let ExprKind::Identifier(source_name) = &value.kind {
+                                self.suppress_user_drop_for_var(source_name);
+                            }
+                        }
                         if let Some(slot) = self.variables.get(var_name.as_str()) {
                             let alloca = slot.ptr;
                             if has_user_drop {
-                                self.track_user_drop_var(&struct_name, alloca);
+                                self.track_user_drop_var(&struct_name, var_name, alloca);
                             } else if self.struct_types.contains_key(&struct_name) {
                                 self.track_struct_var(&struct_name, alloca);
                             }

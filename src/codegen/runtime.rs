@@ -729,15 +729,40 @@ impl<'ctx> super::Codegen<'ctx> {
     /// through to no-op (no action pushed) when the wrapper isn't in
     /// the cache (shouldn't happen — `emit_user_drop_wrappers` runs
     /// before the function-body compile pass).
-    pub(super) fn track_user_drop_var(&mut self, type_name: &str, binding_ptr: PointerValue<'ctx>) {
+    pub(super) fn track_user_drop_var(
+        &mut self,
+        type_name: &str,
+        binding_name: &str,
+        binding_ptr: PointerValue<'ctx>,
+    ) {
         let drop_fn = match self.user_drop_wrapper_fns.get(type_name) {
             Some(f) => *f,
             None => return,
         };
         if let Some(frame) = self.scope_cleanup_actions.last_mut() {
             frame.push(CleanupAction::UserDrop {
+                binding_name: binding_name.to_string(),
                 binding_ptr,
                 drop_fn,
+            });
+        }
+    }
+
+    /// Move-suppression for user-Drop bindings — remove the
+    /// `CleanupAction::UserDrop` entry for `name` from the cleanup
+    /// stack so it does NOT fire at scope exit. Used at `let g = f;`
+    /// (RHS is an Identifier) when `f`'s value is moved into `g`;
+    /// without suppression both bindings would drop the same logical
+    /// value, double-closing fds / double-dropping resources. Walks
+    /// all frames (inner-most first) so the suppression works even
+    /// for moves out of nested scopes — though the v1 caller in
+    /// `stmts.rs` only ever suppresses within the current frame
+    /// because that's where the source binding lives.
+    pub(super) fn suppress_user_drop_for_var(&mut self, name: &str) {
+        for frame in self.scope_cleanup_actions.iter_mut().rev() {
+            frame.retain(|action| match action {
+                CleanupAction::UserDrop { binding_name, .. } => binding_name != name,
+                _ => true,
             });
         }
     }
@@ -1141,6 +1166,7 @@ impl<'ctx> super::Codegen<'ctx> {
             // path is the unique field-cleanup invocation for types
             // with a user Drop impl.
             CleanupAction::UserDrop {
+                binding_name: _,
                 binding_ptr,
                 drop_fn,
             } => {

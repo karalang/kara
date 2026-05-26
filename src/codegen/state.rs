@@ -358,6 +358,15 @@ pub(crate) enum CleanupAction<'ctx> {
     /// Prereq.3 of the user-`impl Drop` dispatch slice
     /// (`docs/implementation_checklist/phase-7-codegen.md`).
     UserDrop {
+        /// Source-level binding name — `let f = Foo {...}` gives `"f"`.
+        /// Used by `suppress_user_drop_for_var` to find and remove a
+        /// specific binding's UserDrop entry when the value is moved
+        /// out via `let g = f;` (RHS is an Identifier). Without the
+        /// name on the action, `binding_ptr` equality would be the
+        /// only matcher available, but `let g = f` produces a fresh
+        /// alloca for `g` — the source's `binding_ptr` doesn't move,
+        /// it's just abandoned.
+        binding_name: String,
         /// Alloca holding the struct value — same shape passed to
         /// `StructDrop` (`StructTy` directly, not a pointer to it).
         binding_ptr: PointerValue<'ctx>,

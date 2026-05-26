@@ -1458,6 +1458,103 @@ fn test_user_drop_body_can_read_struct_fields() {
     assert_eq!(output, vec!["42\n".to_string()]);
 }
 
+// ── Move-suppression for user-Drop bindings (let-rebind) ──
+//
+// `let g = f;` where `f` has a user `impl Drop` moves the value
+// into `g`. Without move-suppression both bindings' Drop actions
+// would fire at scope exit, calling the user body twice on what is
+// logically the same value (double-close fds, etc.). The interpreter
+// helper `suppress_let_rebind_user_drop` removes the source's
+// CleanupAction::Drop from the current cleanup frame before
+// `push_drops_for_stmt` pushes the destination's. Non-user-Drop
+// bindings still get their drop_trace records (the suppression is
+// gated on `program.drop_method_keys`).
+
+#[test]
+fn test_user_drop_move_suppression_let_rebind() {
+    let (output, drops) = run_program_with_drops(
+        "struct R { tag: i64 }\n\
+         impl Drop for R {\n\
+             fn drop(mut ref self) { println(self.tag); }\n\
+         }\n\
+         fn main() {\n\
+             let f = R { tag: 7 };\n\
+             let g = f;\n\
+             println(g.tag);\n\
+         }",
+    );
+    // The user body should fire exactly ONCE — for `g`, not also for
+    // `f`. Output sequence:
+    //   stmt 0: let f = R { tag: 7 }  → no output, but the `value`
+    //           expression is a struct literal so the user body
+    //           would normally fire at f's NLL endpoint (which is
+    //           THIS statement under interpreter NLL semantics)
+    //           UNLESS move-suppression catches the next-stmt
+    //           move-out first. Today the suppression runs at the
+    //           NEXT statement's let-binding, AFTER `f`'s push +
+    //           fire — so `f`'s drop body actually fires here.
+    //           Documenting the observed behavior: this works for
+    //           let-rebind only when `f` is used AFTER let-binding
+    //           OR when the source binding's NLL endpoint is the
+    //           statement that moves it.
+    //   stmt 1: let g = f → before pushing g's Drop, suppress
+    //           f's. But f's was already pushed AND fired at NLL
+    //           endpoint of stmt 0. So suppression here is a no-op
+    //           when the source already fired.
+    //
+    // To get the move-suppression to actually suppress, `f` must
+    // still have its Drop slot in the cleanup vec when stmt 1 runs.
+    // That requires `f` to be live past stmt 0 — which it IS,
+    // because stmt 1 USES `f`. So `f`'s NLL endpoint is stmt 1, not
+    // stmt 0. Drop slot survives stmt 0's fire_due_drops; at the
+    // start of stmt 1's let-binding processing, suppress runs and
+    // removes f's slot; then g's slot is pushed; then
+    // fire_due_drops fires anything whose NLL endpoint is stmt 1
+    // — but f's slot is gone, and g's last-use is later (stmt 2),
+    // so neither fires here. At stmt 2's NLL endpoint, g fires.
+    //
+    // Expected: println(g.tag) → "7\n" then g's drop → "7\n".
+    // f's drop body is suppressed — never appears.
+    assert_eq!(
+        output,
+        vec!["7\n".to_string(), "7\n".to_string()],
+        "expected one println(g.tag) + one g.drop (NOT also f.drop); got {:?}",
+        output
+    );
+    // drop_trace records only `g` — `f`'s Drop slot was removed by
+    // suppression before fire_due_drops could push the trace.
+    assert_eq!(
+        drops,
+        vec!["g".to_string()],
+        "expected drop_trace to contain only `g` (source `f` move-suppressed); got {:?}",
+        drops
+    );
+}
+
+#[test]
+fn test_user_drop_move_suppression_does_not_affect_non_drop_types() {
+    // Plain `let y = x;` for a non-struct value (no user Drop) keeps
+    // the existing drop_trace behaviour — both `x` and `y` get
+    // recorded. Move-suppression is gated on `drop_method_keys`
+    // containing the source's type, which is empty for primitives.
+    let (_output, drops) = run_program_with_drops(
+        "fn main() {\n\
+             let x = 1;\n\
+             let y = x;\n\
+             println(y);\n\
+         }",
+    );
+    // Both x and y appear in drop_trace per the existing NLL placement
+    // (x's last use is `let y = x`, so it fires after stmt 1; y's
+    // last use is println, fires after stmt 2).
+    assert_eq!(
+        drops,
+        vec!["x".to_string(), "y".to_string()],
+        "non-Drop bindings should still get drop_trace records; got {:?}",
+        drops
+    );
+}
+
 // ── Prereq.5 user-`impl Drop` dispatch — edge cases ──
 //
 // Multiple-binding ordering, Drop / defer interleave, and the documented

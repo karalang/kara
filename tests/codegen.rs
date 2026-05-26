@@ -3756,6 +3756,75 @@ fn main() {
         );
     }
 
+    // ── Move-suppression for user-Drop bindings (let-rebind) ──
+    //
+    // `let g = f;` where `f` has a user `impl Drop` moves the value
+    // out of `f` into `g`. Without suppression both bindings would
+    // fire their UserDrop at scope exit, double-closing fds /
+    // double-calling user Drop bodies. The codegen `stmts.rs`
+    // let-binding tracking calls `suppress_user_drop_for_var` on the
+    // source name before tracking the destination, removing the
+    // source's CleanupAction::UserDrop. These tests pin the
+    // observable IR shape: exactly one `call @karac_drop_<Type>`
+    // remains in main.
+
+    #[test]
+    fn test_ir_let_rebind_suppresses_source_user_drop() {
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let f = Foo { x: 1 };
+    let g = f;
+    println(g.x);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        let count = main_body.matches("call void @karac_drop_Foo(").count();
+        assert_eq!(
+            count, 1,
+            "expected exactly ONE `@karac_drop_Foo` call in main \
+             (source `f` should be move-suppressed; only destination \
+             `g` drops at scope exit); got {} calls; body was:\n{}",
+            count, main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_let_rebind_tcp_listener_suppresses_double_close() {
+        // Production motivation: `let l2 = l1` for TcpListener should
+        // close the fd exactly once at scope exit, not twice. The IR
+        // pins the same shape: one `@karac_drop_TcpListener` call.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let l1 = TcpListener.bind("127.0.0.1:0");
+    let l2 = l1;
+    println(l2.fd);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        let count = main_body
+            .matches("call void @karac_drop_TcpListener(")
+            .count();
+        assert_eq!(
+            count, 1,
+            "expected exactly ONE `@karac_drop_TcpListener` call in main \
+             after `let l2 = l1` (source `l1` move-suppressed); got {} \
+             calls; body was:\n{}",
+            count, main_body
+        );
+    }
+
     #[test]
     fn test_ir_no_wrapper_without_impl_drop() {
         // No `impl Drop` → no entry in `program.drop_method_keys` →
