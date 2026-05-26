@@ -3668,6 +3668,94 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 17 slice 9d — TcpStream / TcpListener close-on-drop ──
+    //
+    // Hand-rolled `@TcpStream.drop` / `@TcpListener.drop` LLVM bodies
+    // call `karac_runtime_tcp_close(self.fd)` and return void. The
+    // user-Drop wrapper machinery (Prereq.2-5) then invokes these
+    // bodies at scope exit. Together they close the kernel-side fd
+    // when a kara binding goes out of scope, replacing the previous
+    // "kernel reaps fds on process exit" leak.
+
+    #[test]
+    fn test_ir_tcp_listener_drop_body_calls_tcp_close() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0");
+    println(l.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "TcpListener.drop").unwrap_or_else(|| {
+            panic!(
+                "@TcpListener.drop body not found in IR; expected hand-rolled \
+                 body emitted before emit_user_drop_wrappers. IR:\n{}",
+                ir
+            )
+        });
+        assert!(
+            body.contains("call i32 @karac_runtime_tcp_close("),
+            "expected `@TcpListener.drop` body to call \
+             `@karac_runtime_tcp_close(...)`; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_tcp_stream_drop_body_calls_tcp_close() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0");
+    let s = l.accept();
+    println(s.fd);
+}
+"#,
+        );
+        let body = function_body(&ir, "TcpStream.drop").unwrap_or_else(|| {
+            panic!(
+                "@TcpStream.drop body not found in IR; expected hand-rolled \
+                 body. IR:\n{}",
+                ir
+            )
+        });
+        assert!(
+            body.contains("call i32 @karac_runtime_tcp_close("),
+            "expected `@TcpStream.drop` body to call \
+             `@karac_runtime_tcp_close(...)`; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_main_invokes_tcp_drop_wrapper_at_scope_exit() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let l = TcpListener.bind("127.0.0.1:0");
+    println(l.fd);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        // Prereq.3's scope-exit drain emits `call @karac_drop_TcpListener`
+        // at scope exit; the wrapper internally calls @TcpListener.drop,
+        // which closes the fd. This pins the full pipeline:
+        // typechecker drop_method_keys → Prereq.2 wrapper synth →
+        // Prereq.3 CleanupAction::UserDrop registration → drain emits
+        // the call.
+        assert!(
+            main_body.contains("call void @karac_drop_TcpListener("),
+            "expected `main` to call `@karac_drop_TcpListener(...)` at \
+             scope exit (the wrapper closes the fd via @TcpListener.drop); \
+             main body was:\n{}",
+            main_body
+        );
+    }
+
     #[test]
     fn test_ir_no_wrapper_without_impl_drop() {
         // No `impl Drop` → no entry in `program.drop_method_keys` →

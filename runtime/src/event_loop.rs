@@ -1100,6 +1100,51 @@ pub unsafe extern "C" fn karac_runtime_tcp_write(
     result
 }
 
+// ── TCP close FFI (stdlib `TcpStream` / `TcpListener` Drop dispatch) ─────
+//
+// Phase 6 line 17 slice 9d. Called by the codegen-emitted bodies of
+// `@TcpStream.drop` and `@TcpListener.drop` when a kara binding goes
+// out of scope. `close(2)` releases the kernel-side socket resource;
+// without this the per-connection fd leaks until process exit (the
+// kernel reaps fds on `_exit`, but inside a long-running server the
+// fd table eventually fills).
+//
+// **Idempotence and double-close.** A `-1` fd is a no-op (returns 0,
+// matching the per-method convention of using `-1` as the "no-fd"
+// sentinel: `bind` returns `TcpListener { fd: -1 }` on bind failure;
+// the wrapper structures created by `accept` use the same sentinel
+// for accept failure). A double-close on a valid fd surfaces as
+// `EBADF` from the kernel; the helper does NOT try to detect that
+// — under Prereq.1-5 + Slice 9d the user-Drop dispatch fires once
+// per binding scope-exit per the existing `CleanupAction::UserDrop`
+// drain; move-suppression for the broader cleanup-action family
+// (see phase-7-codegen.md tracker entry) closes the double-drop
+// surface for value-move patterns.
+//
+// **#[cfg(unix)] gate.** Mirrors the bind / accept / read / write
+// FFIs — Windows IOCP path lands in a separate slice (phase-6 line
+// 17 slice 10).
+
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_tcp_close(fd: i32) -> i32 {
+    use std::os::unix::io::FromRawFd;
+    if fd < 0 {
+        return 0;
+    }
+    // SAFETY: reconstructing the `TcpStream` from the raw fd and
+    // letting it drop (no `into_raw_fd()` here, unlike the bind /
+    // accept / read / write FFIs which release ownership back to
+    // the caller) invokes the kernel-side `close(2)` and releases
+    // the fd. Both `TcpStream::from_raw_fd` and
+    // `TcpListener::from_raw_fd` route through the same OS close on
+    // drop; using `TcpStream` here is fine for either listener or
+    // stream — the Rust-side type only governs the API surface, not
+    // the underlying fd's kind.
+    let _ = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+    0
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's

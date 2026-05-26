@@ -1499,6 +1499,20 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_tcp_close(fd: i32) -> i32` — backs the
+        // hand-rolled `@TcpStream.drop` / `@TcpListener.drop` LLVM
+        // bodies emitted by `emit_hardcoded_stdlib_drop_bodies`.
+        // Closes the kernel-side socket; a `-1` fd is a no-op.
+        // Phase 6 line 17 slice 9d.
+        let tcp_close_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into()], false);
+        module.add_function(
+            "karac_runtime_tcp_close",
+            tcp_close_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized
@@ -2326,6 +2340,16 @@ impl<'ctx> Codegen<'ctx> {
         // during user body compilation that runs immediately after
         // this — so the side-table is populated in time.
         self.emit_state_machine_poll_fns(program);
+
+        // Phase 6 line 17 slice 9d — hand-roll bodies for stdlib
+        // `<Type>.drop` symbols that the existing impl-method pass
+        // can't reach (stdlib impls live outside `program.items`). For
+        // `TcpListener` / `TcpStream` this emits a `call
+        // @karac_runtime_tcp_close(self.fd); ret void` body, mirroring
+        // the always-emitted pattern from `karac_park_on_fd`. Must run
+        // BEFORE `emit_user_drop_wrappers` below so the wrapper synth's
+        // `module.get_function("<Type>.drop")` lookup succeeds.
+        self.emit_hardcoded_stdlib_drop_bodies(program);
 
         // Phase 7 user-`impl Drop` dispatch — synthesize the per-type
         // `karac_drop_<Type>` wrapper for each entry in

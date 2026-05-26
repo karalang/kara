@@ -31,15 +31,20 @@
 //     (same deferral discipline as previous slice; consolidated
 //     Result wrapping across all four methods lands when a real
 //     consumer needs the structured-error path on bind/accept).
-//   - Drop semantics — `TcpListener` / `TcpStream` don't auto-close
-//     the fd on drop today. The test programs are short-lived (the
-//     kernel reaps fds on process exit). User-Drop dispatch in the
-//     typechecker / codegen is the precondition for adding
-//     close-on-drop, mirroring `Pool[T]`'s same deferral.
 //   - `local_addr()` / `port()` getter — for now the BOUND_PORT
 //     stdout convention covers the smoke-test readback need; once a
 //     real consumer wants programmatic access, an accessor that
 //     calls `getsockname(2)` through a new runtime FFI lands.
+//
+// **Slice 9d (shipped 2026-05-25):** close-on-drop. Both types now
+// have `impl Drop for <T> { #[compiler_builtin] fn drop(mut ref self) {} }`
+// at the bottom of this file; the codegen hand-rolls the LLVM body
+// to invoke `karac_runtime_tcp_close(self.fd)` (same pattern as the
+// always-emitted `karac_park_on_fd` from slice 6). User-Drop dispatch
+// flows through Prereq.1-5 (`docs/implementation_checklist/phase-7-codegen.md`
+// § User-`impl Drop` dispatch) — typechecker validates the impl,
+// codegen wraps it in `karac_drop_<Type>`, scope-exit drain invokes
+// the wrapper.
 //
 // **Effect set.** `bind` has no declared effect — binding a socket
 // is a one-shot syscall that doesn't park, doesn't read, doesn't
@@ -189,4 +194,27 @@ impl TcpStream {
     {
         Result.Err(TcpError.Other(-1))
     }
+}
+
+// Phase 6 line 17 slice 9d — close-on-drop for `TcpListener` and
+// `TcpStream`. The kara source `impl Drop` blocks register both
+// types in `TypeCheckResult.drop_method_keys` (Prereq.1) so the
+// codegen wrapper-synth pass (Prereq.2) emits `karac_drop_TcpListener`
+// and `karac_drop_TcpStream`. The scope-exit drain (Prereq.3 →
+// `CleanupAction::UserDrop`) then fires the wrapper, which calls
+// `@TcpListener.drop` / `@TcpStream.drop`. Both `<Type>.drop` LLVM
+// bodies are hand-rolled in codegen (mirrors the `karac_park_on_fd`
+// always-emitted pattern from slice 6) — the stub bodies below
+// never execute. When the codegen-compiles-stdlib gap closes the
+// stubs become real pure-kara bodies of the shape
+// `unsafe { karac_runtime_tcp_close(self.fd); }`.
+
+impl Drop for TcpListener {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+impl Drop for TcpStream {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
 }

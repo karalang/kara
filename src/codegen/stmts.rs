@@ -1369,29 +1369,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 // paths in `bind_pattern` / `compile_struct_init`.
                 if let PatternKind::Binding(var_name) = &pattern.kind {
                     if let Some(struct_name) = self.var_type_names.get(var_name.as_str()).cloned() {
-                        if self.struct_types.contains_key(&struct_name) {
-                            if let Some(slot) = self.variables.get(var_name.as_str()) {
-                                let alloca = slot.ptr;
-                                // Phase 7 user-`impl Drop` dispatch Prereq.3:
-                                // when the struct's type has a validated
-                                // user Drop impl, route cleanup through the
-                                // `karac_drop_<Type>` wrapper (which invokes
-                                // the user body then defers to the existing
-                                // field-cleanup synthesiser). The wrapper
-                                // and the StructDrop action both target the
-                                // same `__karac_drop_struct_<Type>` field
-                                // walk, so we register exactly one of the
-                                // two to avoid a double-cleanup of fields.
-                                let has_user_drop = self
-                                    .program_snapshot
-                                    .as_deref()
-                                    .map(|p| p.drop_method_keys.contains_key(&struct_name))
-                                    .unwrap_or(false);
-                                if has_user_drop {
-                                    self.track_user_drop_var(&struct_name, alloca);
-                                } else {
-                                    self.track_struct_var(&struct_name, alloca);
-                                }
+                        // Phase 7 user-`impl Drop` dispatch Prereq.3:
+                        // when the struct's type has a validated user
+                        // Drop impl, route cleanup through the
+                        // `karac_drop_<Type>` wrapper (which invokes
+                        // the user body then defers to the existing
+                        // field-cleanup synthesiser). The wrapper and
+                        // the StructDrop action both target the same
+                        // `__karac_drop_struct_<Type>` field walk, so
+                        // we register exactly one of the two to avoid
+                        // a double-cleanup of fields.
+                        //
+                        // Stdlib types (TcpListener, TcpStream) with
+                        // user Drop register here even though they're
+                        // NOT in `struct_types` — that map is filled
+                        // by `declare_structs` walking `program.items`,
+                        // which doesn't include stdlib items. The
+                        // user-drop wrapper for them is hand-rolled
+                        // by `emit_hardcoded_stdlib_drop_bodies`
+                        // (slice 9d). For user types both paths
+                        // coexist; `struct_types` containing the type
+                        // is the existing trigger for `track_struct_var`,
+                        // and `drop_method_keys` is the trigger for
+                        // `track_user_drop_var`.
+                        let has_user_drop = self
+                            .program_snapshot
+                            .as_deref()
+                            .map(|p| p.drop_method_keys.contains_key(&struct_name))
+                            .unwrap_or(false);
+                        if let Some(slot) = self.variables.get(var_name.as_str()) {
+                            let alloca = slot.ptr;
+                            if has_user_drop {
+                                self.track_user_drop_var(&struct_name, alloca);
+                            } else if self.struct_types.contains_key(&struct_name) {
+                                self.track_struct_var(&struct_name, alloca);
                             }
                         }
                     }

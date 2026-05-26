@@ -1107,6 +1107,96 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.build_return(None).unwrap();
     }
 
+    /// Phase 6 line 17 slice 9d — hand-rolled bodies for
+    /// `@TcpListener.drop` and `@TcpStream.drop`. These two stdlib
+    /// types declare `impl Drop` in `runtime/stdlib/tcp.kara` (so the
+    /// typechecker registers them in `drop_method_keys`), but the
+    /// existing impl-method orchestration in `compile_program` only
+    /// walks user `program.items` — stdlib impl bodies never reach the
+    /// `compile_function` pass. Without this helper, Prereq.2's
+    /// `emit_user_drop_wrapper` would fail to find the `@TcpStream.drop`
+    /// LLVM symbol and silently skip wrapper emission, leaving
+    /// `TcpStream` / `TcpListener` bindings to leak their fd at scope
+    /// exit. The helper mirrors the always-emitted pattern from
+    /// `karac_park_on_fd` (declarations.rs `synthesize_park_on_fd_layout`
+    /// + `emit_park_on_fd_poll_body`): the LLVM function is declared
+    ///   and bodied unconditionally whenever the stdlib registers the
+    ///   impl, and the linker dead-strips when no caller exists.
+    ///
+    /// Body shape (for both types — `TcpListener` / `TcpStream` are
+    /// structurally identical, single `i32 fd` field):
+    /// ```text
+    /// define internal void @<Type>.drop(ptr %self) {
+    ///   %fd_ptr = getelementptr {i32}, ptr %self, i32 0, i32 0
+    ///   %fd     = load i32, ptr %fd_ptr
+    ///   %_      = call i32 @karac_runtime_tcp_close(i32 %fd)
+    ///   ret void
+    /// }
+    /// ```
+    ///
+    /// Must run BEFORE `emit_user_drop_wrappers` so the wrapper synth's
+    /// `module.get_function("<Type>.drop")` lookup succeeds.
+    pub(super) fn emit_hardcoded_stdlib_drop_bodies(&mut self, program: &crate::ast::Program) {
+        for type_name in ["TcpListener", "TcpStream"] {
+            if !program.drop_method_keys.contains_key(type_name) {
+                continue;
+            }
+            self.emit_tcp_drop_body_for(type_name);
+        }
+    }
+
+    /// Hand-roll a `@<type_name>.drop(ptr) -> void` LLVM function whose
+    /// body calls `karac_runtime_tcp_close(self.fd)`. Used for both
+    /// `TcpListener` and `TcpStream` (their LLVM struct layout is
+    /// identical — a single `i32` field at offset 0). The struct type
+    /// is constructed inline (matching the convention in `src/codegen/tcp.rs`
+    /// where `lower_tcp_listener_bind` builds `context.struct_type(&[i32])`
+    /// inline) rather than reading from `self.struct_types`, because
+    /// stdlib structs aren't registered in `struct_types` — that map
+    /// is populated by `declare_structs` walking `program.items`, and
+    /// stdlib items live outside the user program.
+    fn emit_tcp_drop_body_for(&mut self, type_name: &str) {
+        let fn_name = format!("{}.drop", type_name);
+        if self.module.get_function(&fn_name).is_some() {
+            return;
+        }
+        let close_fn = match self.module.get_function("karac_runtime_tcp_close") {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i32_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(&fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let fd_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "fd_ptr")
+            .unwrap();
+        let fd = self
+            .builder
+            .build_load(i32_ty, fd_ptr, "fd")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
     /// Prereq.2 of the user-`impl Drop` dispatch slice — synthesize the
     /// per-type drop-wrapper `karac_drop_<Type>` for each entry in
     /// `program.drop_method_keys`. The wrapper body:

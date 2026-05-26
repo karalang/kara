@@ -17714,9 +17714,22 @@ fn drop_impl_records_method_key_in_result() {
 #[test]
 fn drop_method_keys_empty_when_no_drop_impl() {
     let result = typecheck_ok("struct Point { x: i32, y: i32 }");
+    // After Slice 9d (2026-05-25), stdlib `runtime/stdlib/tcp.kara`
+    // adds `impl Drop for TcpListener` and `impl Drop for TcpStream`
+    // for close-on-drop dispatch. Those entries are always present
+    // regardless of user code, so the test now asserts no USER-defined
+    // impl was added (Point's entry is absent) and the only entries
+    // are the stdlib ones.
+    let user_keys: Vec<&String> = result
+        .drop_method_keys
+        .keys()
+        .filter(|k| k.as_str() != "TcpListener" && k.as_str() != "TcpStream")
+        .collect();
     assert!(
-        result.drop_method_keys.is_empty(),
-        "drop_method_keys should be empty when no impl Drop, got: {:?}",
+        user_keys.is_empty(),
+        "drop_method_keys should contain only stdlib entries when no \
+         user impl Drop, got user keys: {:?} (full map: {:?})",
+        user_keys,
         result.drop_method_keys,
     );
 }
