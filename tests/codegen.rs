@@ -21486,6 +21486,61 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_errdefer_with_binding_no_double_eval_on_impure_err_arg() {
+        // Slice 4 follow-up (b) — double-eval fix (2026-05-26).
+        // Slice 4 staged the Err binding-form payload by unconditionally
+        // re-compiling `payload_expr`, which evaluated side-effecting Err
+        // args twice (`return Err(some_io());` → `some_io()` ran for the
+        // return-struct construction AND again to stage the payload).
+        //
+        // This test pins single-evaluation via `Self::is_pure_recompilable`:
+        // `make_err()` is an impure call (writes "called" to stdout),
+        // so it routes through the extract-from-v path — the constructed
+        // Err struct's field 1 (`w0`) is the i64-coerced payload. With
+        // the fix, "called" appears exactly once in output; pre-fix it
+        // would have appeared twice.
+        //
+        // The binding-form errdefer reads the staged i64 payload (`7`
+        // here) and prints it.
+        let out = run_program(
+            r#"
+fn make_err() -> i64 {
+    println("called");
+    7_i64
+}
+fn body() -> Result[i64, i64] {
+    errdefer(e) { println(e); }
+    return Err(make_err());
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Expected sequence:
+            //   "called" — make_err() runs exactly ONCE for the Err
+            //              return struct's construction (single eval).
+            //   "7"      — errdefer(e) prints the staged i64 payload
+            //              (extracted from the constructed struct's
+            //              field 1).
+            //   "caller-err" — the caller's Err arm.
+            assert_eq!(lines, vec!["called", "7", "caller-err"]);
+            // Stronger assertion against regression: count "called"
+            // occurrences. Pre-fix it would have been 2 (double-eval).
+            let called_count = out.matches("called").count();
+            assert_eq!(
+                called_count, 1,
+                "impure Err arg should evaluate exactly once; got {called_count} `called` lines:\n{out}",
+            );
+        }
+    }
+
     // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
     //
     // Real LLVM globals — immutable `let X: T = INIT` lowers to

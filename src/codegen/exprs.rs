@@ -303,14 +303,45 @@ impl<'ctx> super::Codegen<'ctx> {
                         // this is `None`, and the error-path drain runs
                         // without any binding-form errdefer payload
                         // available — the no-binding form still fires.
+                        //
+                        // Slice 4 follow-up (b) — double-eval fix
+                        // (2026-05-26). Slice 4 staged the payload by
+                        // unconditionally re-compiling `payload_expr`,
+                        // which double-evaluates side-effecting Err
+                        // args like `return Err(some_fn_with_io());`
+                        // The expr is now staged via two paths gated
+                        // on `Self::is_pure_recompilable`:
+                        //   - Pure (Identifier / Path / literal):
+                        //     re-compile. Side-effect-free in source
+                        //     semantics, so two evaluations produce the
+                        //     same value and observable behaviour. The
+                        //     IR is slightly bigger (one extra load /
+                        //     constant emit), but value is source-typed
+                        //     — preserves wider-E (`Result[T, String]`)
+                        //     binding correctness.
+                        //   - Impure (call / method / field access /
+                        //     etc.): extract the i64-coerced payload
+                        //     word from the constructed Err struct's
+                        //     field 1. Single eval. Trade: wider-E
+                        //     impure args see the i64-coerced w0
+                        //     instead of the reconstructed source-
+                        //     level value — same shape as the `?`
+                        //     site's known limitation (a). Cross-
+                        //     referenced in this entry's tracker
+                        //     notes (`docs/implementation_checklist/
+                        //     phase-7-codegen.md` line 96 closure).
                         let staged = Self::err_payload_from_value(e).and_then(|payload_expr| {
-                            // The payload's value is already inside `v`
-                            // (the constructed Err struct). Re-compile
-                            // the payload arg to get the inner LLVM
-                            // value at its source-level type — cheaper
-                            // and more accurate than peeling fields off
-                            // the constructed enum struct.
-                            self.compile_expr(payload_expr).ok()
+                            if Self::is_pure_recompilable(payload_expr) {
+                                self.compile_expr(payload_expr).ok()
+                            } else {
+                                self.builder
+                                    .build_extract_value(
+                                        v.into_struct_value(),
+                                        1,
+                                        "errdefer_payload_w0",
+                                    )
+                                    .ok()
+                            }
                         });
                         self.pending_errdefer_payload = staged;
                         self.emit_scope_cleanup_for_error_path();
@@ -753,6 +784,54 @@ impl<'ctx> super::Codegen<'ctx> {
     /// typechecker rejects before reaching codegen). Mirrors the call-
     /// recognition gate used by `is_error_exit_value`: both `Err`-as-
     /// identifier and `Path([..., "Err"])` callee shapes are accepted.
+    /// Slice 4 follow-up (b) — double-eval fix (2026-05-26). True
+    /// when `expr` is a syntactic shape whose `compile_expr` lowering
+    /// is observably side-effect-free in source semantics — re-
+    /// evaluating it yields the same value with no observable extra
+    /// behaviour. Used by the `ExprKind::Return(Err(arg))` and
+    /// function-tail `Err(arg)` emitters to decide whether to re-
+    /// compile the payload expression for binding-form errdefer
+    /// staging (preserves wider-E source-typed binding for pure
+    /// args) or extract the i64-coerced payload word from the
+    /// already-constructed Err return struct (single eval for
+    /// impure args, at the cost of wider-E precision).
+    ///
+    /// Whitelist: `Identifier`, `Path`, integer / float / bool /
+    /// char / byte / string literals. Identifier/Path re-compile
+    /// to a load from a local alloca or global, which is value-
+    /// stable across two reads at the same program point (no
+    /// intervening write at the same callsite). Literals are
+    /// constants. `StringLit` materialises a global string ptr
+    /// once and reuses it on subsequent compile_expr calls (per
+    /// `compile_expr`'s `StringLit` arm), so re-compile produces
+    /// the same `{ptr, len, cap}` struct value with `cap=0` —
+    /// safe to re-emit.
+    ///
+    /// Out of whitelist: any `Call` / `MethodCall` / `FieldAccess`
+    /// / `Index` / `Unary` / `Binary` (operators lower to method
+    /// calls via `lowering.rs`'s desugaring pass) / `Block` / etc.
+    /// Conservative — false negatives mean we drop into the
+    /// extract-from-v path, accepting the i64-coerce trade for
+    /// wider-E payloads. Adding more shapes to the whitelist (e.g.
+    /// `Binary` over pure operands) is fine but unnecessary for
+    /// the common Err-arg shapes seen in practice (`Err(literal)`,
+    /// `Err(error_code)`, `Err(name.into())`).
+    pub(super) fn is_pure_recompilable(expr: &Expr) -> bool {
+        matches!(
+            &expr.kind,
+            ExprKind::Identifier(_)
+                | ExprKind::Path { .. }
+                | ExprKind::Integer(_, _)
+                | ExprKind::Float(_, _)
+                | ExprKind::Bool(_)
+                | ExprKind::CharLit(_)
+                | ExprKind::ByteLit(_)
+                | ExprKind::StringLit(_)
+                | ExprKind::SelfValue
+                | ExprKind::SelfType
+        )
+    }
+
     pub(super) fn err_payload_from_value(expr: &Expr) -> Option<&Expr> {
         if let ExprKind::Call { callee, args } = &expr.kind {
             let is_err_ctor = match &callee.kind {

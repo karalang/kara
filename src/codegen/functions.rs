@@ -418,21 +418,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the tail-Err payload so an in-scope `errdefer(e) {
                 // ... }` can bind `e`. The tail expr has already been
                 // compiled into `result` by `compile_function_body`
-                // above, but we still re-compile the inner Err arg here
-                // because `result` is the constructed Err struct
-                // (`{i64 tag, i64 w0, ...}`) — the binding wants the
-                // pre-construction payload value at its source-level
-                // type. Re-compiling the inner expression is cheap
-                // (literals / identifiers); side-effecting payload
-                // expressions ARE evaluated twice, which is acceptable
-                // for v1's narrow common case but tracked as a known
-                // limitation at the bottom of the slice notes.
+                // above (which is the constructed Err struct
+                // `{i64 tag, i64 w0, ...}`).
+                //
+                // Slice 4 follow-up (b) — double-eval fix (2026-05-26).
+                // Same pure-vs-impure split as the early-return path in
+                // `compile_expr`'s `ExprKind::Return` arm: pure
+                // payload expressions (Identifier / Path / literals)
+                // re-compile (preserves wider-E source-typed binding);
+                // impure expressions extract the i64-coerced payload
+                // word from `result`'s field 1 (single eval, accepts
+                // i64-coerce trade for wider-E impure args). See
+                // `Self::is_pure_recompilable` for the whitelist.
                 let staged = func
                     .body
                     .final_expr
                     .as_deref()
                     .and_then(Self::err_payload_from_value)
-                    .and_then(|payload_expr| self.compile_expr(payload_expr).ok());
+                    .and_then(|payload_expr| {
+                        if Self::is_pure_recompilable(payload_expr) {
+                            self.compile_expr(payload_expr).ok()
+                        } else {
+                            let constructed = result?;
+                            self.builder
+                                .build_extract_value(
+                                    constructed.into_struct_value(),
+                                    1,
+                                    "errdefer_tail_payload_w0",
+                                )
+                                .ok()
+                        }
+                    });
                 self.pending_errdefer_payload = staged;
                 self.emit_scope_cleanup_for_error_path();
                 self.pending_errdefer_payload = None;
