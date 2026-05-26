@@ -1319,7 +1319,21 @@ impl<'ctx> super::Codegen<'ctx> {
                     let _ = self.builder.build_store(tag_ptr, zero);
                 }
             }
+            // Recursion suppression (par-slice 4 — same shape as the
+            // cancel-bb's cleanup site in `emit_branch_cancel_check`).
+            // A user defer body containing a call would route the call
+            // through `compile_call` → `emit_branch_cancel_check`,
+            // which would walk `scope_cleanup_actions` and re-encounter
+            // the SAME UserDefer (still in the frame; only removed
+            // when the frame pops). At compile time that's infinite
+            // recursion. Branch end is the terminal cleanup site
+            // before `ret void` — there's no further cancellation
+            // semantics to enforce. Save + null + restore the cancel
+            // pointer to suppress nested cancel-checks during the
+            // drain.
+            let inner_saved_cancel_ptr = self.branch_cancel_ptr.take();
             self.emit_scope_cleanup();
+            self.branch_cancel_ptr = inner_saved_cancel_ptr;
             self.builder.build_return(None).unwrap();
         }
 
@@ -1387,7 +1401,36 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_conditional_branch(is_cancelled, cancel_bb, cont_bb)
             .unwrap();
         self.builder.position_at_end(cancel_bb);
-        self.emit_scope_cleanup();
+        // Par-cancellation slice 4 (Phase 7 § *Par codegen: cancellation
+        // and error propagation*): route through the error-path drain
+        // so `errdefer { ... }` blocks registered in the branch body
+        // fire on cooperative cancellation (design.md: "observing
+        // cancellation — `errdefer(e)` sees `e = Cancelled`"). User
+        // `defer { ... }` blocks already drained via `emit_scope_cleanup`,
+        // but its UserErrDefer skip (added in defer-codegen slice 2)
+        // meant errdefers were silently swallowed at this exit point.
+        // The error-path drain runs errdefers in phase 1 (LIFO across
+        // frames) then drops + defers in phase 2 — matching the
+        // interpreter's per-scope `run_cleanup` shape when
+        // `ExitPath::Cancelled` fires (`src/interpreter/eval_stmt.rs`).
+        //
+        // Recursion suppression: temporarily clear `branch_cancel_ptr`
+        // while emitting the cleanup drain. A user defer/errdefer body
+        // can contain calls (e.g. `defer { println("x"); }`) which
+        // route through `compile_call`, which calls back into
+        // `emit_branch_cancel_check` — if the cancel ptr is still
+        // set, that re-entry walks `scope_cleanup_actions` again and
+        // re-encounters the SAME `UserDefer` / `UserErrDefer` action
+        // still living in the outer frame (it's only removed when its
+        // containing frame pops). At compile time this is an infinite
+        // recursion. Conceptually the cleanup IS the cancel-exit
+        // path's terminal work — there's nothing meaningful to
+        // re-cancel inside cleanup bodies. Save + null + restore the
+        // cancel pointer to suppress nested cancel-checks during this
+        // drain.
+        let saved_cancel_ptr = self.branch_cancel_ptr.take();
+        self.emit_scope_cleanup_for_error_path();
+        self.branch_cancel_ptr = saved_cancel_ptr;
         self.builder.build_return(None).unwrap();
         self.builder.position_at_end(cont_bb);
     }

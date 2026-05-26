@@ -4282,4 +4282,140 @@ fn main() {
             "no `#[par_unordered]` ⇒ no worker_collect fn; got:\n{ir}"
         );
     }
+
+    // --- Par codegen slice 4: defer / errdefer on the cancel path ---
+    //
+    // Slice 4 of the Phase 7 § *Par codegen: cancellation and error
+    // propagation* tranche. The single-line emission change in
+    // `emit_branch_cancel_check` (`src/codegen/par_blocks.rs`) routes
+    // the mid-branch cancel-check exit through
+    // `emit_scope_cleanup_for_error_path` instead of
+    // `emit_scope_cleanup`, so user `errdefer { ... }` blocks fire on
+    // cooperative cancellation (matches design.md "observing
+    // cancellation — `errdefer(e)` sees `e = Cancelled`"). User
+    // `defer { ... }` blocks were already firing via the prior
+    // `emit_scope_cleanup` drain; the switch keeps that behaviour
+    // (defers drain in phase 2 of the error-path walk) while adding
+    // errdefer-on-cancel.
+    //
+    // The defer-codegen entry's slice 2 split (which introduced
+    // `UserErrDefer` skipping in `emit_scope_cleanup`) made the
+    // slice-4 description's original "no new emission code" claim
+    // stale — without the cancel-exit's switch to the error-path
+    // drain, errdefers would have been silently swallowed on
+    // cooperative cancel. These two tests pin both halves of the
+    // resulting behaviour: the errdefer test is the discriminating
+    // signal (errdefer ONLY fires on error paths, so observing the
+    // body's stdout proves the cancel-exit is treated as an error
+    // path); the defer test is the regression lock against any
+    // future refactor that breaks defer-on-cancel via the new
+    // error-path drain.
+
+    #[test]
+    fn test_e2e_par_branch_defer_fires_on_cooperative_cancel() {
+        // Branch 0 runs a long loop of effectful `println(i)` calls;
+        // each call's pre-call cancel-check (per slice 3's audit)
+        // sees the cancel flag and routes to the cancel-exit BB.
+        // Branch 1's `let b: Result[i64, i64] = fast_err();` is the
+        // canonical slice-1a Result-typed-binding shape that
+        // `branch_result_binding_name` recognises (annotation-only
+        // detection: `PatternKind::Binding(name)` + `Result[...]`
+        // type annotation) — slot-write at branch end stores the Err
+        // tag and fires the cancel-flag store, which slice 1a's
+        // codegen wires into the branch fn's body.
+        //
+        // With the slice-4 switch, branch 0's next mid-branch
+        // cancel-check (before any `println(i)` after the cancel flag
+        // is set) routes to the cancel-exit BB, which now drains the
+        // registered defer body.
+        //
+        // 10_000 iterations is sized so branch 0 cannot possibly
+        // complete before branch 1 finishes and a mid-branch cancel-
+        // check fires — keeps the test independent of host timing
+        // while staying well under the cargo-test runner's per-test
+        // timeout.
+        let out = run_program(
+            r#"
+fn fast_err() -> Result[i64, i64] { Err(99_i64) }
+
+fn main() {
+    par {
+        let _ = {
+            defer { println("def-fired-on-cancel"); }
+            let mut i = 0_i64;
+            while i < 10000_i64 {
+                println(i);
+                i = i + 1_i64;
+            }
+            0_i64
+        };
+        let b: Result[i64, i64] = fast_err();
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert!(
+                out.contains("def-fired-on-cancel"),
+                "defer body should fire when cancel-exit drains the branch frame; \
+                 got first 500 chars:\n{}",
+                &out[..out.len().min(500)],
+            );
+            // Sanity-check: branch 0 did NOT run to completion. If it
+            // had, the cancel never fired and the defer drained via
+            // the normal-exit path (which would also have printed
+            // `9999` before the defer's `def-fired-on-cancel` line).
+            // Absence of `9999` proves the cancel-exit was the drain
+            // site.
+            assert!(
+                !out.contains("9999"),
+                "branch should have been cancelled before completing all iterations; \
+                 saw `9999` in output (last 200 chars):\n{}",
+                &out[out.len().saturating_sub(200)..],
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_par_branch_errdefer_fires_on_cooperative_cancel() {
+        // Discriminating test for the slice-4 switch. Errdefer ONLY
+        // fires on error paths (`emit_scope_cleanup` skips
+        // `UserErrDefer` slots; only
+        // `emit_scope_cleanup_for_error_path` runs them). The
+        // branch's source-level value is `0_i64` (a normal Ok-ish
+        // exit), so the only way the errdefer body runs is via the
+        // cancel-exit drain. Observing `"err-fired-on-cancel"` in
+        // output is the unique signal that the cancel-exit is now
+        // recognised as an error path — pre-slice-4 (when
+        // `emit_branch_cancel_check` called `emit_scope_cleanup`),
+        // the errdefer would have been silently swallowed.
+        let out = run_program(
+            r#"
+fn fast_err() -> Result[i64, i64] { Err(99_i64) }
+
+fn main() {
+    par {
+        let _ = {
+            errdefer { println("err-fired-on-cancel"); }
+            let mut i = 0_i64;
+            while i < 10000_i64 {
+                println(i);
+                i = i + 1_i64;
+            }
+            0_i64
+        };
+        let b: Result[i64, i64] = fast_err();
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert!(
+                out.contains("err-fired-on-cancel"),
+                "errdefer body should fire on cancel-exit (slice-4 switch to \
+                 emit_scope_cleanup_for_error_path); got first 500 chars:\n{}",
+                &out[..out.len().min(500)],
+            );
+        }
+    }
 }
