@@ -91,6 +91,46 @@ impl<'a> super::TypeChecker<'a> {
                     }
                 }
             }
+            // Same check-mode short-circuit for `Vec.filled(n, fill)` so
+            // an annotated `let mut v: Vec[Vec[i64]] = Vec.filled(N,
+            // Vec.new())` propagates `Vec[i64]` into the fill arg, which
+            // then hits the `Vec.new()` short-circuit above and gets
+            // pinned cleanly. Without this arm, `Vec.filled(n, Vec.new())`
+            // synth-mode returns `Vec[Vec[?T0]]`, the fresh typevar never
+            // unifies against the declared `Vec[i64]`, and
+            // `types_compatible` rejects with "expected Vec<Vec<i64>>,
+            // found Vec<Vec<?T0>>" — surfaced 2026-05-25 by kata 3629's
+            // `bench/bfs_sieve.kara::build_factors`.
+            if args.len() == 2 {
+                if let ExprKind::Path { segments, .. } = &callee.kind {
+                    if segments.len() == 2
+                        && segments[0] == "Vec"
+                        && segments[1] == "filled"
+                    {
+                        if let Type::Named {
+                            name,
+                            args: type_args,
+                        } = expected
+                        {
+                            if name == "Vec" && type_args.len() == 1 {
+                                let n_ty = self.infer_expr(&args[0].value);
+                                self.check_assignable(
+                                    &Type::Int(IntSize::I64),
+                                    &n_ty,
+                                    args[0].value.span.clone(),
+                                );
+                                // Push the inner element type into the
+                                // fill arg so a nested `Vec.new()` /
+                                // `Vec.with_capacity(n)` constructor at
+                                // that position can short-circuit on it.
+                                self.check_expr(&args[1].value, &type_args[0]);
+                                self.record_expr_type(&expr.span, expected);
+                                return expected.clone();
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Empty prefix-literal (`Vec[]` / `Array[]` / `Set[]` / `Map[]`) at

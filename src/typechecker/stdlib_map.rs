@@ -247,7 +247,15 @@ impl<'a> super::TypeChecker<'a> {
             "or_insert" => {
                 // `or_insert(default: V) -> mut ref V`. Returns a borrow into
                 // the map's slot — fresh on Vacant (after writing default),
-                // existing on Occupied.
+                // existing on Occupied. Uses `check_expr` (push-down) instead
+                // of `infer_expr` (synth-only) so a nested
+                // `Vec.new()` / `Vec.with_capacity(n)` / `Vec.filled(n, ..)`
+                // default constructor sees the expected value type `V` and
+                // can short-circuit on it. Without push-down, the bottom-up
+                // `Vec.new()` returns `Vec[?T]`, which the subsequent
+                // `check_assignable` can't unify against `Vec[V]` — surfaced
+                // 2026-05-25 by kata 3629's
+                // `bucket.entry(p).or_insert(Vec.new()).push(j)`.
                 if args.len() != 1 {
                     self.type_error(
                         format!("Entry.or_insert() expects 1 argument, found {}", args.len()),
@@ -258,8 +266,7 @@ impl<'a> super::TypeChecker<'a> {
                         self.infer_expr(&arg.value);
                     }
                 } else {
-                    let dt = self.infer_expr(&args[0].value);
-                    self.check_assignable(&v, &dt, args[0].value.span.clone());
+                    self.check_expr(&args[0].value, &v);
                 }
                 mut_ref_v
             }

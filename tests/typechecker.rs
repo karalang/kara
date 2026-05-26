@@ -5712,6 +5712,51 @@ fn test_array_coerces_to_slice_at_call_boundary() {
 }
 
 #[test]
+fn test_vec_filled_pushes_inner_element_type_into_fill_arg() {
+    // Regression for the 2026-05-25 typechecker bidirectional-inference
+    // gap surfaced by kata 3629's `bench/bfs_sieve.kara::build_factors`.
+    // `let mut factors: Vec[Vec[i64]] = Vec.filled(n, Vec.new())` failed
+    // with 'expected Vec<Vec<i64>>, found Vec<Vec<?T0>>' — the inner
+    // `Vec.new()` minted a fresh typevar that didn't unify against the
+    // declared inner element type. Fix: extend the check-mode short-
+    // circuit in `check_expr` from the existing `Vec.new()` and
+    // `Vec.with_capacity(n)` arms to also cover `Vec.filled(n, fill)`,
+    // propagating the inner element type into the fill arg.
+    typecheck_ok(
+        "fn main() {
+             let mut factors: Vec[Vec[i64]] = Vec.filled(10, Vec.new());
+             factors[0].push(1);
+         }",
+    );
+    // Nested form: Vec.filled with Vec.with_capacity as the fill.
+    typecheck_ok(
+        "fn main() {
+             let mut buckets: Vec[Vec[i64]] = Vec.filled(8, Vec.with_capacity(4));
+             buckets[0].push(1);
+         }",
+    );
+}
+
+#[test]
+fn test_map_entry_or_insert_pushes_value_type_into_default_arg() {
+    // Regression for the 2026-05-25 typechecker bidirectional-inference
+    // gap surfaced by kata 3629:
+    // `bucket.entry(p).or_insert(Vec.new()).push(j)` failed with
+    // 'expected Vec<i64>, found Vec<?T0>' — `Entry.or_insert(default)`
+    // was using `infer_expr` (bottom-up synth) on the default arg, so
+    // the nested `Vec.new()` minted a fresh typevar instead of pinning
+    // to the Map's value type `V`. Fix: switch to `check_expr` (push-
+    // down) so the expected `V` flows into the default arg and a nested
+    // `Vec.new()` / `Vec.with_capacity(n)` short-circuits on it.
+    typecheck_ok(
+        "fn main() {
+             let mut bucket: Map[i64, Vec[i64]] = Map.new();
+             bucket.entry(1_i64).or_insert(Vec.new()).push(42_i64);
+         }",
+    );
+}
+
+#[test]
 fn test_vec_from_slice_typecheck_arm() {
     // Regression for the 2026-05-25 typechecker-vs-codegen out-of-sync
     // bug surfaced by kata 1665's `bench/greedy.kara`. Codegen has a
