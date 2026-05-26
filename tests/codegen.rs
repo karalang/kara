@@ -21189,6 +21189,198 @@ fn main() {
         }
     }
 
+    // --- Phase 7 § *defer / errdefer codegen* slice 3: LIFO interleave ---
+    //
+    // Slice 3 audits and pins that user `defer { ... }` and the compiler-
+    // internal cleanup actions (`FreeVecBuffer`, `RcDec`, `FreeMapHandle`,
+    // `EnumDrop`, `StructDrop`, `RcDecOption`) share a single per-scope
+    // stack (`scope_cleanup_actions.last_mut()`) and drain in reverse
+    // push order (LIFO) per `emit_scope_cleanup` (`src/codegen/runtime.rs`).
+    // The structural invariant was established by slice 1 (`UserDefer`
+    // pushes onto the same frame `track_vec_var` / `track_rc_var` /
+    // `track_map_handle` push onto) — slice 3's contribution is the
+    // verification + the regression-pin tests below.
+    //
+    // Design.md § *Drop ordering within a branch* mandates program-order
+    // LIFO interleave: `let v = Vec.new(); defer foo();` drains `foo()`
+    // first, then `drop(v)`. Both observable behaviours are pinned:
+    //   - E2E (`test_e2e_defer_lifo_with_let_vec_interleave`,
+    //     `test_e2e_defer_lifo_with_two_let_vecs_interleave`) — defer
+    //     bodies read the let-bound Vec's `.len()` at scope exit and the
+    //     output proves the Vec was still alive when the defer fired
+    //     (had the order been "all drops then defers", the read would
+    //     touch freed memory).
+    //   - IR (`test_ir_defer_drop_interleave_emission_order`) — pins the
+    //     emission order of `mark_b()` / `@free` / `mark_a()` / `@free`
+    //     within `compile_function`'s tail-cleanup block to distinguish
+    //     the unified-stack-LIFO behaviour from the "all defers then all
+    //     drops" two-phase alternative (which would emit both `mark_*`
+    //     calls before any `@free`).
+
+    #[test]
+    fn test_e2e_defer_lifo_with_let_vec_interleave() {
+        // Single let + single defer: push order is `[FreeVec(v),
+        // UserDefer(println)]`; LIFO drain fires the defer first (sees
+        // live `v.len() == 3`), then the `FreeVec(v)` cleanup releases
+        // the buffer. Under the alternative two-phase ordering
+        // "all drops then all defers", the defer would read a freed
+        // data pointer and either print garbage or crash; observing
+        // `"len=3"` pins the unified-stack interleave.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(10_i64);
+    v.push(20_i64);
+    v.push(30_i64);
+    defer { println(f"len={v.len()}"); }
+    println("body");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["body", "len=3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_defer_lifo_with_two_let_vecs_interleave() {
+        // Mirrors design.md's canonical example:
+        //     let v = Vec.new(); defer A; let w = Vec.new(); defer B;
+        // → push order `[FreeVec(v), Defer A, FreeVec(w), Defer B]`,
+        //   LIFO drain `[Defer B, FreeVec(w), Defer A, FreeVec(v)]`.
+        //
+        // Each defer's body prints its respective Vec's `.len()`.
+        // The interleaved LIFO drain order guarantees both reads land
+        // BEFORE the matching `FreeVec` for that Vec: defer B reads w
+        // before FreeVec(w); defer A reads v before FreeVec(v). The
+        // stdout order is `wlen=2` then `vlen=1` because B drains
+        // before A (LIFO between the two defers, both alive on the
+        // same unified stack). Distinguishes from "all drops then all
+        // defers" by the live read; the LIFO-vs-FIFO defer order pin
+        // is additional.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    defer { println(f"vlen={v.len()}"); }
+    let mut w: Vec[i64] = Vec.new();
+    w.push(10_i64);
+    w.push(20_i64);
+    defer { println(f"wlen={w.len()}"); }
+    println("body");
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["body", "wlen=2", "vlen=1"]);
+        }
+    }
+
+    #[test]
+    fn test_ir_defer_drop_interleave_emission_order() {
+        // Slice 3's structural pin. The two prior E2E tests rule out
+        // "all drops then all defers" (defers read live Vec buffers),
+        // but they do NOT distinguish the unified-stack LIFO interleave
+        // from the alternative two-phase ordering "all defers then all
+        // drops" — both orderings let a defer see its in-scope let-
+        // binding alive. This IR test closes the gap by pinning the
+        // emission order of defer bodies vs. `@free` calls in
+        // `compile_function`'s tail-cleanup block.
+        //
+        // Source:
+        //     let v = Vec.new(); v.push(...); defer { mark_a(); }
+        //     let w = Vec.new(); w.push(...); defer { mark_b(); }
+        //
+        // Push order at the function's top frame:
+        //     [FreeVec(v), UserDefer(mark_a), FreeVec(w), UserDefer(mark_b)]
+        //
+        // Drain order (LIFO) emits IR in this sequence inside main's
+        // exit-cleanup block:
+        //     1. UserDefer(mark_b) → `call .* @mark_b`
+        //     2. FreeVec(w)        → `call .* @free` on w's data ptr
+        //     3. UserDefer(mark_a) → `call .* @mark_a`
+        //     4. FreeVec(v)        → `call .* @free` on v's data ptr
+        //
+        // Counterfactual ordering "all defers then all drops" would
+        // emit `[@mark_b, @mark_a, @free, @free]`. Observing `@mark_a`
+        // appearing AFTER an `@free` (and before the second `@free`)
+        // distinguishes the actual unified-LIFO behaviour from that
+        // alternative.
+        let full_ir = ir_for(
+            r#"
+fn mark_a() { println("a"); }
+fn mark_b() { println("b"); }
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1_i64);
+    defer { mark_a(); }
+    let mut w: Vec[i64] = Vec.new();
+    w.push(2_i64);
+    defer { mark_b(); }
+}
+"#,
+        );
+        // Scope to `@main`'s body so positions are not confused by
+        // `@free` calls inside `Vec.push`'s realloc path (which run
+        // BEFORE the cleanup block in IR text order, but live in a
+        // different function).
+        let main_start = full_ir
+            .find("define i32 @main")
+            .unwrap_or_else(|| panic!("expected `define i32 @main` in IR; got:\n{full_ir}"));
+        // `@main` ends at the first `\n}\n` after its opening — every
+        // other top-level fn starts on a new line after that.
+        let main_body_end_rel = full_ir[main_start..]
+            .find("\n}\n")
+            .unwrap_or_else(|| panic!("expected `@main` body terminator in IR; got:\n{full_ir}"));
+        let ir = &full_ir[main_start..main_start + main_body_end_rel];
+
+        let pos_b = ir
+            .find("call void @mark_b")
+            .unwrap_or_else(|| panic!("expected `call void @mark_b` in main; got:\n{ir}"));
+        let pos_a = ir
+            .find("call void @mark_a")
+            .unwrap_or_else(|| panic!("expected `call void @mark_a` in main; got:\n{ir}"));
+        // The cleanup-time `@free` calls take their data pointer from
+        // `%cleanup.data*` slots (per `emit_cleanup_action`'s
+        // `FreeVecBuffer` arm in `src/codegen/runtime.rs`). Earlier
+        // `@free` calls in main's body come from `Vec.push`'s realloc
+        // path (`call void @free(ptr %data4)`) and are NOT what we want
+        // to compare against — scope to the `%cleanup.data` form.
+        let cleanup_free_pat = "call void @free(ptr %cleanup.data";
+        let pos_free1 = ir.find(cleanup_free_pat).unwrap_or_else(|| {
+            panic!("expected first cleanup-time `@free` (matching `{cleanup_free_pat}`) in main; got:\n{ir}")
+        });
+        let pos_free2 = {
+            let start = pos_free1 + 1;
+            let rest = &ir[start..];
+            rest.find(cleanup_free_pat)
+                .map(|p| start + p)
+                .unwrap_or_else(|| {
+                    panic!("expected a second cleanup-time `@free` in main; got:\n{ir}")
+                })
+        };
+        // Drain order: mark_b → free(w) → mark_a → free(v). The
+        // critical assertion is that mark_a sits BETWEEN the two
+        // free calls — that's what rules out "all defers then all
+        // drops" (which would put both `mark_*` before either free).
+        assert!(
+            pos_b < pos_free1,
+            "defer B (`mark_b`) should drain before the first cleanup `@free`; got mark_b at {pos_b}, free at {pos_free1}\nmain IR:\n{ir}",
+        );
+        assert!(
+            pos_free1 < pos_a,
+            "first cleanup `@free` (FreeVec(w)) should drain before defer A (`mark_a`); got free at {pos_free1}, mark_a at {pos_a}\nmain IR:\n{ir}",
+        );
+        assert!(
+            pos_a < pos_free2,
+            "defer A (`mark_a`) should drain before the second cleanup `@free` (FreeVec(v)); got mark_a at {pos_a}, free at {pos_free2}\nmain IR:\n{ir}",
+        );
+    }
+
     // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
     //
     // Real LLVM globals — immutable `let X: T = INIT` lowers to
