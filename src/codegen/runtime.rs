@@ -719,6 +719,29 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase 7 user-`impl Drop` dispatch Prereq.3 — track a struct
+    /// alloca for scope-exit invocation of its `karac_drop_<Type>`
+    /// wrapper. Used in place of `track_struct_var` when the binding's
+    /// type has a user-defined `impl Drop` — the wrapper's body already
+    /// invokes the existing `__karac_drop_struct_<Type>` synthesiser
+    /// internally after running the user body, so registering both
+    /// would double-cleanup the fields. Returns `()` either way; falls
+    /// through to no-op (no action pushed) when the wrapper isn't in
+    /// the cache (shouldn't happen — `emit_user_drop_wrappers` runs
+    /// before the function-body compile pass).
+    pub(super) fn track_user_drop_var(&mut self, type_name: &str, binding_ptr: PointerValue<'ctx>) {
+        let drop_fn = match self.user_drop_wrapper_fns.get(type_name) {
+            Some(f) => *f,
+            None => return,
+        };
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::UserDrop {
+                binding_ptr,
+                drop_fn,
+            });
+        }
+    }
+
     /// Emit all cleanup actions registered across all scope frames (for function exit).
     /// Iterates frames in reverse (innermost first) and within each frame in reverse
     /// push order (LIFO). LIFO is mandatory for user `defer` per design.md § Drop
@@ -1106,6 +1129,23 @@ impl<'ctx> super::Codegen<'ctx> {
             } => {
                 self.builder
                     .build_call(*drop_fn, &[(*struct_alloca).into()], "")
+                    .unwrap();
+            }
+            // Phase 7 user-`impl Drop` dispatch Prereq.3 — invoke the
+            // per-type wrapper `karac_drop_<Type>` on the binding. The
+            // wrapper internally calls the user-defined `<Type>.drop`
+            // method body, then (when the type has heap-owning fields)
+            // hands off to the existing `__karac_drop_struct_<Type>`
+            // field cleanup synthesiser. Registration at let-binding
+            // time is mutually exclusive with `StructDrop`, so this
+            // path is the unique field-cleanup invocation for types
+            // with a user Drop impl.
+            CleanupAction::UserDrop {
+                binding_ptr,
+                drop_fn,
+            } => {
+                self.builder
+                    .build_call(*drop_fn, &[(*binding_ptr).into()], "")
                     .unwrap();
             }
             // `Option[shared T]` binding — load the tag, branch on

@@ -3497,6 +3497,116 @@ fn main() {
         );
     }
 
+    // ── Prereq.3 user-`impl Drop` dispatch — scope-exit drop call placement ──
+    //
+    // When a struct binding has a user `impl Drop`, the let-binding
+    // registers `CleanupAction::UserDrop` (Prereq.3) instead of the
+    // existing `CleanupAction::StructDrop` (the existing field-cleanup
+    // path), so the scope-exit drain emits `call void @karac_drop_<Type>`
+    // — and exactly that one call, not also the field-cleanup synthesiser
+    // (the wrapper invokes the field-cleanup synthesiser internally; a
+    // second call from a stale `StructDrop` action would double-walk
+    // fields and trigger a double-free for heap-bearing fields).
+
+    #[test]
+    fn test_ir_scope_exit_emits_karac_drop_call() {
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let f = Foo { x: 1 };
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @karac_drop_Foo("),
+            "expected `main` to call `@karac_drop_Foo(...)` at scope exit; \
+             body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_user_drop_replaces_struct_field_cleanup_at_scope_exit() {
+        // Bag has a heap-owning Vec field. Without user Drop the
+        // scope-exit drain would emit `call @__karac_drop_struct_Bag`
+        // directly. With user Drop, the drain emits
+        // `call @karac_drop_Bag` ONCE; the wrapper itself dispatches
+        // into `__karac_drop_struct_Bag` for field cleanup. The two
+        // registrations are mutually exclusive at let-binding time, so
+        // main's body must NOT contain a direct `__karac_drop_struct_Bag`
+        // call (only the wrapper does, inside its own body).
+        let ir = ir_for(
+            r#"
+struct Bag { items: Vec[i64] }
+impl Drop for Bag {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let b = Bag { items: Vec.new() };
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @karac_drop_Bag("),
+            "expected `main` to call `@karac_drop_Bag(...)` at scope exit; \
+             body was:\n{}",
+            main_body
+        );
+        assert!(
+            !main_body.contains("call void @__karac_drop_struct_Bag("),
+            "main must NOT also emit a direct `@__karac_drop_struct_Bag` \
+             call — the wrapper handles field cleanup internally; a \
+             second call would double-walk the Vec field. body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_struct_drop_still_fires_without_impl_drop() {
+        // Sibling assertion of the above: without user Drop, the
+        // existing field-cleanup path stands. Bag's let-binding
+        // registers `CleanupAction::StructDrop` whose drain emits
+        // `call @__karac_drop_struct_Bag` directly in `main`. This
+        // pins down that Prereq.3's tracking change is gated on
+        // `drop_method_keys` presence — no regression in the
+        // no-impl-Drop case.
+        let ir = ir_for(
+            r#"
+struct Bag { items: Vec[i64] }
+fn main() {
+    let b = Bag { items: Vec.new() };
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @__karac_drop_struct_Bag("),
+            "expected `main` to call `@__karac_drop_struct_Bag(...)` at \
+             scope exit (no user Drop → existing field-cleanup path stays \
+             in effect); body was:\n{}",
+            main_body
+        );
+        assert!(
+            !main_body.contains("call void @karac_drop_Bag("),
+            "main must NOT call `@karac_drop_Bag` when Bag has no \
+             `impl Drop` — the wrapper isn't emitted in this case. \
+             body was:\n{}",
+            main_body
+        );
+    }
+
     #[test]
     fn test_ir_no_wrapper_without_impl_drop() {
         // No `impl Drop` → no entry in `program.drop_method_keys` →

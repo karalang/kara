@@ -346,6 +346,25 @@ pub(crate) enum CleanupAction<'ctx> {
     /// covers normal-exit semantics; error-exit dispatch (errdefer,
     /// `?`-propagation, panic) lands in slice 2.
     UserDefer(Block),
+    /// Invoke the per-type user-Drop wrapper `karac_drop_<Type>` on a
+    /// struct alloca at scope exit. The wrapper (emitted by Prereq.2's
+    /// `emit_user_drop_wrappers`) (a) calls the user-defined
+    /// `<Type>.drop` method body and (b) hands off to the existing
+    /// `__karac_drop_struct_<Type>` field-cleanup synthesiser when the
+    /// type has heap-owning fields. Registration at let-binding time
+    /// replaces — does NOT add to — the existing `StructDrop`
+    /// registration for the same alloca, so field cleanup runs exactly
+    /// once (via the wrapper's internal call) and never double-frees.
+    /// Prereq.3 of the user-`impl Drop` dispatch slice
+    /// (`docs/implementation_checklist/phase-7-codegen.md`).
+    UserDrop {
+        /// Alloca holding the struct value — same shape passed to
+        /// `StructDrop` (`StructTy` directly, not a pointer to it).
+        binding_ptr: PointerValue<'ctx>,
+        /// Cached `karac_drop_<Type>` wrapper from
+        /// `Codegen::user_drop_wrapper_fns`.
+        drop_fn: FunctionValue<'ctx>,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-

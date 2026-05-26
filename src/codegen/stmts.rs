@@ -1372,7 +1372,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         if self.struct_types.contains_key(&struct_name) {
                             if let Some(slot) = self.variables.get(var_name.as_str()) {
                                 let alloca = slot.ptr;
-                                self.track_struct_var(&struct_name, alloca);
+                                // Phase 7 user-`impl Drop` dispatch Prereq.3:
+                                // when the struct's type has a validated
+                                // user Drop impl, route cleanup through the
+                                // `karac_drop_<Type>` wrapper (which invokes
+                                // the user body then defers to the existing
+                                // field-cleanup synthesiser). The wrapper
+                                // and the StructDrop action both target the
+                                // same `__karac_drop_struct_<Type>` field
+                                // walk, so we register exactly one of the
+                                // two to avoid a double-cleanup of fields.
+                                let has_user_drop = self
+                                    .program_snapshot
+                                    .as_deref()
+                                    .map(|p| p.drop_method_keys.contains_key(&struct_name))
+                                    .unwrap_or(false);
+                                if has_user_drop {
+                                    self.track_user_drop_var(&struct_name, alloca);
+                                } else {
+                                    self.track_struct_var(&struct_name, alloca);
+                                }
                             }
                         }
                     }

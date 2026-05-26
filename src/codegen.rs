@@ -2327,6 +2327,21 @@ impl<'ctx> Codegen<'ctx> {
         // this — so the side-table is populated in time.
         self.emit_state_machine_poll_fns(program);
 
+        // Phase 7 user-`impl Drop` dispatch — synthesize the per-type
+        // `karac_drop_<Type>` wrapper for each entry in
+        // `program.drop_method_keys`. Must run AFTER impl-method
+        // declarations (so the wrapper body's `call @<Type>.drop` finds
+        // the symbol via `module.get_function`) AND BEFORE the
+        // concrete-function body pass below — Prereq.3's
+        // `track_user_drop_var` reads `user_drop_wrapper_fns` at
+        // let-binding time during body compile, so the cache must be
+        // populated by then. The wrapper body's `call @<Type>.drop`
+        // references the impl-method symbol but does not need its
+        // body to be compiled (Prereq.2 finding); the impl-method body
+        // pass at the bottom of this function compiles user-side bodies
+        // in their own pass.
+        self.emit_user_drop_wrappers(program);
+
         // Second pass: compile concrete functions (generic ones are compiled lazily).
         for item in &program.items {
             if let Item::Function(f) = item {
@@ -2365,14 +2380,6 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
-
-        // Prereq.2 of the user-`impl Drop` dispatch slice — synthesize a
-        // `karac_drop_<Type>` wrapper per `program.drop_method_keys` entry.
-        // Must run AFTER the impl-method body pass above so the
-        // user-defined `Type.drop` LLVM symbol is already declared+compiled
-        // when the wrapper builds the call into it. Scope-exit invocation
-        // of these wrappers lands in Prereq.3.
-        self.emit_user_drop_wrappers(program);
 
         self.emit_jit_template_section();
         self.emit_llvm_used();
