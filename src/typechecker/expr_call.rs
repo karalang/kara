@@ -501,9 +501,10 @@ impl<'a> super::TypeChecker<'a> {
                 let src_ty = self.infer_expr(&args[0].value);
                 let elem_ty = match &src_ty {
                     Type::Slice { element, .. } => (**element).clone(),
-                    Type::Named { name, args: ty_args } if name == "Vec" && ty_args.len() == 1 => {
-                        ty_args[0].clone()
-                    }
+                    Type::Named {
+                        name,
+                        args: ty_args,
+                    } if name == "Vec" && ty_args.len() == 1 => ty_args[0].clone(),
                     Type::Array { element, .. } => (**element).clone(),
                     _ => self.env.fresh_type_var(),
                 };
