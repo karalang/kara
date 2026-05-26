@@ -353,6 +353,16 @@ impl<'ctx> super::Codegen<'ctx> {
             let addr_val = self.compile_expr(&_args[0].value)?;
             return self.lower_tcp_listener_bind(addr_val);
         }
+        // Phase 6 line 17 slice 9e.1 — `WebSocket.from_fd(fd) -> WebSocket`.
+        // Pure value construction: pack the i32 fd into a fresh
+        // `WebSocket { fd }` struct value (same single-i32-field
+        // layout as `TcpListener` / `TcpStream`). Real-world entry
+        // through HTTP upgrade ships in slice 9e.2; for v1 this is
+        // the testing entry point.
+        if type_name == "WebSocket" && method == "from_fd" && _args.len() == 1 {
+            let fd_val = self.compile_expr(&_args[0].value)?;
+            return self.lower_websocket_from_fd(fd_val);
+        }
         if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
             {
                 let addr_val = self.compile_expr(&_args[0].value)?;

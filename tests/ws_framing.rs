@@ -1,0 +1,183 @@
+//! Phase 6 line 17 slice 9e.1 — stdlib `WebSocket` codegen IR-grep tests.
+//!
+//! The wire-format correctness of `karac_runtime_ws_send_text` /
+//! `_recv_text` is pinned by Rust unit tests inside the runtime
+//! crate (`runtime/src/event_loop.rs` test module). This file
+//! pins the *codegen-side* wiring: that kara source referencing
+//! `WebSocket.send_text` / `.recv_text` / `Drop` lowers to the
+//! right IR shape (park then runtime FFI, plus the
+//! `@karac_drop_WebSocket` wrapper at scope exit).
+//!
+//! **Why not a kara-source E2E test of the framing round-trip?**
+//! The kara-source surface for constructing a WebSocket from an
+//! accepted TcpStream requires `stream.fd` field access. Today
+//! that returns const 0 at codegen because `struct_types` is
+//! only populated for user `program.items`, not stdlib bodies —
+//! the field-access lowering falls back to a zero default. Filed
+//! as a follow-on in phase-7-codegen.md; affects any stdlib-type
+//! field access, not WebSocket-specific. Slice 9e.2's
+//! `accept_websocket(listener)` builder bypasses the field-access
+//! path and unlocks kara-source E2E coverage; slice 9e.1's
+//! correctness gate is the runtime FFI tests + these IR-grep
+//! tests for the codegen wiring.
+
+#![cfg(feature = "llvm")]
+
+mod ws_codegen_tests {
+    use karac::codegen::compile_to_ir;
+
+    fn ir_for(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "typecheck: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+    }
+
+    /// Locate a function definition body by name; same shape as
+    /// `tests/codegen.rs::function_body`.
+    fn function_body(ir: &str, name: &str) -> Option<String> {
+        let needle = format!("@{name}(");
+        let mut found_define = false;
+        let mut depth = 0i32;
+        let mut body = String::new();
+        for line in ir.lines() {
+            if !found_define {
+                if line.starts_with("define ") && line.contains(&needle) {
+                    found_define = true;
+                    depth = line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                    continue;
+                }
+            } else {
+                body.push_str(line);
+                body.push('\n');
+                depth += line.matches('{').count() as i32;
+                depth -= line.matches('}').count() as i32;
+                if depth <= 0 {
+                    return Some(body);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn test_ir_websocket_drop_wrapper_emitted() {
+        // A program that constructs a WebSocket via `from_fd` and
+        // lets it drop at scope exit should emit the
+        // `karac_drop_WebSocket` wrapper alongside the underlying
+        // `@WebSocket.drop` body. The wrapper's body calls into
+        // `@WebSocket.drop`, which (hand-rolled by
+        // `emit_hardcoded_stdlib_drop_bodies` for stdlib types
+        // sharing the single-i32-field layout) ultimately calls
+        // `karac_runtime_tcp_close`.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    println(ws.fd);
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_drop_WebSocket"),
+            "expected `@karac_drop_WebSocket` wrapper in IR:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("@WebSocket.drop"),
+            "expected hand-rolled `@WebSocket.drop` in IR:\n{}",
+            ir
+        );
+        let drop_body = function_body(&ir, "WebSocket.drop")
+            .unwrap_or_else(|| panic!("WebSocket.drop body not found:\n{}", ir));
+        assert!(
+            drop_body.contains("call i32 @karac_runtime_tcp_close("),
+            "WebSocket.drop body should close the fd via \
+             `karac_runtime_tcp_close`; body was:\n{}",
+            drop_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_send_text_dispatches_to_runtime_ffi() {
+        // `ws.send_text(buf)` should park on write-readiness then
+        // call `karac_runtime_ws_send_text`. The Result wrapping
+        // reuses the slice-9b `wrap_tcp_io_result` so labels show
+        // `tcp.write.*` BB names — that's the cross-pollination
+        // documented in `lower_websocket_io`.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "hi";
+    let _ = ws.send_text(msg.bytes());
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_send_text("),
+            "main should call `karac_runtime_ws_send_text`; body was:\n{}",
+            main_body
+        );
+        // Park primitive must precede the FFI call (slice 6 +
+        // slice 9 compose-at-leaf shape). Check that the park
+        // poll state machine is present in main.
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before send_text; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_recv_text_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    let _ = ws.recv_text(mut buf);
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_recv_text("),
+            "main should call `karac_runtime_ws_recv_text`; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before recv_text; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_runtime_ffis_declared() {
+        // Sanity check that both runtime FFI declarations land in
+        // the module's external-declaration section, even if no
+        // user code calls them (defensive — `Codegen::new` adds
+        // the declarations unconditionally so the FFI ABI is
+        // stable for any kara program that might bring in
+        // WebSocket).
+        let ir = ir_for("fn main() {}");
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_send_text(i32, ptr, i64)"),
+            "expected ws_send_text FFI declaration; IR:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_recv_text(i32, ptr, i64)"),
+            "expected ws_recv_text FFI declaration; IR:\n{}",
+            ir
+        );
+    }
+}

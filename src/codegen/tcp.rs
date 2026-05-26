@@ -785,4 +785,136 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_int_value()
         }
     }
+
+    // ── Phase 6 line 17 slice 9e.1 — WebSocket framing lowerings ────────
+    //
+    // `WebSocket` shares the same single-i32-field layout as
+    // `TcpListener` / `TcpStream`, so the fd-extraction helper and
+    // struct-build pattern transplant directly. The compose-at-leaf
+    // shape from slice 8/9 also applies: park via
+    // `karac_park_on_fd(self.fd, direction)` then call the
+    // `karac_runtime_ws_*` FFI. The Result wrapping reuses
+    // `wrap_tcp_io_result` because the runtime FFIs return the same
+    // shape — `>= 0` for byte count, `-1` for error. v1 maps `-1` to
+    // `TcpError.Other(-1)` (which `wrap_tcp_io_result` produces when
+    // errno=-1 doesn't match EINTR=4); slice 9e.3's richer `WsError`
+    // type with `Protocol` / `Closed` variants will require a
+    // dedicated `wrap_ws_io_result` helper that distinguishes
+    // EOF (0) from byte-count-zero (also 0 — they overlap in v1).
+
+    /// Lower `WebSocket.from_fd(fd: i32) -> WebSocket` — pack the i32
+    /// fd into a fresh `WebSocket { fd }` struct value. Mirror of the
+    /// post-bind `insert_value` pack in `lower_tcp_listener_bind`. No
+    /// syscall, no parking — pure value construction.
+    pub(super) fn lower_websocket_from_fd(
+        &mut self,
+        fd_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ws_ty = self
+            .context
+            .struct_type(&[self.context.i32_type().into()], false);
+        let i32_ty = self.context.i32_type();
+        // Kara's value model represents int-typed values as `i64` at
+        // the LLVM SSA layer regardless of source-level width. The
+        // WebSocket struct's `fd` field is `i32`, so we truncate
+        // before inserting. Mirrors the i32-storage convention that
+        // `TcpListener.bind` follows (its `karac_runtime_tcp_bind`
+        // FFI returns `i32` directly, so no truncation is needed
+        // there).
+        let fd_int = fd_val.into_int_value();
+        let fd_i32 = if fd_int.get_type().get_bit_width() == 32 {
+            fd_int
+        } else {
+            self.builder
+                .build_int_truncate(fd_int, i32_ty, "ws.from_fd.fd_i32")
+                .expect("truncate fd to i32 for WebSocket struct field")
+        };
+        let undef = ws_ty.get_undef();
+        let ws_val = self
+            .builder
+            .build_insert_value(undef, fd_i32, 0, "ws.from_fd.val")
+            .expect("insert fd into WebSocket struct value");
+        Ok(ws_val.into_struct_value().into())
+    }
+
+    /// Lower `WebSocket.send_text(ref self, msg: Slice[u8]) ->
+    /// Result[i64, TcpError]` — extract self.fd + msg.{ptr, len}, park
+    /// on write-readiness, call `karac_runtime_ws_send_text`, wrap the
+    /// returned `i64` in `Result[i64, TcpError]`. Mirror of
+    /// `lower_tcp_stream_io` with `is_write=true` but routes to the
+    /// WS FFI instead of `karac_runtime_tcp_write`.
+    pub(super) fn lower_websocket_send_text(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        msg_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(self_val, msg_val, /*is_send=*/ true)
+    }
+
+    /// Lower `WebSocket.recv_text(ref self, buf: mut Slice[u8]) ->
+    /// Result[i64, TcpError]` — symmetric to `send_text` but parks on
+    /// read-readiness and routes to `karac_runtime_ws_recv_text`.
+    pub(super) fn lower_websocket_recv_text(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(self_val, buf_val, /*is_send=*/ false)
+    }
+
+    /// Shared lowering for `WebSocket.send_text` / `.recv_text` —
+    /// near-verbatim mirror of `lower_tcp_stream_io`. Extract `self.fd`
+    /// plus `slice.{ptr, len}`, park on the right direction, call the
+    /// FFI, wrap the `i64` result via `wrap_tcp_io_result` (the WS FFIs
+    /// follow the same `>= 0 / -1` convention as the TCP ones).
+    fn lower_websocket_io(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        slice_val: BasicValueEnum<'ctx>,
+        is_send: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let fd = self.extract_fd_from_tcp_struct(self_val, "ws.io.self.fd");
+
+        let slice_sv = slice_val.into_struct_value();
+        let buf_ptr = self
+            .builder
+            .build_extract_value(slice_sv, 0, "ws.io.buf.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let buf_len = self
+            .builder
+            .build_extract_value(slice_sv, 1, "ws.io.buf.len")
+            .unwrap()
+            .into_int_value();
+
+        let direction = self
+            .context
+            .i8_type()
+            .const_int(if is_send { 1 } else { 0 }, false);
+        self.emit_state_machine_invocation_for_park_on_fd(fd, direction);
+
+        let fn_name = if is_send {
+            "karac_runtime_ws_send_text"
+        } else {
+            "karac_runtime_ws_recv_text"
+        };
+        let io_fn = self
+            .module
+            .get_function(fn_name)
+            .unwrap_or_else(|| panic!("{fn_name} declared in Codegen::new"));
+        let label = if is_send { "ws.send.n" } else { "ws.recv.n" };
+        let io_call = self
+            .builder
+            .build_call(io_fn, &[fd.into(), buf_ptr.into(), buf_len.into()], label)
+            .unwrap_or_else(|_| panic!("call {fn_name}"));
+        let n = io_call.try_as_basic_value().unwrap_basic().into_int_value();
+        // `is_write` arg controls only the BB label prefix in
+        // `wrap_tcp_io_result` ("tcp.write" vs "tcp.read"); the
+        // labels show up in WS IR as "tcp.write" / "tcp.read", which
+        // is mildly imprecise but harmless. A dedicated
+        // `wrap_ws_io_result` with WS-specific labels could land
+        // when slice 9e.3 introduces the `WsError` type and a
+        // separate Result-wrapping convention.
+        self.wrap_tcp_io_result(n, is_send)
+    }
 }

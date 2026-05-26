@@ -1513,6 +1513,41 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_ws_send_text(fd: i32, msg_ptr: *const u8,
+        // msg_len: i64) -> i64` — backs the encode + write step
+        // inside `WebSocket.send_text`'s codegen lowering. Caller
+        // (codegen) is responsible for parking via
+        // `karac_park_on_fd(fd, 1)` BEFORE invoking this. Returns
+        // payload byte count on success (== msg_len); -1 on error.
+        // Phase 6 line 17 slice 9e.1.
+        let ws_send_text_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_send_text",
+            ws_send_text_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_ws_recv_text(fd: i32, out_ptr: *mut u8,
+        // out_max_len: i64) -> i64` — backs the read + decode +
+        // unmask step inside `WebSocket.recv_text`'s codegen
+        // lowering. Caller (codegen) is responsible for parking via
+        // `karac_park_on_fd(fd, 0)` BEFORE invoking this. Returns
+        // payload byte count on success; 0 on graceful EOF;
+        // -1 on protocol error / IO error / oversize payload.
+        // Phase 6 line 17 slice 9e.1.
+        let ws_recv_text_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_recv_text",
+            ws_recv_text_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized

@@ -1137,7 +1137,14 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Must run BEFORE `emit_user_drop_wrappers` so the wrapper synth's
     /// `module.get_function("<Type>.drop")` lookup succeeds.
     pub(super) fn emit_hardcoded_stdlib_drop_bodies(&mut self, program: &crate::ast::Program) {
-        for type_name in ["TcpListener", "TcpStream"] {
+        // `WebSocket` (slice 9e.1) shares the same single-i32-field
+        // layout as `TcpListener` / `TcpStream`, so `emit_tcp_drop_body_for`
+        // applies verbatim — the hand-rolled body extracts `self.fd`
+        // and calls `karac_runtime_tcp_close(fd)`. When slice 9e.3
+        // adds WebSocket-specific drop steps (e.g., sending a close
+        // frame before close(2)), this loop will need to dispatch
+        // to a WS-specific body emitter for that type.
+        for type_name in ["TcpListener", "TcpStream", "WebSocket"] {
             if !program.drop_method_keys.contains_key(type_name) {
                 continue;
             }

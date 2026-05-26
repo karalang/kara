@@ -1145,6 +1145,230 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i32) -> i32 {
     0
 }
 
+// ── WebSocket framing FFI (stdlib `WebSocket.send_text` / `.recv_text`) ──
+//
+// Phase 6 line 17 slice 9e.1 — RFC 6455 frame encode/decode for text
+// frames. v1 scope: TEXT frames only (opcode 0x1), FIN=1 unfragmented,
+// server-side convention (unmasked send, masked recv). Binary frames,
+// fragmentation, control frames (close/ping/pong), and client-side
+// masked send land in slice 9e.3.
+//
+// Convention matches `karac_runtime_tcp_read` / `_write` — the caller
+// (codegen lowering for `WebSocket.send_text` / `.recv_text`) is
+// responsible for parking via `karac_park_on_fd(fd, direction)` BEFORE
+// invoking these. The FFIs themselves do blocking reads / writes; the
+// initial park ensures the first read returns immediately, and short
+// frames (under the kernel's socket buffer size, ~64 KiB on Linux /
+// macOS defaults) typically complete in one syscall. For larger
+// frames the loop-read pattern in `read_exact_or_eof` blocks the
+// worker thread briefly until the kernel delivers the rest — fine
+// for v1's connection-per-thread baseline, but a re-park-on-partial
+// follow-on slice will need to land for the M1 100K-connection
+// target if the OS-buffer-fits-in-one-read assumption is violated.
+
+/// Helper: read exactly `buf.len()` bytes from `stream`, or detect EOF.
+/// Returns `Ok(true)` on full read, `Ok(false)` on EOF (peer closed
+/// before all bytes arrived), `Err` on syscall failure. Loops past
+/// `EINTR` per the standard convention.
+#[cfg(unix)]
+fn ws_read_exact_or_eof(stream: &mut std::net::TcpStream, buf: &mut [u8]) -> std::io::Result<bool> {
+    use std::io::Read;
+    let mut got = 0;
+    while got < buf.len() {
+        match stream.read(&mut buf[got..]) {
+            Ok(0) => return Ok(false),
+            Ok(n) => got += n,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(true)
+}
+
+/// Encode a TEXT frame (FIN=1, opcode=0x1, MASK=0) and write it to
+/// `fd`. Server→client convention — frames are NOT masked. Payload
+/// length is encoded per RFC 6455 §5.2: 7-bit inline for `< 126`,
+/// 7+16-bit extended for `< 65536`, 7+64-bit extended otherwise.
+///
+/// Returns `msg_len` on success (matching the `karac_runtime_tcp_write`
+/// convention), `-1` on any write failure. Caller should have parked
+/// on write-readiness via `karac_park_on_fd(fd, 1)` first.
+///
+/// # Safety
+///
+/// `msg_ptr` must point to at least `msg_len` valid bytes when
+/// `msg_len > 0`; the helper reads from this region without
+/// additional bounds checking. `fd` must be a kernel-side socket
+/// descriptor.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_send_text(
+    fd: i32,
+    msg_ptr: *const u8,
+    msg_len: i64,
+) -> i64 {
+    use std::io::Write;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if fd < 0 || msg_len < 0 {
+        return -1;
+    }
+    if msg_ptr.is_null() && msg_len > 0 {
+        return -1;
+    }
+
+    let mut stream = std::net::TcpStream::from_raw_fd(fd);
+    let result = (|| -> i64 {
+        // Build the frame header. Worst-case length is 10 bytes
+        // (1 fin/opcode + 1 mask/len-marker + 8 extended-len).
+        let mut header: [u8; 10] = [0; 10];
+        header[0] = 0x81; // FIN=1, RSV=000, opcode=0x1 (text)
+        let header_len: usize = if msg_len < 126 {
+            header[1] = msg_len as u8;
+            2
+        } else if msg_len < 65536 {
+            header[1] = 126;
+            let be = (msg_len as u16).to_be_bytes();
+            header[2] = be[0];
+            header[3] = be[1];
+            4
+        } else {
+            header[1] = 127;
+            let be = (msg_len as u64).to_be_bytes();
+            header[2..10].copy_from_slice(&be);
+            10
+        };
+
+        if stream.write_all(&header[..header_len]).is_err() {
+            return -1;
+        }
+        if msg_len > 0 {
+            let payload = std::slice::from_raw_parts(msg_ptr, msg_len as usize);
+            if stream.write_all(payload).is_err() {
+                return -1;
+            }
+        }
+        msg_len
+    })();
+    let _ = stream.into_raw_fd();
+    result
+}
+
+/// Read one TEXT frame from `fd`, validate the header (FIN=1,
+/// opcode=0x1, MASK=1 per RFC 6455 §5.1 client→server requirement),
+/// unmask the payload, and write up to `out_max_len` bytes into
+/// `out_ptr`. Returns the payload byte count on success, `0` on
+/// graceful EOF before a complete frame arrives, `-1` on any
+/// protocol error / IO error / oversize-payload (caller's buffer
+/// too small).
+///
+/// Caller should have parked on read-readiness via
+/// `karac_park_on_fd(fd, 0)` first.
+///
+/// v1 limitations (deferred to slice 9e.3): no fragmentation
+/// support (FIN=0 frames rejected), no opcode-0 continuation, no
+/// control frames (close 0x8 / ping 0x9 / pong 0xA — all rejected).
+/// Binary frames (opcode 0x2) also rejected at v1; only text payloads
+/// flow through this entry point.
+///
+/// # Safety
+///
+/// `out_ptr` must point to at least `out_max_len` writable bytes
+/// when `out_max_len > 0`. The helper writes payload bytes into
+/// this region (unmasked) and writes nothing on error. `fd` must
+/// be a kernel-side socket descriptor.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_recv_text(
+    fd: i32,
+    out_ptr: *mut u8,
+    out_max_len: i64,
+) -> i64 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+    if fd < 0 || out_max_len < 0 {
+        return -1;
+    }
+    if out_ptr.is_null() && out_max_len > 0 {
+        return -1;
+    }
+
+    let mut stream = std::net::TcpStream::from_raw_fd(fd);
+    let result = (|| -> i64 {
+        // First 2 header bytes: fin/rsv/opcode + mask/payload-len.
+        let mut header2 = [0u8; 2];
+        match ws_read_exact_or_eof(&mut stream, &mut header2) {
+            Ok(true) => {}
+            Ok(false) => return 0,
+            Err(_) => return -1,
+        }
+        let fin = (header2[0] & 0x80) != 0;
+        let rsv = header2[0] & 0x70;
+        let opcode = header2[0] & 0x0F;
+        let masked = (header2[1] & 0x80) != 0;
+        let len7 = (header2[1] & 0x7F) as u64;
+
+        // v1 frame-shape gate: text-only, complete, unreserved,
+        // client-masked. Anything else is a protocol violation at
+        // this layer (or a frame slice 9e.3 will handle later).
+        if !fin || rsv != 0 || opcode != 0x1 || !masked {
+            return -1;
+        }
+
+        // Extended payload length.
+        let payload_len: u64 = match len7 {
+            0..=125 => len7,
+            126 => {
+                let mut buf = [0u8; 2];
+                match ws_read_exact_or_eof(&mut stream, &mut buf) {
+                    Ok(true) => u16::from_be_bytes(buf) as u64,
+                    _ => return -1,
+                }
+            }
+            127 => {
+                let mut buf = [0u8; 8];
+                match ws_read_exact_or_eof(&mut stream, &mut buf) {
+                    Ok(true) => u64::from_be_bytes(buf),
+                    _ => return -1,
+                }
+            }
+            _ => return -1, // unreachable per 7-bit width
+        };
+
+        // 4-byte masking key.
+        let mut mask_key = [0u8; 4];
+        if !ws_read_exact_or_eof(&mut stream, &mut mask_key).unwrap_or(false) {
+            return -1;
+        }
+
+        // Reject frames that don't fit in the caller's buffer. Caller
+        // can re-attempt with a larger buffer if needed; the remaining
+        // payload bytes are still in the socket buffer, which means
+        // the WS connection is now mid-frame — future reads on this
+        // fd will return garbage. Caller should treat -1 here as
+        // fatal-for-this-connection. v2 may add a streaming /
+        // chunked-recv API for the large-frame case.
+        if payload_len > out_max_len as u64 {
+            return -1;
+        }
+
+        // Read payload directly into the caller's buffer, then
+        // unmask in place per RFC 6455 §5.3.
+        if payload_len > 0 {
+            let payload_usize = payload_len as usize;
+            let out_slice = std::slice::from_raw_parts_mut(out_ptr, payload_usize);
+            if !ws_read_exact_or_eof(&mut stream, out_slice).unwrap_or(false) {
+                return -1;
+            }
+            for (i, byte) in out_slice.iter_mut().enumerate() {
+                *byte ^= mask_key[i % 4];
+            }
+        }
+
+        payload_len as i64
+    })();
+    let _ = stream.into_raw_fd();
+    result
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's
@@ -2143,5 +2367,232 @@ mod tests {
 
         drop(task);
         drop(state);
+    }
+
+    // ── Phase 6 line 17 slice 9e.1 — WebSocket framing tests ────────────
+    //
+    // Wire-format correctness for `karac_runtime_ws_send_text` /
+    // `_recv_text` (RFC 6455 §5.2 + §5.3). Each test sets up a
+    // loopback TCP socket pair, drives one side via the FFI under
+    // test, validates the other side observes the expected wire
+    // bytes (for send) OR observes correctly-unmasked bytes after
+    // the FFI's read (for recv).
+
+    #[cfg(unix)]
+    fn loopback_pair() -> (i32, std::net::TcpStream) {
+        use std::os::unix::io::IntoRawFd;
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let addr = listener.local_addr().expect("local_addr");
+        let client_handle =
+            std::thread::spawn(move || std::net::TcpStream::connect(addr).expect("client connect"));
+        let (server_side, _) = listener.accept().expect("accept loopback");
+        let client_side = client_handle.join().expect("client thread join");
+        let server_fd = server_side.into_raw_fd();
+        (server_fd, client_side)
+    }
+
+    /// Close a raw fd at test end (reconstruct + drop). Mirrors
+    /// the cleanup convention in `karac_runtime_tcp_close`.
+    #[cfg(unix)]
+    fn close_fd(fd: i32) {
+        use std::os::unix::io::FromRawFd;
+        let _ = unsafe { std::net::TcpStream::from_raw_fd(fd) };
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_send_text_encodes_short_frame_unmasked() {
+        use std::io::Read;
+        let (server_fd, mut client) = loopback_pair();
+        let payload = b"hello";
+        let n = unsafe {
+            super::karac_runtime_ws_send_text(server_fd, payload.as_ptr(), payload.len() as i64)
+        };
+        assert_eq!(n, payload.len() as i64);
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        // Loop-read until we have a full 2-byte header + 5-byte
+        // payload. A single read() can return fewer bytes than the
+        // kernel-buffered frame; loop until we have what we need
+        // (same pattern as the extended-length test).
+        let mut buf = [0u8; 16];
+        let mut got = 0;
+        while got < 7 {
+            let m = client.read(&mut buf[got..]).expect("read frame");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert!(got >= 7, "expected ≥7 bytes (header+payload); got {}", got);
+        // FIN=1, opcode=0x1 (text), RSV=000.
+        assert_eq!(buf[0], 0x81);
+        // MASK=0 (server→client), len=5 inline.
+        assert_eq!(buf[1], 0x05);
+        assert_eq!(&buf[2..7], payload);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_send_text_uses_extended_2byte_length_for_200_byte_payload() {
+        use std::io::Read;
+        let (server_fd, mut client) = loopback_pair();
+        // 200 bytes lands in the 7+16-bit extended range
+        // (126..=65535). Payload contents distinguishable from
+        // pure repetition so we can verify byte-for-byte
+        // identity, not just length.
+        let payload: Vec<u8> = (0..200u8).map(|i| (i & 0x7F) | 0x40).collect();
+        let n = unsafe {
+            super::karac_runtime_ws_send_text(server_fd, payload.as_ptr(), payload.len() as i64)
+        };
+        assert_eq!(n, payload.len() as i64);
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut buf = vec![0u8; 256];
+        let mut got = 0;
+        while got < 4 + payload.len() {
+            let m = client.read(&mut buf[got..]).expect("read frame");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert!(got >= 4 + payload.len());
+        assert_eq!(buf[0], 0x81);
+        // Len-marker 126 signals extended 2-byte length follows.
+        assert_eq!(buf[1], 0x7E);
+        let ext_len = u16::from_be_bytes([buf[2], buf[3]]);
+        assert_eq!(ext_len as usize, payload.len());
+        assert_eq!(&buf[4..4 + payload.len()], &payload[..]);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_decodes_masked_client_frame() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        let payload = b"client-to-server";
+        let mask_key = [0xA5u8, 0x37, 0x91, 0x4C];
+        let mut frame = Vec::with_capacity(2 + 4 + payload.len());
+        frame.push(0x81);
+        frame.push(0x80 | (payload.len() as u8));
+        frame.extend_from_slice(&mask_key);
+        for (i, b) in payload.iter().enumerate() {
+            frame.push(b ^ mask_key[i % 4]);
+        }
+        client.write_all(&frame).expect("write client frame");
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, payload.len() as i64);
+        assert_eq!(&out[..n as usize], payload);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_rejects_unmasked_client_frame() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        // Client→server frames MUST be masked per RFC 6455 §5.1.
+        // An unmasked client frame is a protocol violation.
+        let payload = b"unmasked";
+        let mut frame = Vec::with_capacity(2 + payload.len());
+        frame.push(0x81);
+        frame.push(payload.len() as u8); // MASK=0 — invalid for c→s
+        frame.extend_from_slice(payload);
+        client.write_all(&frame).expect("write client frame");
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_recv_text_rejects_binary_opcode_in_v1() {
+        use std::io::Write;
+        let (server_fd, mut client) = loopback_pair();
+        // Slice 9e.1 scope: text frames only. Binary (opcode 0x2),
+        // close (0x8), ping (0x9), pong (0xA) — all rejected.
+        // Slice 9e.3 lifts this restriction.
+        let payload = b"binary";
+        let mask_key = [0u8; 4];
+        let mut frame = Vec::with_capacity(2 + 4 + payload.len());
+        frame.push(0x82); // FIN=1, opcode=0x2 (binary)
+        frame.push(0x80 | (payload.len() as u8));
+        frame.extend_from_slice(&mask_key);
+        frame.extend_from_slice(payload);
+        client.write_all(&frame).expect("write client frame");
+        let mut out = [0u8; 64];
+        let n = unsafe {
+            super::karac_runtime_ws_recv_text(server_fd, out.as_mut_ptr(), out.len() as i64)
+        };
+        assert_eq!(n, -1);
+        close_fd(server_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_round_trip_recv_then_send() {
+        use std::io::{Read, Write};
+        // Full bidirectional round-trip from the FFI's perspective:
+        // FFI recvs a masked client frame, then sends the same
+        // payload back as a server frame. Harness verifies the
+        // server frame arrives correctly.
+        let (server_fd, mut client) = loopback_pair();
+        let server_thread = std::thread::spawn(move || {
+            let mut in_buf = [0u8; 128];
+            let n_recv = unsafe {
+                super::karac_runtime_ws_recv_text(
+                    server_fd,
+                    in_buf.as_mut_ptr(),
+                    in_buf.len() as i64,
+                )
+            };
+            assert!(n_recv > 0, "recv_text failed: {}", n_recv);
+            let recvd: Vec<u8> = in_buf[..n_recv as usize].to_vec();
+            let n_send = unsafe {
+                super::karac_runtime_ws_send_text(server_fd, recvd.as_ptr(), recvd.len() as i64)
+            };
+            assert_eq!(n_send, recvd.len() as i64);
+            (recvd, server_fd)
+        });
+
+        let payload = b"echo-this-back";
+        let mask_key = [0x12u8, 0x34, 0x56, 0x78];
+        let mut frame = Vec::with_capacity(2 + 4 + payload.len());
+        frame.push(0x81);
+        frame.push(0x80 | (payload.len() as u8));
+        frame.extend_from_slice(&mask_key);
+        for (i, b) in payload.iter().enumerate() {
+            frame.push(b ^ mask_key[i % 4]);
+        }
+        client.write_all(&frame).expect("write client frame");
+        client
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .unwrap();
+        let mut response = [0u8; 64];
+        let mut got = 0;
+        while got < 2 + payload.len() {
+            let m = client.read(&mut response[got..]).expect("read response");
+            if m == 0 {
+                break;
+            }
+            got += m;
+        }
+        assert!(got >= 2 + payload.len());
+        assert_eq!(response[0], 0x81); // FIN+text from FFI's send
+        assert_eq!(response[1], payload.len() as u8); // MASK=0 + len
+        assert_eq!(&response[2..2 + payload.len()], payload);
+        let (_, fd) = server_thread.join().expect("server thread");
+        close_fd(fd);
     }
 }

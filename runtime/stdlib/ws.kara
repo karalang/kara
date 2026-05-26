@@ -1,0 +1,144 @@
+// runtime/stdlib/ws.kara
+//
+// Phase 6 line 17 slice 9e — WebSocket stdlib surface. M1 flagship-demo
+// gate (100K idle WebSocket connections). Slice 9e is split into three
+// sub-slices; this file ships the surface that 9e.1 covers and stubs
+// for the remaining work:
+//
+//   - **9e.1 (THIS SLICE)** — RFC 6455 framing protocol. TEXT frames
+//     only, FIN=1 unfragmented, server-side convention (unmasked send,
+//     masked recv). The methods `send_text` / `recv_text` operate on
+//     raw payload bytes; richer `Message` enum + binary frame support
+//     ship later.
+//
+//   - **9e.2** — HTTP-upgrade handshake. v1's testing entry point
+//     `WebSocket.from_fd(fd)` constructs a `WebSocket` from a raw fd
+//     assuming the caller already performed the upgrade; the
+//     `accept_websocket(listener: TcpListener) -> WebSocket` shape
+//     that runs the handshake ships in 9e.2.
+//
+//   - **9e.3** — fragmentation + control frames + binary payloads.
+//     Continuation-frame opcode 0x0, close/ping/pong (0x8/0x9/0xA),
+//     binary payload (0x2), client-side masked send.
+//
+// **Architecture.** Same compose-at-leaf pattern as `TcpStream` (slice
+// 9): each method extracts `self.fd`, parks via `karac_park_on_fd`,
+// then calls the underlying runtime FFI. The FFI handles the RFC 6455
+// wire-format details; the kara surface stays clean. Composes with
+// the `with sends(Network) receives(Network)` effect system so callers
+// of these methods themselves become state-machine-transformable.
+//
+// **Drop dispatch.** `impl Drop for WebSocket` is wired through the
+// user-Drop chain (phase-7-codegen.md § User-`impl Drop` dispatch):
+// Prereq.1 picks up the impl, Prereq.2 emits the
+// `karac_drop_WebSocket` wrapper, Prereq.3 fires it at scope exit via
+// `CleanupAction::UserDrop`. The `@WebSocket.drop` LLVM body is
+// hand-rolled in codegen (mirror of `@TcpStream.drop` from slice 9d)
+// to call `karac_runtime_tcp_close(self.fd)` — WebSocket and
+// TcpStream share the same single-i32-field layout, so the
+// `emit_tcp_drop_body_for` helper extends trivially.
+
+// `WebSocket` wraps an accepted (or connected) socket fd that has
+// completed the WebSocket protocol upgrade. v1 layout matches
+// `TcpStream` — a single `i32 fd` — because v1 ships text-only
+// unfragmented frames, so no per-connection state beyond the fd
+// itself is needed. Fragmentation tracking (`state: u32` in the
+// original slice 9e description) lands with 9e.3 when continuation
+// opcode 0x0 / multi-frame messages become first-class.
+struct WebSocket {
+    fd: i32,
+}
+
+impl WebSocket {
+    // Construct a `WebSocket` from a raw fd that the caller has
+    // already negotiated through the RFC 6455 HTTP-upgrade
+    // handshake. v1 testing entry point — the upgrade itself ships
+    // in slice 9e.2 as `accept_websocket(listener) -> WebSocket`.
+    // Until then, `from_fd` lets tests and early adopters drive the
+    // framing layer directly against a hand-crafted fd.
+    //
+    // No system call here — pure value construction. The codegen
+    // lowering builds a `WebSocket { fd }` struct value in one IR
+    // instruction (mirror of `TcpListener.bind`'s `insert_value`
+    // pack at `lower_tcp_listener_bind`).
+    #[compiler_builtin]
+    fn from_fd(fd: i32) -> WebSocket {
+        WebSocket { fd: fd }
+    }
+
+    // Park on read-readiness of `self.fd`, then read one RFC 6455
+    // TEXT frame from the socket (FIN=1, opcode=0x1, MASK=1 per the
+    // client→server convention), unmask the payload, and write up
+    // to `buf.len` bytes into `buf`'s backing buffer. Returns
+    // `Ok(n)` with the payload byte count (n=0 if the peer closed
+    // gracefully before sending a full frame), or `Err(TcpError)`
+    // on protocol error / IO error / oversize payload. The
+    // structured-error wrapping reuses `TcpError` (defined in
+    // `tcp.kara`) — TCP-shaped errors are the dominant failure
+    // mode at the v1 WebSocket layer. A dedicated `WsError` with
+    // protocol-specific variants (FragmentationMissing,
+    // OpcodeNotSupported, BinaryWhereTextExpected) ships with
+    // slice 9e.3 when fragmentation and binary frames become
+    // first-class.
+    //
+    // **Parking convention.** Same as `TcpStream.read`: the codegen
+    // lowering emits `karac_park_on_fd(self.fd, 0u8)` BEFORE the
+    // syscall so the calling task suspends on read-readiness
+    // through the slice 6 parking primitive. The runtime FFI
+    // `karac_runtime_ws_recv_text` does blocking reads in a loop
+    // until the full frame header + payload arrives — fine for v1
+    // because frames typically fit in the kernel's socket buffer
+    // (default ~64 KiB on Linux/macOS).
+    //
+    // v1 limitations (deferred to slice 9e.3): FIN=0 fragmented
+    // frames, opcode=0x0 continuation frames, opcode=0x2 binary
+    // payloads, control frames (close 0x8 / ping 0x9 / pong 0xA)
+    // are all rejected by the runtime FFI as protocol errors.
+    #[compiler_builtin]
+    fn recv_text(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
+    // Park on write-readiness of `self.fd`, then encode `msg` as a
+    // single RFC 6455 TEXT frame (FIN=1, opcode=0x1, MASK=0 per
+    // the server→client convention) and write the header + payload
+    // to the socket. Returns `Ok(n)` with `n == msg.len` on
+    // success, or `Err(TcpError)` on write error. The payload-
+    // length encoding follows RFC 6455 §5.2 (7-bit inline for
+    // payloads under 126 bytes, 7+16-bit extended under 65536,
+    // 7+64-bit extended otherwise).
+    //
+    // **Parking convention.** Mirrors `TcpStream.write` — the
+    // codegen lowering emits `karac_park_on_fd(self.fd, 1u8)` for
+    // write-readiness before the syscall. The runtime FFI uses
+    // `write_all` internally so partial writes are absorbed; a
+    // single `send_text` call always corresponds to exactly one
+    // frame on the wire.
+    //
+    // **Client-side masking — NOT supported in v1.** RFC 6455
+    // requires client→server frames to be masked. v1 ships
+    // server-side only (this method emits unmasked frames). If
+    // a kara program tries to use this on the client side, the
+    // server peer will close the connection with a protocol
+    // violation. Slice 9e.3 adds a `send_text_masked` companion
+    // or a per-WebSocket-instance side flag.
+    #[compiler_builtin]
+    fn send_text(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+}
+
+// Close-on-drop. Same pattern as `TcpStream` / `TcpListener` (slice 9d).
+// The user-Drop dispatch chain emits `@karac_drop_WebSocket` at scope
+// exit; the wrapper calls `@WebSocket.drop` whose hand-rolled body
+// invokes `karac_runtime_tcp_close(self.fd)`. The stub body below
+// never executes — codegen replaces it via
+// `emit_hardcoded_stdlib_drop_bodies` in `src/codegen/synth_drop.rs`.
+impl Drop for WebSocket {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

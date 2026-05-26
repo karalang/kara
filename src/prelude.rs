@@ -105,9 +105,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     // Phase 6 line 17 — `TcpListener` + `TcpStream` stdlib types,
     // composing through the `karac_park_on_fd` parking primitive.
     // Surface: `TcpListener.bind` / `.accept` (slice 8), and
-    // `TcpStream.read` / `.write` (slice 9).
+    // `TcpStream.read` / `.write` (slice 9). `WebSocket` shares the
+    // same single-i32-field layout and ships in slice 9e.1
+    // (`send_text` / `recv_text` framing protocol).
     "TcpListener",
     "TcpStream",
+    "WebSocket",
     "Base64",
     "Hex",
     "Url",
@@ -433,6 +436,10 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // Phase 6 line 17 — `TcpListener` stdlib type composing through
     // the `karac_park_on_fd` leaf parking primitive (Slice 6 + 7).
     ("tcp.kara", include_str!("../runtime/stdlib/tcp.kara")),
+    // Phase 6 line 17 slice 9e.1 — `WebSocket` stdlib type with
+    // RFC 6455 text-frame send/recv. Depends on `tcp.kara` for the
+    // `TcpError` enum reused as the structured-error type.
+    ("ws.kara", include_str!("../runtime/stdlib/ws.kara")),
     (
         "encoding.kara",
         include_str!("../runtime/stdlib/encoding.kara"),
