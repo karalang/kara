@@ -17,6 +17,7 @@ mod block_stmt;
 mod borrow;
 mod capture_body;
 mod closure_escape;
+mod concurrent_shared;
 mod expr_check;
 mod par_helpers;
 mod rc_promote;
@@ -432,6 +433,25 @@ pub enum OwnershipErrorKind {
         budget: usize,
         observed: usize,
     },
+    /// Phase-7 line 197 (E_CONCURRENT_SHARED_STRUCT) — a `shared struct`
+    /// / `shared enum` binding is referenced from two or more concurrent
+    /// branches of a `par {}` block. Per design.md § Rc vs Arc — Two-Phase
+    /// Algorithm "Rule for `shared struct`": `live_range(v) ∩
+    /// parallel_region ≠ ∅` AND the allocation is reachable from more
+    /// than one concurrent branch is a compile error. `shared struct`
+    /// carries hidden per-field RC borrow flags and is single-task only;
+    /// concurrent access needs `par struct` (`Atomic[T]` / `Mutex[T]`
+    /// field constraints enforced at the definition site). The
+    /// diagnostic primary span is the binding's second-branch use; the
+    /// `consume_span` slot carries the first-branch use as a secondary
+    /// span. The suggestion text spells out the four-step migration
+    /// (rename keyword, wrap mut fields, add lock blocks, Rc→Arc clone
+    /// semantics) from design.md § Compiler-assisted migration from
+    /// `shared struct` to `par struct`.
+    ConcurrentSharedStruct {
+        type_name: String,
+        binding: String,
+    },
 }
 
 impl std::fmt::Display for OwnershipError {
@@ -840,6 +860,7 @@ impl<'a> OwnershipChecker<'a> {
         self.emit_rc_fallback_notes();
         self.enforce_no_rc_attrs();
         self.enforce_rc_budget();
+        self.check_concurrent_shared_struct();
 
         // Build representations: parameter modes first, then overlay RC/Arc
         // for any binding (parameter or local) flagged by Phase 1/2.

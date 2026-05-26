@@ -2594,6 +2594,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::RcBudgetExceeded { .. } => {
                     "E_RC_BUDGET_EXCEEDED"
                 }
+                crate::ownership::OwnershipErrorKind::ConcurrentSharedStruct { .. } => {
+                    "E_CONCURRENT_SHARED_STRUCT"
+                }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(

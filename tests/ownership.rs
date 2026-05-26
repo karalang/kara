@@ -5893,3 +5893,165 @@ fn rc_budget_attr_parses_onto_program_inner_attrs() {
     };
     assert_eq!(*n, 5);
 }
+
+// ── E_CONCURRENT_SHARED_STRUCT (phase-7 line 197) ───────────────
+//
+// A `shared struct` / `shared enum` binding referenced from two or
+// more concurrent branches of a `par {}` block is a compile error.
+// Sole-ownership move into exactly one branch is OK.
+
+#[test]
+fn test_concurrent_shared_struct_fires_on_two_branch_use() {
+    let errors = ownership_errors(
+        "shared struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    let hit = errors
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.kind,
+                OwnershipErrorKind::ConcurrentSharedStruct { type_name, binding }
+                    if type_name == "Counter" && binding == "c"
+            )
+        })
+        .expect("expected E_CONCURRENT_SHARED_STRUCT error");
+    assert!(
+        hit.message.contains("Counter"),
+        "diagnostic message should name the shared struct; got: {}",
+        hit.message,
+    );
+    assert!(
+        hit.consume_span.is_some(),
+        "first-branch use should be threaded as the secondary span"
+    );
+    let suggestion = hit
+        .suggestion
+        .as_ref()
+        .expect("suggestion should be present");
+    assert!(
+        suggestion.contains("par struct Counter"),
+        "suggestion should spell out the rename; got: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("Mutex"),
+        "suggestion should mention Mutex wrapping for mut fields"
+    );
+}
+
+#[test]
+fn test_concurrent_shared_struct_silent_when_only_one_branch_uses() {
+    // Sole-ownership move into exactly one branch — per design.md §
+    // Rc vs Arc — Two-Phase Algorithm "Rule for `shared struct`":
+    // this is NOT an error. The other branch is independent work.
+    let result = ownership_ok(
+        "shared struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn other_work(n: i64) -> i64 { n + 1 }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 other_work(7);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "sole-branch shared-struct use must not fire E_CONCURRENT_SHARED_STRUCT"
+    );
+}
+
+#[test]
+fn test_concurrent_shared_struct_does_not_fire_on_plain_struct() {
+    // The new diagnostic targets shared struct only. Plain structs
+    // moved into two branches would be caught by other ownership
+    // checks (UseAfterMove), but NOT by this kind. Locks the kind
+    // selector against accidental over-firing.
+    let parsed = karac::parse(
+        "struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "plain (non-shared) struct must NOT fire E_CONCURRENT_SHARED_STRUCT"
+    );
+}
+
+#[test]
+fn test_concurrent_shared_struct_fires_via_field_access() {
+    // The detection counts any source-level reference to the shared
+    // binding inside each branch — including field-access shapes like
+    // `tree.left`. Pins that we don't only catch identifier-passed-
+    // to-fn forms.
+    let errors = ownership_errors(
+        "shared struct Node { val: i64 }\n\
+         fn read(n: i64) -> i64 { n }\n\
+         fn main() {\n\
+             let root = Node { val: 7 };\n\
+             par {\n\
+                 read(root.val);\n\
+                 read(root.val);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { type_name, binding }
+                if type_name == "Node" && binding == "root"
+        )),
+        "field-access in two branches should still fire E_CONCURRENT_SHARED_STRUCT"
+    );
+}
+
+#[test]
+fn test_concurrent_shared_enum_fires() {
+    // Sibling to the struct case — shared enums follow the same rule.
+    let errors = ownership_errors(
+        "shared enum Status { Active, Idle }\n\
+         fn handle_a(s: Status) { }\n\
+         fn handle_b(s: Status) { }\n\
+         fn main() {\n\
+             let s = Status.Active;\n\
+             par {\n\
+                 handle_a(s);\n\
+                 handle_b(s);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { type_name, .. }
+                if type_name == "Status"
+        )),
+        "shared enum in two branches should fire E_CONCURRENT_SHARED_STRUCT"
+    );
+}
