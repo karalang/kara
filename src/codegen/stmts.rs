@@ -1841,6 +1841,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
                 Ok(())
             }
+            StmtKind::ErrDefer { binding, body } => {
+                // Slice 2: param-less `errdefer { ... }` only. The
+                // binding form `errdefer(e) { ... }` falls through to
+                // the catch-all below and stays a no-op until slice 4
+                // wires the bind-payload-then-emit dispatch — mirrors
+                // slice 1's deferral of block-scoped defer to slice 1.5.
+                if binding.is_none() {
+                    if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+                        frame.push(super::state::CleanupAction::UserErrDefer {
+                            binding: binding.clone(),
+                            body: body.clone(),
+                        });
+                    }
+                }
+                Ok(())
+            }
             _ => Ok(()),
         }
     }

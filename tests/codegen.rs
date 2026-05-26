@@ -21015,6 +21015,180 @@ fn main() {
         }
     }
 
+    // --- Phase 7 § *defer / errdefer codegen* slice 2: errdefer on error paths ---
+    //
+    // Slice 2 wires `UserErrDefer { binding: Option<String>, body: Block }`
+    // onto the same `scope_cleanup_actions` stack `UserDefer` lives on, then
+    // splits the drain into two phases routed by exit path:
+    //   - `emit_scope_cleanup` (normal exit) filters out `UserErrDefer` so an
+    //     `errdefer { ... }` declared in a normally-exiting function never
+    //     fires.
+    //   - `emit_scope_cleanup_for_error_path` (error exit) drains errdefers
+    //     LIFO in phase 1, then drops + defers LIFO in phase 2, innermost
+    //     frame first. Mirrors the interpreter's per-scope `run_cleanup`
+    //     shape (`src/interpreter/eval_stmt.rs:364-408`).
+    //
+    // Error-exit sites today: the `?` operator's Err-propagation branch
+    // (`compile_question`'s `fail_bb`), early `return Err(...)` / `return
+    // None` (the `ExprKind::Return` arm in `compile_expr`), and tail-position
+    // `Err(...)` / `None` (`compile_function`'s tail emitter). Detection is
+    // purely syntactic via `Codegen::is_error_exit_value`.
+    //
+    // Out of scope for slice 2 (deferred):
+    //   - Binding form `errdefer(e) { ... }` — pushed in slice 4; the
+    //     compile_stmt push gates on `binding.is_none()` so for now the
+    //     binding form falls through to the catch-all `_ => Ok(())` arm
+    //     and stays a no-op at codegen, mirroring slice 1's deferral of
+    //     block-scoped defer to slice 1.5.
+    //   - Panic landing pads — the panic-unwind story is not in this
+    //     compiler today (panic=abort-style), so there are no landing pads
+    //     to wire. Phase 7 § *defer/errdefer codegen* slice 2 design called
+    //     this out for coordination if the panic story landed first.
+
+    #[test]
+    fn test_e2e_errdefer_fires_on_explicit_return_err() {
+        // Param-less errdefer fires when control exits via
+        // `return Err(...)`. Mirrors interpreter
+        // `test_errdefer_fires_on_err_return`.
+        let out = run_program(
+            r#"
+fn body() -> Result[i64, i64] {
+    defer { println("d"); }
+    errdefer { println("e"); }
+    return Err(7_i64);
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Phase 1 (errdefer) then phase 2 (defer), then caller's
+            // match arm. errdefer prints "e" before defer's "d".
+            assert_eq!(lines, vec!["e", "d", "caller-err"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_errdefer_skipped_on_normal_return() {
+        // errdefer must NOT fire on a normal `return Ok(...)`; defer
+        // always fires. Mirrors interpreter
+        // `test_errdefer_skipped_on_normal_return`.
+        let out = run_program(
+            r#"
+fn body() -> Result[i64, i64] {
+    defer { println("d"); }
+    errdefer { println("e"); }
+    return Ok(1_i64);
+}
+fn main() {
+    match body() {
+        Ok(_) => println("caller-ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["d", "caller-ok"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_errdefer_fires_on_question_propagation() {
+        // The `?` operator's Err-propagation branch is the canonical
+        // error-exit path. An `errdefer { ... }` registered upstream
+        // of the `?` site fires in the `fail_bb` before the early
+        // `ret` — `emit_scope_cleanup_for_error_path` drains in phase
+        // order. Compares against the existing
+        // `test_e2e_question_triggers_scope_cleanup` test, which only
+        // pins that compiler-internal cleanup runs at the `?` site.
+        let out = run_program(
+            r#"
+fn boom() -> Result[i64, i64] { Err(7_i64) }
+fn caller() -> Result[i64, i64] {
+    errdefer { println("err-cleanup"); }
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["err-cleanup", "caller-err"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_errdefer_phase1_before_defer_lifo() {
+        // Phase ordering pin: on an error path the LIFO drain runs
+        // (errdefer e2, errdefer e1) in phase 1, then (defer d2, defer
+        // d1) in phase 2 — full output `e2 e1 d2 d1`. Mirrors the
+        // interpreter's `test_errdefer_runs_before_defer_on_error_path`
+        // shape.
+        let out = run_program(
+            r#"
+fn body() -> Result[i64, i64] {
+    defer { println("d1"); }
+    errdefer { println("e1"); }
+    defer { println("d2"); }
+    errdefer { println("e2"); }
+    return Err(0_i64);
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["e2", "e1", "d2", "d1", "caller-err"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_errdefer_fires_on_tail_err_expression() {
+        // Function-tail error-exit: when the function's final
+        // expression is syntactically `Err(...)` (no leading `return`),
+        // `compile_function`'s tail emitter routes through
+        // `emit_scope_cleanup_for_error_path` and the errdefer fires.
+        // Distinguishes the tail-expression path from the explicit
+        // `return` path covered above — both flow through the same
+        // `is_error_exit_value` detector but different emitters.
+        let out = run_program(
+            r#"
+fn body() -> Result[i64, i64] {
+    errdefer { println("tail-err-cleanup"); }
+    Err(42_i64)
+}
+fn main() {
+    match body() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["tail-err-cleanup", "caller-err"]);
+        }
+    }
+
     // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
     //
     // Real LLVM globals — immutable `let X: T = INIT` lowers to

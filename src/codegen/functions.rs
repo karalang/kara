@@ -401,7 +401,23 @@ impl<'ctx> super::Codegen<'ctx> {
                     self.zero_vec_alloca_cap(acc);
                 }
             }
-            self.emit_scope_cleanup();
+            // Slice 2 (Phase 7 § *defer / errdefer codegen*): when the
+            // function's tail expression is syntactically `Err(...)` or
+            // `None`, route through the error-path cleanup so any
+            // in-scope `errdefer { ... }` fires before the regular
+            // drop+defer drain. Other tail shapes (`Ok(v)`, plain values,
+            // void) stay on the normal-exit drain. Same syntactic
+            // detector as the early-return arm in `compile_expr`.
+            let tail_is_error_exit = func
+                .body
+                .final_expr
+                .as_deref()
+                .is_some_and(Self::is_error_exit_value);
+            if tail_is_error_exit {
+                self.emit_scope_cleanup_for_error_path();
+            } else {
+                self.emit_scope_cleanup();
+            }
             if func.name == "main" {
                 let zero = self.context.i32_type().const_int(0, false);
                 self.builder.build_return(Some(&zero)).unwrap();

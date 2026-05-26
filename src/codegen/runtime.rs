@@ -774,6 +774,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cleanup variants (RcDec, FreeVecBuffer, FreeMapHandle, EnumDrop, StructDrop,
     /// RcDecOption) each touch independent allocations and commute, so reversing
     /// their order is a no-op for correctness.
+    ///
+    /// **Normal-exit path.** `UserErrDefer` actions are skipped here — they
+    /// fire only on error-exit paths (`?`-propagation, explicit `return
+    /// Err(...)` / `return None`). Error-exit dispatch goes through
+    /// `emit_scope_cleanup_for_error_path` instead, which runs errdefers
+    /// in phase 1 before reaching this same drop+defer drain in phase 2.
     pub(super) fn emit_scope_cleanup(&mut self) {
         let vec_ty = self.vec_struct_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -783,6 +789,62 @@ impl<'ctx> super::Codegen<'ctx> {
         for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
             let n = self.scope_cleanup_actions[frame_idx].len();
             for action_idx in (0..n).rev() {
+                if matches!(
+                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    CleanupAction::UserErrDefer { .. }
+                ) {
+                    continue;
+                }
+                self.emit_cleanup_action_at(frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
+            }
+        }
+    }
+
+    /// Error-exit drain. Per design.md § *Drop ordering within a branch*,
+    /// when control exits a scope via an error path (the `?` operator's
+    /// Err-propagation branch, an explicit `return Err(...)` or `return
+    /// None`), the unified cleanup stack drains in two phases:
+    ///
+    /// 1. **Phase 1: errdefers.** Every `UserErrDefer` action runs first,
+    ///    in reverse declaration order (LIFO), per frame innermost-first.
+    /// 2. **Phase 2: drops + defers.** Every other cleanup variant (the
+    ///    compiler-internal drops + `UserDefer`) drains in the same
+    ///    program-order LIFO `emit_scope_cleanup` uses on normal exit.
+    ///
+    /// Per-frame interleave (phase 1 then phase 2 within each frame,
+    /// innermost frame first) mirrors the interpreter's `run_cleanup`
+    /// shape (`src/interpreter/eval_stmt.rs:364-408`): each scope drains
+    /// its own errdefers before its own drops, and outer scopes drain in
+    /// turn when the error bubbles out. The action stack still excludes
+    /// the binding form `errdefer(e) { ... }` per slice 2 — slice 4 will
+    /// lift the gate in `compile_stmt` and add the bind-payload step here.
+    pub(super) fn emit_scope_cleanup_for_error_path(&mut self) {
+        let vec_ty = self.vec_struct_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+        let fn_val = self.current_fn.unwrap();
+
+        for frame_idx in (0..self.scope_cleanup_actions.len()).rev() {
+            let n = self.scope_cleanup_actions[frame_idx].len();
+            // Phase 1: errdefers LIFO within this frame.
+            for action_idx in (0..n).rev() {
+                if matches!(
+                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    CleanupAction::UserErrDefer { .. }
+                ) {
+                    self.emit_cleanup_action_at(
+                        frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t,
+                    );
+                }
+            }
+            // Phase 2: non-errdefer actions LIFO within this frame.
+            for action_idx in (0..n).rev() {
+                if matches!(
+                    &self.scope_cleanup_actions[frame_idx][action_idx],
+                    CleanupAction::UserErrDefer { .. }
+                ) {
+                    continue;
+                }
                 self.emit_cleanup_action_at(frame_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
             }
         }
@@ -799,6 +861,12 @@ impl<'ctx> super::Codegen<'ctx> {
     /// Caller is responsible for ensuring the basic-block insertion point is
     /// somewhere meaningful (i.e. the arm-body's end before the merge branch).
     /// No-op if the cleanup stack is empty.
+    ///
+    /// **Normal-exit semantics.** `UserErrDefer` actions in the frame are
+    /// skipped — this is a normal-fall-through drain, the error-path drain
+    /// goes through `emit_scope_cleanup_for_error_path` instead. The skipped
+    /// errdefers are dropped along with the frame on pop, so a block that
+    /// registers an `errdefer` but exits normally never fires it.
     pub(super) fn drain_top_frame_with_emit(&mut self) {
         if self.scope_cleanup_actions.is_empty() {
             return;
@@ -810,6 +878,12 @@ impl<'ctx> super::Codegen<'ctx> {
         let top_idx = self.scope_cleanup_actions.len() - 1;
         let n = self.scope_cleanup_actions[top_idx].len();
         for action_idx in (0..n).rev() {
+            if matches!(
+                &self.scope_cleanup_actions[top_idx][action_idx],
+                CleanupAction::UserErrDefer { .. }
+            ) {
+                continue;
+            }
             self.emit_cleanup_action_at(top_idx, action_idx, fn_val, vec_ty, ptr_ty, i64_t);
         }
         self.scope_cleanup_actions.pop();
@@ -817,10 +891,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Dispatch one cleanup action by `(frame_idx, action_idx)` indices into
     /// `scope_cleanup_actions`. Uses indices rather than a borrowed reference
-    /// so user-defer dispatch (`UserDefer(Block)`) can release the borrow,
-    /// clone the body, and then call `compile_block` under `&mut self`.
-    /// Compiler-internal variants take the existing `&self` `emit_cleanup_action`
-    /// fast path.
+    /// so user-defer dispatch (`UserDefer(Block)` / `UserErrDefer { .. }`)
+    /// can release the borrow, clone the body, and then call `compile_block`
+    /// under `&mut self`. Compiler-internal variants take the existing
+    /// `&self` `emit_cleanup_action` fast path.
     fn emit_cleanup_action_at(
         &mut self,
         frame_idx: usize,
@@ -832,6 +906,14 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let body_clone = match &self.scope_cleanup_actions[frame_idx][action_idx] {
             CleanupAction::UserDefer(block) => Some(block.clone()),
+            // Slice 2: errdefer body is routed through the same
+            // frame-pushing block emission as user-defer — same
+            // runtime-reachability + nested-defer-scoping shape. Slice 4
+            // will extend this branch to bind the Err payload into the
+            // body's scope when `binding` is `Some(_)`; today only the
+            // no-binding variant reaches here (the binding form falls
+            // through to the catch-all in `compile_stmt`).
+            CleanupAction::UserErrDefer { body, .. } => Some(body.clone()),
             _ => None,
         };
         if let Some(block) = body_clone {
@@ -841,7 +923,9 @@ impl<'ctx> super::Codegen<'ctx> {
             // bubbling up to the enclosing scope's frame. Also gives the
             // defer body the same runtime-reachability shape as a naked
             // block: a `defer` inside an `if false { ... }` nested in
-            // here never fires.
+            // here never fires. The errdefer body (slice 2) reuses this
+            // same path so a `defer` inside an errdefer body scopes the
+            // same way.
             let _ = self.compile_block_with_frame(&block);
             return;
         }
@@ -1283,6 +1367,21 @@ impl<'ctx> super::Codegen<'ctx> {
                 // the UserDefer case out before reaching this match.
                 unreachable!(
                     "CleanupAction::UserDefer must be dispatched via emit_cleanup_action_at"
+                );
+            }
+            CleanupAction::UserErrDefer { .. } => {
+                // Routed through `emit_cleanup_action_at` instead — same
+                // shape as UserDefer (the errdefer body needs `&mut self`
+                // to compile a Block). On normal-exit drains
+                // (`emit_scope_cleanup` / `drain_top_frame_with_emit`)
+                // errdefers are filtered out before reaching this match;
+                // on error-exit drains (`emit_scope_cleanup_for_error_path`)
+                // errdefers are routed via `emit_cleanup_action_at` in
+                // phase 1. Reaching this arm means the cleanup-action
+                // index walked an errdefer slot on a normal-exit path,
+                // which is a routing bug.
+                unreachable!(
+                    "CleanupAction::UserErrDefer must be dispatched via emit_cleanup_action_at on an error-exit path"
                 );
             }
         }

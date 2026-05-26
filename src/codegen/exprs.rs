@@ -266,6 +266,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `return d` from inside a loop's match-arm body was
                 // bypassing cleanup for `factors` / `bucket` / `visited` /
                 // `queue`, leaking the entire per-call working set.
+                //
+                // Slice 2 (Phase 7 § *defer / errdefer codegen*): when the
+                // return value is syntactically `Err(...)` or `None`, this
+                // is an error-exit path — route through
+                // `emit_scope_cleanup_for_error_path` so any in-scope
+                // `errdefer { ... }` fires (phase 1) before the regular
+                // drop+defer drain (phase 2). Other return shapes
+                // (`Ok(v)`, `Some(v)`, plain values, or void return) stay
+                // on the normal-exit drain. Detection is purely syntactic
+                // — the typechecker has already rejected an Err/None
+                // return in a non-Result/Option-returning function.
+                let is_error_exit = val.as_deref().is_some_and(Self::is_error_exit_value);
                 if let Some(e) = val {
                     self.suppress_source_vec_cleanup_for_arg(e);
                     // Sub-slice (3) of move-suppression — when the
@@ -281,7 +293,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.suppress_user_drop_for_var(name);
                     }
                     let v = self.compile_expr(e)?;
-                    self.emit_scope_cleanup();
+                    if is_error_exit {
+                        self.emit_scope_cleanup_for_error_path();
+                    } else {
+                        self.emit_scope_cleanup();
+                    }
                     self.builder.build_return(Some(&v)).unwrap();
                 } else {
                     self.emit_scope_cleanup();
@@ -577,9 +593,17 @@ impl<'ctx> super::Codegen<'ctx> {
         // values, Map handles) are released before the function returns.
         // The trace push happens BEFORE cleanup so the runtime sees the
         // failure site in source order even if cleanup itself crashes.
+        //
+        // Slice 2 (Phase 7 § *defer / errdefer codegen*): route through
+        // `emit_scope_cleanup_for_error_path`, which runs `UserErrDefer`
+        // bodies in phase 1 (LIFO across frames) before the regular
+        // drop+defer drain. The `?` failure branch is the canonical
+        // error-exit path: an `errdefer { ... }` registered upstream of
+        // the `?` site fires here exactly as the interpreter's
+        // `run_cleanup` on `ExitPath::Err` would.
         self.builder.position_at_end(fail_bb);
         self.emit_error_trace_push(outer_span);
-        self.emit_scope_cleanup();
+        self.emit_scope_cleanup_for_error_path();
 
         // Cross-error-type conversion: when the typechecker recorded a target
         // type for this `?` site, look up the LLVM function `Target.from` and
@@ -658,6 +682,34 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_call(self.karac_error_trace_clear_fn, &[], "q_trace_clear")
             .unwrap();
         Ok(w0)
+    }
+
+    /// Slice 2 (Phase 7 § *defer / errdefer codegen*). Recognise the
+    /// syntactic shape of an error-exit return value so the surrounding
+    /// `return` / function-tail emitter can route cleanup through
+    /// `emit_scope_cleanup_for_error_path`. Matches `Err(...)`,
+    /// `Result.Err(...)`, `None`, and `Option.None` — the four error-path
+    /// shapes a Result-returning or Option-returning function can produce
+    /// at a `return` site or as a tail expression. `Ok(...)` / `Some(...)`
+    /// / plain values are normal-exit shapes and take the regular
+    /// drop+defer drain. Detection is purely syntactic: the typechecker
+    /// has already gated where errdefer is legal (Result/Option-returning
+    /// functions) and where these variant constructors can appear, so
+    /// inspecting the call's path segments is sufficient.
+    pub(super) fn is_error_exit_value(expr: &Expr) -> bool {
+        fn last_segment_is(segments: &[String], name: &str) -> bool {
+            segments.last().is_some_and(|s| s == name)
+        }
+        match &expr.kind {
+            ExprKind::Call { callee, .. } => match &callee.kind {
+                ExprKind::Path { segments, .. } => last_segment_is(segments, "Err"),
+                ExprKind::Identifier(name) => name == "Err",
+                _ => false,
+            },
+            ExprKind::Path { segments, .. } => last_segment_is(segments, "None"),
+            ExprKind::Identifier(name) => name == "None",
+            _ => false,
+        }
     }
 
     /// Emit a call to `karac_error_trace_push(file, file_len, line, col)`

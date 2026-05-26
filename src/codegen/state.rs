@@ -374,6 +374,32 @@ pub(crate) enum CleanupAction<'ctx> {
         /// `Codegen::user_drop_wrapper_fns`.
         drop_fn: FunctionValue<'ctx>,
     },
+    /// User-source `errdefer { ... }` block to compile on error-exit
+    /// paths only. Pushed in program order at the `errdefer` statement's
+    /// site; drained LIFO in phase 1 (before the regular drop+defer
+    /// stack) on error paths. Slice 2 of Phase 7 § *defer / errdefer
+    /// codegen* covers param-less `errdefer { ... }` firing on `?`-
+    /// propagation and explicit `return Err(...)` / `return None` sites.
+    /// `binding: Some(name)` is the `errdefer(e) { ... }` payload-binding
+    /// form — present on the variant for forward compatibility with
+    /// slice 4 but NOT pushed by slice 2's `compile_stmt`; binding-form
+    /// errdefers fall through to the catch-all `_ => Ok(())` arm and
+    /// remain a no-op until slice 4 wires the bind-payload-then-emit
+    /// dispatch.
+    UserErrDefer {
+        /// `errdefer(e) { ... }` payload-binding name. Slice 2 never
+        /// pushes this variant with `Some(_)` (the binding form falls
+        /// through in `compile_stmt` until slice 4), so today the field
+        /// is always `None` at construction sites. Kept on the variant
+        /// for forward compatibility with slice 4's bind-payload-then-
+        /// emit dispatch — once that lands, `compile_stmt`'s gate lifts
+        /// and `emit_cleanup_action_at` reads this to allocate an entry
+        /// alloca for the binding and store the about-to-be-returned Err
+        /// value before running the body.
+        #[allow(dead_code)]
+        binding: Option<String>,
+        body: Block,
+    },
 }
 
 /// One let-binding hoisted out of an auto-par group via the slice-A return-
