@@ -166,6 +166,32 @@ impl WebSocket {
     {
         Result.Err(TcpError.Other(-1))
     }
+
+    // Slice 9e.3 — binary frame counterparts to `send_text` /
+    // `recv_text`. Same shape, but the wire frame carries opcode
+    // 0x2 (binary) instead of 0x1 (text). Payload bytes are
+    // passed through verbatim — no UTF-8 validation, no
+    // framing-layer interpretation. Used for protocols that
+    // multiplex non-text data over WebSocket (e.g., MessagePack,
+    // CBOR, or raw byte streams).
+    //
+    // The recv-side runtime FFI transparently handles control
+    // frames (ping/pong/close) that arrive ahead of the data
+    // frame — same behaviour as `recv_text`, see RFC 6455 §5.5
+    // discussion in the runtime helper comment.
+    #[compiler_builtin]
+    fn recv_binary(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
+    #[compiler_builtin]
+    fn send_binary(ref self, msg: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
 }
 
 // Close-on-drop. Same pattern as `TcpStream` / `TcpListener` (slice 9d).

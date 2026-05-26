@@ -118,6 +118,8 @@ transform (phase 6 line 18). Unix-only on the fd-registration entries;
 | `karac_runtime_ws_send_text` (unix) | `unsafe extern "C" fn(fd: i32, msg_ptr: *const u8, msg_len: i64) -> i64` | Slice 9e.1. Encodes a single RFC 6455 TEXT frame (FIN=1, opcode=0x1, MASK=0 — server→client) and writes header + payload to `fd`. Returns `msg_len` on success, -1 on any write error. v1 limitations: text-only, FIN=1 unfragmented; binary / fragmentation / control frames land in slice 9e.3. |
 | `karac_runtime_ws_recv_text` (unix) | `unsafe extern "C" fn(fd: i32, out_ptr: *mut u8, out_max_len: i64) -> i64` | Slice 9e.1. Reads one client→server RFC 6455 TEXT frame from `fd`, validates header (FIN=1, opcode=0x1, MASK=1, RSV=000), unmasks payload, writes up to `out_max_len` bytes into `out_ptr`. Returns payload byte count on success, 0 on graceful EOF before complete frame, -1 on protocol error / IO error / oversize payload. |
 | `karac_runtime_ws_accept` (unix) | `extern "C" fn(listener_fd: i32) -> i32` | Slice 9e.2. Accepts a TCP connection on `listener_fd`, reads HTTP/1.1 request, computes `Sec-WebSocket-Accept` from the request's `Sec-WebSocket-Key` (SHA-1 + Base64 per RFC 6455 §4.2), writes the 101 Switching Protocols response. Returns the upgraded connection fd on success, -1 on any failure. |
+| `karac_runtime_ws_send_binary` (unix) | `unsafe extern "C" fn(fd: i32, msg_ptr: *const u8, msg_len: i64) -> i64` | Slice 9e.3. BINARY counterpart to `_send_text`: encodes opcode 0x2 single-frame, unmasked. Same convention otherwise. |
+| `karac_runtime_ws_recv_binary` (unix) | `unsafe extern "C" fn(fd: i32, out_ptr: *mut u8, out_max_len: i64) -> i64` | Slice 9e.3. BINARY counterpart to `_recv_text`: accepts opcode 0x2 instead of 0x1. Transparently handles inbound control frames (ping → pong reply, pong → discard, close → close-response + return 0) per RFC 6455 §5.5 — same behaviour also retroactively applies to `_recv_text` after slice 9e.3. |
 
 Repr-C type also exported: `KaracSchedulerStats { polls: u64, ready_observations: u64, err_observations: u64, pending_observations: u64 }` — written by `karac_runtime_scheduler_stats_snapshot` into the caller-allocated buffer.
 
@@ -176,7 +178,7 @@ an explicit keep-list at the codegen end.
 
 ## Summary
 
-- **Total `#[no_mangle]` exports (2026-05-25 audit):** 55.
+- **Total `#[no_mangle]` exports (2026-05-25 audit):** 57.
   - 4 carried over from 2026-05-07: `karac_par_run`, `karac_error_trace_push`, `karac_error_trace_clear`, `karac_string_clone`.
   - 15 `karac_map_*` (unchanged from 2026-05-07).
   - 18 added 2026-05-07 → 2026-05-12: 5 `karac_provider_*`, `karac_runtime_get_current_frame`, `karac_runtime_for_each_active_frame`, `karac_runtime_has_debug_metadata`, `karac_runtime_list_par_blocks_into`, 4 `karac_runtime_http_*` getters/setters, 2 `karac_runtime_serve_http*`, 4 `karac_runtime_json_*`, `karac_vec_sort_by`.
@@ -189,6 +191,7 @@ an explicit keep-list at the codegen end.
   - 1 added 2026-05-25 (slice 9d): `karac_runtime_tcp_close` (unix) — phase 6 line 17 slice 9d (close-on-drop for `TcpStream` / `TcpListener`; consumed by hand-rolled `@TcpStream.drop` / `@TcpListener.drop` codegen bodies).
   - 2 added 2026-05-25 (slice 9e.1): `karac_runtime_ws_send_text` (unix), `karac_runtime_ws_recv_text` (unix) — phase 6 line 17 slice 9e.1 (stdlib `WebSocket` framing protocol; text frames only, server-side convention).
   - 1 added 2026-05-25 (slice 9e.2): `karac_runtime_ws_accept` (unix) — phase 6 line 17 slice 9e.2 (stdlib `WebSocket.accept` RFC 6455 §4.2 HTTP upgrade handshake: accept + read HTTP request + SHA-1 + Base64 + write 101 response).
+  - 2 added 2026-05-25 (slice 9e.3): `karac_runtime_ws_send_binary` (unix), `karac_runtime_ws_recv_binary` (unix) — phase 6 line 17 slice 9e.3 (binary frame surface + transparent control-frame handling in both `_recv_text` and `_recv_binary`).
 - **Total libc `extern "C"` imports:** 1 (`atexit`).
 - **Total private `extern "C"` callbacks:** 1 (`print_trace_at_exit`, registered with `atexit`).
 - **`#[used]` / `#[link_section(…)]` / `#[ctor]` / `#[dtor]`:** none.

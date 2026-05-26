@@ -190,6 +190,73 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 17 slice 9e.3 — binary frame dispatch ────────
+
+    #[test]
+    fn test_ir_websocket_send_binary_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let msg: String = "bin";
+    let _ = ws.send_binary(msg.bytes());
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_send_binary("),
+            "main should call `karac_runtime_ws_send_binary`; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before send_binary; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_recv_binary_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    let _ = ws.recv_binary(mut buf);
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_recv_binary("),
+            "main should call `karac_runtime_ws_recv_binary`; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before recv_binary; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_binary_ffis_declared() {
+        let ir = ir_for("fn main() {}");
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_send_binary(i32, ptr, i64)"),
+            "expected ws_send_binary FFI declaration; IR:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("declare i64 @karac_runtime_ws_recv_binary(i32, ptr, i64)"),
+            "expected ws_recv_binary FFI declaration; IR:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_ir_websocket_accept_ffi_declared() {
         // Defensive: the accept FFI declaration lands

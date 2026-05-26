@@ -1578,6 +1578,29 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Phase 6 line 17 slice 9e.3 — binary frame FFIs. Same ABI
+        // as the text framing FFIs from slice 9e.1 (3-arg `(fd,
+        // ptr, len)` returning i64); the runtime helper switches
+        // on the opcode bit (0x2 vs 0x1) internally.
+        let ws_send_binary_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_send_binary",
+            ws_send_binary_ty,
+            Some(Linkage::External),
+        );
+        let ws_recv_binary_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_ws_recv_binary",
+            ws_recv_binary_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized

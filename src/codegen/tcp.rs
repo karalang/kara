@@ -894,7 +894,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self_val: BasicValueEnum<'ctx>,
         msg_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        self.lower_websocket_io(self_val, msg_val, /*is_send=*/ true)
+        self.lower_websocket_io(self_val, msg_val, "karac_runtime_ws_send_text", true)
     }
 
     /// Lower `WebSocket.recv_text(ref self, buf: mut Slice[u8]) ->
@@ -905,18 +905,41 @@ impl<'ctx> super::Codegen<'ctx> {
         self_val: BasicValueEnum<'ctx>,
         buf_val: BasicValueEnum<'ctx>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        self.lower_websocket_io(self_val, buf_val, /*is_send=*/ false)
+        self.lower_websocket_io(self_val, buf_val, "karac_runtime_ws_recv_text", false)
     }
 
-    /// Shared lowering for `WebSocket.send_text` / `.recv_text` —
-    /// near-verbatim mirror of `lower_tcp_stream_io`. Extract `self.fd`
-    /// plus `slice.{ptr, len}`, park on the right direction, call the
-    /// FFI, wrap the `i64` result via `wrap_tcp_io_result` (the WS FFIs
-    /// follow the same `>= 0 / -1` convention as the TCP ones).
+    /// Slice 9e.3 — binary frame send: same shape as `send_text`
+    /// but routes to the binary FFI (opcode 0x2 in the runtime
+    /// helper's frame header).
+    pub(super) fn lower_websocket_send_binary(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        msg_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(self_val, msg_val, "karac_runtime_ws_send_binary", true)
+    }
+
+    /// Slice 9e.3 — binary frame recv: same shape as `recv_text`
+    /// but routes to the binary FFI.
+    pub(super) fn lower_websocket_recv_binary(
+        &mut self,
+        self_val: BasicValueEnum<'ctx>,
+        buf_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_websocket_io(self_val, buf_val, "karac_runtime_ws_recv_binary", false)
+    }
+
+    /// Shared lowering for `WebSocket.{send,recv}_{text,binary}`
+    /// — near-verbatim mirror of `lower_tcp_stream_io`. Extract
+    /// `self.fd` plus `slice.{ptr, len}`, park on the right
+    /// direction, call the supplied FFI, wrap the `i64` result
+    /// via `wrap_tcp_io_result` (the WS FFIs follow the same
+    /// `>= 0 / -1` convention as the TCP ones).
     fn lower_websocket_io(
         &mut self,
         self_val: BasicValueEnum<'ctx>,
         slice_val: BasicValueEnum<'ctx>,
+        fn_name: &str,
         is_send: bool,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let fd = self.extract_fd_from_tcp_struct(self_val, "ws.io.self.fd");
@@ -939,11 +962,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .const_int(if is_send { 1 } else { 0 }, false);
         self.emit_state_machine_invocation_for_park_on_fd(fd, direction);
 
-        let fn_name = if is_send {
-            "karac_runtime_ws_send_text"
-        } else {
-            "karac_runtime_ws_recv_text"
-        };
         let io_fn = self
             .module
             .get_function(fn_name)
@@ -959,8 +977,7 @@ impl<'ctx> super::Codegen<'ctx> {
         // labels show up in WS IR as "tcp.write" / "tcp.read", which
         // is mildly imprecise but harmless. A dedicated
         // `wrap_ws_io_result` with WS-specific labels could land
-        // when slice 9e.3 introduces the `WsError` type and a
-        // separate Result-wrapping convention.
+        // alongside the `WsError` introduction (slice 9e.4).
         self.wrap_tcp_io_result(n, is_send)
     }
 }
