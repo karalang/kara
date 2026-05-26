@@ -5712,6 +5712,34 @@ fn test_array_coerces_to_slice_at_call_boundary() {
 }
 
 #[test]
+fn test_vec_from_slice_typecheck_arm() {
+    // Regression for the 2026-05-25 typechecker-vs-codegen out-of-sync
+    // bug surfaced by kata 1665's `bench/greedy.kara`. Codegen has a
+    // `Vec.from_slice(src) -> Vec[T]` handler at
+    // `src/codegen/assoc_call.rs:~1008` but the typechecker had no
+    // matching arm, so the call panicked with
+    // "no associated function 'from_slice' on type 'Vec'" before
+    // codegen could run. The new arm in `src/typechecker/expr_call.rs`
+    // accepts Slice[T] / Vec[T] / Array[T,N] sources, extracts the
+    // element type, and returns `Vec[T]`.
+    typecheck_ok(
+        "fn main() {
+             let src: Slice[i64] = [1_i64, 2, 3].as_slice();
+             let _v: Vec[i64] = Vec.from_slice(src);
+         }",
+    );
+    // Tuple-element form (kata-1665 shape).
+    typecheck_ok(
+        "fn copy_pairs(tasks: Slice[(i64, i64)]) -> Vec[(i64, i64)] {
+             Vec.from_slice(tasks)
+         }
+         fn main() {
+             let _ = copy_pairs;
+         }",
+    );
+}
+
+#[test]
 fn test_ref_vec_parameter_coerces_to_slice() {
     // Function whose parameter is already `ref Vec[i64]` (a borrow) —
     // passes through to a downstream function that takes `Slice[i64]`.

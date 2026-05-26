@@ -479,6 +479,43 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // `Vec.from_slice(src) -> Vec[T]` — pairs with `Vec.new` /
+        // `Vec.with_capacity` / `Vec.filled` in the special-arm family.
+        // Codegen handles it (see `src/codegen/assoc_call.rs:~1008`) by
+        // bulk-copying the source (Slice[T] / Vec[T] / Array[T,N]) into
+        // a freshly-allocated Vec — one malloc + one memcpy/clone-loop,
+        // vs the `Vec.new() + push-in-loop` shape which grow-and-reallocs
+        // ~log₂(n) times. Without this typechecker arm, the call falls
+        // through to the bottom of `infer_call` and panics with
+        // "no associated function 'from_slice' on type 'Vec'", as
+        // surfaced by kata 1665's `bench/greedy.kara` (2026-05-25). The
+        // return type is `Vec[<element>]` where `<element>` is extracted
+        // from the source argument's inferred type — recognizes
+        // `Slice[T]`, `Vec[T]`, and `Array { element, .. }`.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2
+                && segments[0] == "Vec"
+                && segments[1] == "from_slice"
+                && args.len() == 1
+            {
+                let src_ty = self.infer_expr(&args[0].value);
+                let elem_ty = match &src_ty {
+                    Type::Slice { element, .. } => (**element).clone(),
+                    Type::Named { name, args: ty_args } if name == "Vec" && ty_args.len() == 1 => {
+                        ty_args[0].clone()
+                    }
+                    Type::Array { element, .. } => (**element).clone(),
+                    _ => self.env.fresh_type_var(),
+                };
+                let ty = Type::Named {
+                    name: "Vec".to_string(),
+                    args: vec![elem_ty],
+                };
+                self.record_expr_type(span, &ty);
+                return ty;
+            }
+        }
+
         // `String.from(x)` — codegen-only builtin (no syntactic
         // `impl From for String` in baked stdlib); historically used to
         // convert a `StringSlice` / string literal to an owned `String`,
