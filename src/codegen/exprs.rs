@@ -268,6 +268,18 @@ impl<'ctx> super::Codegen<'ctx> {
                 // `queue`, leaking the entire per-call working set.
                 if let Some(e) = val {
                     self.suppress_source_vec_cleanup_for_arg(e);
+                    // Sub-slice (3) of move-suppression — when the
+                    // return value is an Identifier whose binding has
+                    // a user `impl Drop`, the source's value is moved
+                    // out as the return; suppress its UserDrop so the
+                    // user-body (close fd, etc.) doesn't fire here.
+                    // The caller will fire it when its own binding
+                    // for the returned value goes out of scope.
+                    // Mirrors the tail-expression suppression in
+                    // `suppress_cleanup_for_tail_return`.
+                    if let ExprKind::Identifier(name) = &e.kind {
+                        self.suppress_user_drop_for_var(name);
+                    }
                     let v = self.compile_expr(e)?;
                     self.emit_scope_cleanup();
                     self.builder.build_return(Some(&v)).unwrap();

@@ -1555,6 +1555,90 @@ fn test_user_drop_move_suppression_does_not_affect_non_drop_types() {
     );
 }
 
+// ── Move-suppression for return-by-value of user-Drop bindings ──
+//
+// `fn make() -> T { let l = T::new(); l }` — `l`'s value moves out
+// as the function's return value. The interpreter's
+// `suppress_tail_expr_user_drop` (called before evaluating
+// `block.final_expr`) removes `l`'s Drop slot from cleanup so its
+// user-body doesn't fire when the function's `run_cleanup` runs;
+// the caller fires its drop on the same logical value at its own
+// scope exit. The companion `suppress_return_stmt_user_drop`
+// handles explicit `return expr;` statements.
+
+#[test]
+fn test_user_drop_return_by_value_trailing_expression() {
+    let (output, drops) = run_program_with_drops(
+        "struct R { tag: i64 }\n\
+         impl Drop for R {\n\
+             fn drop(mut ref self) { println(self.tag); }\n\
+         }\n\
+         fn make() -> R {\n\
+             let l = R { tag: 7 };\n\
+             l\n\
+         }\n\
+         fn main() {\n\
+             let r = make();\n\
+             println(r.tag);\n\
+         }",
+    );
+    // The user body fires EXACTLY ONCE — when `r` drops in `main`'s
+    // scope exit. Not also in `make` (where `l` would otherwise fire
+    // before returning, dropping the value the caller is about to
+    // receive). Expected output:
+    //   println(r.tag) → "7\n"
+    //   r's user drop body → "7\n"
+    // If the suppression were broken, we'd see "7\n", "7\n", "7\n"
+    // (the suppressed-but-still-firing `l.drop` in `make` would add
+    // an extra 7).
+    assert_eq!(
+        output,
+        vec!["7\n".to_string(), "7\n".to_string()],
+        "expected exactly two `7\\n` lines (println + one drop); got {:?}",
+        output
+    );
+    // drop_trace shows only `r` — `l` was suppressed in `make`'s
+    // cleanup (so its trace push never happened).
+    assert_eq!(
+        drops,
+        vec!["r".to_string()],
+        "expected drop_trace to contain only `r` (l move-suppressed in make); got {:?}",
+        drops
+    );
+}
+
+#[test]
+fn test_user_drop_return_by_value_explicit_return() {
+    let (output, drops) = run_program_with_drops(
+        "struct R { tag: i64 }\n\
+         impl Drop for R {\n\
+             fn drop(mut ref self) { println(self.tag); }\n\
+         }\n\
+         fn make() -> R {\n\
+             let l = R { tag: 7 };\n\
+             return l;\n\
+         }\n\
+         fn main() {\n\
+             let r = make();\n\
+             println(r.tag);\n\
+         }",
+    );
+    // Same expectation as the trailing-expression case — explicit
+    // `return l;` is handled by `suppress_return_stmt_user_drop`.
+    assert_eq!(
+        output,
+        vec!["7\n".to_string(), "7\n".to_string()],
+        "explicit return: expected exactly two `7\\n` lines; got {:?}",
+        output
+    );
+    assert_eq!(
+        drops,
+        vec!["r".to_string()],
+        "explicit return: expected drop_trace [\"r\"]; got {:?}",
+        drops
+    );
+}
+
 // ── Prereq.5 user-`impl Drop` dispatch — edge cases ──
 //
 // Multiple-binding ordering, Drop / defer interleave, and the documented

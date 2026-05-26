@@ -77,6 +77,15 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
                 return Err(cf);
             }
+            // Sub-slice (3) of move-suppression — pre-statement
+            // suppression for `return expr;` where expr is an
+            // Identifier whose binding has a user `impl Drop`. The
+            // source's value is moved out as the return value; its
+            // Drop slot is removed from cleanup BEFORE the statement
+            // evaluates so when run_cleanup fires (after the
+            // ControlFlow::Return signal propagates back to this
+            // block), the source's user-body doesn't run.
+            self.suppress_return_stmt_user_drop(stmt, &mut cleanup);
             let stmt_result = self.eval_stmt_cf(stmt);
             let cf_opt = match stmt_result {
                 Ok(_) => self.pending_cf.take(),
@@ -125,6 +134,17 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
                 return Err(cf);
             }
+            // Sub-slice (3) of move-suppression — when the block's
+            // trailing expression is an Identifier whose binding has
+            // a user `impl Drop`, the source's value is moved out as
+            // the block's result (return value for a function body).
+            // Suppress its Drop in the cleanup vec so the user-body
+            // doesn't fire when this block's `run_cleanup` runs after
+            // returning — the receiving scope will fire it when its
+            // own binding for the returned value goes out of scope.
+            // Mirrors the codegen `suppress_cleanup_for_tail_return`
+            // wiring.
+            self.suppress_tail_expr_user_drop(expr, &mut cleanup);
             let v = self.eval_expr_inner(expr);
             if let Some(cf) = self.pending_cf.take() {
                 let path = ExitPath::classify(&cf);
@@ -513,6 +533,48 @@ impl<'a> super::Interpreter<'a> {
             let _ = self.eval_block_inner(&body);
             self.env.pop_scope();
         }
+    }
+
+    /// Sub-slice (3) of move-suppression — interpreter helper that
+    /// removes the source binding's Drop slot from `cleanup` when
+    /// the block's trailing expression moves out a user-Drop value.
+    /// Called immediately before evaluating `block.final_expr` so
+    /// the subsequent `run_cleanup` doesn't fire the source's user
+    /// body on a value that's already gone to the caller's binding.
+    /// Mirrors the codegen `suppress_cleanup_for_tail_return`
+    /// behaviour for the user-Drop family.
+    fn suppress_tail_expr_user_drop(&mut self, expr: &Expr, cleanup: &mut Vec<CleanupAction>) {
+        let name = match &expr.kind {
+            ExprKind::Identifier(n) => n.clone(),
+            _ => return,
+        };
+        let type_name = match self.env.get(&name) {
+            Some(Value::Struct { name, .. }) => name.clone(),
+            _ => return,
+        };
+        if !self.program.drop_method_keys.contains_key(&type_name) {
+            return;
+        }
+        cleanup.retain(|action| match action {
+            CleanupAction::Drop { name: drop_name } => drop_name != &name,
+            _ => true,
+        });
+    }
+
+    /// Sub-slice (3) of move-suppression — pre-statement variant for
+    /// `return expr;` where expr is an Identifier. Same shape as
+    /// `suppress_tail_expr_user_drop` but operates on a `Stmt` (the
+    /// outer statement node) so the iteration loop can call it
+    /// before dispatching the statement evaluator.
+    fn suppress_return_stmt_user_drop(&mut self, stmt: &Stmt, cleanup: &mut Vec<CleanupAction>) {
+        let inner_expr = match &stmt.kind {
+            StmtKind::Expr(e) => match &e.kind {
+                ExprKind::Return(Some(inner)) => inner.as_ref(),
+                _ => return,
+            },
+            _ => return,
+        };
+        self.suppress_tail_expr_user_drop(inner_expr, cleanup);
     }
 
     /// Move-suppression for `let g = f;` patterns where `f` is a

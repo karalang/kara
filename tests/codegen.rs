@@ -3825,6 +3825,105 @@ fn main() {
         );
     }
 
+    // ── Move-suppression for return-by-value of user-Drop bindings ──
+    //
+    // `fn make() -> T { let l = T::new(); l }` — `l`'s value moves
+    // out as the function's return value. Without suppression, the
+    // function-scope cleanup would fire `l`'s UserDrop (close the
+    // fd) before the return happens, leaving the caller with a stale
+    // fd. The fix in `suppress_cleanup_for_tail_return` removes `l`'s
+    // UserDrop from the scope-cleanup stack right before
+    // `emit_scope_cleanup` runs; the caller then closes the fd
+    // exactly once when its own binding goes out of scope.
+
+    #[test]
+    fn test_ir_return_by_value_suppresses_source_user_drop() {
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn make() -> Foo {
+    let f = Foo { x: 7 };
+    f
+}
+fn main() {
+    let r = make();
+    println(r.x);
+}
+"#,
+        );
+        let make_body = function_body(&ir, "make").unwrap_or_else(|| {
+            panic!("make body not found in IR:\n{}", ir);
+        });
+        assert!(
+            !make_body.contains("call void @karac_drop_Foo("),
+            "expected `make` to NOT contain `@karac_drop_Foo` — `f` is \
+             moved out as the return value and its UserDrop should be \
+             suppressed before scope-exit cleanup. body was:\n{}",
+            make_body
+        );
+        // The caller still drops the value at its own scope exit.
+        let main_body = function_body(&ir, "main").unwrap_or_else(|| {
+            panic!("main body not found in IR:\n{}", ir);
+        });
+        assert!(
+            main_body.contains("call void @karac_drop_Foo("),
+            "expected `main` to drop `r` at scope exit (caller owns \
+             the returned value); body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_explicit_return_suppresses_source_user_drop() {
+        // `return f;` is an explicit return that takes the
+        // Return-statement path in `compile_expr`. The companion
+        // suppression in `src/codegen/exprs.rs`'s `ExprKind::Return`
+        // arm pins this case.
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn make() -> Foo {
+    let f = Foo { x: 7 };
+    return f;
+}
+fn main() {
+    let r = make();
+    println(r.x);
+}
+"#,
+        );
+        let make_body = function_body(&ir, "make").unwrap_or_else(|| {
+            panic!("make body not found in IR:\n{}", ir);
+        });
+        assert!(
+            !make_body.contains("call void @karac_drop_Foo("),
+            "expected `make` to NOT contain `@karac_drop_Foo` — \
+             explicit `return f` move-suppresses `f`. body was:\n{}",
+            make_body
+        );
+    }
+
+    // Note: production-shaped `fn make_listener() -> TcpListener {
+    // let l = TcpListener.bind(...); l }` is the natural Slice 9d
+    // motivating example, but is NOT currently testable end-to-end:
+    // TcpListener-as-a-function-return-type fails LLVM module
+    // verification with "Function return type does not match
+    // operand type of return inst!" because the codegen's stdlib
+    // struct-return ABI lowering doesn't yet wire the
+    // single-i32-field shape through a function's return slot.
+    // The user-struct case above (`fn make() -> Foo`) exercises the
+    // same move-suppression mechanism; once the stdlib return-ABI
+    // gap closes, the TcpListener case will compile and the move-
+    // suppression machinery already wired here will make it
+    // correct. Filed as a follow-on in phase-7-codegen.md's
+    // move-suppression entry.
+
     #[test]
     fn test_ir_no_wrapper_without_impl_drop() {
         // No `impl Drop` → no entry in `program.drop_method_keys` →

@@ -846,7 +846,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cleanup's `cap > 0` guard skips the free; the loaded return
     /// struct retains the original cap, and the caller's own
     /// scope-exit cleanup frees the buffer exactly once.
-    pub(super) fn suppress_cleanup_for_tail_return(&self, body: &Block) {
+    pub(super) fn suppress_cleanup_for_tail_return(&mut self, body: &Block) {
         // Walk the tail of the body: if the final expression of the
         // block (or the value of the last `return expr;` statement)
         // is a bare Identifier for a tracked Vec / String, suppress.
@@ -860,6 +860,18 @@ impl<'ctx> super::Codegen<'ctx> {
         });
         if let Some(expr) = from_final.or(from_last_stmt) {
             self.suppress_source_vec_cleanup_for_arg(expr);
+            // Sub-slice (3) of move-suppression — when the tail
+            // expression is an Identifier whose binding has a user
+            // `impl Drop`, the source binding's value is moved out as
+            // the function return value. Suppress its UserDrop so the
+            // user-body (and thus the user-visible side effect, like
+            // `karac_runtime_tcp_close(self.fd)`) doesn't fire at this
+            // function's scope exit — the caller will fire it when
+            // its own binding for the returned value goes out of
+            // scope.
+            if let ExprKind::Identifier(name) = &expr.kind {
+                self.suppress_user_drop_for_var(name);
+            }
             // Extra: when the tail is `var.field` and `var` is a
             // shared struct whose field is `Option[shared T]`, the
             // loaded Option-of-pointer is being moved into the
