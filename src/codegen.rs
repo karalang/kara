@@ -1560,6 +1560,24 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // `karac_runtime_ws_accept(listener_fd: i32) -> i32` —
+        // backs the accept + HTTP-upgrade step inside
+        // `WebSocket.accept`'s codegen lowering. Caller (codegen)
+        // is responsible for parking via
+        // `karac_park_on_fd(listener_fd, 0)` BEFORE invoking this.
+        // Returns the upgraded connection fd on success, -1 on
+        // any failure (accept error, IO error, missing
+        // Sec-WebSocket-Key, response write error).
+        // Phase 6 line 17 slice 9e.2.
+        let ws_accept_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into()], false);
+        module.add_function(
+            "karac_runtime_ws_accept",
+            ws_accept_ty,
+            Some(Linkage::External),
+        );
+
         // ── std.json codegen-side wiring (phase-8 line 435 slice 1) ──────
         //
         // Per-variant FFI constructors invoked by the synthesized

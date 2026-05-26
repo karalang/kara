@@ -1369,6 +1369,316 @@ pub unsafe extern "C" fn karac_runtime_ws_recv_text(
     result
 }
 
+// ── WebSocket HTTP upgrade handshake FFI (stdlib `WebSocket.accept`) ─────
+//
+// Phase 6 line 17 slice 9e.2 — RFC 6455 §4.2 server-side handshake.
+// Accepts a TCP connection on the listener, reads the HTTP/1.1
+// Upgrade request, validates the `Sec-WebSocket-Key` header,
+// computes the `Sec-WebSocket-Accept` response per the RFC's
+// SHA-1 + Base64 recipe, writes the 101 Switching Protocols
+// response. Returns the upgraded connection fd on success, `-1`
+// on any failure (accept error, IO error, malformed request,
+// missing key header, response write error). The caller is
+// responsible for parking on listener-readable via
+// `karac_park_on_fd(listener_fd, 0)` BEFORE invoking this — same
+// convention as `karac_runtime_tcp_accept`.
+//
+// v1 limitations (deferred to follow-on slices):
+//
+// - **No request validation beyond `Sec-WebSocket-Key` presence.**
+//   The RFC mandates `Upgrade: websocket`, `Connection: Upgrade`,
+//   `Sec-WebSocket-Version: 13`, and `Host:` headers; v1 accepts
+//   any request that contains a valid-shaped Sec-WebSocket-Key.
+//   A real production deployment behind a stricter handshake
+//   validator should add these checks (and respond with 400 on
+//   failure rather than upgrading anyway).
+// - **No subprotocol / extension negotiation.** The 101 response
+//   never echoes `Sec-WebSocket-Protocol` or `Sec-WebSocket-Extensions`.
+//   Slice 9e.3 may revisit if a use case surfaces.
+// - **Blocking reads with no timeout.** A malicious client that
+//   connects but never sends an HTTP request will hang the
+//   worker thread until the kernel times out the socket (typically
+//   minutes). Production deployments should set `SO_RCVTIMEO`
+//   or run the handshake on a dedicated tasked pool.
+// - **8 KiB request size limit.** The hand-rolled header parser
+//   reads into a fixed buffer; requests larger than 8 KiB fail
+//   with `-1`. RFC 6455 doesn't mandate a size; real browsers
+//   stay well under this.
+
+const WS_HANDSHAKE_GUID: &[u8] = b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+/// Hand-rolled SHA-1 (RFC 3174). Returns the 20-byte digest. v1
+/// avoids pulling the `sha1` crate as a dependency — the
+/// algorithm is well-known and bounded; the slice 9e.2 use case
+/// hashes a single fixed-size input (Sec-WebSocket-Key + GUID)
+/// so the implementation doesn't need to be streaming or
+/// performance-tuned. If future work needs SHA-1 elsewhere
+/// (e.g., for HTTP digest auth), factor this out to a sibling
+/// `hash.rs`.
+fn sha1(message: &[u8]) -> [u8; 20] {
+    let mut h0: u32 = 0x67452301;
+    let mut h1: u32 = 0xEFCDAB89;
+    let mut h2: u32 = 0x98BADCFE;
+    let mut h3: u32 = 0x10325476;
+    let mut h4: u32 = 0xC3D2E1F0;
+
+    // Pad the message: append 0x80, then zeros, then 8-byte
+    // big-endian length-in-bits. Final length is a multiple of 64.
+    let bit_len = (message.len() as u64) * 8;
+    let mut padded: Vec<u8> = Vec::with_capacity(message.len() + 64 + 8);
+    padded.extend_from_slice(message);
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    // Process each 64-byte chunk.
+    for chunk in padded.chunks_exact(64) {
+        let mut w = [0u32; 80];
+        for (i, word) in chunk.chunks_exact(4).enumerate() {
+            w[i] = u32::from_be_bytes([word[0], word[1], word[2], word[3]]);
+        }
+        for i in 16..80 {
+            w[i] = (w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16]).rotate_left(1);
+        }
+        let mut a = h0;
+        let mut b = h1;
+        let mut c = h2;
+        let mut d = h3;
+        let mut e = h4;
+        for (i, &wi) in w.iter().enumerate() {
+            let (f, k): (u32, u32) = if i < 20 {
+                ((b & c) | ((!b) & d), 0x5A827999)
+            } else if i < 40 {
+                (b ^ c ^ d, 0x6ED9EBA1)
+            } else if i < 60 {
+                ((b & c) | (b & d) | (c & d), 0x8F1BBCDC)
+            } else {
+                (b ^ c ^ d, 0xCA62C1D6)
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(wi);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h0 = h0.wrapping_add(a);
+        h1 = h1.wrapping_add(b);
+        h2 = h2.wrapping_add(c);
+        h3 = h3.wrapping_add(d);
+        h4 = h4.wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    out[0..4].copy_from_slice(&h0.to_be_bytes());
+    out[4..8].copy_from_slice(&h1.to_be_bytes());
+    out[8..12].copy_from_slice(&h2.to_be_bytes());
+    out[12..16].copy_from_slice(&h3.to_be_bytes());
+    out[16..20].copy_from_slice(&h4.to_be_bytes());
+    out
+}
+
+/// Standard Base64 encode (RFC 4648, no URL-safe alternate
+/// alphabet). v1 avoids the `base64` crate for the same reason
+/// as `sha1` above — bounded one-call use, well-known algorithm.
+fn base64_encode(input: &[u8]) -> String {
+    const TABLE: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
+    let mut chunks = input.chunks_exact(3);
+    for chunk in chunks.by_ref() {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk[1] as u32;
+        let b2 = chunk[2] as u32;
+        let combined = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((combined >> 18) & 0x3F) as usize] as char);
+        out.push(TABLE[((combined >> 12) & 0x3F) as usize] as char);
+        out.push(TABLE[((combined >> 6) & 0x3F) as usize] as char);
+        out.push(TABLE[(combined & 0x3F) as usize] as char);
+    }
+    let rem = chunks.remainder();
+    match rem.len() {
+        0 => {}
+        1 => {
+            let b0 = rem[0] as u32;
+            out.push(TABLE[((b0 >> 2) & 0x3F) as usize] as char);
+            out.push(TABLE[((b0 << 4) & 0x3F) as usize] as char);
+            out.push('=');
+            out.push('=');
+        }
+        2 => {
+            let b0 = rem[0] as u32;
+            let b1 = rem[1] as u32;
+            let combined = (b0 << 8) | b1;
+            out.push(TABLE[((combined >> 10) & 0x3F) as usize] as char);
+            out.push(TABLE[((combined >> 4) & 0x3F) as usize] as char);
+            out.push(TABLE[((combined << 2) & 0x3F) as usize] as char);
+            out.push('=');
+        }
+        _ => unreachable!(),
+    }
+    out
+}
+
+/// Read HTTP request bytes from `stream` until the canonical
+/// `\r\n\r\n` end-of-headers marker is found, or the buffer
+/// fills up. Returns the accumulated bytes including the
+/// trailing `\r\n\r\n` on success; `None` on IO error, EOF
+/// before complete request, or oversize request.
+#[cfg(unix)]
+fn ws_read_http_request(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
+    use std::io::Read;
+    const MAX_REQUEST_SIZE: usize = 8 * 1024;
+    let mut buf: Vec<u8> = Vec::with_capacity(1024);
+    let mut chunk = [0u8; 1024];
+    loop {
+        match stream.read(&mut chunk) {
+            Ok(0) => return None,
+            Ok(n) => {
+                buf.extend_from_slice(&chunk[..n]);
+                if buf.windows(4).any(|w| w == b"\r\n\r\n") {
+                    return Some(buf);
+                }
+                if buf.len() >= MAX_REQUEST_SIZE {
+                    return None;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => return None,
+        }
+    }
+}
+
+/// Find the value of the `Sec-WebSocket-Key` header in an HTTP
+/// request byte slice. Header lookup is case-insensitive per
+/// RFC 7230. Returns `None` if the header is missing or
+/// malformed.
+fn extract_sec_websocket_key(request: &[u8]) -> Option<&[u8]> {
+    // Split on \r\n to walk header lines. We could parse more
+    // strictly but the v1 use case only needs this one header.
+    for line in request.split(|&b| b == b'\n') {
+        let line = if let Some(stripped) = line.strip_suffix(b"\r") {
+            stripped
+        } else {
+            line
+        };
+        // Case-insensitive name match on "sec-websocket-key:".
+        const NAME: &[u8] = b"sec-websocket-key:";
+        if line.len() < NAME.len() {
+            continue;
+        }
+        let name_part = &line[..NAME.len()];
+        let mut matches = true;
+        for (lhs, rhs) in name_part.iter().zip(NAME.iter()) {
+            if lhs.to_ascii_lowercase() != *rhs {
+                matches = false;
+                break;
+            }
+        }
+        if matches {
+            // Skip whitespace after the colon.
+            let mut rest = &line[NAME.len()..];
+            while let Some((b, tail)) = rest.split_first() {
+                if *b == b' ' || *b == b'\t' {
+                    rest = tail;
+                } else {
+                    break;
+                }
+            }
+            if rest.is_empty() {
+                return None;
+            }
+            return Some(rest);
+        }
+    }
+    None
+}
+
+/// Server-side WebSocket handshake. Mirrors
+/// `karac_runtime_tcp_accept` for the listener-side park-then-
+/// accept flow, but adds the HTTP upgrade exchange before
+/// returning. Returns the upgraded connection fd on success,
+/// `-1` on any failure.
+///
+/// # Safety
+///
+/// `listener_fd` must be a valid listener socket descriptor;
+/// passing a non-socket fd produces undefined behaviour from
+/// `accept`. Caller is responsible for parking on
+/// listener-readability before invoking.
+#[cfg(unix)]
+#[no_mangle]
+pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
+    use std::io::Write;
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+
+    if listener_fd < 0 {
+        return -1;
+    }
+
+    // Accept the underlying TCP connection (same shape as
+    // `karac_runtime_tcp_accept`).
+    let listener = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+    let accept_result = listener.accept();
+    let _ = listener.into_raw_fd();
+
+    let mut conn = match accept_result {
+        Ok((c, _addr)) => c,
+        Err(_) => return -1,
+    };
+
+    // Read the HTTP request headers.
+    let request = match ws_read_http_request(&mut conn) {
+        Some(bytes) => bytes,
+        None => return -1,
+    };
+
+    // Extract Sec-WebSocket-Key.
+    let key = match extract_sec_websocket_key(&request) {
+        Some(k) => k,
+        None => {
+            // Best-effort 400 response so a misbehaving client
+            // sees a friendly error rather than a silent close.
+            let resp =
+                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = conn.write_all(resp);
+            return -1;
+        }
+    };
+
+    // Compute Sec-WebSocket-Accept per RFC 6455 §4.2.2:
+    //   accept = base64(sha1(key + GUID))
+    let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
+    digest_input.extend_from_slice(key);
+    digest_input.extend_from_slice(WS_HANDSHAKE_GUID);
+    let digest = sha1(&digest_input);
+    let accept = base64_encode(&digest);
+
+    // Write the 101 Switching Protocols response.
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {}\r\n\
+         \r\n",
+        accept
+    );
+    if conn.write_all(response.as_bytes()).is_err() {
+        return -1;
+    }
+
+    // Return the connection fd; ownership of close-on-drop
+    // belongs to the kara `WebSocket` value the caller
+    // constructs from this fd (slice-9e.1 + slice-9d Drop chain).
+    conn.into_raw_fd()
+}
+
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────
 //
 // A background dispatcher thread that drains the background poller's
@@ -2594,5 +2904,187 @@ mod tests {
         assert_eq!(&response[2..2 + payload.len()], payload);
         let (_, fd) = server_thread.join().expect("server thread");
         close_fd(fd);
+    }
+
+    // ── Phase 6 line 17 slice 9e.2 — WebSocket handshake tests ──────────
+
+    #[test]
+    fn test_sha1_rfc3174_test_vectors() {
+        // RFC 3174 sample digests.
+        // "abc" → A9993E364706816ABA3E25717850C26C9CD0D89D
+        let digest = super::sha1(b"abc");
+        let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex, "a9993e364706816aba3e25717850c26c9cd0d89d");
+        // Empty input → DA39A3EE5E6B4B0D3255BFEF95601890AFD80709
+        let digest = super::sha1(b"");
+        let hex: String = digest.iter().map(|b| format!("{:02x}", b)).collect();
+        assert_eq!(hex, "da39a3ee5e6b4b0d3255bfef95601890afd80709");
+    }
+
+    #[test]
+    fn test_base64_rfc4648_test_vectors() {
+        // RFC 4648 §10 test vectors.
+        assert_eq!(super::base64_encode(b""), "");
+        assert_eq!(super::base64_encode(b"f"), "Zg==");
+        assert_eq!(super::base64_encode(b"fo"), "Zm8=");
+        assert_eq!(super::base64_encode(b"foo"), "Zm9v");
+        assert_eq!(super::base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(super::base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(super::base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn test_ws_handshake_accept_value_rfc6455_example() {
+        // RFC 6455 §1.3 worked example:
+        //   key = "dGhlIHNhbXBsZSBub25jZQ=="
+        //   accept = "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        let key = b"dGhlIHNhbXBsZSBub25jZQ==";
+        let mut input: Vec<u8> = Vec::with_capacity(key.len() + super::WS_HANDSHAKE_GUID.len());
+        input.extend_from_slice(key);
+        input.extend_from_slice(super::WS_HANDSHAKE_GUID);
+        let digest = super::sha1(&input);
+        let accept = super::base64_encode(&digest);
+        assert_eq!(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=");
+    }
+
+    #[test]
+    fn test_extract_sec_websocket_key_case_insensitive() {
+        // Header name matching is case-insensitive per RFC 7230 §3.2.
+        let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nSEC-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+        let key = super::extract_sec_websocket_key(req).expect("key present");
+        assert_eq!(key, b"dGhlIHNhbXBsZSBub25jZQ==");
+    }
+
+    #[test]
+    fn test_extract_sec_websocket_key_missing_returns_none() {
+        let req = b"GET / HTTP/1.1\r\nHost: example.com\r\nUpgrade: websocket\r\n\r\n";
+        assert!(super::extract_sec_websocket_key(req).is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_accept_full_handshake_round_trip() {
+        use std::io::{Read, Write};
+        // Set up a real listener, hand-roll a client that sends an
+        // RFC 6455 upgrade request, drive the FFI to accept +
+        // upgrade, validate the 101 response on the client side,
+        // confirm the returned conn fd is usable for subsequent
+        // framed-message exchange.
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        use std::os::unix::io::IntoRawFd;
+        let listener_fd = listener.into_raw_fd();
+
+        let client_handle = std::thread::spawn(move || {
+            let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            // Standard browser-shape Upgrade request.
+            let req = b"GET /ws HTTP/1.1\r\n\
+                        Host: 127.0.0.1\r\n\
+                        Upgrade: websocket\r\n\
+                        Connection: Upgrade\r\n\
+                        Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\
+                        Sec-WebSocket-Version: 13\r\n\
+                        \r\n";
+            conn.write_all(req).expect("write request");
+
+            // Read response and find the end-of-headers marker.
+            let mut resp = Vec::new();
+            let mut chunk = [0u8; 256];
+            while !resp.windows(4).any(|w| w == b"\r\n\r\n") {
+                let n = conn.read(&mut chunk).expect("read response");
+                if n == 0 {
+                    break;
+                }
+                resp.extend_from_slice(&chunk[..n]);
+                if resp.len() > 4096 {
+                    break;
+                }
+            }
+            (resp, conn)
+        });
+
+        // Server side: invoke the FFI under test.
+        let conn_fd = super::karac_runtime_ws_accept(listener_fd);
+        assert!(
+            conn_fd >= 0,
+            "ws_accept should return a valid conn fd; got {}",
+            conn_fd
+        );
+
+        let (resp, _client_conn) = client_handle.join().expect("client thread");
+        let resp_str = String::from_utf8_lossy(&resp);
+        // 101 status line.
+        assert!(
+            resp_str.starts_with("HTTP/1.1 101 Switching Protocols\r\n"),
+            "expected 101 status; got: {}",
+            resp_str
+        );
+        // Sec-WebSocket-Accept value matches the RFC example.
+        assert!(
+            resp_str.contains("Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=\r\n"),
+            "expected the RFC's worked Sec-WebSocket-Accept value; got: {}",
+            resp_str
+        );
+        // Required Upgrade/Connection headers for protocol switch.
+        assert!(resp_str.contains("Upgrade: websocket\r\n"));
+        assert!(resp_str.contains("Connection: Upgrade\r\n"));
+
+        // Cleanup.
+        close_fd(conn_fd);
+        close_fd(listener_fd);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_ws_accept_returns_minus_one_when_key_missing() {
+        use std::io::{Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let addr = listener.local_addr().expect("local_addr");
+        use std::os::unix::io::IntoRawFd;
+        let listener_fd = listener.into_raw_fd();
+
+        let client_handle = std::thread::spawn(move || {
+            let mut conn = std::net::TcpStream::connect(addr).expect("client connect");
+            conn.set_read_timeout(Some(std::time::Duration::from_secs(5)))
+                .unwrap();
+            // Request without Sec-WebSocket-Key.
+            let req = b"GET / HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+            conn.write_all(req).expect("write request");
+            let mut resp = Vec::new();
+            let mut chunk = [0u8; 256];
+            // Read until the connection closes (the server sends a
+            // 400 then closes) or we accumulate something useful.
+            for _ in 0..10 {
+                match conn.read(&mut chunk) {
+                    Ok(0) => break,
+                    Ok(n) => resp.extend_from_slice(&chunk[..n]),
+                    Err(_) => break,
+                }
+                if resp.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            resp
+        });
+
+        let conn_fd = super::karac_runtime_ws_accept(listener_fd);
+        assert_eq!(
+            conn_fd, -1,
+            "ws_accept should return -1 when Sec-WebSocket-Key is missing"
+        );
+
+        let resp = client_handle.join().expect("client thread");
+        let resp_str = String::from_utf8_lossy(&resp);
+        // The FFI sends a best-effort 400 before returning -1.
+        assert!(
+            resp_str.starts_with("HTTP/1.1 400 Bad Request\r\n"),
+            "expected 400 response for missing key; got: {}",
+            resp_str
+        );
+
+        close_fd(listener_fd);
     }
 }

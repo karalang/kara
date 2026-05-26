@@ -802,6 +802,52 @@ impl<'ctx> super::Codegen<'ctx> {
     // dedicated `wrap_ws_io_result` helper that distinguishes
     // EOF (0) from byte-count-zero (also 0 — they overlap in v1).
 
+    /// Lower `WebSocket.accept(listener: TcpListener) -> WebSocket`
+    /// — extract `listener.fd`, park on read-readiness, call the
+    /// runtime FFI `karac_runtime_ws_accept` which performs the
+    /// blocking accept(2) + HTTP-upgrade exchange, pack the
+    /// returned conn fd into a `WebSocket { fd }` struct value.
+    /// Mirror of `lower_tcp_listener_accept` but routes to the
+    /// WS FFI instead of the raw TCP accept. Phase 6 line 17
+    /// slice 9e.2.
+    pub(super) fn lower_websocket_accept(
+        &mut self,
+        listener_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let listener_fd = self.extract_fd_from_tcp_struct(listener_val, "ws.accept.listener.fd");
+
+        // Park on listener-readability (direction = 0 for read).
+        let direction = self.context.i8_type().const_int(0, false);
+        self.emit_state_machine_invocation_for_park_on_fd(listener_fd, direction);
+
+        let accept_fn = self
+            .module
+            .get_function("karac_runtime_ws_accept")
+            .expect("karac_runtime_ws_accept declared in Codegen::new");
+        let conn_fd_call = self
+            .builder
+            .build_call(accept_fn, &[listener_fd.into()], "ws.accept.conn_fd")
+            .expect("call karac_runtime_ws_accept");
+        let conn_fd = conn_fd_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Pack conn_fd into a fresh `WebSocket { fd }` struct value.
+        // Same shape as `lower_tcp_listener_accept`'s TcpStream pack
+        // — single i32 field, no truncation needed since the FFI
+        // returns i32 directly.
+        let ws_ty = self
+            .context
+            .struct_type(&[self.context.i32_type().into()], false);
+        let undef = ws_ty.get_undef();
+        let ws_val = self
+            .builder
+            .build_insert_value(undef, conn_fd, 0, "ws.accept.val")
+            .expect("insert conn_fd into WebSocket struct value");
+        Ok(ws_val.into_struct_value().into())
+    }
+
     /// Lower `WebSocket.from_fd(fd: i32) -> WebSocket` — pack the i32
     /// fd into a fresh `WebSocket { fd }` struct value. Mirror of the
     /// post-bind `insert_value` pack in `lower_tcp_listener_bind`. No

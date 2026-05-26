@@ -52,10 +52,8 @@ struct WebSocket {
 impl WebSocket {
     // Construct a `WebSocket` from a raw fd that the caller has
     // already negotiated through the RFC 6455 HTTP-upgrade
-    // handshake. v1 testing entry point — the upgrade itself ships
-    // in slice 9e.2 as `accept_websocket(listener) -> WebSocket`.
-    // Until then, `from_fd` lets tests and early adopters drive the
-    // framing layer directly against a hand-crafted fd.
+    // handshake. v1 testing entry point — production usage flows
+    // through `WebSocket.accept(listener)` below.
     //
     // No system call here — pure value construction. The codegen
     // lowering builds a `WebSocket { fd }` struct value in one IR
@@ -64,6 +62,44 @@ impl WebSocket {
     #[compiler_builtin]
     fn from_fd(fd: i32) -> WebSocket {
         WebSocket { fd: fd }
+    }
+
+    // Park on the listener's read-readiness, then accept a TCP
+    // connection AND perform the RFC 6455 §4.2 HTTP upgrade
+    // handshake (read the `Sec-WebSocket-Key` header, compute
+    // `Sec-WebSocket-Accept`, write the 101 Switching Protocols
+    // response). Returns a `WebSocket` wrapping the upgraded
+    // connection on success, or `WebSocket { fd: -1 }` on any
+    // failure (accept error, HTTP IO error, missing key header,
+    // response write error). Slice 9e.2.
+    //
+    // **Parking convention.** Mirrors `TcpListener.accept` — the
+    // codegen lowering emits `karac_park_on_fd(listener.fd, 0u8)`
+    // BEFORE the syscall so the calling task yields to the
+    // scheduler until the listener is readable. The handshake
+    // itself runs inside the runtime FFI as a blocking sequence
+    // (accept, read request, write response) — fine for v1 since
+    // the kernel typically buffers the entire request before the
+    // first read returns. v2 may re-park between request-read and
+    // response-write for high-concurrency robustness.
+    //
+    // **By-value listener argument.** The codegen lowering
+    // extracts `listener.fd` via the existing
+    // `extract_fd_from_tcp_struct` helper (same shape as
+    // `TcpListener.accept` consuming `ref self`), so the listener
+    // is not consumed at the kara value-model level — the
+    // listener's close-on-drop fires at the caller's scope exit
+    // independently of this call.
+    //
+    // **v1 limitations** (deferred to 9e.3): no request
+    // validation beyond Sec-WebSocket-Key presence (no
+    // Upgrade / Connection / Version header checks); no
+    // subprotocol / extension negotiation; no handshake-timeout.
+    #[compiler_builtin]
+    fn accept(listener: TcpListener) -> WebSocket
+        with sends(Network) receives(Network)
+    {
+        WebSocket { fd: -1 }
     }
 
     // Park on read-readiness of `self.fd`, then read one RFC 6455

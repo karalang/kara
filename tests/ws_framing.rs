@@ -161,6 +161,49 @@ fn main() {
     }
 
     #[test]
+    fn test_ir_websocket_accept_parks_then_calls_runtime_ffi() {
+        // Slice 9e.2 — `WebSocket.accept(listener)` should park on
+        // listener-readability, then call `karac_runtime_ws_accept`
+        // which performs accept + HTTP upgrade. The returned i32
+        // gets packed into a `WebSocket { fd }` struct value.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0");
+    let ws = WebSocket.accept(listener);
+    println(ws.fd);
+}
+"#,
+        );
+        let main_body =
+            function_body(&ir, "main").unwrap_or_else(|| panic!("main body not found:\n{}", ir));
+        assert!(
+            main_body.contains("call i32 @karac_runtime_ws_accept("),
+            "main should call `karac_runtime_ws_accept`; body was:\n{}",
+            main_body
+        );
+        // Park primitive must precede the FFI call.
+        assert!(
+            main_body.contains("__kara_poll_karac_park_on_fd"),
+            "main should park before ws_accept; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_accept_ffi_declared() {
+        // Defensive: the accept FFI declaration lands
+        // unconditionally in `Codegen::new`, alongside the framing
+        // FFIs from slice 9e.1.
+        let ir = ir_for("fn main() {}");
+        assert!(
+            ir.contains("declare i32 @karac_runtime_ws_accept(i32)"),
+            "expected ws_accept FFI declaration; IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
     fn test_ir_websocket_runtime_ffis_declared() {
         // Sanity check that both runtime FFI declarations land in
         // the module's external-declaration section, even if no
