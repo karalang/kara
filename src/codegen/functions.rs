@@ -190,6 +190,30 @@ impl<'ctx> super::Codegen<'ctx> {
         // leave the slot populated.
         self.last_fstr_acc = None;
 
+        // Slice 4 follow-up (a) — wider-E payload reconstruction at the
+        // `?` site (2026-05-26). Reset and re-populate the
+        // current-function's Err-arm LLVM type from `func.return_type`
+        // when the return type is syntactically `Result[T, E]`. Read by
+        // `compile_question`'s `fail_bb` to reconstruct the source-typed
+        // Err value from the result struct's payload words via
+        // `rebuild_value_from_payload_words`. `None` (the default)
+        // means the function doesn't return `Result[T, E]` or the
+        // annotation isn't recognised — falls back to staging bare
+        // `w0` as i64 in the `?` failure branch.
+        self.current_fn_err_payload_ty = func.return_type.as_ref().and_then(|ret_ty| match &ret_ty
+            .kind
+        {
+            TypeKind::Path(path) if path.segments.len() == 1 && path.segments[0] == "Result" => {
+                path.generic_args
+                    .as_ref()
+                    .and_then(|args| match args.get(1) {
+                        Some(GenericArg::Type(e_te)) => Some(self.llvm_type_for_type_expr(e_te)),
+                        _ => None,
+                    })
+            }
+            _ => None,
+        });
+
         let entry = self.context.append_basic_block(fn_val, "entry");
         self.builder.position_at_end(entry);
 

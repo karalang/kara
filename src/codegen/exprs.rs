@@ -658,14 +658,50 @@ impl<'ctx> super::Codegen<'ctx> {
         // about-to-be-returned Err payload so any in-scope binding-form
         // errdefer (`errdefer(e) { ... }`) can bind `e` during its
         // phase-1 emission inside `emit_scope_cleanup_for_error_path`.
-        // The payload here is `w0` — the i64-wide payload word extracted
-        // from the result struct's field 1. For `Result[T, E]` with E
-        // narrower than i64 in source (e.g. `Result[T, i64]`,
-        // `Result[T, i32]`), the binding form sees the i64-coerced word
-        // directly; wider E payloads (struct, String) need a reshape
-        // before reaching the binding — tracked as a follow-up at the
-        // bottom of the slice notes.
-        self.pending_errdefer_payload = Some(w0);
+        //
+        // Slice 4 follow-up (a) — wider-E payload reconstruction
+        // (2026-05-26). When `current_fn_err_payload_ty` is set (the
+        // current function returns `Result[T, E]` and codegen knows
+        // E's LLVM type from the annotation), extract every payload
+        // word the result struct carries (w0/w1/w2 at fields 1/2/3 —
+        // synthesizing 0 for words past the struct's count_fields) and
+        // call `rebuild_value_from_payload_words(E_ty, w0, w1, w2)` to
+        // get the source-typed Err value. Stage that. The helper
+        // handles primitives (i8..i64 truncate / zext), floats
+        // (bitcast), pointers (inttoptr), Vec/String 3-word struct,
+        // Slice 2-word struct, and generic user structs field-by-field.
+        // Pre-(a), the `?` site staged bare `w0` as i64 — the binding
+        // `e: String` saw the data-ptr-as-i64 (garbage from the
+        // binding's perspective). When `current_fn_err_payload_ty` is
+        // `None` (no annotation / not a `Result[T, E]` return type),
+        // fall back to staging `w0` as before.
+        let staged_payload = match self.current_fn_err_payload_ty {
+            Some(e_ty) => {
+                let w0_i = w0.into_int_value();
+                let payload_word_count = enum_ty.count_fields().saturating_sub(1) as usize;
+                let zero = i64_t.const_int(0, false);
+                let w1_i = if payload_word_count >= 2 {
+                    self.builder
+                        .build_extract_value(val.into_struct_value(), 2, "q_w1")
+                        .unwrap()
+                        .into_int_value()
+                } else {
+                    zero
+                };
+                let w2_i = if payload_word_count >= 3 {
+                    self.builder
+                        .build_extract_value(val.into_struct_value(), 3, "q_w2")
+                        .unwrap()
+                        .into_int_value()
+                } else {
+                    zero
+                };
+                self.rebuild_value_from_payload_words(e_ty, w0_i, w1_i, w2_i)
+                    .ok()
+            }
+            None => Some(w0),
+        };
+        self.pending_errdefer_payload = staged_payload;
         self.emit_scope_cleanup_for_error_path();
         self.pending_errdefer_payload = None;
 

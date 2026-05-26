@@ -537,6 +537,19 @@ pub(super) struct Codegen<'ctx> {
     /// `None` means no payload is currently staged — only the no-binding
     /// form errdefer can fire (the binding form is gated on `is_some`).
     pub(crate) pending_errdefer_payload: Option<inkwell::values::BasicValueEnum<'ctx>>,
+    /// Phase 7 § *defer / errdefer codegen* slice 4 follow-up (a) —
+    /// wider-E payload reconstruction at the `?` site (2026-05-26).
+    /// Source-level LLVM type of the current function's `Result[T, E]`
+    /// Err arm — recorded at `compile_function` entry by walking
+    /// `func.return_type` for the `Result[T, E]` shape and lowering E
+    /// via `llvm_type_for_type_expr`. Read by `compile_question`'s
+    /// `fail_bb` to call `rebuild_value_from_payload_words` against
+    /// the result struct's payload words (w0/w1/w2 at fields 1/2/3),
+    /// staging the source-typed value rather than the i64-coerced
+    /// `w0` slice 4 originally used. `None` means the current function
+    /// doesn't return `Result[T, E]` (or doesn't return at all) — the
+    /// `?` site falls back to staging bare `w0` as i64 in that case.
+    pub(crate) current_fn_err_payload_ty: Option<inkwell::types::BasicTypeEnum<'ctx>>,
     /// Set by `compile_match` when the scrutinee is a borrow-returning
     /// call (`Map.get`, `Vec.first`, ...) — used by `bind_pattern_values`
     /// to suppress `track_vec_var` for the bound name, since the payload
@@ -1932,6 +1945,7 @@ impl<'ctx> Codegen<'ctx> {
             soa_layouts: HashMap::new(),
             scope_cleanup_actions: Vec::new(),
             pending_errdefer_payload: None,
+            current_fn_err_payload_ty: None,
             pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),

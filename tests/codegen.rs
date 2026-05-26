@@ -21541,6 +21541,60 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_errdefer_with_binding_sees_wider_e_at_question_propagation() {
+        // Slice 4 follow-up (a) — wider-E payload reconstruction at the
+        // `?` site (2026-05-26). Pre-(a), `compile_question`'s `fail_bb`
+        // staged bare `w0` (the i64-coerced first payload word) for the
+        // binding-form errdefer's payload — so a `Result[T, String]`
+        // caller's `errdefer(e) { println(e); }` at a `boom()?` site
+        // saw `e` as the i64 reinterpretation of String's `data` ptr
+        // (garbage from the binding's perspective; would crash on
+        // println if the load happened to dereference a non-string-like
+        // value).
+        //
+        // The fix records the current function's source-level Err arm
+        // LLVM type at `compile_function` entry (in
+        // `current_fn_err_payload_ty`, lowered via
+        // `llvm_type_for_type_expr` from the `Result[T, E]`
+        // annotation). `compile_question`'s `fail_bb` extracts every
+        // available payload word from the result struct (w0/w1/w2 at
+        // fields 1/2/3) and calls `rebuild_value_from_payload_words`
+        // to reconstruct the source-typed value. For `Result[T, String]`
+        // this gives the `{ptr, i64 len, i64 cap}` struct directly —
+        // the binding-form errdefer sees the live String value and
+        // `println(e)` prints the message.
+        //
+        // This test pins the canonical wider-E shape (String — 3
+        // payload words). Adjacent shapes (Vec, user struct) ride on
+        // the same `rebuild_value_from_payload_words` dispatch path
+        // and are out of scope for this single test.
+        let out = run_program(
+            r#"
+fn boom() -> Result[i64, String] { Err("kaboom") }
+fn caller() -> Result[i64, String] {
+    errdefer(e) { println(e); }
+    let _ = boom()?;
+    Ok(0_i64)
+}
+fn main() {
+    match caller() {
+        Ok(_) => println("ok"),
+        Err(_) => println("caller-err"),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // errdefer(e) prints the bound String payload "kaboom"
+            // (rebuilt from the result struct's 3 payload words via
+            // `rebuild_value_from_payload_words`), then the caller's
+            // Err arm prints "caller-err".
+            assert_eq!(lines, vec!["kaboom", "caller-err"]);
+        }
+    }
+
     // ── Slice 9: Module-level let / let mut codegen (design.md §1278-1330) ─
     //
     // Real LLVM globals — immutable `let X: T = INIT` lowers to
