@@ -3401,6 +3401,122 @@ fn main() {
         );
     }
 
+    // ── Prereq.2 user-`impl Drop` dispatch — drop-glue wrapper emission ──
+    //
+    // The wrapper `karac_drop_<Type>` is synthesised for every user type
+    // with a validated `impl Drop`. Its body calls the user-defined
+    // `Type.drop` method body and, when the type has heap-owning fields,
+    // hands off to the existing per-struct field-cleanup synthesizer
+    // (`__karac_drop_struct_<Type>`). Scope-exit invocation of these
+    // wrappers lands in Prereq.3.
+
+    #[test]
+    fn test_ir_user_drop_wrapper_emitted() {
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let f = Foo { x: 1 };
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_drop_Foo"),
+            "expected synthesized drop-wrapper `karac_drop_Foo` in IR; \
+             not found in:\n{}",
+            ir
+        );
+        // The user-defined body symbol should be present too — sanity-check
+        // that the existing impl-method codegen still emits it. LLVM
+        // doesn't quote `Type.method` names (the `.` is accepted bare),
+        // so the symbol appears as `@Foo.drop`, not `@"Foo.drop"`.
+        assert!(
+            ir.contains("@Foo.drop"),
+            "expected user-defined `Foo.drop` method symbol in IR; \
+             not found in:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_user_drop_wrapper_calls_user_body() {
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+impl Drop for Foo {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let f = Foo { x: 1 };
+}
+"#,
+        );
+        let body = function_body(&ir, "karac_drop_Foo").unwrap_or_else(|| {
+            panic!("karac_drop_Foo body not found in IR:\n{}", ir);
+        });
+        assert!(
+            body.contains("call void @Foo.drop("),
+            "expected wrapper body to call `@Foo.drop(...)`; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_user_drop_wrapper_composes_field_cleanup() {
+        // `Bag` has a heap-owning Vec field, so
+        // `emit_struct_drop_synthesis` returns `Some(...)` and the
+        // wrapper composes its call after the user-body call.
+        let ir = ir_for(
+            r#"
+struct Bag { items: Vec[i64] }
+impl Drop for Bag {
+    fn drop(mut ref self) {}
+}
+fn main() {
+    let b = Bag { items: Vec.new() };
+}
+"#,
+        );
+        let body = function_body(&ir, "karac_drop_Bag").unwrap_or_else(|| {
+            panic!("karac_drop_Bag body not found in IR:\n{}", ir);
+        });
+        assert!(
+            body.contains("call void @Bag.drop("),
+            "expected wrapper body to call `@Bag.drop(...)`; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("call void @__karac_drop_struct_Bag"),
+            "expected wrapper body to compose field cleanup via \
+             `@__karac_drop_struct_Bag` (Bag has a heap-owning Vec field); \
+             body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_no_wrapper_without_impl_drop() {
+        // No `impl Drop` → no entry in `program.drop_method_keys` →
+        // `emit_user_drop_wrappers` synthesizes nothing.
+        let ir = ir_for(
+            r#"
+struct Foo { x: i64 }
+fn main() {
+    let f = Foo { x: 1 };
+}
+"#,
+        );
+        assert!(
+            !ir.contains("@karac_drop_Foo"),
+            "wrapper `karac_drop_Foo` must NOT be emitted when `Foo` has \
+             no `impl Drop`; found in:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_e2e_struct_owning_map_shared_drops_cleanly() {
         // E2E: an `Owner` struct owns a `Map[i64, Node]` where

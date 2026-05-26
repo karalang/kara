@@ -547,6 +547,18 @@ pub(super) struct Codegen<'ctx> {
     /// with no heap-owning fields don't get an entry (the synthesis fn returns
     /// `None`) and don't reach `CleanupAction::StructDrop`.
     pub(crate) struct_drop_fns: HashMap<String, FunctionValue<'ctx>>,
+    /// Per-user-type lazy drop-wrapper cache (type name →
+    /// `karac_drop_<Type>` `FunctionValue`). Populated by
+    /// `emit_user_drop_wrappers` for every type in
+    /// `program.drop_method_keys` — i.e., every user type with a
+    /// validated `impl Drop`. The wrapper invokes the user-defined
+    /// `Type.drop` body and then hands off to the existing field-cleanup
+    /// synthesizer (`emit_struct_drop_synthesis`) when the type has
+    /// heap-owning fields. Prereq.2 of the user-`impl Drop` dispatch
+    /// slice (`docs/implementation_checklist/phase-7-codegen.md`).
+    /// Consumed by Prereq.3's scope-exit lowering pass via
+    /// `module.get_function("karac_drop_<Type>")`.
+    pub(crate) user_drop_wrapper_fns: HashMap<String, FunctionValue<'ctx>>,
     /// Per-shared-struct lazy drop-fn cache (shared-struct name →
     /// `__karac_rc_drop_<Name>` `FunctionValue`, or `None` when the
     /// struct has no heap-owning fields and `emit_rc_dec` can fall
@@ -1820,6 +1832,7 @@ impl<'ctx> Codegen<'ctx> {
             pattern_binding_is_borrow: false,
             enum_drop_fns: HashMap::new(),
             struct_drop_fns: HashMap::new(),
+            user_drop_wrapper_fns: HashMap::new(),
             rc_drop_fns: HashMap::new(),
             question_conversions: HashMap::new(),
             callee_effectful: HashMap::new(),
@@ -2352,6 +2365,14 @@ impl<'ctx> Codegen<'ctx> {
                 }
             }
         }
+
+        // Prereq.2 of the user-`impl Drop` dispatch slice — synthesize a
+        // `karac_drop_<Type>` wrapper per `program.drop_method_keys` entry.
+        // Must run AFTER the impl-method body pass above so the
+        // user-defined `Type.drop` LLVM symbol is already declared+compiled
+        // when the wrapper builds the call into it. Scope-exit invocation
+        // of these wrappers lands in Prereq.3.
+        self.emit_user_drop_wrappers(program);
 
         self.emit_jit_template_section();
         self.emit_llvm_used();

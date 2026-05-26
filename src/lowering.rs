@@ -87,6 +87,12 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), *v))
         .collect();
+    // Forward the typechecker's `impl Drop` registry so codegen's
+    // `emit_user_drop_wrappers` pass can synthesize `karac_drop_<Type>`
+    // wrappers for each user type with a validated drop body. Prereq.2
+    // of the user-`impl Drop` dispatch slice — see
+    // `docs/implementation_checklist/phase-7-codegen.md`.
+    program.drop_method_keys = tc.drop_method_keys.clone();
 }
 
 struct Lowerer<'a> {

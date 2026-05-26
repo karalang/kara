@@ -288,6 +288,18 @@ pub enum PatternBindingBorrow {
 pub type PatternBindingBorrowModesTable =
     std::collections::HashMap<(usize, usize), PatternBindingBorrow>;
 
+/// Maps each user type with an `impl Drop` to its canonical drop-method key
+/// `"<Type>.drop"`. Populated by the typechecker (Prereq.1) and forwarded by
+/// the lowering pass for codegen to consume. The presence of a `(Type, key)`
+/// entry signals that the type has a validated user-defined `drop()` body
+/// already declared+compiled under the `Type.drop` LLVM symbol by the
+/// existing impl-method orchestration; codegen synthesizes a public
+/// `karac_drop_<Type>` wrapper that invokes the user body + hands off to
+/// existing field-cleanup synthesis (Prereq.2 in
+/// `docs/implementation_checklist/phase-7-codegen.md`). Empty for programs
+/// without any `impl Drop` blocks.
+pub type DropMethodKeysTable = std::collections::HashMap<String, String>;
+
 #[derive(Debug, Clone, Default)]
 pub struct Program {
     pub items: Vec<Item>,
@@ -368,6 +380,13 @@ pub struct Program {
     /// must conservatively keep the intercept for every call site of
     /// those.
     pub callee_purely_polymorphic_effects: CalleePurelyPolymorphicEffectsSet,
+    /// Set by the lowering pass from `TypeCheckResult.drop_method_keys`;
+    /// empty otherwise. Maps each user type with an `impl Drop` to its
+    /// canonical drop-method key `"<Type>.drop"`. Codegen consumes this to
+    /// synthesize per-type `karac_drop_<Type>` wrapper functions that
+    /// invoke the user-defined drop body. Prereq.2 of the user-`impl Drop`
+    /// dispatch slice (phase-7-codegen.md § User-`impl Drop` dispatch).
+    pub drop_method_keys: DropMethodKeysTable,
 }
 
 mod exprs;

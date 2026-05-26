@@ -1106,4 +1106,97 @@ impl<'ctx> super::Codegen<'ctx> {
         self.builder.position_at_end(end_bb);
         self.builder.build_return(None).unwrap();
     }
+
+    /// Prereq.2 of the user-`impl Drop` dispatch slice — synthesize the
+    /// per-type drop-wrapper `karac_drop_<Type>` for each entry in
+    /// `program.drop_method_keys`. The wrapper body:
+    ///
+    /// ```text
+    /// fn karac_drop_T(self: *mut T) {
+    ///   T.drop(self);                  // (a) user body
+    ///   __karac_drop_struct_T(self);   // (b) field cleanup — only when
+    ///                                  //     the struct has heap-owning
+    ///                                  //     fields (`emit_struct_drop_
+    ///                                  //     synthesis` returns Some)
+    ///   ret void
+    /// }
+    /// ```
+    ///
+    /// Runs after the impl-method body pass in `compile_program` so the
+    /// user-defined `Type.drop` LLVM symbol already exists when the
+    /// wrapper is built. Each wrapper is independent — order across
+    /// `drop_method_keys` entries does not matter at v1.
+    ///
+    /// No call sites are emitted by this slice — Prereq.3 lowers
+    /// scope-exit drop calls to invocations of these wrappers via
+    /// `module.get_function("karac_drop_<Type>")`.
+    pub(super) fn emit_user_drop_wrappers(&mut self, program: &crate::ast::Program) {
+        // Iterate in deterministic (sorted) order so the emitted IR is
+        // stable across runs — eases IR-grep test debugging when failures
+        // surface ordering-dependent symbols.
+        let mut type_names: Vec<&String> = program.drop_method_keys.keys().collect();
+        type_names.sort();
+        for type_name in type_names {
+            self.emit_user_drop_wrapper(type_name);
+        }
+    }
+
+    /// Lazy, memoized per-type emitter for `karac_drop_<Type>`. Returns
+    /// `None` only when the user `Type.drop` LLVM symbol is absent —
+    /// shouldn't happen in normal pipelines (the typechecker only
+    /// records entries in `drop_method_keys` for impl blocks that
+    /// reached `env.add_impl`, and the impl-method compile pass emits
+    /// `Type.drop` for every such block).
+    fn emit_user_drop_wrapper(&mut self, type_name: &str) -> Option<FunctionValue<'ctx>> {
+        if let Some(f) = self.user_drop_wrapper_fns.get(type_name) {
+            return Some(*f);
+        }
+        let user_drop_fn = self.module.get_function(&format!("{type_name}.drop"))?;
+
+        let fn_name = format!("karac_drop_{type_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            self.user_drop_wrapper_fns.insert(type_name.to_string(), f);
+            return Some(f);
+        }
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let void_ty = self.context.void_type();
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let wrapper_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let wrapper = self
+            .module
+            .add_function(&fn_name, wrapper_ty, Some(Linkage::Internal));
+        self.user_drop_wrapper_fns
+            .insert(type_name.to_string(), wrapper);
+
+        let entry_bb = self.context.append_basic_block(wrapper, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = wrapper.get_nth_param(0).unwrap().into_pointer_value();
+
+        // (a) Invoke the user-defined drop body. Signature is
+        // `fn drop(mut ref self)` so the LLVM symbol takes a single
+        // pointer arg, matching our wrapper's self pointer.
+        self.builder
+            .build_call(user_drop_fn, &[self_ptr.into()], "")
+            .unwrap();
+
+        // (b) Hand off to the existing per-struct field-cleanup
+        // synthesizer for heap-owning fields. Returns `None` for structs
+        // with no heap-bearing fields (primitive-only) — skip the call
+        // in that case since there's nothing to free.
+        if let Some(field_drop_fn) = self.emit_struct_drop_synthesis(type_name) {
+            self.builder
+                .build_call(field_drop_fn, &[self_ptr.into()], "")
+                .unwrap();
+        }
+
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        Some(wrapper)
+    }
 }
