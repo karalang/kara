@@ -127,7 +127,7 @@ impl<'ctx> super::Codegen<'ctx> {
                             let (src_ptr, src_len) = if is_char {
                                 self.emit_codepoint_to_utf8(val.into_int_value())
                             } else {
-                                self.compile_fstr_part_to_cstr(val)
+                                self.compile_fstr_part_to_cstr(val, e)
                             };
                             self.emit_string_append_raw(acc, src_ptr, src_len);
                         }

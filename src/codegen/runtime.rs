@@ -1696,10 +1696,18 @@ impl<'ctx> super::Codegen<'ctx> {
     /// - `String` (3-field struct) → extract (data_ptr, len)
     /// - `bool` (i1) → global "true"/"false" literal
     /// - float (f32/f64) → snprintf "%g" into a 64-byte stack buffer
-    /// - integer → snprintf "%lld" into a 64-byte stack buffer
+    /// - integer → snprintf "%lld" / "%llu" into a 64-byte stack buffer
+    ///
+    /// `source_expr` carries the originating Kāra expression so the integer
+    /// arm can pick signed/unsigned widening via `expr_is_unsigned_int` —
+    /// mirrors the fix in `compile_print` (2026-05-19). Pre-fix this arm
+    /// passed narrow ints (e.g. `i32`) raw to `%lld`, which printf reads as
+    /// 64 bits and produces the unsigned reinterpretation on negatives
+    /// (`i32 -123` → `4294967173` inside an f-string).
     pub(super) fn compile_fstr_part_to_cstr(
         &mut self,
         val: BasicValueEnum<'ctx>,
+        source_expr: &Expr,
     ) -> (PointerValue<'ctx>, inkwell::values::IntValue<'ctx>) {
         let i64_t = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -1761,13 +1769,44 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_pointer_cast(buf, ptr_ty, "fst.buf_ptr")
                     .unwrap();
-                let fmt_str = if matches!(val, BasicValueEnum::FloatValue(_)) {
+                let is_float = matches!(val, BasicValueEnum::FloatValue(_));
+                // Widen narrower ints to i64 before snprintf's varargs slot —
+                // sext for signed, zext for unsigned. Mirrors `compile_print`
+                // (control_flow.rs ~258-285): without this, a negative i32 in
+                // an f-string renders as its unsigned reinterpretation
+                // (`-123` → `4294967173`) because printf reads 64 bits and
+                // the high bits are LLVM's zero pad.
+                let is_unsigned_int = !is_float && self.expr_is_unsigned_int(source_expr);
+                let arg_val: BasicValueEnum<'ctx> = if let BasicValueEnum::IntValue(iv) = val {
+                    let bits = iv.get_type().get_bit_width();
+                    if bits < 64 {
+                        let widened = if is_unsigned_int {
+                            self.builder
+                                .build_int_z_extend(iv, i64_t, "fst.zext")
+                                .unwrap()
+                        } else {
+                            self.builder
+                                .build_int_s_extend(iv, i64_t, "fst.sext")
+                                .unwrap()
+                        };
+                        widened.into()
+                    } else {
+                        val
+                    }
+                } else {
+                    val
+                };
+                let fmt_str = if is_float {
                     self.builder
                         .build_global_string_ptr("%g", "fst.fmt_f")
                         .unwrap()
                         .as_pointer_value()
+                } else if is_unsigned_int {
+                    self.builder
+                        .build_global_string_ptr("%llu", "fst.fmt_u")
+                        .unwrap()
+                        .as_pointer_value()
                 } else {
-                    // Integer
                     self.builder
                         .build_global_string_ptr("%lld", "fst.fmt_i")
                         .unwrap()
@@ -1777,7 +1816,12 @@ impl<'ctx> super::Codegen<'ctx> {
                     .builder
                     .build_call(
                         self.snprintf_fn,
-                        &[buf_ptr.into(), buf_size.into(), fmt_str.into(), val.into()],
+                        &[
+                            buf_ptr.into(),
+                            buf_size.into(),
+                            fmt_str.into(),
+                            arg_val.into(),
+                        ],
                         "fst.written",
                     )
                     .unwrap()

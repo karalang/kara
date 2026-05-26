@@ -6557,6 +6557,44 @@ fn main() {
         }
     }
 
+    #[test]
+    fn test_e2e_fstring_narrow_signed_int_negative() {
+        // Pre-fix the f-string integer arm passed raw i32 to snprintf("%lld"),
+        // which printf read as 64 bits — LLVM zero-padded the upper 32 bits
+        // before the call, so a negative i32 like -123 printed as the
+        // unsigned reinterpretation 4294967173. Regression for the
+        // sign-extend fix in `compile_fstr_part_to_cstr`.
+        let out = run_program(
+            r#"
+fn main() {
+    let x: i32 = -123i32;
+    println(f"x={x}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "x=-123");
+        }
+    }
+
+    #[test]
+    fn test_e2e_fstring_narrow_unsigned_int_large() {
+        // Companion to the signed-negative regression: a u32 with the high
+        // bit set must print as the unsigned value (zext + %llu), not as a
+        // signed reinterpretation.
+        let out = run_program(
+            r#"
+fn main() {
+    let x: u32 = 4000000000u32;
+    println(f"x={x}");
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "x=4000000000");
+        }
+    }
+
     // ── RC-fallback codegen E2E ──────────────────────────────────
 
     #[test]
