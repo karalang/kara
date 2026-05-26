@@ -794,19 +794,28 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
 
   **Cross-link.** Pairs with `karac test` per-test timeout and `karac run --timeout` (entries above) — same family, different scope.
 
-- [ ] **Investigate the concurrent `Command::output()` deadlock in `tests/codegen.rs` parallel runs.** **Filed 2026-05-25.** Commit `62af025` installed a per-spawn watchdog that converts the hang into a clean test failure, but the root cause was never identified. Symptoms: full `cargo test --features llvm --test codegen` ran 30+ minutes with one child kara binary (`/tmp/karac_e2e_<pid>_<id>`) consuming 50% CPU and never exiting; the *same binary* spawned standalone or via a tiny single-test runner exited in 105 ms. Serial run via `cargo test --features llvm --test codegen -- --test-threads=1` completed all 785 tests in 113 s with zero failures. Reproducer (pre-`62af025`): just run `cargo test --features llvm --test codegen` with default parallelism on M5 Pro and wait. Hang location varies (libtest scheduling is non-deterministic) but always at the `Command::new(exe).output()` site inside `run_program_capturing_inner` or one of its peers.
+- [x] **Investigate the concurrent `Command::output()` deadlock in `tests/codegen.rs` parallel runs.** ✓ Resolved 2026-05-25 (`bdbaadd`). Root cause was *not* a process / pipe / FD / libtest race — it was a karac codegen bug whose downstream symptom *manifested* under parallel cargo-test load because libtest's spawn pattern surfaced it more often. Four codegen call sites looked up the enum that owns a given variant name by iterating `self.enum_layouts` (HashMap, non-deterministic order) with only a hard-coded `Option`/`Result` carve-out for the user-vs-seed preference. When a user enum's variant name collided with a *seeded* built-in not in the carve-out — specifically `MyIoErr.Other` (test source) colliding with `TcpError.Other` (seeded via `seed_builtin_enum_layouts`) — HashMap iteration order non-deterministically picked the seeded layout, producing a wrong-shape enum value at construction and the wrong tag at match dispatch. The compiler emitted `unreachable` mid-`main` for the wrong-arm dispatch (LLVM lowers `unreachable` to `brk #0x1` on macOS arm64); under cargo test's parallel spawn pattern the brk-trapped child looped forever instead of terminating, because the libtest parent task intercepts `EXC_BREAKPOINT` Mach exceptions and prevents kernel-default `SIGTRAP` delivery to the child.
 
-  **Hypotheses to test.**
-  1. **FD exhaustion under load.** Hundreds of concurrent test binaries × stdin+stdout+stderr pipes; `ulimit -n` on M5 Pro is high (10240) but the test pool can still hit it under stress. Check `lsof -p <cargo_test_pid>` near the hang point.
-  2. **posix_spawn race on macOS.** std uses posix_spawn by default since Rust 1.66; concurrent spawns from many threads might hit a libc bug. Try forcing fork+exec via `Command::new(...).spawn()` configured to avoid posix_spawn, or replicate the hang with a tiny Rust binary that spawns N children in parallel from M threads.
-  3. **libtest stdout-capture interaction.** libtest captures each test's stdout/stderr by replacing global stdio handles per test; a child spawned during that swap might inherit a corrupted handle. Try `cargo test --features llvm --test codegen -- --nocapture` and see if disabling capture eliminates the hang.
-  4. **Watchdog masks the trigger.** Now that `output_with_hang_watchdog` is in place, the symptom may no longer reproduce because the watchdog kills the hung child before any cascade. Disable the watchdog locally and try to reproduce on demand.
+  **Investigation chain that led to the root cause:**
+  1. 5 consecutive suite runs → 1/5 hung → confirmed real, intermittent (~20%/run).
+  2. `lsof` + `sample` on a hung child: child spinning at `main+24` at 57% CPU, single frame, no pipe drain in progress — NOT a process/pipe issue.
+  3. Disassembled hung binary: `main` ends in `brk #0x1` (LLVM's `unreachable`), missing the entire `mov w0,#0 / ldp / add sp / ret` epilogue. Standalone `karac build` for the same source produces a correct `ret`-terminated `main`.
+  4. Tight repro: compile `MyIoErr.Other("disk full")` 20 times sequentially in-process; 54% produce a 9471-byte IR (wrong TcpError layout), 46% produce a 10132-byte IR (correct MyIoErr layout). Bimodal output from the same input on the same thread.
+  5. Bisect: hashed the IR per call → exactly TWO distinct shapes (`03264…` vs `ea8b…`). One-bit-of-state nondeterminism. Diffed the two IRs → enum layout diverges: `{ i64, i64 }` vs `{ i64, i64, i64, i64 }`; tag for `Other` is 1 vs 2.
+  6. Located the iteration: `try_compile_enum_variant` at `src/codegen/call_dispatch.rs:689` iterates `enum_layouts` HashMap to find which enum owns variant `Other`. Workaround comment in-place for `Option`/`Result` collisions; missed `Json` and `TcpError`.
 
-  **Why this matters.** The watchdog is defensive; the suite is unblockable but slow (~84 s with watchdog vs the original ~85 s parallel run when it didn't hang — basically unchanged). If the root cause is reproducible and fixable, no flake risk remains. If it's a libc / libtest bug, file upstream and document the workaround in `CLAUDE.md`.
+  **Fix:** `bdbaadd` introduces `seeded_enum_names: HashSet<String>` populated by `seed_builtin_enum_layouts` and applies the user-vs-seed preference at all four lossy lookup sites:
+  - `try_compile_enum_variant` (variant constructor with payload)
+  - `try_unit_enum_variant` (unit-variant constructor)
+  - `enum_tag_for_variant` + `enum_type_for_variant` (match-dispatch tag/type)
+  - `infer_enum_from_value` (RHS-typing when an enum is bound to a tracked var)
+  - `bind_pattern_values` (offset-lookup fallback when scrutinee-type match misses)
 
-  **Priority.** Low — suite is unblockable, dev iteration unaffected. Pick up when there's a quiet afternoon or when the same hang shape resurfaces in CI under different load profiles.
+  Regression test in `tests/codegen.rs::test_enum_variant_name_collision_with_seeded_other_is_deterministic` compiles the collision program 20 times and asserts every IR is byte-identical. Verification: 5 consecutive parallel codegen-suite runs post-fix, all 786 tests pass, 0 hangs, 0 failures (pre-fix this same pattern produced ~20% suite hangs and ~60% `test_io_error` "wrong variant" failures).
 
-  **Cross-link.** Commit `62af025` (test-harness watchdog landing). Entry below ("Mirror watchdog into …") is independent — it can ship without root-causing this.
+  **Belt-and-suspenders:** The 62af025 watchdog (`output_with_hang_watchdog`) stays in place. If a future codegen regression emits `unreachable` mid-function, it'll surface as one test failing with the hang panic message instead of hanging the whole suite.
+
+  **Cross-link.** Commit `62af025` (defensive watchdog), `bdbaadd` (root-cause fix). Entry below ("Mirror watchdog into …") is independent and still open — the watchdog mirror is a defensive measure orthogonal to this fix.
 
 - [ ] **Mirror `output_with_hang_watchdog` into `par_codegen.rs`, `parallax.rs`, `parallax_lite.rs`, `cli.rs`.** **Filed 2026-05-25.** Companion to commit `62af025`. The codegen suite shipped a per-spawn hang watchdog (`tests/codegen.rs::output_with_hang_watchdog`), but four other test files still call `Command::new(exe).output()` directly and have identical exposure to the same concurrent-spawn deadlock:
 
