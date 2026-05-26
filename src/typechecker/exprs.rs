@@ -103,10 +103,7 @@ impl<'a> super::TypeChecker<'a> {
             // `bench/bfs_sieve.kara::build_factors`.
             if args.len() == 2 {
                 if let ExprKind::Path { segments, .. } = &callee.kind {
-                    if segments.len() == 2
-                        && segments[0] == "Vec"
-                        && segments[1] == "filled"
-                    {
+                    if segments.len() == 2 && segments[0] == "Vec" && segments[1] == "filled" {
                         if let Type::Named {
                             name,
                             args: type_args,
