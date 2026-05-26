@@ -687,6 +687,19 @@ pub struct TypeCheckResult {
     /// non-primitive operand has an applicable trait impl (e.g. user
     /// `impl Eq for MyStruct` drives `==` dispatch).
     pub trait_impls: std::collections::HashSet<(String, String)>,
+    /// Phase 7 user-`impl Drop` dispatch — Prereq.1 side-table.
+    /// `type_name → "Type.drop"` for every `impl Drop for Type` block
+    /// that passes `env_add_impl`'s focused signature validation
+    /// (`E_DROP_SIGNATURE_INVALID`). Downstream phases (drop-glue
+    /// emission in Prereq.2, scope-exit call placement in Prereq.3,
+    /// interpreter parity in Prereq.4) read this map to discover
+    /// which user types carry a Drop impl and to look up the bound
+    /// method key inside `env.impls`. Empty for programs without any
+    /// `impl Drop` blocks; presence is keyed on the target type's
+    /// name (no generic-args specialization at v1 — Drop must
+    /// register generically per type, matching the trait-coherence
+    /// gate that already rejects generic-vs-specialized overlap).
+    pub drop_method_keys: HashMap<String, String>,
     /// For each `x.into()` call resolved against an expected type, the target
     /// type's name. Lowering rewrites these to `Target.from(x)` — the `Into`
     /// blanket impl is not materialized in `env.impls`, it's purely a lowering
@@ -1203,6 +1216,22 @@ impl<'a> TypeChecker<'a> {
             .iter()
             .filter_map(|imp| imp.trait_name.clone().map(|t| (t, imp.target_type.clone())))
             .collect();
+        // Phase 7 user-`impl Drop` dispatch — Prereq.1. Surface the
+        // `Type → "Type.drop"` mapping for every `impl Drop for Type`
+        // that passed `env_add_impl`'s focused signature validation.
+        // Reads from `self.env.impls` (the same source `trait_impls`
+        // filters above) so an impl block that errored out early
+        // never appears here. The method key shape (`Type.drop`)
+        // mirrors the registration shape used by `must_use_functions`
+        // and `method_callee_types`, so downstream phases can index
+        // into the same impl-method table.
+        let drop_method_keys: HashMap<String, String> = self
+            .env
+            .impls
+            .iter()
+            .filter(|imp| imp.trait_name.as_deref() == Some("Drop"))
+            .map(|imp| (imp.target_type.clone(), format!("{}.drop", imp.target_type)))
+            .collect();
         let distinct_type_traits = self.env.distinct_types.clone();
         let compiler_builtins = self.env.compiler_builtins.clone();
         let must_use_functions = self.env.must_use_functions.clone();
@@ -1216,6 +1245,7 @@ impl<'a> TypeChecker<'a> {
             distinct_type_traits,
             question_conversions: self.question_conversions,
             trait_impls,
+            drop_method_keys,
             into_conversions: self.into_conversions,
             try_into_conversions: self.try_into_conversions,
             display_snake_case_enums: self.display_snake_case_enums,

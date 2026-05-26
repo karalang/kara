@@ -1429,6 +1429,93 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
+        // Phase 7 user-`impl Drop` dispatch — Prereq.1. Validate the
+        // impl block matches `trait Drop { fn drop(mut ref self); }`
+        // exactly: a single method named `drop`, receiver `mut ref
+        // self`, no further parameters, no return type, no method-
+        // level generics. The focused diagnostic surfaces the rule
+        // ahead of generic trait-impl-coherence diagnostics so that
+        // user-source mistakes get a clear pointer at the impl site
+        // rather than downstream type-mismatch noise from the
+        // drop-glue codegen (Prereq.2). Duplicate `impl Drop for X`
+        // blocks are caught by the Theme-4 overlap check further
+        // below — no separate gate needed here. Type-side recording
+        // of validated impls lives in `TypeChecker::finish` where
+        // `drop_method_keys` is populated from `self.env.impls`.
+        if trait_name.as_deref() == Some("Drop") {
+            // Reject a second `impl Drop for Type` for the same target.
+            // The Theme-4 overlap check above intentionally leaves
+            // generic-vs-generic duplicates to "pre-existing trait-
+            // coherence concerns" — Drop can't tolerate that gap
+            // because the drop-glue codegen (Prereq.2) needs a single
+            // canonical method per type. Earliest-impl-wins so the
+            // diagnostic points at the second (offending) block.
+            let already_has_drop = self.env.impls.iter().any(|existing| {
+                existing.trait_name.as_deref() == Some("Drop") && existing.target_type == type_name
+            });
+            if already_has_drop {
+                self.type_error(
+                    format!(
+                        "error[E_DROP_DUPLICATE_IMPL]: type `{type_name}` already has an \
+                         `impl Drop` block — a type may declare at most one Drop \
+                         implementation; merge the cleanup logic into the existing \
+                         `impl Drop for {type_name}` block"
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::ConflictingImpl,
+                );
+                return;
+            }
+            let method_items: Vec<&Function> = imp
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    ImplItem::Method(m) => Some(m.as_ref()),
+                    ImplItem::AssocType(_) => None,
+                })
+                .collect();
+            let mut sig_problems: Vec<&'static str> = Vec::new();
+            let has_assoc_type = imp
+                .items
+                .iter()
+                .any(|i| matches!(i, ImplItem::AssocType(_)));
+            if method_items.len() != 1 || method_items[0].name != "drop" || has_assoc_type {
+                sig_problems.push(
+                    "the impl block must contain exactly one method named `drop` (no other \
+                     methods, no associated types)",
+                );
+            }
+            if let Some(m) = method_items.first() {
+                if m.self_param != Some(SelfParam::MutRef) {
+                    sig_problems.push("the `drop` method's receiver must be `mut ref self`");
+                }
+                if !m.params.is_empty() {
+                    sig_problems
+                        .push("the `drop` method must take no parameters beyond `mut ref self`");
+                }
+                if m.return_type.is_some() {
+                    sig_problems.push("the `drop` method must not declare a return type");
+                }
+                if m.generic_params.is_some() {
+                    sig_problems
+                        .push("the `drop` method must not declare its own generic parameters");
+                }
+            }
+            if !sig_problems.is_empty() {
+                self.type_error(
+                    format!(
+                        "error[E_DROP_SIGNATURE_INVALID]: `impl Drop for {}` does not \
+                         match `trait Drop {{ fn drop(mut ref self); }}` — {}",
+                        type_name,
+                        sig_problems.join("; "),
+                    ),
+                    imp.span.clone(),
+                    TypeErrorKind::TypeMismatch,
+                );
+                return;
+            }
+        }
+
         let mut methods = HashMap::new();
         for item in &imp.items {
             let method = match item {

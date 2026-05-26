@@ -17604,6 +17604,240 @@ fn struct_drop_impl_unaffected_by_union_arm() {
     );
 }
 
+// ── Phase 7 user-`impl Drop` dispatch — Prereq.1 ─────────────────
+//
+// `env_add_impl` validates `impl Drop for X` against the trait's
+// signature with a focused diagnostic
+// (`E_DROP_SIGNATURE_INVALID`) ahead of generic trait-impl-
+// coherence checks. The validated `Type → "Type.drop"` mapping
+// surfaces on `TypeCheckResult.drop_method_keys` for downstream
+// drop-glue / scope-exit / interpreter prereqs. Tests below pin
+// the validation rules and the side-table contract; the inline
+// `trait Drop { ... }` declarations match the pattern established
+// by `union_drop_impl_rejected` (test helpers parse + typecheck
+// directly without weaving stdlib, so the baked trait at
+// `runtime/stdlib/drop.kara` isn't in scope from these helpers).
+//
+// The baked stdlib trait is what production user-source consumes
+// (the full pipeline at `src/cli.rs::Pipeline` does weave stdlib
+// in); the inline declaration here is a test-helper artefact, not
+// a user-source pattern.
+
+#[test]
+fn drop_impl_records_method_key_in_result() {
+    let result = typecheck_ok(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(mut ref self) {} }",
+    );
+    assert_eq!(
+        result.drop_method_keys.get("Resource"),
+        Some(&"Resource.drop".to_string()),
+        "drop_method_keys should record Resource → Resource.drop, got: {:?}",
+        result.drop_method_keys,
+    );
+}
+
+#[test]
+fn drop_method_keys_empty_when_no_drop_impl() {
+    let result = typecheck_ok("struct Point { x: i32, y: i32 }");
+    assert!(
+        result.drop_method_keys.is_empty(),
+        "drop_method_keys should be empty when no impl Drop, got: {:?}",
+        result.drop_method_keys,
+    );
+}
+
+#[test]
+fn drop_impl_with_owned_self_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(self) {} }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_DROP_SIGNATURE_INVALID"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_DROP_SIGNATURE_INVALID, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("`mut ref self`"),
+        "diagnostic should name the required receiver shape, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn drop_impl_with_ref_self_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(ref self) {} }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_DROP_SIGNATURE_INVALID")),
+        "expected E_DROP_SIGNATURE_INVALID for `ref self` receiver, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn drop_impl_with_extra_param_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(mut ref self, extra: i32) {} }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_DROP_SIGNATURE_INVALID"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_DROP_SIGNATURE_INVALID, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("no parameters beyond"),
+        "diagnostic should explain the no-extra-params rule, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn drop_impl_with_return_type_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(mut ref self) -> i32 { 0 } }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_DROP_SIGNATURE_INVALID"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_DROP_SIGNATURE_INVALID, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("must not declare a return type"),
+        "diagnostic should name the no-return-type rule, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn drop_impl_with_extra_method_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource {\n\
+             fn drop(mut ref self) {}\n\
+             fn extra(mut ref self) {}\n\
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_DROP_SIGNATURE_INVALID")),
+        "expected E_DROP_SIGNATURE_INVALID for extra method in Drop impl, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn drop_impl_with_wrong_method_name_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn destroy(mut ref self) {} }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_DROP_SIGNATURE_INVALID")),
+        "expected E_DROP_SIGNATURE_INVALID for misnamed method in Drop impl, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn drop_impl_with_method_generics_rejected() {
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop[T](mut ref self) {} }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("E_DROP_SIGNATURE_INVALID")
+                && e.message.contains("own generic parameters")),
+        "expected E_DROP_SIGNATURE_INVALID naming own-generic-parameters, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn duplicate_drop_impl_rejected() {
+    // Two `impl Drop for Resource` blocks. The Theme-4 overlap check
+    // intentionally leaves generic-vs-generic duplicates on the same
+    // (trait, target) to "pre-existing trait-coherence concerns";
+    // Drop can't tolerate that gap (drop-glue codegen needs one
+    // canonical method per type), so Prereq.1 adds its own focused
+    // E_DROP_DUPLICATE_IMPL diagnostic ahead of the generic check.
+    // Earliest-impl-wins so the diagnostic points at the offending
+    // second block.
+    let errors = typecheck_errors(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(mut ref self) {} }\n\
+         impl Drop for Resource { fn drop(mut ref self) {} }",
+    );
+    let diag = errors
+        .iter()
+        .find(|e| e.message.contains("E_DROP_DUPLICATE_IMPL"))
+        .unwrap_or_else(|| {
+            panic!(
+                "expected E_DROP_DUPLICATE_IMPL, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>()
+            )
+        });
+    assert!(
+        diag.message.contains("Resource"),
+        "diagnostic should name the duplicated target type, got: {}",
+        diag.message,
+    );
+}
+
+#[test]
+fn failed_drop_impl_not_recorded_in_drop_method_keys() {
+    // Sanity: when the signature validation rejects an `impl Drop`,
+    // the impl never reaches `env.add_impl`, so the failed type
+    // doesn't appear in the result's `drop_method_keys` side-table.
+    // This is the contract downstream prereqs rely on — only
+    // validated impls are visible to Prereq.2's drop-glue emission.
+    let parsed = parse(
+        "trait Drop { fn drop(mut ref self); }\n\
+         struct Resource { fd: i32 }\n\
+         impl Drop for Resource { fn drop(self) {} }",
+    );
+    let resolved = resolve(&parsed.program);
+    let result = typecheck(&parsed.program, &resolved);
+    assert!(
+        !result.drop_method_keys.contains_key("Resource"),
+        "Resource should be absent from drop_method_keys when its Drop impl errored, got: {:?}",
+        result.drop_method_keys,
+    );
+}
+
 // ── C-string literals (line 587 / v60 item 18) ───────────────────
 //
 // Slice 2: typechecker assigns `ref CStr` to `c"..."` expressions.

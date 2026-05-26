@@ -207,6 +207,12 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     "Shl",
     "Shr",
     "Not",
+    // Phase 7 user-`impl Drop` dispatch — Prereq.1. Bakes the `Drop`
+    // trait visible at scope-0 so user code can write
+    // `impl Drop for X { fn drop(mut ref self) { ... } }` without
+    // an explicit import. Signature validation lives in
+    // `typechecker/env_build.rs` (`E_DROP_SIGNATURE_INVALID`).
+    "Drop",
     "Index",
     "IndexMut",
     "Display",
@@ -472,6 +478,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
         include_str!("../runtime/stdlib/into_iterator.kara"),
     ),
     ("not.kara", include_str!("../runtime/stdlib/not.kara")),
+    // Phase 7 user-`impl Drop` dispatch — Prereq.1. Bakes the `Drop`
+    // trait so user code can write `impl Drop for X { fn drop(mut ref
+    // self) { ... } }` without an inline trait declaration. See
+    // `runtime/stdlib/drop.kara` for the rationale + signature rule.
+    ("drop.kara", include_str!("../runtime/stdlib/drop.kara")),
     (
         "partial_eq.kara",
         include_str!("../runtime/stdlib/partial_eq.kara"),

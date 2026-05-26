@@ -1,0 +1,22 @@
+// runtime/stdlib/drop.kara
+//
+// Phase 7 user-`impl Drop` dispatch — Prereq.1. Bakes the `Drop`
+// trait into stdlib so user types can `impl Drop for X { fn drop(mut
+// ref self) { ... } }` without an inline trait declaration. The
+// drop method must take `mut ref self`, no other parameters, and
+// return Unit — those constraints are enforced by the typechecker
+// (env_add_impl) with a focused diagnostic (E_DROP_SIGNATURE_INVALID)
+// when an impl block diverges from the trait's signature, ahead of
+// the generic trait-impl-coherence path.
+//
+// `impl Drop for U` where `U` is an FFI union remains rejected at
+// the typechecker with the pre-existing E_UNION_DROP_FORBIDDEN
+// diagnostic (see env_build.rs and tests/typechecker.rs §
+// union_drop_impl_rejected). The full drop-glue-emission +
+// scope-exit-call placement work lands in subsequent Phase 7
+// prereqs (see docs/implementation_checklist/phase-7-codegen.md §
+// User-`impl Drop` dispatch).
+
+trait Drop {
+    fn drop(mut ref self);
+}
