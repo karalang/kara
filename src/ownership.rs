@@ -26,7 +26,12 @@ mod rc_promote;
 // reuses `build_fix_diff_edits` + `BindingKind` to emit the same type-
 // definition rewrite the `karac fix` diagnostic path produces, without
 // having to fire the underlying `E_CONCURRENT_*_STRUCT` diagnostic.
-pub(crate) use concurrent_shared::{build_fix_diff_edits, BindingKind};
+// L215b1 adds `build_consumer_rewrite_edits_in_program`, the consumer-
+// site write-rewrite walker the migrate tool runs after the type-def
+// rewrite (single-file mode, type-annotated bindings only).
+pub(crate) use concurrent_shared::{
+    build_consumer_rewrite_edits_in_program, build_fix_diff_edits, BindingKind,
+};
 
 // ── Core Types ──────────────────────────────────────────────────
 

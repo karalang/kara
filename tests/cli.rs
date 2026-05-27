@@ -7424,3 +7424,237 @@ fn test_migrate_help_lists_kind_and_flags() {
         "help should list --force flag; got: {stdout}",
     );
 }
+
+// ── L215b1: consumer-site write-rewrite (single-file, type-annotated bindings) ──
+
+#[test]
+fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
+    // Canonical L215b1 case: a `let c: Counter` binding with an assign
+    // write — the migrate path emits a `lock count { c.count = 5 }` wrap
+    // around the assignment in addition to the type-def rewrite.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 5;\n}\n";
+    let path = migrate_scratch_file("consumer_assign", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct Counter"),
+        "type-def rewrite missing; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("lock count {"),
+        "expected consumer-site `lock count {{` wrap; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("c.count = 5"),
+        "wrapped assign body must remain present; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_wraps_writes_through_ref_parameter() {
+    // The common real-world shape: a free function takes the migrating
+    // type by ref. Type-match must strip the `ref` modifier so the
+    // param is discovered. `mut ref` should also work the same way.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn bump(c: ref Counter) {\n    c.count = c.count + 1;\n}\n\nfn reset(c: mut ref Counter) {\n    c.count = 0;\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("consumer_ref_param", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    // Both function bodies should have their `c.count = ...` writes wrapped.
+    let lock_wrap_count = rewritten.matches("lock count {").count();
+    assert_eq!(
+        lock_wrap_count, 2,
+        "expected two lock-count wraps (one per ref-param fn); got {lock_wrap_count} in: {rewritten}",
+    );
+}
+
+#[test]
+fn test_migrate_skips_writes_inside_par_block() {
+    // Writes inside `par { ... }` are the diagnostic-emitting territory
+    // of `karac fix` (E_CONCURRENT_SHARED_STRUCT). The migrate path
+    // must NOT double-wrap them. Only the write outside the par should
+    // receive a lock wrap.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 1;\n    par {\n        c.count = 2;\n        c.count = 3;\n    }\n}\n";
+    let path = migrate_scratch_file("consumer_skip_par", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "dry-run should succeed");
+    // Two pure-insertion edits per wrap (prefix + suffix). Outside-par
+    // assign produces one wrap = two insertions. Inside-par assigns
+    // would produce four insertions if not filtered. Sum: 4 type-def
+    // edits + 2 consumer edits = 6 total.
+    assert!(
+        stdout.contains("would apply 6 migration edit(s)"),
+        "expected 6 edits (4 type-def + 2 consumer for the single outside-par write); got: {stdout}",
+    );
+    let prefix_count = stdout.matches("(insert) → `lock count {").count();
+    assert_eq!(
+        prefix_count, 1,
+        "expected one consumer-write wrap (the outside-par assign); got {prefix_count} in: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_wraps_compound_assign() {
+    // Compound assignment (`+=`) is structurally a write; the existing
+    // walker handles it via the `StmtKind::CompoundAssign` arm.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count += 1;\n}\n";
+    let path = migrate_scratch_file("consumer_compound", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("lock count {"),
+        "compound-assign should be wrapped; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("c.count += 1"),
+        "compound-assign body must remain; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_skips_writes_to_non_mut_fields() {
+    // Only `mut` fields get the `Mutex[T]` wrap on the type-def side,
+    // so the consumer-rewrite walker must mirror that: writes to the
+    // non-mut field `name` stay alone, writes to the mut field `count`
+    // get wrapped.
+    let original = "shared struct Counter {\n    mut count: i64,\n    name: String,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0, name: \"a\" };\n    c.count = 1;\n    c.name = \"b\";\n}\n";
+    let path = migrate_scratch_file("consumer_nonmut", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "dry-run should succeed");
+    let lock_count = stdout.matches("(insert) → `lock count {").count();
+    let lock_name = stdout.matches("(insert) → `lock name {").count();
+    assert_eq!(
+        lock_count, 1,
+        "expected single `lock count` wrap for the mut field; got {lock_count}",
+    );
+    assert_eq!(
+        lock_name, 0,
+        "expected zero `lock name` wraps for the non-mut field; got {lock_name} in: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_ignores_bindings_of_other_types() {
+    // A `let x: i64 = ...` binding inside a function body with a write
+    // to `x.something` must NOT be confused for a Counter binding even
+    // if the function also has an unrelated Counter binding.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let n: i64 = 0;\n    let c: Counter = Counter { count: 0 };\n    c.count = n;\n}\n";
+    let path = migrate_scratch_file("consumer_other_types", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "dry-run should succeed");
+    // Exactly one wrap for the single Counter write.
+    let wraps = stdout.matches("(insert) → `lock count {").count();
+    assert_eq!(
+        wraps, 1,
+        "expected exactly one wrap for the c.count write; got {wraps} in: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
+    // The dry-run epilogue claims consumer-site wraps are emitted.
+    // Pin the actual edit list: it must include both the type-def
+    // rewrites (4 for one mut field) AND consumer wraps (2 per assign).
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 1;\n}\n";
+    let path = migrate_scratch_file("consumer_dryrun_shape", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("would apply 6 migration edit(s)"),
+        "expected 6 edits (4 type-def + 2 consumer wrap insertions); got: {stdout}",
+    );
+    assert!(
+        stdout.contains("`shared` → `par`"),
+        "type-def keyword rename should still appear; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("(insert) → `lock count {"),
+        "consumer wrap prefix should appear in dry-run; got: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}

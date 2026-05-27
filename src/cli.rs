@@ -6699,11 +6699,19 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         process::exit(1);
     }
 
-    let edits = crate::ownership::build_fix_diff_edits(
+    let typedef_edits = crate::ownership::build_fix_diff_edits(
         type_name,
         crate::ownership::BindingKind::Shared,
         &parsed.program.items,
     );
+    // L215b1: consumer-site write-rewrite for `let <c>: <Type> = ...`
+    // bindings inside function bodies. Single-file + writes-only + type-
+    // annotated bindings only in v1 (see L215b2/b3/b4 follow-ups for
+    // reads, typechecker-resolved bindings, and project-mode walk).
+    let consumer_edits =
+        crate::ownership::build_consumer_rewrite_edits_in_program(type_name, &parsed.program.items);
+    let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
+    edits.extend(consumer_edits);
     if edits.is_empty() {
         // No mut fields and the rename collapses to a single keyword edit
         // — but build_fix_diff_edits always emits the rename for Shared,
@@ -6731,6 +6739,17 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
     // peer of the cmd_fix path.
     let mut sorted: Vec<crate::resolver::TextEdit> = edits;
     sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    // Dedup any consumer edits that re-emit the same insertion the
+    // type-def pass already produced (e.g. an inserted `]` after the
+    // field type would collide with an inserted lock-wrap close at the
+    // same offset). Keep the first occurrence; same offset+length+
+    // replacement signature → drop the duplicate. Defense-in-depth —
+    // the type-def and consumer paths emit at structurally disjoint
+    // offsets today (struct-def vs fn-body), but the discipline matches
+    // `cmd_fix`'s overlap-drop guard.
+    sorted.dedup_by(|a, b| {
+        a.offset == b.offset && a.length == b.length && a.replacement == b.replacement
+    });
 
     if !apply {
         println!(
@@ -6751,7 +6770,7 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
             println!("  {filename}:{line}:{col}: {preview}");
         }
         println!(
-            "(dry-run — re-run with `--apply` to write changes; consumer-site `lock` blocks are NOT auto-applied in v1 and remain a hand-review step)"
+            "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes against `let <c>: {type_name} = ...` bindings in this file. Reads, mutating method-call writes, type-inferred bindings, and cross-file walks remain hand-review steps — see L215b2/b3/b4 follow-ups)"
         );
         return;
     }
@@ -6774,7 +6793,7 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         process::exit(1);
     }
     println!(
-        "applied {} migration edit(s) to {filename} (review and complete consumer-site `lock` blocks by hand — see `docs/design.md § Compiler-assisted migration`)",
+        "applied {} migration edit(s) to {filename} (consumer-site assign/compound-assign writes wrapped automatically; review reads + mutating method calls + cross-file consumers by hand — see `docs/design.md § Compiler-assisted migration`)",
         sorted.len()
     );
 }

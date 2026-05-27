@@ -1253,6 +1253,334 @@ pub(crate) fn build_fix_diff_edits(
     edits
 }
 
+/// L215b1: Consumer-site write rewrite edits for `karac migrate
+/// shared-to-par <Type>`. Walks every top-level function body (and
+/// impl-block method body) in `program_items`, discovers bindings of
+/// the migrating type — both function parameters (`fn f(c: Counter)`,
+/// `fn f(c: ref Counter)`, `fn f(c: mut ref Counter)`) and `let`
+/// declarations with explicit type annotations (`let c: Counter =
+/// ...`) — and runs the existing par-body write walker on each
+/// function body for every matching binding. Edits whose offset falls
+/// inside any `par { ... }` body are dropped post-collection — those
+/// sites are handled by `karac fix`'s `E_CONCURRENT_SHARED_STRUCT`
+/// path, not by the preemptive migrate.
+///
+/// **Scope (v1, L215b1):**
+/// - Explicit type annotations only — params with annotated type
+///   (including `ref` / `mut ref` borrow forms) and `let c: Foo = ...`
+///   bindings. Type-inferred bindings (`let c = make_foo()`) require
+///   typechecker integration and are deferred to L215b3.
+/// - Single-file: the caller passes one file's `program_items`. Cross-
+///   file project-mode walk lands in L215b4.
+/// - Writes only — assign / compound-assign cases reuse the existing
+///   `collect_lock_block_writes_in_block`. Mutating method-call wraps
+///   need typecheck-supplied receiver-mode data (`MethodMutClassifier`),
+///   which migrate's parse-only pipeline doesn't have; an empty
+///   classifier is supplied so method-call sites silently no-op.
+///   Read-site rewrites + design.md's `lock self.field { ... }` shape
+///   land in L215b2.
+/// - Shadowing: bindings are name-matched globally inside each function
+///   body. If a function has two bindings with the same name in
+///   disjoint scopes (one of the migrating type, one not), the
+///   non-matching scope's writes would still be wrapped. v1 ignores
+///   this corner — the inner walker's name-only match is the limit.
+///
+/// Returns an empty vec when the struct has no mut fields, when the
+/// struct definition isn't found in `program_items`, or when no
+/// matching binding declarations exist.
+pub(crate) fn build_consumer_rewrite_edits_in_program(
+    type_name: &str,
+    program_items: &[Item],
+) -> Vec<TextEdit> {
+    let mut_fields = collect_mut_field_names(type_name, program_items);
+    if mut_fields.is_empty() {
+        return Vec::new();
+    }
+    // Empty classifier: migrate runs parse-only (no typecheck data is
+    // available), so mutating method-call wraps silently no-op. The
+    // method-call coverage lifts when L215b's full-pipeline integration
+    // lands (tracked under L215b2 in the phase-7 tracker).
+    let empty_callee_types: HashMap<SpanKey, String> = HashMap::new();
+    let empty_self_modes: HashMap<String, SelfParam> = HashMap::new();
+    let classifier = MethodMutClassifier {
+        method_callee_types: &empty_callee_types,
+        method_self_modes: &empty_self_modes,
+    };
+    let par_spans = collect_par_body_spans_in_items(program_items);
+    let mut edits = Vec::new();
+    visit_each_function(program_items, &mut |params, body| {
+        let mut bindings: Vec<String> = Vec::new();
+        for p in params {
+            if let Some(name) = p.name() {
+                if type_expr_is_single_segment_named(&p.ty, type_name) {
+                    bindings.push(name.to_string());
+                }
+            }
+        }
+        collect_typed_bindings_in_block(body, type_name, &mut bindings);
+        for binding_name in &bindings {
+            collect_lock_block_writes_in_block(
+                body,
+                binding_name,
+                &mut_fields,
+                &classifier,
+                &mut edits,
+            );
+        }
+    });
+    // Drop edits inside par bodies — those are the par-conflict
+    // diagnostic's territory (`karac fix` emits the same wrap there).
+    edits.retain(|e| {
+        !par_spans
+            .iter()
+            .any(|(s, en)| *s <= e.offset && e.offset < *en)
+    });
+    edits
+}
+
+fn visit_each_function(items: &[Item], visitor: &mut impl FnMut(&[Param], &Block)) {
+    for it in items {
+        match it {
+            Item::Function(f) => visitor(&f.params, &f.body),
+            Item::ImplBlock(ib) => {
+                for ii in &ib.items {
+                    if let ImplItem::Method(m) = ii {
+                        visitor(&m.params, &m.body);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+fn visit_fn_bodies(items: &[Item], visitor: &mut impl FnMut(&Block)) {
+    visit_each_function(items, &mut |_params, body| visitor(body));
+}
+
+fn collect_typed_bindings_in_block(block: &Block, type_name: &str, out: &mut Vec<String>) {
+    for stmt in &block.stmts {
+        collect_typed_bindings_in_stmt(stmt, type_name, out);
+    }
+    if let Some(e) = &block.final_expr {
+        collect_typed_bindings_in_expr(e, type_name, out);
+    }
+}
+
+fn collect_typed_bindings_in_stmt(stmt: &Stmt, type_name: &str, out: &mut Vec<String>) {
+    match &stmt.kind {
+        StmtKind::Let {
+            pattern,
+            ty: Some(ty),
+            value,
+            ..
+        } => {
+            if let PatternKind::Binding(name) = &pattern.kind {
+                if type_expr_is_single_segment_named(ty, type_name) {
+                    out.push(name.clone());
+                }
+            }
+            collect_typed_bindings_in_expr(value, type_name, out);
+        }
+        StmtKind::Let { value, .. } => {
+            collect_typed_bindings_in_expr(value, type_name, out);
+        }
+        StmtKind::LetUninit { name, ty, .. } => {
+            if type_expr_is_single_segment_named(ty, type_name) {
+                out.push(name.clone());
+            }
+        }
+        StmtKind::LetElse {
+            pattern,
+            ty,
+            value,
+            else_block,
+        } => {
+            if let (PatternKind::Binding(name), Some(t)) = (&pattern.kind, ty) {
+                if type_expr_is_single_segment_named(t, type_name) {
+                    out.push(name.clone());
+                }
+            }
+            collect_typed_bindings_in_expr(value, type_name, out);
+            collect_typed_bindings_in_block(else_block, type_name, out);
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            collect_typed_bindings_in_expr(target, type_name, out);
+            collect_typed_bindings_in_expr(value, type_name, out);
+        }
+        StmtKind::Expr(e) => collect_typed_bindings_in_expr(e, type_name, out),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_typed_bindings_in_block(body, type_name, out);
+        }
+    }
+}
+
+fn collect_typed_bindings_in_expr(expr: &Expr, type_name: &str, out: &mut Vec<String>) {
+    match &expr.kind {
+        ExprKind::Block(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Try(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => collect_typed_bindings_in_block(b, type_name, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_typed_bindings_in_expr(condition, type_name, out);
+            collect_typed_bindings_in_block(then_block, type_name, out);
+            if let Some(eb) = else_branch {
+                collect_typed_bindings_in_expr(eb, type_name, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_typed_bindings_in_expr(condition, type_name, out);
+            collect_typed_bindings_in_block(body, type_name, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_typed_bindings_in_expr(iterable, type_name, out);
+            collect_typed_bindings_in_block(body, type_name, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_typed_bindings_in_expr(scrutinee, type_name, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_typed_bindings_in_expr(g, type_name, out);
+                }
+                collect_typed_bindings_in_expr(&arm.body, type_name, out);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_typed_bindings_in_expr(callee, type_name, out);
+            for a in args {
+                collect_typed_bindings_in_expr(&a.value, type_name, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_typed_bindings_in_expr(object, type_name, out);
+            for a in args {
+                collect_typed_bindings_in_expr(&a.value, type_name, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// True iff `ty` is an unqualified single-segment named type whose
+/// name equals `type_name`. Strips `ref` / `mut ref` borrow modifiers
+/// first so `Counter`, `ref Counter`, and `mut ref Counter` all match
+/// — call-site code that mutates `c.field` through any of those forms
+/// is wrapped uniformly by the migrate path. Does not strip
+/// `mut Slice[T]` (that's a slice value, not a `T` binding).
+fn type_expr_is_single_segment_named(ty: &TypeExpr, type_name: &str) -> bool {
+    match &ty.kind {
+        TypeKind::Path(p) => p.segments.len() == 1 && p.segments[0] == type_name,
+        TypeKind::Ref(inner) | TypeKind::MutRef(inner) => {
+            type_expr_is_single_segment_named(inner, type_name)
+        }
+        _ => false,
+    }
+}
+
+fn collect_par_body_spans_in_items(items: &[Item]) -> Vec<(usize, usize)> {
+    let mut out = Vec::new();
+    visit_fn_bodies(items, &mut |body| {
+        collect_par_body_spans_in_block(body, &mut out);
+    });
+    out
+}
+
+fn collect_par_body_spans_in_block(block: &Block, out: &mut Vec<(usize, usize)>) {
+    for stmt in &block.stmts {
+        collect_par_body_spans_in_stmt(stmt, out);
+    }
+    if let Some(e) = &block.final_expr {
+        collect_par_body_spans_in_expr(e, out);
+    }
+}
+
+fn collect_par_body_spans_in_stmt(stmt: &Stmt, out: &mut Vec<(usize, usize)>) {
+    match &stmt.kind {
+        StmtKind::Let { value, .. } | StmtKind::LetElse { value, .. } => {
+            collect_par_body_spans_in_expr(value, out);
+        }
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            collect_par_body_spans_in_expr(target, out);
+            collect_par_body_spans_in_expr(value, out);
+        }
+        StmtKind::Expr(e) => collect_par_body_spans_in_expr(e, out),
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_par_body_spans_in_block(body, out);
+        }
+        StmtKind::LetUninit { .. } => {}
+    }
+}
+
+fn collect_par_body_spans_in_expr(expr: &Expr, out: &mut Vec<(usize, usize)>) {
+    match &expr.kind {
+        ExprKind::Par(b) => {
+            out.push((b.span.offset, b.span.offset + b.span.length));
+            // No recurse: nested par-in-par would be redundant since
+            // the outer span already covers everything.
+        }
+        ExprKind::Block(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Try(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => collect_par_body_spans_in_block(b, out),
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_par_body_spans_in_expr(condition, out);
+            collect_par_body_spans_in_block(then_block, out);
+            if let Some(eb) = else_branch {
+                collect_par_body_spans_in_expr(eb, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_par_body_spans_in_expr(condition, out);
+            collect_par_body_spans_in_block(body, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_par_body_spans_in_expr(iterable, out);
+            collect_par_body_spans_in_block(body, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_par_body_spans_in_expr(scrutinee, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_par_body_spans_in_expr(g, out);
+                }
+                collect_par_body_spans_in_expr(&arm.body, out);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_par_body_spans_in_expr(callee, out);
+            for a in args {
+                collect_par_body_spans_in_expr(&a.value, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_par_body_spans_in_expr(object, out);
+            for a in args {
+                collect_par_body_spans_in_expr(&a.value, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Lock-block wrap edits for writes to `binding_name.<mut_field>`
 /// occurring textually inside `par_body`. Phase-7 L201b shipped the
 /// `Assign` / `CompoundAssign` cases; **L205** extends the walker to
