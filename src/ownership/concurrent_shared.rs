@@ -32,8 +32,13 @@
 //! - Direct binding-name references within branch statements count.
 //! - Field-access (`s.field`) and method-call (`s.method(...)`)
 //!   receivers count via the inner Identifier walk.
-//! - Closure captures and `spawn(...)` boundaries fall outside the v1
-//!   detection — sibling follow-up.
+//! - Closure captures count via `closure_bindings` expansion (mirrors
+//!   the round-12.34 mechanism in `par_helpers.rs`): a `let f = ||
+//!   use(c);` registration plus a sibling-branch `spawn(f)` counts as
+//!   a branch-use of `c`. Inline `spawn(|| use(c))` closures count via
+//!   `OwnershipChecker.closure_captures` lookup at the closure's span.
+//! - `spawn(...)` boundaries beyond a `par {}` block fall outside the
+//!   v1 detection — sibling follow-up.
 
 use std::collections::{HashMap, HashSet};
 
@@ -41,9 +46,11 @@ use crate::ast::*;
 use crate::resolver::{SpanKey, TextEdit};
 use crate::token::Span;
 
-use super::{OwnershipError, OwnershipErrorKind};
+use super::{OwnershipError, OwnershipErrorKind, OwnershipMode};
 
 type BindingTypeMap = HashMap<SpanKey, String>;
+type ClosureCaptures = HashMap<SpanKey, Vec<(String, OwnershipMode)>>;
+type ClosureBindings = HashMap<String, Vec<String>>;
 
 /// Discriminator carried alongside each tracked binding so one walk
 /// catches both diagnostic flavors without two parallel maps.
@@ -71,15 +78,20 @@ impl<'a> super::OwnershipChecker<'a> {
         let items: Vec<Item> = self.program.items.clone();
         let mut errors: Vec<OwnershipError> = Vec::new();
         let mut fix_diffs: HashMap<SpanKey, Vec<TextEdit>> = HashMap::new();
+        let closure_captures = &self.closure_captures;
         for item in &items {
             match item {
                 Item::Function(f) => {
                     let tracked = self.collect_tracked_bindings(&f.params, &f.body);
                     if !tracked.is_empty() {
-                        Self::scan_block_for_par_conflicts(
+                        let mut closure_bindings = ClosureBindings::new();
+                        build_closure_bindings(&f.body, closure_captures, &mut closure_bindings);
+                        scan_block_for_par_conflicts(
                             &f.body,
                             &tracked,
                             &items,
+                            closure_captures,
+                            &closure_bindings,
                             &mut errors,
                             &mut fix_diffs,
                         );
@@ -90,10 +102,18 @@ impl<'a> super::OwnershipChecker<'a> {
                         if let ImplItem::Method(m) = it {
                             let tracked = self.collect_tracked_bindings(&m.params, &m.body);
                             if !tracked.is_empty() {
-                                Self::scan_block_for_par_conflicts(
+                                let mut closure_bindings = ClosureBindings::new();
+                                build_closure_bindings(
+                                    &m.body,
+                                    closure_captures,
+                                    &mut closure_bindings,
+                                );
+                                scan_block_for_par_conflicts(
                                     &m.body,
                                     &tracked,
                                     &items,
+                                    closure_captures,
+                                    &closure_bindings,
                                     &mut errors,
                                     &mut fix_diffs,
                                 );
@@ -162,23 +182,41 @@ impl<'a> super::OwnershipChecker<'a> {
         }
         None
     }
+}
 
-    /// Scan `body` for `ExprKind::Par` blocks; for each, walk every
-    /// top-level statement (branch) collecting referenced names, and
-    /// emit one diagnostic per binding present in more than one branch.
-    fn scan_block_for_par_conflicts(
-        block: &Block,
-        tracked: &HashMap<String, TrackedBinding>,
-        program_items: &[Item],
-        errors: &mut Vec<OwnershipError>,
-        fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
-    ) {
-        for stmt in &block.stmts {
-            scan_stmt_for_par_conflicts(stmt, tracked, program_items, errors, fix_diffs);
-        }
-        if let Some(e) = &block.final_expr {
-            scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
-        }
+/// Scan `body` for `ExprKind::Par` blocks; for each, walk every
+/// top-level statement (branch) collecting referenced names, and
+/// emit one diagnostic per binding present in more than one branch.
+fn scan_block_for_par_conflicts(
+    block: &Block,
+    tracked: &HashMap<String, TrackedBinding>,
+    program_items: &[Item],
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
+    errors: &mut Vec<OwnershipError>,
+    fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
+) {
+    for stmt in &block.stmts {
+        scan_stmt_for_par_conflicts(
+            stmt,
+            tracked,
+            program_items,
+            closure_captures,
+            closure_bindings,
+            errors,
+            fix_diffs,
+        );
+    }
+    if let Some(e) = &block.final_expr {
+        scan_expr_for_par_conflicts(
+            e,
+            tracked,
+            program_items,
+            closure_captures,
+            closure_bindings,
+            errors,
+            fix_diffs,
+        );
     }
 }
 
@@ -360,43 +398,133 @@ fn scan_stmt_for_par_conflicts(
     stmt: &Stmt,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
     match &stmt.kind {
         StmtKind::Let { value, .. } => {
-            scan_expr_for_par_conflicts(value, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                value,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            scan_expr_for_par_conflicts(value, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                value,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for s in &else_block.stmts {
-                scan_stmt_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &else_block.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         StmtKind::LetUninit { .. } => {}
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
             for s in &body.stmts {
-                scan_stmt_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &body.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         StmtKind::Assign { target, value } => {
-            scan_expr_for_par_conflicts(target, tracked, program_items, errors, fix_diffs);
-            scan_expr_for_par_conflicts(value, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                target,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
+            scan_expr_for_par_conflicts(
+                value,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            scan_expr_for_par_conflicts(target, tracked, program_items, errors, fix_diffs);
-            scan_expr_for_par_conflicts(value, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                target,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
+            scan_expr_for_par_conflicts(
+                value,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         StmtKind::Expr(e) => {
-            scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                e,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
     }
 }
@@ -405,17 +533,43 @@ fn scan_expr_for_par_conflicts(
     expr: &Expr,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
     match &expr.kind {
         ExprKind::Par(par_body) => {
-            detect_par_block_conflicts(par_body, tracked, program_items, errors, fix_diffs);
+            detect_par_block_conflicts(
+                par_body,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for stmt in &par_body.stmts {
-                scan_stmt_for_par_conflicts(stmt, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    stmt,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &par_body.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Block(b)
@@ -426,10 +580,26 @@ fn scan_expr_for_par_conflicts(
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
             for stmt in &b.stmts {
-                scan_stmt_for_par_conflicts(stmt, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    stmt,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &b.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::If {
@@ -437,96 +607,328 @@ fn scan_expr_for_par_conflicts(
             then_block,
             else_branch,
         } => {
-            scan_expr_for_par_conflicts(condition, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                condition,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for s in &then_block.stmts {
-                scan_stmt_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &then_block.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(else_b) = else_branch {
-                scan_expr_for_par_conflicts(else_b, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    else_b,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            scan_expr_for_par_conflicts(condition, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                condition,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for s in &body.stmts {
-                scan_stmt_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &body.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::For { iterable, body, .. } => {
-            scan_expr_for_par_conflicts(iterable, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                iterable,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for s in &body.stmts {
-                scan_stmt_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_stmt_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = &body.final_expr {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            scan_expr_for_par_conflicts(scrutinee, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                scrutinee,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    scan_expr_for_par_conflicts(g, tracked, program_items, errors, fix_diffs);
+                    scan_expr_for_par_conflicts(
+                        g,
+                        tracked,
+                        program_items,
+                        closure_captures,
+                        closure_bindings,
+                        errors,
+                        fix_diffs,
+                    );
                 }
-                scan_expr_for_par_conflicts(&arm.body, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    &arm.body,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Call { callee, args } => {
-            scan_expr_for_par_conflicts(callee, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                callee,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for a in args {
-                scan_expr_for_par_conflicts(&a.value, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    &a.value,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            scan_expr_for_par_conflicts(object, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                object,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
             for a in args {
-                scan_expr_for_par_conflicts(&a.value, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    &a.value,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::FieldAccess { object, .. } => {
-            scan_expr_for_par_conflicts(object, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                object,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         ExprKind::Index { object, index } => {
-            scan_expr_for_par_conflicts(object, tracked, program_items, errors, fix_diffs);
-            scan_expr_for_par_conflicts(index, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                object,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
+            scan_expr_for_par_conflicts(
+                index,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         ExprKind::Binary { left, right, .. } => {
-            scan_expr_for_par_conflicts(left, tracked, program_items, errors, fix_diffs);
-            scan_expr_for_par_conflicts(right, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                left,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
+            scan_expr_for_par_conflicts(
+                right,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         ExprKind::Unary { operand, .. } => {
-            scan_expr_for_par_conflicts(operand, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                operand,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         ExprKind::Tuple(items) => {
             for e in items {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Return(inner) => {
             if let Some(e) = inner.as_deref() {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(e) = value.as_deref() {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         ExprKind::Cast { expr, .. } => {
-            scan_expr_for_par_conflicts(expr, tracked, program_items, errors, fix_diffs);
+            scan_expr_for_par_conflicts(
+                expr,
+                tracked,
+                program_items,
+                closure_captures,
+                closure_bindings,
+                errors,
+                fix_diffs,
+            );
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start.as_deref() {
-                scan_expr_for_par_conflicts(s, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    s,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
             if let Some(e) = end.as_deref() {
-                scan_expr_for_par_conflicts(e, tracked, program_items, errors, fix_diffs);
+                scan_expr_for_par_conflicts(
+                    e,
+                    tracked,
+                    program_items,
+                    closure_captures,
+                    closure_bindings,
+                    errors,
+                    fix_diffs,
+                );
             }
         }
         _ => {}
@@ -542,6 +944,8 @@ fn detect_par_block_conflicts(
     par_body: &Block,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
@@ -550,7 +954,13 @@ fn detect_par_block_conflicts(
 
     for (branch_idx, stmt) in par_body.stmts.iter().enumerate() {
         let mut uses: HashMap<String, Span> = HashMap::new();
-        collect_identifier_uses_in_stmt(stmt, tracked, &mut uses);
+        collect_identifier_uses_in_stmt(
+            stmt,
+            tracked,
+            closure_captures,
+            closure_bindings,
+            &mut uses,
+        );
         for (name, use_span) in uses {
             if reported.contains(&name) {
                 continue;
@@ -668,42 +1078,104 @@ fn build_fix_diff_edits(type_name: &str, program_items: &[Item]) -> Vec<TextEdit
 fn collect_identifier_uses_in_stmt(
     stmt: &Stmt,
     tracked: &HashMap<String, TrackedBinding>,
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
     out: &mut HashMap<String, Span>,
 ) {
     match &stmt.kind {
         StmtKind::Let { value, .. } => {
-            collect_identifier_uses_in_expr(value, tracked, out);
+            collect_identifier_uses_in_expr(
+                value,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            collect_identifier_uses_in_expr(value, tracked, out);
+            collect_identifier_uses_in_expr(
+                value,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for s in &else_block.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &else_block.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         StmtKind::LetUninit { .. } => {}
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
             for s in &body.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &body.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         StmtKind::Assign { target, value } => {
-            collect_identifier_uses_in_expr(target, tracked, out);
-            collect_identifier_uses_in_expr(value, tracked, out);
+            collect_identifier_uses_in_expr(
+                target,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
+            collect_identifier_uses_in_expr(
+                value,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         StmtKind::CompoundAssign { target, value, .. } => {
-            collect_identifier_uses_in_expr(target, tracked, out);
-            collect_identifier_uses_in_expr(value, tracked, out);
+            collect_identifier_uses_in_expr(
+                target,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
+            collect_identifier_uses_in_expr(
+                value,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         StmtKind::Expr(e) => {
-            collect_identifier_uses_in_expr(e, tracked, out);
+            collect_identifier_uses_in_expr(e, tracked, closure_captures, closure_bindings, out);
         }
     }
 }
@@ -711,11 +1183,64 @@ fn collect_identifier_uses_in_stmt(
 fn collect_identifier_uses_in_expr(
     expr: &Expr,
     tracked: &HashMap<String, TrackedBinding>,
+    closure_captures: &ClosureCaptures,
+    closure_bindings: &ClosureBindings,
     out: &mut HashMap<String, Span>,
 ) {
     match &expr.kind {
-        ExprKind::Identifier(name) if tracked.contains_key(name) => {
-            out.entry(name.clone()).or_insert_with(|| expr.span.clone());
+        ExprKind::Identifier(name) => {
+            // Direct tracked-binding reference.
+            if tracked.contains_key(name) {
+                out.entry(name.clone()).or_insert_with(|| expr.span.clone());
+            }
+            // Indirect reference via a let-bound closure that captures
+            // tracked bindings — `let f = || use(c);` followed by a
+            // sibling-branch `Identifier(f)` counts as a branch-use of
+            // `c`. Mirrors `par_helpers.rs::scan_expr_for_par_uses`'s
+            // round-12.34 closure_bindings propagation so closure-
+            // dispatched flows of a shared/plain struct don't slip past
+            // the per-branch identifier walk.
+            for cap in expand_through_closure_bindings(name, closure_bindings) {
+                if tracked.contains_key(&cap) {
+                    out.entry(cap).or_insert_with(|| expr.span.clone());
+                }
+            }
+        }
+        ExprKind::Closure { body, .. } => {
+            // Inline closure form — `spawn(|| use(c))`. The closure's
+            // captures (resolved by the OwnershipChecker's capture-
+            // inference pass and stored in `closure_captures` keyed by
+            // the closure expression's span) are the explicit set of
+            // outer names the body references; each captured name that
+            // resolves to a tracked binding (directly or transitively
+            // via another closure binding) counts as a branch-use of
+            // that name, recorded at the closure expression's span.
+            let key = SpanKey::from_span(&expr.span);
+            if let Some(captures) = closure_captures.get(&key) {
+                for (cap_name, _) in captures {
+                    if tracked.contains_key(cap_name) {
+                        out.entry(cap_name.clone())
+                            .or_insert_with(|| expr.span.clone());
+                    }
+                    for chained in expand_through_closure_bindings(cap_name, closure_bindings) {
+                        if tracked.contains_key(&chained) {
+                            out.entry(chained).or_insert_with(|| expr.span.clone());
+                        }
+                    }
+                }
+            }
+            // Closure bodies are NOT recursively walked here — the
+            // `closure_captures` map is the authoritative set of outer
+            // names the body references (filtered through the body's
+            // own bindings and shadowing). Walking the body textually
+            // would risk double-counting locals or shadowed names.
+            // The body's effects on outer state are already reflected
+            // in the captures list. Nested par-blocks inside closure
+            // bodies are likewise not detected here at v1; if a future
+            // workload surfaces them, the fix is to recurse via
+            // `scan_block_for_par_conflicts` over the closure body
+            // rather than through this identifier walker.
+            let _ = body;
         }
         ExprKind::Block(b)
         | ExprKind::Par(b)
@@ -726,10 +1251,22 @@ fn collect_identifier_uses_in_expr(
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
             for s in &b.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &b.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::If {
@@ -737,96 +1274,405 @@ fn collect_identifier_uses_in_expr(
             then_block,
             else_branch,
         } => {
-            collect_identifier_uses_in_expr(condition, tracked, out);
+            collect_identifier_uses_in_expr(
+                condition,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for s in &then_block.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &then_block.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(eb) = else_branch {
-                collect_identifier_uses_in_expr(eb, tracked, out);
+                collect_identifier_uses_in_expr(
+                    eb,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_identifier_uses_in_expr(condition, tracked, out);
+            collect_identifier_uses_in_expr(
+                condition,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for s in &body.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &body.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::For { iterable, body, .. } => {
-            collect_identifier_uses_in_expr(iterable, tracked, out);
+            collect_identifier_uses_in_expr(
+                iterable,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for s in &body.stmts {
-                collect_identifier_uses_in_stmt(s, tracked, out);
+                collect_identifier_uses_in_stmt(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = &body.final_expr {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::Match { scrutinee, arms } => {
-            collect_identifier_uses_in_expr(scrutinee, tracked, out);
+            collect_identifier_uses_in_expr(
+                scrutinee,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    collect_identifier_uses_in_expr(g, tracked, out);
+                    collect_identifier_uses_in_expr(
+                        g,
+                        tracked,
+                        closure_captures,
+                        closure_bindings,
+                        out,
+                    );
                 }
-                collect_identifier_uses_in_expr(&arm.body, tracked, out);
+                collect_identifier_uses_in_expr(
+                    &arm.body,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::Call { callee, args } => {
-            collect_identifier_uses_in_expr(callee, tracked, out);
+            collect_identifier_uses_in_expr(
+                callee,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for a in args {
-                collect_identifier_uses_in_expr(&a.value, tracked, out);
+                collect_identifier_uses_in_expr(
+                    &a.value,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            collect_identifier_uses_in_expr(object, tracked, out);
+            collect_identifier_uses_in_expr(
+                object,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
             for a in args {
-                collect_identifier_uses_in_expr(&a.value, tracked, out);
+                collect_identifier_uses_in_expr(
+                    &a.value,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::FieldAccess { object, .. } => {
-            collect_identifier_uses_in_expr(object, tracked, out);
+            collect_identifier_uses_in_expr(
+                object,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         ExprKind::Index { object, index } => {
-            collect_identifier_uses_in_expr(object, tracked, out);
-            collect_identifier_uses_in_expr(index, tracked, out);
+            collect_identifier_uses_in_expr(
+                object,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
+            collect_identifier_uses_in_expr(
+                index,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         ExprKind::Binary { left, right, .. } => {
-            collect_identifier_uses_in_expr(left, tracked, out);
-            collect_identifier_uses_in_expr(right, tracked, out);
+            collect_identifier_uses_in_expr(left, tracked, closure_captures, closure_bindings, out);
+            collect_identifier_uses_in_expr(
+                right,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         ExprKind::Unary { operand, .. } => {
-            collect_identifier_uses_in_expr(operand, tracked, out);
+            collect_identifier_uses_in_expr(
+                operand,
+                tracked,
+                closure_captures,
+                closure_bindings,
+                out,
+            );
         }
         ExprKind::Tuple(items) => {
             for e in items {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::Return(inner) => {
             if let Some(e) = inner.as_deref() {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(e) = value.as_deref() {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
         }
         ExprKind::Cast { expr, .. } => {
-            collect_identifier_uses_in_expr(expr, tracked, out);
+            collect_identifier_uses_in_expr(expr, tracked, closure_captures, closure_bindings, out);
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start.as_deref() {
-                collect_identifier_uses_in_expr(s, tracked, out);
+                collect_identifier_uses_in_expr(
+                    s,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
             }
             if let Some(e) = end.as_deref() {
-                collect_identifier_uses_in_expr(e, tracked, out);
+                collect_identifier_uses_in_expr(
+                    e,
+                    tracked,
+                    closure_captures,
+                    closure_bindings,
+                    out,
+                );
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Expand `name` through `closure_bindings` and return every closure-
+/// captured name reachable from it (excluding `name` itself). Cycle-
+/// safe via the visited set — guards against pathological self-capture
+/// shapes the parser can't produce today but the data structure
+/// permits. The returned set never contains `name` itself; the caller
+/// is responsible for recording the direct hit when applicable.
+fn expand_through_closure_bindings(name: &str, closure_bindings: &ClosureBindings) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(name.to_string());
+    let mut stack: Vec<String> = vec![name.to_string()];
+    while let Some(n) = stack.pop() {
+        if let Some(captures) = closure_bindings.get(&n) {
+            for c in captures {
+                if seen.insert(c.clone()) {
+                    out.push(c.clone());
+                    stack.push(c.clone());
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Forward-walk every `let pat = closure_expr;` form in `body` and
+/// register each pattern binding name in `out` mapping to the closure's
+/// inferred capture list. Mirrors `par_helpers.rs`'s round-12.34 Step
+/// 6 mechanism so a sibling-branch `Identifier(f)` use of a let-bound
+/// closure can transitively count as a use of each captured tracked
+/// binding. Single forward pass is sufficient because closure bindings
+/// must be declared before they are referenced in source order.
+fn build_closure_bindings(
+    body: &Block,
+    closure_captures: &ClosureCaptures,
+    out: &mut ClosureBindings,
+) {
+    for stmt in &body.stmts {
+        build_closure_bindings_stmt(stmt, closure_captures, out);
+    }
+    if let Some(e) = &body.final_expr {
+        build_closure_bindings_expr(e, closure_captures, out);
+    }
+}
+
+fn build_closure_bindings_stmt(
+    stmt: &Stmt,
+    closure_captures: &ClosureCaptures,
+    out: &mut ClosureBindings,
+) {
+    match &stmt.kind {
+        StmtKind::Let { pattern, value, .. } => {
+            if matches!(value.kind, ExprKind::Closure { .. }) {
+                if let Some(captures) = closure_captures.get(&SpanKey::from_span(&value.span)) {
+                    let names: Vec<String> = captures.iter().map(|(n, _)| n.clone()).collect();
+                    for binding in pattern.binding_names() {
+                        out.insert(binding, names.clone());
+                    }
+                }
+            }
+            build_closure_bindings_expr(value, closure_captures, out);
+        }
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            build_closure_bindings_expr(value, closure_captures, out);
+            build_closure_bindings(else_block, closure_captures, out);
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            build_closure_bindings(body, closure_captures, out);
+        }
+        StmtKind::Assign { target, value } => {
+            build_closure_bindings_expr(target, closure_captures, out);
+            build_closure_bindings_expr(value, closure_captures, out);
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            build_closure_bindings_expr(target, closure_captures, out);
+            build_closure_bindings_expr(value, closure_captures, out);
+        }
+        StmtKind::Expr(e) => {
+            build_closure_bindings_expr(e, closure_captures, out);
+        }
+    }
+}
+
+fn build_closure_bindings_expr(
+    expr: &Expr,
+    closure_captures: &ClosureCaptures,
+    out: &mut ClosureBindings,
+) {
+    match &expr.kind {
+        ExprKind::Block(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Try(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => {
+            build_closure_bindings(b, closure_captures, out);
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            build_closure_bindings_expr(condition, closure_captures, out);
+            build_closure_bindings(then_block, closure_captures, out);
+            if let Some(eb) = else_branch {
+                build_closure_bindings_expr(eb, closure_captures, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            build_closure_bindings_expr(condition, closure_captures, out);
+            build_closure_bindings(body, closure_captures, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            build_closure_bindings_expr(iterable, closure_captures, out);
+            build_closure_bindings(body, closure_captures, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            build_closure_bindings_expr(scrutinee, closure_captures, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    build_closure_bindings_expr(g, closure_captures, out);
+                }
+                build_closure_bindings_expr(&arm.body, closure_captures, out);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            build_closure_bindings_expr(callee, closure_captures, out);
+            for a in args {
+                build_closure_bindings_expr(&a.value, closure_captures, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            build_closure_bindings_expr(object, closure_captures, out);
+            for a in args {
+                build_closure_bindings_expr(&a.value, closure_captures, out);
             }
         }
         _ => {}

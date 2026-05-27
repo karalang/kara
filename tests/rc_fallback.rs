@@ -1091,13 +1091,22 @@ fn step6_closure_created_inside_par_still_promotes_capture() {
     // INSIDE the par walk, and `h()` reaches the Identifier arm with
     // inside_par=true, so cfg promotes via either route. The two routes
     // converge on the same verdict.
+    //
+    // Two stmts (`let h = ...;` and `h();`) collapsed into ONE branch
+    // via a block expression after L203 (closure-captured shared
+    // bindings, 2026-05-26): the bare two-stmt form put `cfg` in two
+    // branches (branch 0 captures via the closure literal, branch 1
+    // expands through closure_bindings via `Identifier(h)`), which the
+    // L203 detector correctly flags as a data race. The block-
+    // expression form preserves this test's intent (Arc promotion of a
+    // par-internal closure capture via round-12.34's step 6 walker)
+    // without the unrelated branch-count race.
     let src = "struct Config { name: i64 }\n\
                fn apply(c: Config) { }\n\
                fn log(c: Config) { }\n\
                fn make_handler(cfg: Config) {\n\
                    par {\n\
-                       let h = || apply(cfg);\n\
-                       h();\n\
+                       { let h = || apply(cfg); h(); }\n\
                    }\n\
                    log(cfg);\n\
                }";

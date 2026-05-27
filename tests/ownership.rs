@@ -6289,3 +6289,145 @@ fn test_concurrent_struct_fix_diff_empty_when_no_mut_fields() {
         "no mut fields → no fix_diff edits"
     );
 }
+
+// ── L203: closure-captured shared bindings ──────────────────────
+//
+// The v1 detector only counted direct source-level references to the
+// shared/plain binding inside each branch. Closures dispatched into
+// sibling branches that capture the binding indirectly slipped past.
+// L203 mirrors `par_helpers.rs`'s round-12.34 closure_bindings
+// expansion into the concurrent_shared detector: a let-bound closure
+// `let f = || use(c);` followed by a sibling-branch `Identifier(f)`
+// counts as a branch-use of `c`, and an inline closure
+// `spawn(|| use(c))` counts via `closure_captures` lookup at the
+// closure's span. Both flavors fire the right diagnostic kind
+// (shared → SharedStruct, plain → PlainStruct).
+
+#[test]
+fn test_concurrent_shared_struct_fires_via_let_bound_closure() {
+    // Two let-bound closures, each capturing `c`, dispatched into
+    // sibling branches via `spawn(f)` / `spawn(g)`. Neither
+    // `spawn(f)` nor `spawn(g)` lexically contains `c` — the v1
+    // detector saw zero branch-uses. L203 expands the Identifier(f)
+    // use through the closure_bindings table to record `c` as a
+    // branch-use, and likewise for Identifier(g) in the sibling
+    // branch.
+    let errors = ownership_errors(
+        "shared struct Counter { val: i64 }\n\
+         fn spawn(c: Fn() -> ()) { }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             let f = || use_a(c);\n\
+             let g = || use_b(c);\n\
+             par {\n\
+                 spawn(f);\n\
+                 spawn(g);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { type_name, binding }
+                if type_name == "Counter" && binding == "c"
+        )),
+        "let-bound closures capturing `c` across two par branches should fire E_CONCURRENT_SHARED_STRUCT; got errors: {errors:?}",
+    );
+}
+
+#[test]
+fn test_concurrent_shared_struct_fires_via_inline_closure() {
+    // Inline-closure form — `spawn(|| use(c))` in each branch. The
+    // closure expression itself is the argument; no let-binding is
+    // ever introduced. L203 looks up `closure_captures` at the
+    // closure's span and records each captured tracked binding as a
+    // branch-use at the closure expression's span.
+    let errors = ownership_errors(
+        "shared struct Counter { val: i64 }\n\
+         fn spawn(c: Fn() -> ()) { }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 spawn(|| use_a(c));\n\
+                 spawn(|| use_b(c));\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentSharedStruct { type_name, binding }
+                if type_name == "Counter" && binding == "c"
+        )),
+        "inline-closure captures of `c` across two par branches should fire E_CONCURRENT_SHARED_STRUCT; got errors: {errors:?}",
+    );
+}
+
+#[test]
+fn test_concurrent_shared_struct_silent_when_only_one_branch_closure_captures() {
+    // Sole-branch closure capture stays silent — the accept side of
+    // the rule still holds for closure-mediated uses. Exercises the
+    // closure_bindings expansion path: `f` is bound outside the par
+    // block and invoked in exactly one branch, which expands through
+    // closure_bindings[f] = [c] to record `c` as a branch-0 use; the
+    // sibling branch is closure-free. Local invocation `f()` avoids
+    // the closure-escape diagnostic that fires when a closure is
+    // passed through `spawn(...)`.
+    let result = ownership_ok(
+        "shared struct Counter { val: i64 }\n\
+         fn use_a(c: ref Counter) { }\n\
+         fn other_work(n: i64) -> i64 { n + 1 }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             let f = || use_a(c);\n\
+             par {\n\
+                 f();\n\
+                 other_work(7);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. })),
+        "sole-branch closure capture of `c` must not fire E_CONCURRENT_SHARED_STRUCT; got errors: {:?}",
+        result.errors,
+    );
+}
+
+#[test]
+fn test_concurrent_plain_struct_fires_via_inline_closure() {
+    // Sibling case for the plain (non-shared) struct kind — same
+    // closure-capture mechanism, different diagnostic flavor. Pins
+    // that the BindingKind discriminator routes inline-closure-
+    // captured plain structs to E_CONCURRENT_PLAIN_STRUCT. Both
+    // call-sites use `ref Counter` so the captures land as Ref mode
+    // (plain `Counter` would consume `c` on first closure → second
+    // closure use-after-move masks the concurrent-shared signal).
+    let errors = ownership_errors(
+        "struct Counter { val: i64 }\n\
+         fn spawn(c: Fn() -> ()) { }\n\
+         fn use_a(c: ref Counter) { }\n\
+         fn use_b(c: ref Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 spawn(|| use_a(c));\n\
+                 spawn(|| use_b(c));\n\
+             }\n\
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            &e.kind,
+            OwnershipErrorKind::ConcurrentPlainStruct { type_name, binding }
+                if type_name == "Counter" && binding == "c"
+        )),
+        "inline-closure captures of plain `c` across two par branches should fire E_CONCURRENT_PLAIN_STRUCT; got errors: {errors:?}",
+    );
+}
