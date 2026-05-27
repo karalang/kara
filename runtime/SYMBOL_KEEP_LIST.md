@@ -74,7 +74,7 @@ verify none gets stripped.
 | `karac_runtime_has_debug_metadata` | `extern "C" fn() -> bool` | True iff codegen emitted a non-default `KARAC_SPAWN_SITES` table; queries the linked-in static. |
 | `karac_runtime_list_par_blocks_into` | `unsafe extern "C" fn(out: *mut KaracVec)` | Read the spawn-site table into a `Vec<KaracSpawnSiteEntry>` for tooling. |
 | `karac_runtime_json_parse` / `karac_runtime_json_stringify` / `karac_runtime_json_free_value` / `karac_runtime_json_free_string` | JSON FFI | Slice F's `std.json` backing impl. Drag the `serde_json` subgraph into the link only if a Kāra program imports `std.json` — Phase 2 DCE strips them otherwise. |
-| `karac_runtime_http_response_set_body` / `_set_status` / `karac_runtime_http_request_path` / `_request_method` | HTTP FFI getters/setters | Slice B's `std.http` request/response accessors. |
+| `karac_runtime_http_response_set_body` / `_set_status` / `karac_runtime_http_request_path` / `_request_method` / `_request_body_ptr` / `_request_body_len` / `_request_header` | HTTP FFI getters/setters | Slice B's `std.http` request/response accessors. |
 | `karac_runtime_serve_http` / `karac_runtime_serve_http_static` | HTTP FFI server | Slice B's `Server.serve` / `Server.serve_static`. Roots the tokio + hyper + h2 subgraph; Phase 2 DCE strips the entire subgraph when no Kāra program imports `std.http`. |
 | `karac_vec_sort_by` | `unsafe extern "C" fn(data: *mut u8, len: i64, elem_size: i64, cmp: extern "C" fn(*mut u8, *const u8, *const u8) -> i64, ctx: *mut u8)` | `Vec.sort_by` backing impl. 8-byte and 16-byte element fast paths inline-monomorphize via `slice::sort_by`; fallback path is index-sort + permute. |
 

@@ -117,6 +117,23 @@ impl<'a> super::Interpreter<'a> {
                             data: EnumData::Unit,
                         });
                     }
+                    // Request side mirrors the path/method/body convention:
+                    // the interpreter doesn't run a real HTTP server, so
+                    // there's no header map to inspect. Always return
+                    // `None`; what the test pins is the *shape* (Option
+                    // payload, owned String on Some) and that the method
+                    // dispatches at all. Real header lookup happens through
+                    // the codegen path via `karac_runtime_http_request_header`.
+                    if name == "Request" {
+                        // Eagerly evaluate the name arg so any side effects
+                        // (or type-checker pinning) still fire.
+                        let _ = args.first().map(|a| self.eval_expr_inner(&a.value));
+                        return Some(Value::EnumVariant {
+                            enum_name: "Option".to_string(),
+                            variant: "None".to_string(),
+                            data: EnumData::Unit,
+                        });
+                    }
                 }
             }
             "message" => {

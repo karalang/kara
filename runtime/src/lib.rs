@@ -2617,6 +2617,71 @@ pub unsafe extern "C" fn karac_runtime_http_request_body_len(
     (*request).body_len
 }
 
+/// Look up a header value by name (case-insensitive per RFC 7230 §
+/// 3.2). Returns a pointer to the value's null-terminated UTF-8 bytes
+/// if a matching header exists, or null if no header with the given
+/// name is present. The returned pointer is owned by the runtime for
+/// the duration of the handler call; caller must not free.
+///
+/// The lookup walks `headers_keys` linearly — hyper preserves request-
+/// order, and v1's typical handler reads at most a handful of headers
+/// per request, so the simpler linear scan beats a per-request HashMap
+/// build (which would amortize only past ~16 lookups). If a v1.x
+/// workload pushes that envelope, the hot path can switch to a
+/// `HeaderMap` view without breaking this FFI's contract.
+///
+/// An explicitly-empty header value (rare but legal — e.g.
+/// `X-Trace-Id:`) returns a pointer to a zero-length C string, not
+/// null. Null is reserved for "header not found." This lets the
+/// Kāra-side `Request.header(name)` distinguish `Some("")` from
+/// `None` without a second FFI call.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path. `name_ptr` must point at
+/// `name_len` initialized UTF-8 bytes (or be null with `name_len ==
+/// 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_header(
+    request: *const KaracHttpRequest,
+    name_ptr: *const u8,
+    name_len: usize,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    let req = &*request;
+    if req.headers_keys.is_null() || req.headers_vals.is_null() || req.headers_len == 0 {
+        return std::ptr::null();
+    }
+    let name_bytes: &[u8] = if name_ptr.is_null() || name_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(name_ptr, name_len)
+    };
+    let name_str = match std::str::from_utf8(name_bytes) {
+        Ok(s) => s,
+        Err(_) => return std::ptr::null(),
+    };
+
+    let keys = std::slice::from_raw_parts(req.headers_keys, req.headers_len);
+    let vals = std::slice::from_raw_parts(req.headers_vals, req.headers_len);
+    for (idx, key_ptr) in keys.iter().enumerate() {
+        if key_ptr.is_null() {
+            continue;
+        }
+        let key_cstr = std::ffi::CStr::from_ptr(*key_ptr);
+        let Ok(key_str) = key_cstr.to_str() else {
+            continue;
+        };
+        if key_str.eq_ignore_ascii_case(name_str) {
+            return vals[idx];
+        }
+    }
+    std::ptr::null()
+}
+
 /// Parse a UTF-8 byte slice as a base-10 signed 64-bit integer.
 /// Returns `1` on success (with the parsed value written through
 /// `out`) or `0` on failure. Trims leading/trailing whitespace

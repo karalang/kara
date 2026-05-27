@@ -1379,6 +1379,20 @@ impl<'ctx> Codegen<'ctx> {
             request_body_len_type,
             Some(Linkage::External),
         );
+        // `karac_runtime_http_request_header(*const KaracHttpRequest,
+        //  *const u8, usize) -> *const c_char` — case-insensitive header
+        // lookup. Returns null on miss; on hit, returns a runtime-owned
+        // null-terminated UTF-8 pointer (valid for the duration of the
+        // handler call). `Request.header(name)` copies the bytes into a
+        // fresh Kāra String per call so the resulting `Option[String]`
+        // outlives the request struct.
+        let request_header_type =
+            ptr_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        let _karac_runtime_http_request_header_fn = module.add_function(
+            "karac_runtime_http_request_header",
+            request_header_type,
+            Some(Linkage::External),
+        );
         // `karac_runtime_parse_i64(data: *const u8, len: usize, out: *mut i64) -> u8`.
         // Returns 1 on success (with the parsed value at `*out`), 0 on
         // failure. Backs `i64.parse(s: String) -> Option[i64]` and the

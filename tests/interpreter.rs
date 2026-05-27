@@ -7326,6 +7326,26 @@ fn main() {
     assert_eq!(output, "0\n0\n0\n");
 }
 
+/// `Request.header(name)` interpreter shape: returns `Option[String]`,
+/// with the interpreter (no real HTTP server) always falling through
+/// to `None`. Pins: the method dispatches at all, the args slot
+/// accepts a `String`, and the result pattern-matches as `Option`.
+/// Real header lookup happens through the codegen path —
+/// `tests/http_server.rs::test_server_serve_handler_reads_header`.
+#[test]
+fn test_server_serve_handler_request_header_returns_none() {
+    let output = run(r#"
+fn main() {
+    let req = Request { };
+    match req.header("content-type") {
+        Some(v) => println(v),
+        None => println("none"),
+    }
+}
+"#);
+    assert_eq!(output, "none\n");
+}
+
 #[test]
 fn test_for_in_vec_string_calls_len_interp() {
     // Interpreter parity for List 2 / item 3 (codegen for-loop element-type

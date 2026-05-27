@@ -9441,6 +9441,11 @@ fn test_http_response_header_ok() {
 }
 
 #[test]
+fn test_http_request_header_ok() {
+    typecheck_ok(r#"fn f(r: Request) -> Option[String] { r.header("content-type") }"#);
+}
+
+#[test]
 fn test_http_error_message_ok() {
     typecheck_ok(r#"fn f(e: HttpError) -> String { e.message() }"#);
 }

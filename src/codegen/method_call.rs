@@ -751,6 +751,18 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_request_body(&name);
                 }
+                // `Request.header(name)` — case-insensitive lookup
+                // through `karac_runtime_http_request_header`; returns
+                // `Option[String]` with `Some(value)` on hit, `None` on
+                // miss. Args[0] is the header name (`String`); the
+                // payload's data ptr + len round-trip through the FFI.
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                    && method == "header"
+                    && args.len() == 1
+                {
+                    let name = name.clone();
+                    return self.compile_request_header(&name, &args[0].value);
+                }
                 // `std.json` codegen-side wiring (phase-8 line 435):
                 // `j.stringify()` on a Kāra-side `Json` enum value.
                 // Loads the receiver's four enum words, dispatches

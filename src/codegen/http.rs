@@ -1,12 +1,17 @@
 //! HTTP handler ABI shim and Request method codegen.
 //!
-//! Houses the three methods that bridge Kāra `Server.serve(handler)`
-//! to the FFI extern `void (*)(*const KaracHttpRequest, *mut
+//! Houses the methods that bridge Kāra `Server.serve(handler)` to the
+//! FFI extern `void (*)(*const KaracHttpRequest, *mut
 //! KaracHttpResponse)` slot: `resolve_free_fn_for_handler_arg`
 //! (validates and dereferences the user fn pointer),
 //! `emit_http_handler_shim` (synthesizes the per-handler extern "C"
-//! shim function), and `compile_request_string_method` (lowers
-//! `Request.path()` / `Request.method()` to the runtime externs).
+//! shim function), `compile_request_string_method` (lowers
+//! `Request.path()` / `Request.method()` to the runtime externs),
+//! `compile_request_body` (lowers `Request.body()` through the raw-
+//! byte pair `karac_runtime_http_request_body_ptr` / `_body_len`),
+//! and `compile_request_header` (lowers `Request.header(name)` through
+//! `karac_runtime_http_request_header` and wraps the result in
+//! `Option[String]`).
 
 use crate::ast::*;
 
@@ -395,6 +400,214 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value()
             .into();
         Ok(str_val)
+    }
+
+    /// Compile `req.header(name)` for a `Request`-typed local. Returns
+    /// `Option[String]`: `Some(value)` if the header is present
+    /// (case-insensitive lookup), `None` otherwise. Pairs the runtime
+    /// extern `karac_runtime_http_request_header(req, name_data,
+    /// name_len) -> *const c_char` (null on miss; runtime-owned cstring
+    /// on hit) with the same strlen + malloc + memcpy String-build
+    /// path as `compile_request_string_method`. The found-end basic
+    /// block hands off three payload words via
+    /// `build_option_some_via_phis`, which merges them with a None
+    /// branch into the final `Option[String]` aggregate.
+    pub(super) fn compile_request_header(
+        &mut self,
+        var_name: &str,
+        name_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+
+        // Compile the name arg first — outside any of the new BBs — so the
+        // String aggregate's construction happens at the call site rather
+        // than inside one of the option-merge branches.
+        let name_val = self.compile_expr(name_arg)?;
+        let name_struct = name_val.into_struct_value();
+        let name_data = self
+            .builder
+            .build_extract_value(name_struct, 0, "req.hdr.name.data")
+            .unwrap()
+            .into_pointer_value();
+        let name_len = self
+            .builder
+            .build_extract_value(name_struct, 1, "req.hdr.name.len")
+            .unwrap()
+            .into_int_value();
+
+        // Load the request pointer from the local's alloca.
+        let req_ptr = self
+            .builder
+            .build_load(slot.ty, slot.ptr, &format!("{var_name}.req.hdr.load"))
+            .unwrap()
+            .into_pointer_value();
+
+        // Call the runtime extern; null return = header not present.
+        let extern_fn = self
+            .module
+            .get_function("karac_runtime_http_request_header")
+            .expect("karac_runtime_http_request_header declared in Codegen::new");
+        let cstr_ptr = self
+            .builder
+            .build_call(
+                extern_fn,
+                &[req_ptr.into(), name_data.into(), name_len.into()],
+                "req.hdr.cstr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Request.header called outside fn".to_string())?;
+        let found_bb = self.context.append_basic_block(fn_val, "req.hdr.found");
+        let notfound_bb = self.context.append_basic_block(fn_val, "req.hdr.notfound");
+        let merge_bb = self.context.append_basic_block(fn_val, "req.hdr.merge");
+
+        let is_null = self
+            .builder
+            .build_is_null(cstr_ptr, "req.hdr.is_null")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_null, notfound_bb, found_bb)
+            .unwrap();
+
+        // Found path: strlen + malloc + memcpy into a fresh String
+        // aggregate, then split into three payload words for the PHI
+        // merge. Mirrors the tail of `compile_request_string_method` —
+        // including the `len == 0` empty-path branch — so an explicitly-
+        // empty header value (e.g. `X-Trace-Id:`) materializes a
+        // `Some("")` whose data ptr is null (matching how other empty
+        // Kāra Strings are represented elsewhere in codegen).
+        self.builder.position_at_end(found_bb);
+        let strlen_fn = self
+            .module
+            .get_function("strlen")
+            .expect("strlen declared in Codegen::new");
+        let val_len_raw = self
+            .builder
+            .build_call(strlen_fn, &[cstr_ptr.into()], "req.hdr.val.len")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let val_len_i64 = self
+            .builder
+            .build_int_z_extend_or_bit_cast(val_len_raw, i64_ty, "req.hdr.val.len.i64")
+            .unwrap();
+
+        let zero = i64_ty.const_zero();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                val_len_i64,
+                zero,
+                "req.hdr.val.is_empty",
+            )
+            .unwrap();
+        let alloc_bb = self.context.append_basic_block(fn_val, "req.hdr.val.alloc");
+        let empty_bb = self.context.append_basic_block(fn_val, "req.hdr.val.empty");
+        let found_end_bb = self.context.append_basic_block(fn_val, "req.hdr.found.end");
+        let buf_slot = self.create_entry_alloca(fn_val, "req.hdr.val.buf", ptr_ty.into());
+
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, alloc_bb)
+            .unwrap();
+
+        // Empty: null buffer.
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(buf_slot, ptr_ty.const_null())
+            .unwrap();
+        self.builder
+            .build_unconditional_branch(found_end_bb)
+            .unwrap();
+
+        // Non-empty: malloc + memcpy.
+        self.builder.position_at_end(alloc_bb);
+        let buf = self
+            .builder
+            .build_call(
+                self.malloc_fn,
+                &[val_len_i64.into()],
+                "req.hdr.val.buf.alloc",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(buf, 1, cstr_ptr, 1, val_len_i64)
+            .unwrap();
+        self.builder.build_store(buf_slot, buf).unwrap();
+        self.builder
+            .build_unconditional_branch(found_end_bb)
+            .unwrap();
+
+        // Assemble the String aggregate in `found_end_bb` and split it
+        // into three i64 payload words for the option-merge.
+        self.builder.position_at_end(found_end_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, buf_slot, "req.hdr.val.data")
+            .unwrap()
+            .into_pointer_value();
+        let str_ty = self.vec_struct_type();
+        let mut str_val: BasicValueEnum<'ctx> = str_ty.get_undef().into();
+        str_val = self
+            .builder
+            .build_insert_value(str_val.into_struct_value(), data, 0, "req.hdr.str.data.ins")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(
+                str_val.into_struct_value(),
+                val_len_i64,
+                1,
+                "req.hdr.str.len.ins",
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(
+                str_val.into_struct_value(),
+                val_len_i64,
+                2,
+                "req.hdr.str.cap.ins",
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        let some_payload_words = self.coerce_to_payload_words(str_val, 3)?;
+        let some_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // Not found: just branch to merge.
+        self.builder.position_at_end(notfound_bb);
+        self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+        // Merge — PHI-assemble `Option[String]`.
+        self.builder.position_at_end(merge_bb);
+        let agg = self.build_option_some_via_phis(
+            &some_payload_words,
+            some_end_bb,
+            notfound_bb,
+            "req.hdr.opt",
+        );
+        Ok(agg)
     }
 
     /// Compile `req.body()` for a `Request`-typed local. The body is not

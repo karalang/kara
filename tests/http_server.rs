@@ -746,4 +746,218 @@ mod http_server_tests {
             "expected empty response body for GET with no payload; got: {body:?}"
         );
     }
+
+    /// GET helper that ships a single extra header alongside the default
+    /// `Host` / `Connection: close` pair. Same hand-rolled shape as
+    /// `http_get` so the test doesn't pull in a heavier dev-dep.
+    fn http_get_with_header(
+        port: u16,
+        path: &str,
+        header_name: &str,
+        header_value: &str,
+    ) -> Result<(u16, String), String> {
+        let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("connect failed: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+        let req = format!(
+            "GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{header_name}: {header_value}\r\n\
+             Connection: close\r\n\r\n"
+        );
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("read failed: {e}"))?;
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut parts = text.split("\r\n\r\n");
+        let head = parts.next().unwrap_or("");
+        let body = parts.collect::<Vec<_>>().join("\r\n\r\n");
+        let first = head.lines().next().ok_or("empty response")?;
+        let mut tokens = first.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+        Ok((status, body))
+    }
+
+    /// Inline driver mirroring `run_handler_smoke` but with custom
+    /// header injection on the outbound GET. Returns `None` (skipping
+    /// the test) when the runtime library can't be built, the same
+    /// soft-skip pattern the sibling helpers use.
+    fn run_handler_smoke_with_header(
+        src: &str,
+        request_path: &str,
+        header_name: &str,
+        header_value: &str,
+    ) -> Option<(u16, String)> {
+        let rt = runtime_path()?;
+        std::env::set_var("KARAC_RUNTIME", &rt);
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_handler_hdr_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+        let started = Instant::now();
+        let mut last_err: Option<String> = None;
+        let mut response: Option<(u16, String)> = None;
+        for _ in 0..10 {
+            match http_get_with_header(port, request_path, header_name, header_value) {
+                Ok(r) => {
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+        match response {
+            Some(r) => Some(r),
+            None => panic!(
+                "GET {request_path} with header against 127.0.0.1:{port} never \
+                 succeeded; last error: {:?}",
+                last_err
+            ),
+        }
+    }
+
+    /// `Request.header(name)` round-trips end-to-end: the handler reads
+    /// the value of the inbound header by name and echoes it back as
+    /// the response body. Pins the runtime extern
+    /// `karac_runtime_http_request_header` + the codegen path
+    /// (`compile_request_header`) + the `Option[String]` unwrap shape.
+    #[test]
+    fn test_server_serve_handler_reads_header() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let body = match req.header("X-Test-Echo") {
+                    Some(v) => v,
+                    None => "absent",
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) =
+            run_handler_smoke_with_header(src, "/echo-hdr", "X-Test-Echo", "greetings")
+        else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "greetings",
+            "expected response body to echo X-Test-Echo header value; got: {body:?}"
+        );
+    }
+
+    /// Header lookup is case-insensitive per RFC 7230 § 3.2 — the
+    /// handler asks for `Content-Type` but the request carries
+    /// `content-type` (lowercase, hyper's normalized form). Pins the
+    /// `eq_ignore_ascii_case` branch in
+    /// `karac_runtime_http_request_header`.
+    #[test]
+    fn test_server_serve_handler_header_lookup_case_insensitive() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let body = match req.header("Content-Type") {
+                    Some(v) => v,
+                    None => "absent",
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) =
+            run_handler_smoke_with_header(src, "/case", "content-type", "application/json")
+        else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "application/json",
+            "expected case-insensitive lookup to find lowercased header; got: {body:?}"
+        );
+    }
+
+    /// `Request.header(name)` returns `None` when no header by that
+    /// name exists on the request. Pins the null-return branch of
+    /// `karac_runtime_http_request_header` and the `None` PHI arm of
+    /// `compile_request_header`.
+    #[test]
+    fn test_server_serve_handler_header_absent_returns_none() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let body = match req.header("X-Does-Not-Exist") {
+                    Some(v) => v,
+                    None => "absent",
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/absent") else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "absent",
+            "expected response body to indicate header absent; got: {body:?}"
+        );
+    }
 }

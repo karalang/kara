@@ -90,17 +90,19 @@ effect resource Network;
 struct Server { }
 
 // `Request` is the translated form of an inbound hyper request. v1's
-// surface ships `path()` + `method()` + `body()` — all round-trip
-// through FFI helpers on the runtime's `KaracHttpRequest` C struct and
-// return a fresh owned `String` per call (F2: re-allocates per call
-// rather than borrowing into the runtime-owned struct, which is
-// dropped after the handler returns). `query()`, `header()`,
-// `headers()` are deferred to follow-ups.
+// surface ships `path()` + `method()` + `body()` + `header(name)` —
+// all round-trip through FFI helpers on the runtime's
+// `KaracHttpRequest` C struct and return a fresh owned `String` per
+// call (F2: re-allocates per call rather than borrowing into the
+// runtime-owned struct, which is dropped after the handler returns).
+// `query()` and `headers()` (full-map iteration) are deferred to
+// follow-ups.
 //
 // At codegen, `Request` lowers to an opaque pointer wrapping the
 // runtime's `*const KaracHttpRequest` (mirrors `Map[K, V]`'s opaque-
 // ptr precedent). User code never sees the raw pointer — it interacts
-// only through the `path()` / `method()` / `body()` methods below.
+// only through the `path()` / `method()` / `body()` / `header()`
+// methods below.
 struct Request { }
 
 impl Request {
@@ -124,6 +126,18 @@ impl Request {
     // requests (including GET).
     #[compiler_builtin]
     fn body(ref self) -> String { "" }
+
+    // Look up a request header by name (case-insensitive per
+    // RFC 7230 § 3.2). Returns `Some(value)` if the header is present,
+    // `None` otherwise. The returned String is freshly allocated per
+    // call — same lifetime contract as `path()` / `method()`. An
+    // explicitly-empty header value (rare but legal) returns
+    // `Some("")`, not `None` — at the FFI boundary, "absent" is
+    // distinguished from "present and empty" by null vs non-null
+    // pointer (`karac_runtime_http_request_header` returns null only
+    // when no header with the requested name exists).
+    #[compiler_builtin]
+    fn header(ref self, name: String) -> Option[String] { None }
 }
 
 impl Server {
