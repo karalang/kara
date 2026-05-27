@@ -28,9 +28,12 @@ mod rc_promote;
 // having to fire the underlying `E_CONCURRENT_*_STRUCT` diagnostic.
 // L215b1 adds `build_consumer_rewrite_edits_in_program`, the consumer-
 // site write-rewrite walker the migrate tool runs after the type-def
-// rewrite (single-file mode, type-annotated bindings only).
+// rewrite. L215b3 adds `ConsumerRewriteTypeCtx` so the migrate tool can
+// thread typecheck-derived data (inferred-binding discovery + mutating-
+// method-call classifier) when the full pipeline succeeded.
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_fix_diff_edits, BindingKind,
+    ConsumerRewriteTypeCtx,
 };
 
 // ── Core Types ──────────────────────────────────────────────────

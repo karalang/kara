@@ -1332,20 +1332,30 @@ pub(crate) fn build_fix_diff_edits(
 pub(crate) fn build_consumer_rewrite_edits_in_program(
     type_name: &str,
     program_items: &[Item],
+    type_ctx: Option<ConsumerRewriteTypeCtx<'_>>,
 ) -> Vec<TextEdit> {
     let mut_fields = collect_mut_field_names(type_name, program_items);
     if mut_fields.is_empty() {
         return Vec::new();
     }
-    // Empty classifier: migrate runs parse-only (no typecheck data is
-    // available), so mutating method-call wraps silently no-op. The
-    // method-call coverage lifts when L215b3's typecheck-integrated
-    // pipeline lands.
+    // When typecheck data is available, the classifier can fire mutating
+    // method-call wraps (`c.field.push(x)` → `lock self.field { ... }`)
+    // because `method_callee_types` resolves each call-site span to its
+    // `Type.method` key, which `method_self_modes` then resolves to the
+    // declared SelfParam (MutRef means the call mutates the receiver).
+    // Without typecheck data, the parse-only fallback supplies an empty
+    // callee-type map so the classifier silently no-ops on method calls
+    // — matching L215b1/b2 semantics. `method_self_modes` is derivable
+    // from the parsed program alone, so we compute it locally and reuse
+    // it across both paths.
+    let method_self_modes = collect_method_self_modes_in_items(program_items);
     let empty_callee_types: HashMap<SpanKey, String> = HashMap::new();
-    let empty_self_modes: HashMap<String, SelfParam> = HashMap::new();
     let classifier = MethodMutClassifier {
-        method_callee_types: &empty_callee_types,
-        method_self_modes: &empty_self_modes,
+        method_callee_types: type_ctx
+            .as_ref()
+            .map(|c| c.method_callee_types)
+            .unwrap_or(&empty_callee_types),
+        method_self_modes: &method_self_modes,
     };
     let par_spans = collect_par_body_spans_in_items(program_items);
     let mut edits = Vec::new();
@@ -1353,12 +1363,30 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
         let mut bindings: Vec<String> = Vec::new();
         for p in params {
             if let Some(name) = p.name() {
+                // Parse-only annotation check covers `ref Foo` / `mut ref Foo`
+                // (which the typechecker's `bind_pattern_types` doesn't
+                // record in `pattern_binding_types` because the outer
+                // type is `Ref` / `MutRef`, not `Named` / `Shared`). The
+                // typecheck-aware lookup below is an additive overlay —
+                // both can fire for the same binding (dedup catches it).
                 if type_expr_is_single_segment_named(&p.ty, type_name) {
                     bindings.push(name.to_string());
                 }
+                if let Some(ctx) = &type_ctx {
+                    let key = SpanKey::from_span(&p.pattern.span);
+                    if ctx.pattern_binding_types.get(&key).map(|s| s.as_str()) == Some(type_name) {
+                        bindings.push(name.to_string());
+                    }
+                }
             }
         }
-        collect_typed_bindings_in_block(body, type_name, &mut bindings);
+        collect_typed_bindings_in_block(body, type_name, type_ctx.as_ref(), &mut bindings);
+        // Dedup: the annotation-check and typecheck-lookup paths both
+        // fire on annotated bindings (`let c: Counter = ...`); the
+        // inner walkers' name-only matching tolerates duplicates but
+        // wastes work and inflates emitted edits before sort+dedup.
+        bindings.sort();
+        bindings.dedup();
         for binding_name in &bindings {
             collect_lock_block_writes_in_block(
                 body,
@@ -1381,6 +1409,82 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
     edits
 }
 
+/// Typecheck-derived data threaded into
+/// [`build_consumer_rewrite_edits_in_program`]. Caller passes `Some(ctx)`
+/// when the full pipeline (parse + resolve + typecheck) ran successfully;
+/// `None` degrades to parse-only behavior — annotation-typed bindings
+/// only, no mutating-method-call wraps. The graceful degradation matches
+/// design.md § Compiler-assisted migration's "always **manual at the
+/// review step**" clause: a typecheck-failing source still produces a
+/// starting-point diff; the human reviewer hand-completes.
+///
+/// Phase-7 line 221 (L215b3).
+pub(crate) struct ConsumerRewriteTypeCtx<'a> {
+    /// `TypeCheckResult.pattern_binding_types` — maps each pattern
+    /// binding's `SpanKey` to its canonical type name. Used to discover
+    /// bindings of the migrating type whose annotation is absent (the
+    /// inferred-type case `let c = make_counter()` that the parse-only
+    /// `type_expr_is_single_segment_named` path can't see). `ref` / `mut
+    /// ref` annotated bindings stay on the parse-only path because the
+    /// typechecker doesn't record them in this map (outer `Type::Ref` /
+    /// `Type::MutRef` doesn't match the `Named` / `Shared` insertion arms
+    /// of `bind_pattern_types`).
+    pub pattern_binding_types: &'a HashMap<SpanKey, String>,
+    /// `TypeCheckResult.method_callee_types` — maps each `MethodCall`
+    /// span to its resolved `Type.method` key. Combined with the locally
+    /// derived `method_self_modes`, this lifts the L215b1/b2 limitation
+    /// where mutating method-call writes (`c.field.push(x)`) silently
+    /// no-op'd under parse-only mode.
+    pub method_callee_types: &'a HashMap<SpanKey, String>,
+}
+
+/// Per-`Type.method` `SelfParam` table derived from `&[Item]`. Mirrors
+/// the body of [`crate::ownership::collect_method_self_modes`] but takes
+/// items directly so the consumer-rewrite path doesn't need a `&Program`
+/// reference (it has only the program-items slice). Kept private —
+/// outside callers go through the `&Program` variant.
+fn collect_method_self_modes_in_items(items: &[Item]) -> HashMap<String, SelfParam> {
+    let mut map = HashMap::new();
+    for item in items {
+        match item {
+            Item::ImplBlock(impl_block) => {
+                let Some(target_name) = (if let TypeKind::Path(path) = &impl_block.target_type.kind
+                {
+                    path.segments.last().cloned()
+                } else {
+                    None
+                }) else {
+                    continue;
+                };
+                for impl_item in &impl_block.items {
+                    if let ImplItem::Method(method) = impl_item {
+                        if let Some(self_param) = &method.self_param {
+                            map.insert(
+                                format!("{target_name}.{}", method.name),
+                                self_param.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            Item::TraitDef(trait_def) => {
+                for trait_item in &trait_def.items {
+                    if let TraitItem::Method(tm) = trait_item {
+                        if let Some(self_param) = &tm.self_param {
+                            map.insert(
+                                format!("{}.{}", trait_def.name, tm.name),
+                                self_param.clone(),
+                            );
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    map
+}
+
 fn visit_each_function(items: &[Item], visitor: &mut impl FnMut(&[Param], &Block)) {
     for it in items {
         match it {
@@ -1401,34 +1505,65 @@ fn visit_fn_bodies(items: &[Item], visitor: &mut impl FnMut(&Block)) {
     visit_each_function(items, &mut |_params, body| visitor(body));
 }
 
-fn collect_typed_bindings_in_block(block: &Block, type_name: &str, out: &mut Vec<String>) {
+fn collect_typed_bindings_in_block(
+    block: &Block,
+    type_name: &str,
+    type_ctx: Option<&ConsumerRewriteTypeCtx<'_>>,
+    out: &mut Vec<String>,
+) {
     for stmt in &block.stmts {
-        collect_typed_bindings_in_stmt(stmt, type_name, out);
+        collect_typed_bindings_in_stmt(stmt, type_name, type_ctx, out);
     }
     if let Some(e) = &block.final_expr {
-        collect_typed_bindings_in_expr(e, type_name, out);
+        collect_typed_bindings_in_expr(e, type_name, type_ctx, out);
     }
 }
 
-fn collect_typed_bindings_in_stmt(stmt: &Stmt, type_name: &str, out: &mut Vec<String>) {
+/// Whether `pattern` was typed as `type_name` by the typechecker. Returns
+/// `false` when `type_ctx` is `None` (parse-only mode) or when the
+/// pattern isn't in the table — covers `ref` / `mut ref` annotations
+/// (no entry recorded) and unresolved/error types (no entry recorded).
+fn pattern_binding_matches_type(
+    pattern: &Pattern,
+    type_name: &str,
+    type_ctx: Option<&ConsumerRewriteTypeCtx<'_>>,
+) -> bool {
+    let Some(ctx) = type_ctx else {
+        return false;
+    };
+    ctx.pattern_binding_types
+        .get(&SpanKey::from_span(&pattern.span))
+        .map(|s| s.as_str())
+        == Some(type_name)
+}
+
+fn collect_typed_bindings_in_stmt(
+    stmt: &Stmt,
+    type_name: &str,
+    type_ctx: Option<&ConsumerRewriteTypeCtx<'_>>,
+    out: &mut Vec<String>,
+) {
     match &stmt.kind {
         StmtKind::Let {
-            pattern,
-            ty: Some(ty),
-            value,
-            ..
+            pattern, ty, value, ..
         } => {
             if let PatternKind::Binding(name) = &pattern.kind {
-                if type_expr_is_single_segment_named(ty, type_name) {
+                let by_annotation = ty
+                    .as_ref()
+                    .map(|t| type_expr_is_single_segment_named(t, type_name))
+                    .unwrap_or(false);
+                let by_typecheck = pattern_binding_matches_type(pattern, type_name, type_ctx);
+                if by_annotation || by_typecheck {
                     out.push(name.clone());
                 }
             }
-            collect_typed_bindings_in_expr(value, type_name, out);
-        }
-        StmtKind::Let { value, .. } => {
-            collect_typed_bindings_in_expr(value, type_name, out);
+            collect_typed_bindings_in_expr(value, type_name, type_ctx, out);
         }
         StmtKind::LetUninit { name, ty, .. } => {
+            // `LetUninit` records its type via `expr_types[name_span]`,
+            // not `pattern_binding_types` — but it always has an explicit
+            // type annotation (no inference possible without an RHS), so
+            // the parse-only check is sufficient here.
             if type_expr_is_single_segment_named(ty, type_name) {
                 out.push(name.clone());
             }
@@ -1439,26 +1574,36 @@ fn collect_typed_bindings_in_stmt(stmt: &Stmt, type_name: &str, out: &mut Vec<St
             value,
             else_block,
         } => {
-            if let (PatternKind::Binding(name), Some(t)) = (&pattern.kind, ty) {
-                if type_expr_is_single_segment_named(t, type_name) {
+            if let PatternKind::Binding(name) = &pattern.kind {
+                let by_annotation = ty
+                    .as_ref()
+                    .map(|t| type_expr_is_single_segment_named(t, type_name))
+                    .unwrap_or(false);
+                let by_typecheck = pattern_binding_matches_type(pattern, type_name, type_ctx);
+                if by_annotation || by_typecheck {
                     out.push(name.clone());
                 }
             }
-            collect_typed_bindings_in_expr(value, type_name, out);
-            collect_typed_bindings_in_block(else_block, type_name, out);
+            collect_typed_bindings_in_expr(value, type_name, type_ctx, out);
+            collect_typed_bindings_in_block(else_block, type_name, type_ctx, out);
         }
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
-            collect_typed_bindings_in_expr(target, type_name, out);
-            collect_typed_bindings_in_expr(value, type_name, out);
+            collect_typed_bindings_in_expr(target, type_name, type_ctx, out);
+            collect_typed_bindings_in_expr(value, type_name, type_ctx, out);
         }
-        StmtKind::Expr(e) => collect_typed_bindings_in_expr(e, type_name, out),
+        StmtKind::Expr(e) => collect_typed_bindings_in_expr(e, type_name, type_ctx, out),
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            collect_typed_bindings_in_block(body, type_name, out);
+            collect_typed_bindings_in_block(body, type_name, type_ctx, out);
         }
     }
 }
 
-fn collect_typed_bindings_in_expr(expr: &Expr, type_name: &str, out: &mut Vec<String>) {
+fn collect_typed_bindings_in_expr(
+    expr: &Expr,
+    type_name: &str,
+    type_ctx: Option<&ConsumerRewriteTypeCtx<'_>>,
+    out: &mut Vec<String>,
+) {
     match &expr.kind {
         ExprKind::Block(b)
         | ExprKind::Par(b)
@@ -1467,47 +1612,49 @@ fn collect_typed_bindings_in_expr(expr: &Expr, type_name: &str, out: &mut Vec<St
         | ExprKind::Unsafe(b)
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
-        | ExprKind::Lock { body: b, .. } => collect_typed_bindings_in_block(b, type_name, out),
+        | ExprKind::Lock { body: b, .. } => {
+            collect_typed_bindings_in_block(b, type_name, type_ctx, out)
+        }
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            collect_typed_bindings_in_expr(condition, type_name, out);
-            collect_typed_bindings_in_block(then_block, type_name, out);
+            collect_typed_bindings_in_expr(condition, type_name, type_ctx, out);
+            collect_typed_bindings_in_block(then_block, type_name, type_ctx, out);
             if let Some(eb) = else_branch {
-                collect_typed_bindings_in_expr(eb, type_name, out);
+                collect_typed_bindings_in_expr(eb, type_name, type_ctx, out);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_typed_bindings_in_expr(condition, type_name, out);
-            collect_typed_bindings_in_block(body, type_name, out);
+            collect_typed_bindings_in_expr(condition, type_name, type_ctx, out);
+            collect_typed_bindings_in_block(body, type_name, type_ctx, out);
         }
         ExprKind::For { iterable, body, .. } => {
-            collect_typed_bindings_in_expr(iterable, type_name, out);
-            collect_typed_bindings_in_block(body, type_name, out);
+            collect_typed_bindings_in_expr(iterable, type_name, type_ctx, out);
+            collect_typed_bindings_in_block(body, type_name, type_ctx, out);
         }
         ExprKind::Match { scrutinee, arms } => {
-            collect_typed_bindings_in_expr(scrutinee, type_name, out);
+            collect_typed_bindings_in_expr(scrutinee, type_name, type_ctx, out);
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    collect_typed_bindings_in_expr(g, type_name, out);
+                    collect_typed_bindings_in_expr(g, type_name, type_ctx, out);
                 }
-                collect_typed_bindings_in_expr(&arm.body, type_name, out);
+                collect_typed_bindings_in_expr(&arm.body, type_name, type_ctx, out);
             }
         }
         ExprKind::Call { callee, args } => {
-            collect_typed_bindings_in_expr(callee, type_name, out);
+            collect_typed_bindings_in_expr(callee, type_name, type_ctx, out);
             for a in args {
-                collect_typed_bindings_in_expr(&a.value, type_name, out);
+                collect_typed_bindings_in_expr(&a.value, type_name, type_ctx, out);
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            collect_typed_bindings_in_expr(object, type_name, out);
+            collect_typed_bindings_in_expr(object, type_name, type_ctx, out);
             for a in args {
-                collect_typed_bindings_in_expr(&a.value, type_name, out);
+                collect_typed_bindings_in_expr(&a.value, type_name, type_ctx, out);
             }
         }
         _ => {}

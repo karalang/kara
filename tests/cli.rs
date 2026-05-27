@@ -7815,3 +7815,153 @@ fn test_migrate_skips_reads_inside_par_block() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+#[test]
+fn test_migrate_discovers_inferred_let_binding() {
+    // L215b3: the canonical inferred-binding case — `let c = make_counter()`
+    // has no annotation, so the parse-only path can't discover the binding.
+    // The typecheck-aware path reads `pattern_binding_types[c.span] = "Counter"`
+    // and wraps the subsequent write. Without L215b3, this would emit only
+    // the 4 type-def edits and silently miss the consumer write.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn make_counter() -> Counter {\n    Counter { count: 0 }\n}\n\nfn main() {\n    let c = make_counter();\n    c.count = 5;\n}\n";
+    let path = migrate_scratch_file("inferred_let", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("lock self.count {"),
+        "expected the inferred-binding write to be wrapped; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("self.count = 5"),
+        "binding `c` (inferred-type) should be rewritten to `self` inside the wrap; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_wraps_mutating_method_call_with_typecheck_data() {
+    // L215b3 lift: under L215b1/b2 the consumer-rewrite ran with an
+    // empty MethodMutClassifier, so mutating method-call writes
+    // (`c.items.push(x)`) silently no-op'd. With typecheck data
+    // threaded through, `method_callee_types` resolves the call site
+    // to `Vec.push` and `stdlib_method_self_borrow_kind` flags it as
+    // MutRef — the L207 walker then wraps the call.
+    let original = "shared struct Queue {\n    mut items: Vec[i64],\n}\n\nfn main() {\n    let q: Queue = Queue { items: [10, 20, 30] };\n    q.items.push(42);\n}\n";
+    let path = migrate_scratch_file("inferred_method_call", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Queue",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("lock self.items {"),
+        "expected mutating method-call to be wrapped; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("self.items.push(42)"),
+        "binding root `q` should be rewritten to `self` for the method receiver; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_typecheck_failure_falls_back_to_annotated_only() {
+    // Graceful degradation: when typecheck fails (e.g. unresolved
+    // identifier elsewhere in the file), migrate still walks the
+    // parse-only annotated-binding path so users on a partially-
+    // broken file get a useful starting-point diff rather than
+    // nothing. Inferred bindings naturally drop out (no typecheck
+    // data to consult), but annotated ones survive.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 5;\n    let _ = undefined_function();\n}\n";
+    let path = migrate_scratch_file("tc_fail_fallback", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed even when typecheck fails; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct Counter"),
+        "type-def rewrite should still run on typecheck-failing source; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("lock self.count {"),
+        "annotated binding write should still wrap under parse-only fallback; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_discovers_inferred_binding_alongside_annotated() {
+    // Mixed-discovery shape: one annotated binding (`let c: Counter`)
+    // + one inferred binding (`let d = make_counter()`). Both must be
+    // wrapped, and the dedup discipline must prevent the annotation
+    // overlap on the annotated binding from doubling its edits.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn make_counter() -> Counter {\n    Counter { count: 0 }\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 1;\n    let d = make_counter();\n    d.count = 2;\n}\n";
+    let path = migrate_scratch_file("inferred_mixed", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "dry-run should succeed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Exactly two `lock self.count {` inserts — one per binding.
+    let wraps = stdout.matches("lock self.count {").count();
+    assert_eq!(
+        wraps, 2,
+        "expected two lock-wrap inserts (one per binding); got {wraps} in: {stdout}",
+    );
+    // Both `c` and `d` should get binding-root rewrites to `self`.
+    assert!(
+        stdout.contains("`c` → `self`"),
+        "annotated binding `c` should rewrite to `self`; stdout: {stdout}",
+    );
+    assert!(
+        stdout.contains("`d` → `self`"),
+        "inferred binding `d` should rewrite to `self`; stdout: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}

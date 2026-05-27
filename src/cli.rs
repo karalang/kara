@@ -6715,9 +6715,9 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         }
     };
     let source = read_source(&filename);
-    let parsed = crate::parse(&source);
-    if !parsed.errors.is_empty() {
-        for err in &parsed.errors {
+    let mut pipeline = Pipeline::new(&filename, &source);
+    if pipeline.has_parse_errors() {
+        for err in &pipeline.parsed.errors {
             eprintln!(
                 "error[parse]: {}:{}:{}: {}",
                 filename, err.span.line, err.span.column, err.message
@@ -6725,15 +6725,32 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         }
         process::exit(1);
     }
+    // L215b3: run resolve + typecheck to populate the binding-type map
+    // and the method-callee-type map used by the consumer-rewrite path
+    // for inferred-binding discovery and mutating-method-call wraps.
+    // Graceful degradation per design.md "manual at the review step"
+    // clause: even when typecheck reports errors, the partial
+    // pattern_binding_types map carries data for the bindings that did
+    // typecheck, so the rewrite covers strictly more cases than parse-
+    // only. The `pipeline.typed` snapshot is `None` only when resolve
+    // failed upstream and typecheck couldn't run at all.
+    pipeline.resolve();
+    pipeline.typecheck();
 
     // Locate the struct + decide which BindingKind to emit. The migration
     // subcommand is `shared-to-par`, so the source struct must be a
     // `shared struct`; a plain struct of the same name is a "you ran the
     // wrong tool" diagnostic. A missing struct definition is a hard error.
-    let Some(struct_def) = parsed.program.items.iter().find_map(|it| match it {
-        Item::StructDef(s) if s.name == type_name => Some(s),
-        _ => None,
-    }) else {
+    let Some(struct_def) = pipeline
+        .parsed
+        .program
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Item::StructDef(s) if s.name == type_name => Some(s),
+            _ => None,
+        })
+    else {
         eprintln!(
             "error: no struct named `{type_name}` found in `{filename}` — `karac migrate shared-to-par` rewrites the type definition in place, so the type must be defined in the migration file"
         );
@@ -6749,14 +6766,27 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
     let typedef_edits = crate::ownership::build_fix_diff_edits(
         type_name,
         crate::ownership::BindingKind::Shared,
-        &parsed.program.items,
+        &pipeline.parsed.program.items,
     );
-    // L215b1: consumer-site write-rewrite for `let <c>: <Type> = ...`
-    // bindings inside function bodies. Single-file + writes-only + type-
-    // annotated bindings only in v1 (see L215b2/b3/b4 follow-ups for
-    // reads, typechecker-resolved bindings, and project-mode walk).
-    let consumer_edits =
-        crate::ownership::build_consumer_rewrite_edits_in_program(type_name, &parsed.program.items);
+    // L215b3: thread typecheck-derived data into the consumer-rewrite
+    // walker so inferred bindings (`let c = make_counter()`) and
+    // mutating method-call writes (`c.field.push(x)`) get wrapped. When
+    // typecheck didn't run to completion (e.g. resolve errors aborted
+    // the pipeline before typecheck), `pipeline.typed` is `None` and the
+    // walker falls back to L215b1/b2's parse-only behavior (annotated
+    // bindings only, no mutating-method-call wraps).
+    let type_ctx = pipeline
+        .typed
+        .as_ref()
+        .map(|t| crate::ownership::ConsumerRewriteTypeCtx {
+            pattern_binding_types: &t.pattern_binding_types,
+            method_callee_types: &t.method_callee_types,
+        });
+    let consumer_edits = crate::ownership::build_consumer_rewrite_edits_in_program(
+        type_name,
+        &pipeline.parsed.program.items,
+        type_ctx,
+    );
     let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
     edits.extend(consumer_edits);
     if edits.is_empty() {
@@ -6817,7 +6847,7 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
             println!("  {filename}:{line}:{col}: {preview}");
         }
         println!(
-            "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes against `let <c>: {type_name} = ...` bindings in this file. Reads, mutating method-call writes, type-inferred bindings, and cross-file walks remain hand-review steps — see L215b2/b3/b4 follow-ups)"
+            "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` in this file — including type-inferred bindings when the file typechecks. Cross-file walks remain a hand-review step — see L215b4 follow-up)"
         );
         return;
     }
@@ -6840,7 +6870,7 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         process::exit(1);
     }
     println!(
-        "applied {} migration edit(s) to {filename} (consumer-site assign/compound-assign writes wrapped automatically; review reads + mutating method calls + cross-file consumers by hand — see `docs/design.md § Compiler-assisted migration`)",
+        "applied {} migration edit(s) to {filename} (consumer-site assign/compound-assign writes, reads, and mutating method calls wrapped automatically — including type-inferred bindings when the file typechecks; review cross-file consumers by hand — see `docs/design.md § Compiler-assisted migration`)",
         sorted.len()
     );
 }
