@@ -19372,10 +19372,9 @@ fn scope_local_returning_task_handle_from_fn_rejected() {
          }",
     );
     assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::typechecker::TypeErrorKind::ScopeLocalEscape
-        )),
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
         "expected ScopeLocalEscape on fn-return-of-TaskHandle, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -19396,10 +19395,9 @@ fn scope_local_returning_task_handle_from_private_fn_rejected() {
          }",
     );
     assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::typechecker::TypeErrorKind::ScopeLocalEscape
-        )),
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
         "expected ScopeLocalEscape on private fn return, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -19414,10 +19412,9 @@ fn scope_local_task_handle_in_struct_field_rejected() {
          fn main() {}",
     );
     assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::typechecker::TypeErrorKind::ScopeLocalEscape
-        )),
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
         "expected ScopeLocalEscape on struct field, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -19433,10 +19430,9 @@ fn scope_local_task_handle_in_enum_variant_payload_rejected() {
          fn main() {}",
     );
     assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::typechecker::TypeErrorKind::ScopeLocalEscape
-        )),
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
         "expected ScopeLocalEscape on enum variant payload, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
@@ -19463,10 +19459,9 @@ fn scope_local_task_handle_through_channel_send_rejected() {
          }",
     );
     assert!(
-        errors.iter().any(|e| matches!(
-            e.kind,
-            karac::typechecker::TypeErrorKind::ScopeLocalEscape
-        )),
+        errors
+            .iter()
+            .any(|e| matches!(e.kind, karac::typechecker::TypeErrorKind::ScopeLocalEscape)),
         "expected ScopeLocalEscape on Sender.send, got: {:?}",
         errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
     );
