@@ -34,6 +34,7 @@
 
 mod clone;
 pub mod event_loop;
+mod file;
 mod map;
 
 use std::cell::Cell;
