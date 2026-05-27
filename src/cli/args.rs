@@ -53,6 +53,7 @@ pub fn parse_args(args: &[String]) -> Command {
             }
         }
         "fix" => parse_fix_command(args),
+        "migrate" => parse_migrate_command(args),
         "init" => parse_init_command(args),
         "test" => parse_test_command(args),
         "repl" => parse_repl_command(args),
@@ -773,6 +774,66 @@ fn parse_init_command(args: &[String]) -> Command {
         directory,
         template,
         force,
+    }
+}
+
+/// Parser for `karac migrate shared-to-par <Type> [--apply] [--force] [<file>]`.
+/// Phase-7 L215a foundation slice. Only the `shared-to-par` migration kind
+/// is in scope today; future kinds (e.g. `plain-to-par`) would extend the
+/// positional-kind argument here.
+fn parse_migrate_command(args: &[String]) -> Command {
+    if args.len() < 3 {
+        eprintln!(
+            "error: `karac migrate` requires a migration kind (try `karac migrate shared-to-par <Type>`)"
+        );
+        process::exit(1);
+    }
+    let kind = args[2].as_str();
+    if kind != "shared-to-par" {
+        eprintln!("error: unknown migration kind '{kind}' (supported: shared-to-par)");
+        process::exit(1);
+    }
+    let mut type_name: Option<String> = None;
+    let mut file: Option<String> = None;
+    let mut apply = false;
+    let mut force = false;
+    for arg in args.iter().skip(3) {
+        match arg.as_str() {
+            "--apply" => apply = true,
+            "--force" => force = true,
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac migrate`");
+                process::exit(1);
+            }
+            other if other.ends_with(".kara") => {
+                if file.is_some() {
+                    eprintln!("error: `karac migrate` takes at most one file argument");
+                    process::exit(1);
+                }
+                file = Some(other.to_string());
+            }
+            other => {
+                if type_name.is_some() {
+                    eprintln!(
+                        "error: `karac migrate shared-to-par` takes a single type name (got '{other}' after type was already set)"
+                    );
+                    process::exit(1);
+                }
+                type_name = Some(other.to_string());
+            }
+        }
+    }
+    let Some(type_name) = type_name else {
+        eprintln!(
+            "error: missing type name for `karac migrate shared-to-par` (try `karac migrate shared-to-par Elevator`)"
+        );
+        process::exit(1);
+    };
+    Command::Migrate {
+        type_name,
+        apply,
+        force,
+        file,
     }
 }
 

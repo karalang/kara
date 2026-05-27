@@ -22,6 +22,12 @@ mod expr_check;
 mod par_helpers;
 mod rc_promote;
 
+// Re-export for `cli::cmd_migrate` (phase-7 L215a): the migrate tool
+// reuses `build_fix_diff_edits` + `BindingKind` to emit the same type-
+// definition rewrite the `karac fix` diagnostic path produces, without
+// having to fire the underlying `E_CONCURRENT_*_STRUCT` diagnostic.
+pub(crate) use concurrent_shared::{build_fix_diff_edits, BindingKind};
+
 // ── Core Types ──────────────────────────────────────────────────
 
 #[derive(Debug, Clone, PartialEq)]

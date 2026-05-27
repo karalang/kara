@@ -59,6 +59,15 @@ COMMANDS:
     fix <file>        Apply machine-applicable suggestions (e.g. resolver
                       `did you mean` corrections) to a .kara file. Use
                       --dry-run to preview without writing.
+    migrate shared-to-par <Type> <file>
+                      Preemptively migrate a `shared struct` to `par struct`.
+                      Rewrites the type definition (keyword rename, `mut `
+                      strip, `Mutex[T]` wrap on every mut field). Dry-run
+                      by default; use --apply to write. The dirty-workspace
+                      guard refuses --apply on a non-clean tree unless
+                      --force is set. Consumer-site `lock` blocks at each
+                      read/write of the migrated type are a separate hand-
+                      review step in this v1 surface.
     repl              Launch the interactive REPL. Items (fn/struct/...)
                       accumulate across cells; statement cells run as the
                       body of an implicit `fn main()`. Type :help inside
@@ -337,6 +346,51 @@ OPTIONS:
                        them to disk. Each line shows
                        `<file>:<line>:<col>: \\`old\\` -> \\`new\\``.
     -h, --help         Print this message"
+        }
+        "migrate" => {
+            "\
+karac migrate - Preemptive type migration tool
+
+USAGE:
+    karac migrate shared-to-par <Type> <file.kara> [--apply] [--force]
+
+DETAILS:
+    Foundation slice (phase-7 L215a). Rewrites a `shared struct <Type>`
+    definition to `par struct <Type>` with every bare `mut` field
+    converted to `Mutex[T]`:
+      - Keyword rename:   `shared struct Foo` → `par struct Foo`
+      - Mut keyword strip: `mut field: T`     → `field: T`
+      - Field type wrap:   `field: T`         → `field: Mutex[T]`
+    Same edit emitter the `E_CONCURRENT_SHARED_STRUCT` fix-diff path
+    uses (`karac fix` against a fired diagnostic), but invoked
+    preemptively against the type definition rather than at first
+    concurrent access.
+
+    Consumer-site `lock self.field { ... }` blocks at every read/write
+    of bindings of the migrated type are NOT applied automatically in
+    this slice (tracked as the L215b follow-up — needs workspace-wide
+    binding-type discovery). The user reviews the type-definition diff,
+    applies it, then hand-completes consumer migrations.
+
+    Defaults to dry-run mode: prints each edit's offset, original text,
+    and replacement to stdout in source order. `--apply` writes the
+    rewrite back to the file. In `--apply` mode the workspace dirty-
+    check refuses to run when `git status --porcelain` reports any
+    modifications, unless `--force` is passed.
+
+OPTIONS:
+    --apply        Write the rewrite back to the file (default: dry-run).
+    --force        Bypass the workspace dirty-check guard. Only honored
+                   in `--apply` mode (dry-run never writes).
+    -h, --help     Print this message
+
+EXAMPLES:
+    karac migrate shared-to-par Counter src/main.kara
+        # dry-run — print the type-definition rewrite
+    karac migrate shared-to-par Counter src/main.kara --apply
+        # write the rewrite (clean workspace required)
+    karac migrate shared-to-par Counter src/main.kara --apply --force
+        # write the rewrite even with uncommitted changes"
         }
         "init" => {
             "\

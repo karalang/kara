@@ -93,8 +93,12 @@ impl MethodMutClassifier<'_> {
 
 /// Discriminator carried alongside each tracked binding so one walk
 /// catches both diagnostic flavors without two parallel maps.
+///
+/// Exposed at crate visibility so `cli::cmd_migrate` (phase-7 L215a) can
+/// reuse [`build_fix_diff_edits`] to produce the same type-definition
+/// rewrite edits the `karac fix` diagnostic path emits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BindingKind {
+pub(crate) enum BindingKind {
     Shared,
     Plain,
 }
@@ -1175,7 +1179,13 @@ fn build_concurrent_struct_error(
 /// Edits are emitted in source order; the consumer applies them back-
 /// to-front (standard `karac fix` discipline) so offsets stay stable.
 /// Returns an empty vec when no matching `StructDef` is found.
-fn build_fix_diff_edits(
+///
+/// Exposed at crate visibility so `cli::cmd_migrate` (phase-7 L215a)
+/// can reuse the same edit emitter for the preemptive `karac migrate
+/// shared-to-par <Type>` workspace rewrite — same type-definition
+/// rewrite shape, called directly off a parsed source rather than
+/// indirectly via a fired diagnostic.
+pub(crate) fn build_fix_diff_edits(
     type_name: &str,
     kind: BindingKind,
     program_items: &[Item],

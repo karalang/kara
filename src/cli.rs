@@ -288,6 +288,40 @@ pub enum Command {
     Catalog {
         file: String,
     },
+    /// Preemptive `shared struct` → `par struct` migration tool. Phase-7
+    /// L215a foundation slice — covers the type-definition rewrite
+    /// (keyword rename + `mut ` strip + `Mutex[T]` wrap), dry-run /
+    /// `--apply` modes, and the workspace dirty-check guard. Consumer-
+    /// site rewrites (`lock self.field { ... }` at every read/write of
+    /// the migrated bindings across the workspace) are tracked as a
+    /// follow-up L215b entry; the v1 surface produces a starting-point
+    /// diff and leaves consumer migration as the documented hand-finish
+    /// step (matches `design.md § Compiler-assisted migration from
+    /// `shared struct` to `par struct`` — "manual at the review step").
+    Migrate {
+        /// The type name to migrate. Currently only `shared struct` →
+        /// `par struct` is in scope (the `shared-to-par <Type>` form
+        /// in the spec); the kind-discriminator argument is fixed by
+        /// the subcommand shape rather than a separate flag.
+        type_name: String,
+        /// `--apply` writes the rewrite to disk. Default (dry-run)
+        /// prints the diff to stdout.
+        apply: bool,
+        /// `--force` bypasses the workspace-uncommitted-changes guard
+        /// that otherwise refuses to run when `git status --porcelain`
+        /// reports any modifications outside the rewrite footprint.
+        /// Honored only in apply mode (dry-run never writes, so the
+        /// guard is moot).
+        force: bool,
+        /// Optional positional file argument. When provided, treats
+        /// the named file as the migration scope (single-file mode);
+        /// when omitted, walks up from CWD for `kara.toml` and uses
+        /// the project's `src/` tree as the scope. Single-file mode
+        /// is the v1 default-shape because the consumer-rewrite walk
+        /// (L215b) doesn't exist yet, so the project-wide form has
+        /// no behavioral advantage over single-file in this slice.
+        file: Option<String>,
+    },
     /// Concept-level explainer surface. `karac explain --concept=closures`
     /// renders a per-concept page covering the relevant analysis rules,
     /// diagnostic shapes, and inspection commands. The concept name is
@@ -513,6 +547,12 @@ pub fn execute(cmd: Command) {
         } => cmd_update(package.as_deref(), output, no_proxy),
         Command::Explain { target, format } => explain::render(&target, format),
         Command::Catalog { file } => cmd_catalog(&file),
+        Command::Migrate {
+            type_name,
+            apply,
+            force,
+            file,
+        } => cmd_migrate(&type_name, apply, force, file.as_deref()),
     }
 }
 
@@ -6590,6 +6630,180 @@ fn cmd_fix(filename: &str, dry_run: bool) {
 // in `src/lib.rs` so codegen's debugger-contract metadata emission can reuse
 // it. The cli still calls it from `apply_fixes` below; the rename is a single
 // crate-path tweak with no behavior change.
+
+/// Implementation of `karac migrate shared-to-par <Type>` — phase-7
+/// L215a foundation slice. Locates the `shared struct <Type>` definition
+/// in the parsed source, runs the L201a type-definition rewrite via
+/// [`crate::ownership::build_fix_diff_edits`], and prints (dry-run) or
+/// writes (`--apply`) the resulting edits.
+///
+/// **Scope (v1, L215a).** Type-definition rewrite only: keyword rename
+/// (`shared` → `par`), `mut ` strip per mut field, `Mutex[T]` wrap per
+/// mut field. Consumer-site rewrites (`lock self.field { ... }` blocks
+/// across every read/write of bindings of `<Type>` in the workspace) are
+/// the L215b follow-up — they need a workspace-wide binding walker that
+/// doesn't exist yet, so the v1 surface produces a starting-point diff
+/// and lets the programmer hand-finish per the design spec's "manual at
+/// the review step" clause (design.md § Compiler-assisted migration).
+///
+/// **Workspace dirty-check** (`--apply` only). When `--apply` is set
+/// without `--force`, the tool refuses to run if `git status --porcelain`
+/// reports any modifications. The check shells out to `git`; absence
+/// of `git` (or running outside a repo) is treated as "no dirt to
+/// guard against" rather than an error — the guard is opportunistic,
+/// not load-bearing. `--force` bypasses the check unconditionally.
+fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
+    // v1 only supports single-file mode (consumer rewrite needs a project-
+    // wide walk anyway, so the project-mode default has no behavioral
+    // advantage today). When the file argument is omitted, point at the
+    // current directory's `src/main.kara` as a convention; a future
+    // L215b consumer-walk slice will replace this with `walker::walk_project`.
+    let filename: String = match file {
+        Some(f) => f.to_string(),
+        None => {
+            eprintln!(
+                "error: `karac migrate shared-to-par` currently requires a file argument (v1 surface — workspace walk lands in the L215b follow-up)"
+            );
+            process::exit(1);
+        }
+    };
+    let source = read_source(&filename);
+    let parsed = crate::parse(&source);
+    if !parsed.errors.is_empty() {
+        for err in &parsed.errors {
+            eprintln!(
+                "error[parse]: {}:{}:{}: {}",
+                filename, err.span.line, err.span.column, err.message
+            );
+        }
+        process::exit(1);
+    }
+
+    // Locate the struct + decide which BindingKind to emit. The migration
+    // subcommand is `shared-to-par`, so the source struct must be a
+    // `shared struct`; a plain struct of the same name is a "you ran the
+    // wrong tool" diagnostic. A missing struct definition is a hard error.
+    let Some(struct_def) = parsed.program.items.iter().find_map(|it| match it {
+        Item::StructDef(s) if s.name == type_name => Some(s),
+        _ => None,
+    }) else {
+        eprintln!(
+            "error: no struct named `{type_name}` found in `{filename}` — `karac migrate shared-to-par` rewrites the type definition in place, so the type must be defined in the migration file"
+        );
+        process::exit(1);
+    };
+    if !struct_def.is_shared {
+        eprintln!(
+            "error: `{type_name}` is not a `shared struct` — `karac migrate shared-to-par` only applies to `shared struct` definitions (run `karac fix` on a `par {{ ... }}` diagnostic instead)"
+        );
+        process::exit(1);
+    }
+
+    let edits = crate::ownership::build_fix_diff_edits(
+        type_name,
+        crate::ownership::BindingKind::Shared,
+        &parsed.program.items,
+    );
+    if edits.is_empty() {
+        // No mut fields and the rename collapses to a single keyword edit
+        // — but build_fix_diff_edits always emits the rename for Shared,
+        // so an empty result here means the struct's kind_keyword_span
+        // was a synthetic placeholder (prelude stub), which can't happen
+        // for a user-source definition. Treat as a "nothing to migrate"
+        // signal and exit cleanly.
+        println!("(no migration edits needed for `{type_name}` in {filename})");
+        return;
+    }
+
+    if apply && !force && workspace_has_uncommitted_changes(&filename) {
+        eprintln!(
+            "error: workspace has uncommitted changes — refusing to run `karac migrate --apply` without `--force`"
+        );
+        eprintln!(
+            "       commit or stash pending work first, or re-run with `--force` to bypass the guard."
+        );
+        process::exit(1);
+    }
+
+    // Sort edits descending by offset so the apply loop's offsets stay
+    // stable (same discipline as `cmd_fix`). build_fix_diff_edits emits
+    // in source order; the consumer sort here is a defense-in-depth
+    // peer of the cmd_fix path.
+    let mut sorted: Vec<crate::resolver::TextEdit> = edits;
+    sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
+
+    if !apply {
+        println!(
+            "would apply {} migration edit(s) to {filename}:",
+            sorted.len()
+        );
+        for edit in sorted.iter().rev() {
+            // Render in source order for human readability.
+            let original = source
+                .get(edit.offset..edit.offset.saturating_add(edit.length))
+                .unwrap_or("<?>");
+            let (line, col) = crate::byte_offset_to_line_col(&source, edit.offset);
+            let preview = if edit.length == 0 {
+                format!("(insert) → `{}`", edit.replacement)
+            } else {
+                format!("`{}` → `{}`", original, edit.replacement)
+            };
+            println!("  {filename}:{line}:{col}: {preview}");
+        }
+        println!(
+            "(dry-run — re-run with `--apply` to write changes; consumer-site `lock` blocks are NOT auto-applied in v1 and remain a hand-review step)"
+        );
+        return;
+    }
+
+    let mut rewritten = source.clone();
+    for edit in &sorted {
+        let end = edit.offset.saturating_add(edit.length);
+        if end > rewritten.len() {
+            eprintln!(
+                "error: migrate would write past end of file ({} > {}) — aborting without modifying {filename}",
+                end,
+                rewritten.len()
+            );
+            process::exit(1);
+        }
+        rewritten.replace_range(edit.offset..end, &edit.replacement);
+    }
+    if let Err(e) = std::fs::write(&filename, &rewritten) {
+        eprintln!("error: failed to write {filename}: {e}");
+        process::exit(1);
+    }
+    println!(
+        "applied {} migration edit(s) to {filename} (review and complete consumer-site `lock` blocks by hand — see `docs/design.md § Compiler-assisted migration`)",
+        sorted.len()
+    );
+}
+
+/// Returns `true` when `git status --porcelain` reports any modified
+/// or untracked files. The check is opportunistic — when `git` is
+/// absent, the path isn't a git repo, or the invocation fails for any
+/// other reason, the result is `false` (no guard rather than spurious
+/// rejection). The intent is to prevent `karac migrate --apply` from
+/// burying user work under a tool-applied diff, not to enforce a
+/// universal pre-flight check.
+fn workspace_has_uncommitted_changes(filename: &str) -> bool {
+    let working_dir = std::path::Path::new(filename)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(std::path::Path::to_path_buf)
+        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let Ok(output) = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(&working_dir)
+        .output()
+    else {
+        return false;
+    };
+    if !output.status.success() {
+        return false;
+    }
+    !output.stdout.is_empty()
+}
 
 // ── Tests ────────────────────────────────────────────────────────
 

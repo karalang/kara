@@ -7171,3 +7171,256 @@ fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
         "expected fix_diff array in JSON envelope; got: {stdout}",
     );
 }
+
+// ── karac migrate shared-to-par <Type> (phase-7 L215a) ─────────
+
+/// Scratch file helper for migrate tests — keyed by pid + tag + nanos so
+/// parallel test runs don't collide. Lives outside any git repo (under
+/// the OS temp dir) so the workspace-dirty guard always reports "clean"
+/// for these tests.
+fn migrate_scratch_file(tag: &str, source: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "karac-migrate-{}-{}-{}.kara",
+        std::process::id(),
+        tag,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::write(&path, source).expect("write migrate scratch source");
+    path
+}
+
+#[test]
+fn test_migrate_dry_run_prints_diff_for_shared_struct() {
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("dryrun_basic", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "migrate dry-run should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        stdout.contains("would apply"),
+        "expected dry-run header in stdout; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("`shared` → `par`"),
+        "expected keyword rename edit in dry-run; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("→ `Mutex[`"),
+        "expected Mutex[ wrap edit in dry-run; got: {stdout}",
+    );
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, original,
+        "dry-run must not write to disk; got rewritten file: {on_disk}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_apply_rewrites_file() {
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("apply_basic", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            // Pass --force so the test is independent of whether the OS
+            // temp dir happens to live inside a git repo (it normally
+            // doesn't, but defensive).
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    assert!(
+        stdout.contains("applied"),
+        "expected apply confirmation in stdout; got: {stdout}",
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct Counter"),
+        "expected `par struct Counter` post-migrate; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("count: Mutex[i64]"),
+        "expected `count: Mutex[i64]` post-migrate; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("shared struct"),
+        "stale `shared struct` keyword still present: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("mut count"),
+        "stale `mut` keyword on field still present: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_rejects_missing_type() {
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("missing_type", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Nonexistent",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "migrate on missing type should fail",);
+    assert!(
+        stderr.contains("no struct named `Nonexistent`"),
+        "expected missing-type diagnostic; got: {stderr}",
+    );
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, original,
+        "missing-type failure must not write to disk; got: {on_disk}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_rejects_non_shared_struct() {
+    let original = "struct Counter {\n    mut count: i64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("non_shared", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "migrate on plain struct should fail (wrong tool)",
+    );
+    assert!(
+        stderr.contains("not a `shared struct`"),
+        "expected wrong-tool diagnostic; got: {stderr}",
+    );
+    let on_disk = std::fs::read_to_string(&path).unwrap();
+    assert_eq!(
+        on_disk, original,
+        "wrong-tool failure must not write to disk; got: {on_disk}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_unknown_kind_rejected() {
+    // Subcommand-shape check: only `shared-to-par` is a known kind today.
+    let out = karac_bin()
+        .args(["migrate", "plain-to-par", "Counter", "/tmp/whatever.kara"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "migrate with unknown kind should fail",
+    );
+    assert!(
+        stderr.contains("unknown migration kind 'plain-to-par'"),
+        "expected unknown-kind diagnostic; got: {stderr}",
+    );
+}
+
+#[test]
+fn test_migrate_multiple_mut_fields_all_wrapped() {
+    let original = "shared struct State {\n    mut count: i64,\n    name: String,\n    mut total: f64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("multi_field", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "State",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("par struct State"),
+        "expected keyword rewrite; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("count: Mutex[i64]"),
+        "expected count field wrapped; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("total: Mutex[f64]"),
+        "expected total field wrapped; got: {rewritten}",
+    );
+    // The non-mut field `name: String` must remain unchanged — only mut
+    // fields get wrapped. This is the load-bearing invariant from L201a.
+    assert!(
+        rewritten.contains("name: String"),
+        "non-mut field must NOT be wrapped; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("Mutex[String]"),
+        "non-mut field must NOT receive a Mutex wrap; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_help_lists_kind_and_flags() {
+    // The per-subcommand help page renders before the arg parser runs,
+    // so `karac migrate --help` returns the help text and exits 0.
+    let out = karac_bin().args(["migrate", "--help"]).output().unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "migrate --help should exit 0");
+    assert!(
+        stdout.contains("karac migrate"),
+        "help should self-identify; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("shared-to-par"),
+        "help should list the migration kind; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("--apply"),
+        "help should list --apply flag; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("--force"),
+        "help should list --force flag; got: {stdout}",
+    );
+}
