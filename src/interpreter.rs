@@ -16,6 +16,7 @@ mod helpers;
 mod iter_eval;
 mod method_call;
 mod method_call_channel;
+mod method_call_file;
 mod method_call_http;
 mod method_call_iter;
 mod method_call_map;

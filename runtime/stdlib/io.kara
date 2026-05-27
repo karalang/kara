@@ -70,6 +70,39 @@ impl FileSystem {
     fn write(path: String, contents: String) -> Result[Unit, IoError] { Err(IoError.Other("placeholder")) }
 }
 
+// Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O. The
+// struct body is empty by design — like `Map[K,V]` / `Sender[T]` /
+// `Pool[T]`, the actual state (an `Arc<Mutex<std::fs::File>>`) lives
+// on the `Value::File` interpreter variant; the typechecker only
+// needs to know the type exists. Constructors `File.open` / `.create`
+// / `.append` return `Result[File, IoError]`; instance methods
+// `read` / `write` / `flush` thread through the mutex. Drop on the
+// last Arc closes the OS file descriptor. `seek` / `sync_all` /
+// `metadata` are deferred to a follow-on slice — minimum useful
+// surface only at F1. See `phase-8-stdlib-floor.md` "File handle
+// type" entry for the full sub-task plan.
+struct File { }
+
+impl File {
+    #[compiler_builtin]
+    fn open(path: String) -> Result[File, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn create(path: String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn append(path: String) -> Result[File, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+
+    #[compiler_builtin]
+    fn flush(ref self) -> Result[Unit, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
+}
+
 struct Env { }
 
 impl Env {

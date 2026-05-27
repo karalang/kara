@@ -4388,6 +4388,128 @@ fn test_stdout_flush_is_callable() {
     assert_eq!(out, "ok\n");
 }
 
+// ── Phase 8 File handle slice F1 — interpreter MVP ─────────────────
+//
+// `File.open` / `.create` / `.append` return `Result[File, IoError]`;
+// `file.read` / `.write` / `.flush` operate on the live handle. Drop
+// on the last Arc clone closes the OS fd. Tests cover the round-trip
+// (create + write + flush + reopen + read), the error path (open
+// nonexistent → IoError.NotFound), and the appendconstructor.
+
+#[test]
+fn test_file_create_write_flush_reopen_read_roundtrip() {
+    let tmp = std::env::temp_dir().join("karac_test_file_roundtrip.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     let data = [104u8, 105u8, 10u8];
+                     match f.write(data[0..3]) {{
+                         Ok(n) => println(\"wrote \" + n.to_string()),
+                         Err(_) => println(\"write err\"),
+                     }}
+                     match f.flush() {{
+                         Ok(_) => println(\"flushed\"),
+                         Err(_) => println(\"flush err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+             match File.open(\"{path}\") {{
+                 Ok(f) => {{
+                     let buf = [0u8, 0u8, 0u8, 0u8];
+                     match f.read(buf[0..4]) {{
+                         Ok(n) => println(\"read \" + n.to_string()),
+                         Err(_) => println(\"read err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"open err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "wrote 3\nflushed\nread 3\n");
+    // Confirm the file has the expected contents (write actually
+    // persisted, not just that the interpreter said it did).
+    let written = std::fs::read(&tmp).expect("temp read");
+    assert_eq!(written, b"hi\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_file_open_nonexistent_returns_io_error_not_found() {
+    // Same NotFound variant as FileSystem.read_to_string — the
+    // `io_error_from_std` helper maps ErrorKind::NotFound to
+    // IoError.NotFound regardless of which surface fired it.
+    let src = "fn main() {
+                   match File.open(\"/nonexistent_karac_test_F1.txt\") {
+                       Ok(_) => println(\"unexpected ok\"),
+                       Err(e) => match e {
+                           IoError.NotFound => println(\"not found\"),
+                           _ => println(\"other\"),
+                       },
+                   }
+               }";
+    let out = run_no_errors(src);
+    assert_eq!(out, "not found\n");
+}
+
+#[test]
+fn test_file_append_constructor_writes_at_end() {
+    // `File.append` opens in append mode (positions writes at end of
+    // file, creating it if absent). Two consecutive appends should
+    // produce concatenated contents.
+    let tmp = std::env::temp_dir().join("karac_test_file_append.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             let first = [97u8, 98u8];
+             let second = [99u8, 100u8];
+             match File.append(\"{path}\") {{
+                 Ok(f) => {{ f.write(first[0..2]); }}
+                 Err(_) => println(\"append1 err\"),
+             }}
+             match File.append(\"{path}\") {{
+                 Ok(f) => {{ f.write(second[0..2]); }}
+                 Err(_) => println(\"append2 err\"),
+             }}
+         }}"
+    );
+    let _ = run_no_errors(&src);
+    let written = std::fs::read(&tmp).expect("temp read");
+    assert_eq!(written, b"abcd");
+    let _ = std::fs::remove_file(&tmp);
+}
+
+#[test]
+fn test_file_flush_on_writable_handle_returns_ok() {
+    // Flush on a freshly opened writable file returns Ok(Unit) even
+    // when nothing was written — the std::fs::File flush is a no-op
+    // for un-buffered handles, never an error in this case.
+    let tmp = std::env::temp_dir().join("karac_test_file_flush_ok.txt");
+    let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+    let _ = std::fs::remove_file(&tmp);
+    let src = format!(
+        "fn main() {{
+             match File.create(\"{path}\") {{
+                 Ok(f) => {{
+                     match f.flush() {{
+                         Ok(_) => println(\"flushed\"),
+                         Err(_) => println(\"err\"),
+                     }}
+                 }}
+                 Err(_) => println(\"create err\"),
+             }}
+         }}"
+    );
+    let out = run_no_errors(&src);
+    assert_eq!(out, "flushed\n");
+    let _ = std::fs::remove_file(&tmp);
+}
+
 #[test]
 fn test_stderr_flush_is_callable() {
     let out = run_no_errors("fn main() { Stderr.flush(); println(\"ok\"); }");

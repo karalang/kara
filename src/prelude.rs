@@ -115,6 +115,12 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Hex",
     "Url",
     "DecodeError",
+    // Phase 8 `File` handle slice F1 (2026-05-26): stateful file I/O.
+    // Constructors `File.open` / `.create` / `.append` return
+    // `Result[File, IoError]`; methods `read` / `write` / `flush`
+    // operate on a live OS file descriptor. See `phase-8-stdlib-floor.md`
+    // "File handle type" entry for the v1 surface + sub-task plan.
+    "File",
     // Debugger Contract slice 5: `std.runtime` introspection surface.
     // `Runtime` is the empty-marker host for the three `#[compiler_builtin]`
     // dispatch methods; `ParBlockInfo` / `TaskInfo` / `WaitTarget` are the

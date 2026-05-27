@@ -234,6 +234,53 @@ impl<'a> super::Interpreter<'a> {
                     let receiver = Value::Receiver(queue);
                     return Value::Tuple(vec![sender, receiver]);
                 }
+                "File.open" | "File.create" | "File.append" => {
+                    // Phase 8 slice F1: stateful file I/O constructors.
+                    // Each routes through the corresponding std::fs::File
+                    // open mode (read-only / write+truncate / append).
+                    // Errors map through `io_error_from_std` to IoError
+                    // variants; success wraps the `Arc<Mutex<File>>` in
+                    // `Value::File`. `reads(FileSystem)` /
+                    // `writes(FileSystem)` is tracked per arm.
+                    let path = match args.first() {
+                        Some(arg) => match self.eval_expr_inner(&arg.value) {
+                            Value::String(s) => s,
+                            _ => {
+                                return self.record_runtime_error(
+                                    format!("{path_str} expects a String path"),
+                                    span,
+                                );
+                            }
+                        },
+                        None => {
+                            return self.record_runtime_error(
+                                format!("{path_str} expects a String path"),
+                                span,
+                            );
+                        }
+                    };
+                    use super::helpers::{io_err_value, io_error_from_std, io_ok};
+                    let mut opts = std::fs::OpenOptions::new();
+                    match path_str.as_str() {
+                        "File.open" => {
+                            self.track_effect("reads(FileSystem)");
+                            opts.read(true);
+                        }
+                        "File.create" => {
+                            self.track_effect("writes(FileSystem)");
+                            opts.write(true).create(true).truncate(true);
+                        }
+                        "File.append" => {
+                            self.track_effect("writes(FileSystem)");
+                            opts.append(true).create(true);
+                        }
+                        _ => unreachable!(),
+                    }
+                    return match opts.open(&path) {
+                        Ok(f) => io_ok(Value::File(Arc::new(Mutex::new(f)))),
+                        Err(e) => io_err_value(io_error_from_std(&e)),
+                    };
+                }
                 "F32.from" => {
                     let val = if let Some(arg) = args.first() {
                         match self.eval_expr_inner(&arg.value) {

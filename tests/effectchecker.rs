@@ -6963,3 +6963,59 @@ fn test_pub_method_modbind_rejected() {
             .collect::<Vec<_>>()
     );
 }
+
+// ── Phase 8 File handle slice F1 — effect declarations ─────────────
+//
+// File methods declare their FileSystem effects via baked stdlib
+// `with reads(FileSystem)` / `with writes(FileSystem)` clauses
+// (`runtime/stdlib/io.kara` slice F1). A `pub fn` that calls a File
+// method without declaring the corresponding effect must fail
+// `MissingEffectDeclaration` — same shape as `FileSystem.write` and
+// every other ambient I/O surface.
+
+#[test]
+fn test_pub_fn_calling_file_open_must_declare_reads_filesystem() {
+    let errors = effectcheck_errors(
+        "pub fn driver() {
+             let _ = File.open(\"x.txt\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("reads(FileSystem)")),
+        "expected MissingEffectDeclaration for reads(FileSystem); got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_calling_file_create_must_declare_writes_filesystem() {
+    let errors = effectcheck_errors(
+        "pub fn driver() {
+             let _ = File.create(\"x.txt\");
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == EffectErrorKind::MissingEffectDeclaration
+                && e.message.contains("writes(FileSystem)")),
+        "expected MissingEffectDeclaration for writes(FileSystem); got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn test_pub_fn_with_filesystem_effects_declared_accepts_file_methods() {
+    // Mirror of the `Env.set` positive test (line 83 of phase-8) —
+    // a `pub fn` that declares both reads/writes(FileSystem) is
+    // accepted when calling open + create + write + flush + read.
+    effectcheck_ok(
+        "pub fn driver() with reads(FileSystem) writes(FileSystem) {
+             let _ = File.open(\"x.txt\");
+             let _ = File.create(\"y.txt\");
+         }",
+    );
+}

@@ -7733,6 +7733,106 @@ fn test_stdout_flush_returns_unit() {
     );
 }
 
+// ── Phase 8 File handle slice F1 — typechecker signatures ──────────
+//
+// File.open / .create / .append are static methods returning
+// Result[File, IoError]; file.read / .write / .flush are instance
+// methods. Effect declarations on each (reads/writes(FileSystem))
+// are validated by the effect-checker via the baked stdlib `with`
+// clauses in `runtime/stdlib/io.kara`.
+
+#[test]
+fn test_file_open_returns_result_file() {
+    typecheck_ok(
+        "fn driver() with reads(FileSystem) {
+             let r = File.open(\"x.txt\");
+         }",
+    );
+}
+
+#[test]
+fn test_file_create_returns_result_file() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             let r = File.create(\"x.txt\");
+         }",
+    );
+}
+
+#[test]
+fn test_file_append_returns_result_file() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             let r = File.append(\"x.txt\");
+         }",
+    );
+}
+
+#[test]
+fn test_file_read_takes_mut_slice_returns_result_usize() {
+    // file.read(buf: mut Slice[u8]) -> Result[usize, IoError]
+    // — receiver is `ref self`; buf is the mutable destination
+    // (must be a `mut Slice[u8]` at the call site, which auto-coerces
+    // from `mut ref Vec[u8]` per the existing mut-Slice arg shape).
+    typecheck_ok(
+        "fn read_into(f: ref File, buf: mut Slice[u8]) -> Result[usize, IoError] \
+             with reads(FileSystem) {
+             f.read(buf)
+         }
+         fn driver() with reads(FileSystem) {
+             match File.open(\"x.txt\") {
+                 Ok(f) => {
+                     let mut v: Vec[u8] = Vec.new();
+                     let _ = read_into(f, mut v);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_file_write_takes_slice_returns_result_usize() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => {
+                     let data = [104u8, 105u8];
+                     let _ = f.write(data[0..2]);
+                 }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_file_flush_returns_result_unit() {
+    typecheck_ok(
+        "fn driver() with writes(FileSystem) {
+             match File.create(\"x.txt\") {
+                 Ok(f) => { let _ = f.flush(); }
+                 Err(_) => {}
+             }
+         }",
+    );
+}
+
+#[test]
+fn test_file_open_wrong_arg_type_is_error() {
+    // File.open expects a String path; passing an integer must fire.
+    let errs = typecheck_errors(
+        "fn driver() with reads(FileSystem) {
+             let _ = File.open(42);
+         }",
+    );
+    assert!(
+        !errs.is_empty(),
+        "expected typechecker rejection for non-String path arg; errs={:?}",
+        errs,
+    );
+}
+
 // ── std.runtime introspection signatures (Debugger Contract slice 5) ─────────
 //
 // Three Kāra-callable APIs declared in `runtime/stdlib/runtime.kara`. The

@@ -620,6 +620,42 @@ impl<'a> EffectChecker<'a> {
             }
         }
 
+        // Phase 8 `File` handle slice F1: stateful file I/O methods.
+        // `File.open` / `File.read` carry `reads(FileSystem)`; `File.create`
+        // / `File.append` / `File.write` / `File.flush` carry
+        // `writes(FileSystem)`. The baked stdlib `with reads(FileSystem)`
+        // / `with writes(FileSystem)` clauses on `impl File { ... }` in
+        // `runtime/stdlib/io.kara` would naturally propagate through
+        // `collect_declared_effects`, but the path-keyed lookup that the
+        // effect-inference walker performs for free-function and instance-
+        // method calls reads from `inferred_effects` (the post-inference
+        // table); without an explicit seed here, the walker sees the
+        // method call as a no-effect builtin. Mirror of the Env.set / Map
+        // / Channel hand-seeding patterns above.
+        {
+            let reads_fs = Effect {
+                verb: EffectVerbKind::Reads,
+                resource: "FileSystem".to_string(),
+            };
+            let writes_fs = Effect {
+                verb: EffectVerbKind::Writes,
+                resource: "FileSystem".to_string(),
+            };
+            for fn_name in ["File.open", "File.read"] {
+                let mut set = EffectSet::new();
+                set.add(reads_fs.clone(), EffectOrigin::Direct(builtin_span.clone()));
+                self.inferred_effects.insert(fn_name.to_string(), set);
+            }
+            for fn_name in ["File.create", "File.append", "File.write", "File.flush"] {
+                let mut set = EffectSet::new();
+                set.add(
+                    writes_fs.clone(),
+                    EffectOrigin::Direct(builtin_span.clone()),
+                );
+                self.inferred_effects.insert(fn_name.to_string(), set);
+            }
+        }
+
         // Stdlib conversion traits (`From`, `Into`, `TryFrom`, `TryInto`) are
         // registered as trait names only by the typechecker — they have no
         // AST `TraitDef`, so `collect_declared_effects` skips them. Seed

@@ -150,6 +150,14 @@ pub enum Value {
     /// single-threaded tree-walk interpreter the test pattern is always
     /// send-before-recv, so the queue already has items when recv fires.
     Receiver(Arc<Mutex<VecDeque<Value>>>),
+    /// File handle wrapping a live OS file descriptor. The `Arc<Mutex<...>>`
+    /// layout keeps `Value` clone-friendly without requiring `Clone` on
+    /// `std::fs::File` (which is intentionally non-Clone — cloning a file
+    /// handle is a `dup(2)` syscall, not a free op). Drop on the last
+    /// Arc closes the underlying fd via `std::fs::File`'s own Drop impl.
+    /// Constructed via `File.open` / `File.create` / `File.append`;
+    /// methods `.read` / `.write` / `.flush` thread through the mutex.
+    File(Arc<Mutex<std::fs::File>>),
     /// Aliasing slot used to back a `mut ref |...|` closure capture.
     /// Lives only inside an `Env` scope or a closure's captured-env map;
     /// never reaches user expressions because every path that reads a
@@ -767,6 +775,7 @@ impl std::fmt::Display for Value {
                 let mv = map_var.as_deref().unwrap_or("?");
                 write!(f, "<{} entry for {} in {}>", occ, key, mv)
             }
+            Value::File(_) => write!(f, "<File>"),
         }
     }
 }
@@ -890,6 +899,7 @@ impl Value {
             Value::Receiver(_) => "Receiver",
             Value::SharedCell(_) => "SharedCell",
             Value::Entry { .. } => "Entry",
+            Value::File(_) => "File",
         }
     }
 
