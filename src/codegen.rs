@@ -1393,6 +1393,58 @@ impl<'ctx> Codegen<'ctx> {
             request_header_type,
             Some(Linkage::External),
         );
+        // Phase 8 `File` handle slice F3: extern declarations for the
+        // runtime/src/file.rs ABI surface. Each open/read/write/flush
+        // entry point returns a `KaracIoResult` struct (32 bytes; see
+        // `runtime/src/file.rs::KaracIoResult` for the field shape +
+        // ABI layout pin). LLVM models the struct return directly;
+        // Rust's `extern "C"` calling convention applies the target's
+        // native struct-return ABI (sret on x86_64 SystemV; x8 on
+        // AArch64), and matching the LLVM declaration to the struct
+        // type produces ABI-aligned code on both sides. F4 method
+        // codegen extracts fields via `build_extract_value`.
+        let i32_type = context.i32_type();
+        let io_result_type = context.struct_type(
+            &[
+                i64_type.into(), // value (handle-as-i64 or byte count)
+                i32_type.into(), // error_kind (0 = OK; 1..=7 = IoError variant tag)
+                i32_type.into(), // _pad (32-bit padding for natural alignment)
+                ptr_type.into(), // error_msg_ptr (owned bytes for IoError.Other; null otherwise)
+                i64_type.into(), // error_msg_len
+            ],
+            false,
+        );
+        // Open-family: (path_ptr, path_len) -> KaracIoResult.
+        let file_open_type = io_result_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        for sym in [
+            "karac_runtime_file_open",
+            "karac_runtime_file_create",
+            "karac_runtime_file_append",
+        ] {
+            module.add_function(sym, file_open_type, Some(Linkage::External));
+        }
+        // Read / write: (handle, buf_ptr, buf_len) -> KaracIoResult.
+        let file_rw_type =
+            io_result_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        for sym in ["karac_runtime_file_read", "karac_runtime_file_write"] {
+            module.add_function(sym, file_rw_type, Some(Linkage::External));
+        }
+        // Flush: (handle) -> KaracIoResult.
+        let file_flush_type = io_result_type.fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_file_flush",
+            file_flush_type,
+            Some(Linkage::External),
+        );
+        // Close: (handle) -> void. Called by F4's FreeFileHandle
+        // cleanup action at scope exit.
+        let file_close_type = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_file_close",
+            file_close_type,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_parse_i64(data: *const u8, len: usize, out: *mut i64) -> u8`.
         // Returns 1 on success (with the parsed value at `*out`), 0 on
         // failure. Backs `i64.parse(s: String) -> Option[i64]` and the

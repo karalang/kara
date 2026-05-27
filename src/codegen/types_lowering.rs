@@ -82,6 +82,14 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "Request" {
                     return self.context.ptr_type(AddressSpace::default()).into();
                 }
+                // Phase 8 `File` handle slice F3: opaque heap pointer
+                // wrapping the runtime's `*mut KaracFile`. Constructed by
+                // `karac_runtime_file_open` / `_create` / `_append`; freed
+                // at scope exit via `karac_runtime_file_close` through the
+                // `FreeFileHandle` cleanup action (F4).
+                if name == "File" {
+                    return self.context.ptr_type(AddressSpace::default()).into();
+                }
                 self.llvm_type_for_name(name)
             }
             TypeKind::Tuple(elems) if elems.is_empty() => {
@@ -194,6 +202,22 @@ impl<'ctx> super::Codegen<'ctx> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
         let i64_ty = self.context.i64_type().into();
         self.context.struct_type(&[ptr_ty, i64_ty], false)
+    }
+
+    /// Phase 8 `File` handle slice F3: ABI struct returned by every
+    /// `karac_runtime_file_*` extern in `runtime/src/file.rs`. Layout
+    /// `{ i64 value, i32 error_kind, i32 _pad, ptr error_msg_ptr,
+    /// i64 error_msg_len }` — 32 bytes, alignment 8, pinned by the
+    /// runtime crate's `test_io_result_layout_pinned`. F4 method
+    /// codegen extracts the fields via `build_extract_value` to build
+    /// `Result[T, IoError]` Ok/Err arms from one struct return.
+    #[allow(dead_code)] // F4 method codegen consumes this — declared at F3 so the type is stable.
+    pub(super) fn kara_io_result_type(&self) -> StructType<'ctx> {
+        let i64_ty = self.context.i64_type().into();
+        let i32_ty = self.context.i32_type().into();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default()).into();
+        self.context
+            .struct_type(&[i64_ty, i32_ty, i32_ty, ptr_ty, i64_ty], false)
     }
 
     /// Produce an LLVM integer type matching the source-level suffix.
