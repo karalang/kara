@@ -11,8 +11,6 @@
 
 Kāra is a systems programming language designed for the AI era. The compiler handles memory layout and concurrency; the programmer handles intent — and hardware targets, like GPU, when they matter.
 
-**Backend-first at v1.** Kāra v1 ships with a flagship-grade concurrency runtime (1M+ idle connections per process), `std.http` server, TLS, and WebSocket — built to host real backend workloads from launch, not after. REPL, data-engineering, and AR/WASM compose on top of the same v1 floor. See [docs/design.md § v1 Positioning](docs/design.md#v1-positioning--backend-first).
-
 Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/gowthamswe/karac-rust/discussions/new/choose) — all input welcome.
 
 ---
@@ -86,6 +84,41 @@ layout entities: Collection<Entity> {
 ### AI-First Compiler Interface
 
 All compiler output available as structured JSON with machine-applicable fix diffs. Compiler query API for programmatic access to effect inference, ownership decisions, and concurrency analysis. Canonical formatter for clean semantic diffs.
+
+## Production-Ready
+
+What v1 ships with, what the numbers look like, and what the toolchain gives you.
+
+> **Status:** skeleton. Each subsection lands its numbers and links once the underlying feature is measured end-to-end. Empty rows are placeholders, not commitments — they ship when the data does.
+
+### Concurrency Runtime
+
+- Target: **1M+ idle connections per process.**
+- Blocking-style I/O syntax; effect-driven scheduling moves blocking work off the par-runtime threads.
+- _TBD: link to the kata and reproduction script once the headline number is measured end-to-end._
+
+### Standard Library at v1
+
+In-tree, no third-party runtime dependencies.
+
+- `std.http` server (HTTP/1.1, HTTP/2) — _TBD: link to module + minimal example_
+- TLS — _TBD: link to module + minimal example_
+- WebSocket — _TBD: link to module + minimal example_
+
+### Performance
+
+Cross-language benchmarks vs. Rust and Go, reported in two lanes:
+
+- **Sequential lane** (`KARAC_AUTO_PAR=0`): apples-to-apples comparison against single-threaded Rust/Go. **This is the headline lane.**
+- **Auto-parallel lane** (default): Kāra with the auto-par runtime enabled, reported separately and clearly labeled.
+
+_TBD: per-kata table and graphs, sourced from `bench/` and the `kara-katas` repo. Sequential lane leads; auto-par follows in its own callout._
+
+### Toolchain
+
+- LLVM-backed codegen.
+- Address-sanitizer–clean across the codegen E2E suite.
+- Structured diagnostics and the AI-first compiler interface described above.
 
 ## Docs
 
