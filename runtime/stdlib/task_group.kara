@@ -22,13 +22,15 @@
 // `fn spawn[T, with E](f: Fn() -> T with E) -> TaskHandle[T] with E`
 // per design.md § Explicit Concurrency lines 9337 and 9357–9366.
 //
-// **ScopeLocal enforcement — slice 2.** Per the design,
-// `TaskHandle[T]` is a `ScopeLocal` marker-trait type — rejected in
-// three positions (function return, struct/enum field, channel
-// `send` argument). v1 slice 1 declares the types without the marker
-// impl; slice 2 of this entry adds the sealed `marker trait
-// ScopeLocal;` + compiler-emitted `impl ScopeLocal for TaskHandle[T]
-// { }` + typechecker enforcement.
+// **ScopeLocal enforcement — slice 2 (shipped 2026-05-27).** Per
+// design.md § ScopeLocal, `TaskHandle[T]` is a `ScopeLocal`
+// marker-trait type — rejected in three positions (function return,
+// struct/enum field, channel `send` argument). The `marker trait
+// ScopeLocal;` + the `impl[T] ScopeLocal for TaskHandle[T] {}` opt-in
+// are declared at the bottom of this file; the typechecker walker
+// lives in `src/typechecker/items.rs::check_scope_local_escape` and
+// runs alongside `check_signature_visibility`. The Sender.send check
+// fires from `src/typechecker/stdlib_io.rs`.
 //
 // **Drop dispatch — slice 5.** `impl Drop for TaskGroup` is declared
 // here; the v1 stub body is empty. Slice 5 of this entry hand-rolls
@@ -190,3 +192,37 @@ impl Drop for TaskGroup {
 fn spawn[T](f: Fn() -> T) -> TaskHandle[T] {
     TaskHandle { task_id: 0 }
 }
+
+// `ScopeLocal` — sealed compiler-known marker trait. Types that
+// implement `ScopeLocal` cannot escape the scope that created them:
+// the typechecker rejects them in three positions per design.md §
+// ScopeLocal: (a) function return type, (b) struct or enum field
+// type, (c) channel `send` argument. Bare `let` binds, passes to
+// functions within the same scope, and explicit `.join()` are still
+// first-class — the marker only blocks escape paths.
+//
+// **Sealed in v1.** Users cannot `impl ScopeLocal for MyType` — the
+// trait is intended only for compiler-known scope-bound handles
+// (TaskHandle today; future RAII critical-section guards / scope-
+// bound iterators per design.md). The seal is currently a convention
+// enforced by documentation rather than typechecker rejection — if a
+// workload surfaces a need to lock it down structurally, a small
+// `is_sealed_marker_trait()` check in `env_add_marker_trait` can
+// reject non-stdlib impls.
+//
+// **Generic-arg opt-in carries through.** `impl[T] ScopeLocal for
+// TaskHandle[T] {}` below means EVERY instantiation of
+// `TaskHandle[T]` (TaskHandle[i64], TaskHandle[String], ...) is
+// ScopeLocal regardless of T — the marker walker keys off the
+// outermost type name, not the generic args.
+pub marker trait ScopeLocal;
+
+// `TaskHandle[T]` is ScopeLocal — cannot escape its spawning scope.
+// Mirrors the existing `impl Drop for TaskGroup` pattern: declared
+// here in stdlib source rather than synthesised by the compiler.
+// The walker (`collect_scope_local_types` in
+// `src/typechecker/items.rs`) keys off the outermost target type
+// name, so the `[T]` generic-arg list doesn't change the set
+// membership — any `TaskHandle[X]` for any X trips the same
+// rejection rule.
+impl[T] ScopeLocal for TaskHandle[T] {}

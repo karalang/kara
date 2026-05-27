@@ -242,6 +242,14 @@ pub const PRELUDE_TRAITS: &[&str] = &[
     // declare `impl ToJson for MyType` without an explicit import.
     "ToJson",
     "FromJson",
+    // Phase 6 line 218 slice 2 — `ScopeLocal` sealed marker trait
+    // (design.md § ScopeLocal). Used by the typechecker walker
+    // `check_scope_local_escape` to identify types that must not
+    // escape their creating scope. Currently the only implementer
+    // shipped in stdlib is `TaskHandle[T]` (see
+    // `runtime/stdlib/task_group.kara`); future scope-bound handles
+    // (RAII guards, scope-bound iterators) implement it the same way.
+    "ScopeLocal",
 ];
 
 /// Enum variant names from prelude enums (`Option`, `Result`, `Ordering`,

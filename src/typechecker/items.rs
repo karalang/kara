@@ -526,6 +526,290 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    // ── Phase 6 line 218 slice 2: ScopeLocal escape walker ──────────
+    //
+    // design.md § ScopeLocal: types implementing the sealed marker
+    // trait `ScopeLocal` cannot escape the scope that created them.
+    // The typechecker rejects them in three positions:
+    //   (a) function return type — any fn, including non-`pub`
+    //   (b) struct field type / enum variant payload — any field
+    //   (c) channel `Sender.send(arg)` argument (handled in
+    //       `src/typechecker/stdlib_io.rs::infer_channel_method` at
+    //       the call site where the channel element type is known)
+    //
+    // The walker mirrors `check_signature_visibility`'s structure but
+    // (i) runs regardless of `is_pub` (escape is escape — a private
+    // fn returning a TaskHandle is still leaking it past the spawning
+    // scope), (ii) keys off a `scope_local_types: HashSet<String>`
+    // collected from `impl ScopeLocal for T {}` blocks across both
+    // user `program.items` AND every entry in `STDLIB_PROGRAMS` (the
+    // baked stdlib's impl blocks don't get spliced into
+    // `program.items` — `synthetic_prelude_items` clones the
+    // StructDef only, so the walker reaches into STDLIB_PROGRAMS
+    // explicitly to pick up `impl[T] ScopeLocal for TaskHandle[T]`
+    // from `runtime/stdlib/task_group.kara`). Same precedent as
+    // `raii_check::collect_cancel_unsafe_annotations`.
+
+    /// Collect type names with an `impl ScopeLocal for T {}` opt-in,
+    /// across the user `program.items` AND the baked stdlib.
+    fn collect_scope_local_types(&self) -> HashSet<String> {
+        let mut out: HashSet<String> = HashSet::new();
+        let mut record = |item: &Item| {
+            let Item::ImplBlock(imp) = item else { return };
+            let Some(ref trait_path) = imp.trait_name else {
+                return;
+            };
+            if trait_path.segments.last().map(String::as_str) != Some("ScopeLocal") {
+                return;
+            }
+            let TypeKind::Path(ref target_path) = imp.target_type.kind else {
+                return;
+            };
+            if target_path.segments.len() != 1 {
+                return;
+            }
+            out.insert(target_path.segments[0].clone());
+        };
+        for item in &self.program.items {
+            record(item);
+        }
+        for (_, prog) in crate::prelude::STDLIB_PROGRAMS.iter() {
+            for item in &prog.items {
+                record(item);
+            }
+        }
+        out
+    }
+
+    /// Walk a `TypeExpr` and emit `ScopeLocalEscape` for every
+    /// reference to a `ScopeLocal`-marked type. The walker mirrors
+    /// `check_type_expr_visibility` — same recursion shape over
+    /// `TypeKind::Path` / `Tuple` / `Array` / `Pointer` / `Ref` /
+    /// `MutRef` / `MutSlice` / `Weak` / `FnType` / `ImplTrait` /
+    /// `Dyn` — but keys off the ScopeLocal type set instead of the
+    /// visibility map. Generic-scope identifiers (`T` inside
+    /// `fn foo[T](...)`) are passed through unchanged because the
+    /// rule applies to the outermost named type, not type
+    /// parameters.
+    fn check_type_expr_scope_local(
+        &mut self,
+        ty: &TypeExpr,
+        generic_scope: &[String],
+        scope_local_types: &HashSet<String>,
+        context: &str,
+        owner: &str,
+    ) {
+        match &ty.kind {
+            TypeKind::Path(p) => {
+                if let Some(ref args) = p.generic_args {
+                    for a in args {
+                        if let GenericArg::Type(t) = a {
+                            self.check_type_expr_scope_local(
+                                t,
+                                generic_scope,
+                                scope_local_types,
+                                context,
+                                owner,
+                            );
+                        }
+                    }
+                }
+                let last = match p.segments.last() {
+                    Some(s) => s.clone(),
+                    None => return,
+                };
+                if p.segments.len() == 1 && generic_scope.iter().any(|g| g == &last) {
+                    return;
+                }
+                if scope_local_types.contains(&last) {
+                    self.type_error(
+                        format!(
+                            "ScopeLocal type '{}' cannot appear in {} of '{}'; the value is bound \
+                             to the scope that created it and cannot escape via return, \
+                             field storage, or channel send",
+                            last, context, owner
+                        ),
+                        ty.span.clone(),
+                        TypeErrorKind::ScopeLocalEscape,
+                    );
+                }
+            }
+            TypeKind::Tuple(ts) => {
+                for t in ts {
+                    self.check_type_expr_scope_local(
+                        t,
+                        generic_scope,
+                        scope_local_types,
+                        context,
+                        owner,
+                    );
+                }
+            }
+            TypeKind::Array { element, .. } => {
+                self.check_type_expr_scope_local(
+                    element,
+                    generic_scope,
+                    scope_local_types,
+                    context,
+                    owner,
+                );
+            }
+            TypeKind::Pointer { inner, .. }
+            | TypeKind::Ref(inner)
+            | TypeKind::MutRef(inner)
+            | TypeKind::MutSlice(inner)
+            | TypeKind::Weak(inner) => {
+                self.check_type_expr_scope_local(
+                    inner,
+                    generic_scope,
+                    scope_local_types,
+                    context,
+                    owner,
+                );
+            }
+            TypeKind::FnType {
+                params,
+                return_type,
+                ..
+            } => {
+                for p in params {
+                    self.check_type_expr_scope_local(
+                        p,
+                        generic_scope,
+                        scope_local_types,
+                        context,
+                        owner,
+                    );
+                }
+                if let Some(ref rt) = return_type {
+                    self.check_type_expr_scope_local(
+                        rt,
+                        generic_scope,
+                        scope_local_types,
+                        context,
+                        owner,
+                    );
+                }
+            }
+            // `impl Trait` / `dyn Trait` carry generic args we still
+            // descend into (same shape as the visibility walker).
+            TypeKind::ImplTrait { args, .. } | TypeKind::Dyn { args, .. } => {
+                for a in args {
+                    if let GenericArg::Type(t) = a {
+                        self.check_type_expr_scope_local(
+                            t,
+                            generic_scope,
+                            scope_local_types,
+                            context,
+                            owner,
+                        );
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Walk every function, struct, and enum in the program, emitting
+    /// `ScopeLocalEscape` for each return-type / field / payload that
+    /// references a `ScopeLocal`-marked type. Runs regardless of
+    /// visibility — escape is escape. Channel-send check lives in
+    /// `infer_channel_method`'s Sender.send arm where the channel
+    /// element type is known.
+    pub(super) fn check_scope_local_escape(&mut self) {
+        let scope_local_types = self.collect_scope_local_types();
+        if scope_local_types.is_empty() {
+            return;
+        }
+        let items = self.program.items.clone();
+        for item in &items {
+            match item {
+                Item::Function(f) => {
+                    let scope = Self::generic_param_names(&f.generic_params);
+                    if let Some(ref rt) = f.return_type {
+                        self.check_type_expr_scope_local(
+                            rt,
+                            &scope,
+                            &scope_local_types,
+                            "return type",
+                            &f.name,
+                        );
+                    }
+                }
+                Item::StructDef(s) => {
+                    let scope = Self::generic_param_names(&s.generic_params);
+                    for fld in &s.fields {
+                        let owner = format!("{}.{}", s.name, fld.name);
+                        self.check_type_expr_scope_local(
+                            &fld.ty,
+                            &scope,
+                            &scope_local_types,
+                            "struct field",
+                            &owner,
+                        );
+                    }
+                }
+                Item::EnumDef(e) => {
+                    let scope = Self::generic_param_names(&e.generic_params);
+                    for v in &e.variants {
+                        match &v.kind {
+                            VariantKind::Unit => {}
+                            VariantKind::Tuple(ts) => {
+                                let owner = format!("{}.{}", e.name, v.name);
+                                for t in ts {
+                                    self.check_type_expr_scope_local(
+                                        t,
+                                        &scope,
+                                        &scope_local_types,
+                                        "enum variant payload",
+                                        &owner,
+                                    );
+                                }
+                            }
+                            VariantKind::Struct(fs) => {
+                                for fld in fs {
+                                    let owner = format!("{}.{}.{}", e.name, v.name, fld.name);
+                                    self.check_type_expr_scope_local(
+                                        &fld.ty,
+                                        &scope,
+                                        &scope_local_types,
+                                        "enum variant field",
+                                        &owner,
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+                Item::ImplBlock(imp) => {
+                    // Methods inside `impl` blocks — return-type
+                    // check fires regardless of visibility. Parameter
+                    // types are intentionally NOT checked: passing a
+                    // ScopeLocal into a same-scope helper is the
+                    // normal usage pattern (e.g.
+                    // `tg_spawn_helper(mut tg, conn)`).
+                    let impl_scope = Self::generic_param_names(&imp.generic_params);
+                    for ii in &imp.items {
+                        if let ImplItem::Method(m) = ii {
+                            let mut scope = impl_scope.clone();
+                            scope.extend(Self::generic_param_names(&m.generic_params));
+                            if let Some(ref rt) = m.return_type {
+                                self.check_type_expr_scope_local(
+                                    rt,
+                                    &scope,
+                                    &scope_local_types,
+                                    "method return type",
+                                    &m.name,
+                                );
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Const-expression evaluator (const generics slice 2). Walks `expr`
     /// against a target `Type`, returning either a resolved `ConstValue`
     /// or a `ConstEvalError`.

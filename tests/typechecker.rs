@@ -19311,25 +19311,198 @@ fn task_handle_inner_type_mismatch_rejected() {
 #[test]
 fn task_group_canonical_accept_loop_shape_compiles() {
     // design.md § Explicit Concurrency lines 9357-9366 — the
-    // canonical accept-loop shape that the spawn entry's slice 7
-    // smoke-tests end-to-end. Slice 1 just verifies it typechecks.
-    // (Compilation to LLVM still fails at codegen until slice 4 of
-    // this entry ships; the typecheck pass is the v1 surface.)
+    // canonical accept-loop shape. The `group.spawn(...)` result is
+    // discarded; the TaskGroup's drop joins all spawned children at
+    // scope exit. The spawn entry's slice 7 smoke-tests this
+    // end-to-end; slice 1 just verifies it typechecks. (Compilation
+    // to LLVM still fails at codegen until slice 4 of this entry
+    // ships.)
     //
     // Note: variable named `tg` (not `group`) because `group` is a
     // reserved keyword in the lexer (`Token::Group`, used for
     // `effect group` and layout-block groupings).
+    //
+    // Slice 2 (ScopeLocal) note: this shape does NOT trigger the
+    // ScopeLocal-escape check — the `TaskHandle` returned by
+    // `tg.spawn(...)` is discarded inline (the call statement's
+    // value is bound to no name), never assigned to a long-lived
+    // binding, never returned. The escape rule fires only at fn
+    // return / struct field / channel send positions.
     typecheck_ok(
         "fn handle_client(c: TcpStream) -> i64 { 0 }
+         fn make_zero() -> i64 { 0 }
          fn main() {
              let listener: TcpListener = TcpListener.bind(\"127.0.0.1:0\");
              let mut tg: TaskGroup = TaskGroup.new();
              let conn: TcpStream = listener.accept();
-             let h: TaskHandle[i64] = tg_spawn_helper(mut tg, conn);
+             tg.spawn(make_zero);
+         }",
+    );
+}
+
+// ── Phase 6 line 218 slice 2: ScopeLocal marker + enforcement ────────
+//
+// design.md § ScopeLocal — `TaskHandle[T]` (and any other future
+// ScopeLocal-marked type) cannot escape its creating scope. The
+// walker (`src/typechecker/items.rs::check_scope_local_escape`)
+// rejects three positions: function/method return type, struct/enum
+// field type, and Sender.send argument. Local binds, pass-to-helper,
+// and explicit `.join()` are still first-class.
+
+#[test]
+fn scope_local_local_bind_and_join_accepted() {
+    // Positive case: TaskHandle bound to a local + consumed by
+    // `.join()` is allowed. The escape rule fires only at the
+    // escape positions, not at local-binding sites.
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let h: TaskHandle[i64] = spawn(make_int);
+             let v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn scope_local_returning_task_handle_from_fn_rejected() {
+    let errors = typecheck_errors(
+        "fn make_int() -> i64 { 42 }
+         fn leak() -> TaskHandle[i64] {
+             spawn(make_int)
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::ScopeLocalEscape
+        )),
+        "expected ScopeLocalEscape on fn-return-of-TaskHandle, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_returning_task_handle_from_private_fn_rejected() {
+    // The rule applies regardless of visibility — even a private
+    // fn cannot return a TaskHandle.
+    let errors = typecheck_errors(
+        "fn make_int() -> i64 { 42 }
+         fn leak_private() -> TaskHandle[i64] {
+             spawn(make_int)
          }
-         fn tg_spawn_helper(tg: mut ref TaskGroup, c: TcpStream) -> TaskHandle[i64] {
-             tg.spawn(make_zero)
+         fn main() {
+             let h: TaskHandle[i64] = leak_private();
+             let v: i64 = h.join();
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::ScopeLocalEscape
+        )),
+        "expected ScopeLocalEscape on private fn return, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_task_handle_in_struct_field_rejected() {
+    let errors = typecheck_errors(
+        "struct Holder {
+             handle: TaskHandle[i64],
          }
-         fn make_zero() -> i64 { 0 }",
+         fn main() {}",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::ScopeLocalEscape
+        )),
+        "expected ScopeLocalEscape on struct field, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_task_handle_in_enum_variant_payload_rejected() {
+    let errors = typecheck_errors(
+        "enum Slot {
+             Empty,
+             Held(TaskHandle[i64]),
+         }
+         fn main() {}",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::ScopeLocalEscape
+        )),
+        "expected ScopeLocalEscape on enum variant payload, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_task_handle_through_channel_send_rejected() {
+    // Use `Sender[TaskHandle[i64]]` as a parameter directly —
+    // matches the existing channel-typechecker test pattern at
+    // `test_sender_send_returns_unit`. Channel construction with
+    // an explicit element type goes through the same code path as
+    // `Channel.new()` destructure once a real consumer needs it.
+    //
+    // NB: parameter position itself doesn't fire the escape rule
+    // (the walker skips params per `check_scope_local_escape`'s
+    // design comment) — even if it did, this test would still
+    // catch the .send fire because the .send check runs at the
+    // call-site infer regardless of how the Sender got into scope.
+    let errors = typecheck_errors(
+        "fn make_int() -> i64 { 42 }
+         fn leak(tx: Sender[TaskHandle[i64]]) {
+             let h: TaskHandle[i64] = spawn(make_int);
+             tx.send(h);
+         }",
+    );
+    assert!(
+        errors.iter().any(|e| matches!(
+            e.kind,
+            karac::typechecker::TypeErrorKind::ScopeLocalEscape
+        )),
+        "expected ScopeLocalEscape on Sender.send, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn scope_local_passing_task_handle_to_helper_accepted() {
+    // Passing a TaskHandle as a function PARAMETER (not return /
+    // field / channel send) is allowed — the handle still lives
+    // within the same lexical scope as its spawning call. The
+    // walker intentionally skips parameter positions per the
+    // design comment in `check_scope_local_escape`.
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn consume(h: TaskHandle[i64]) -> i64 { h.join() }
+         fn main() {
+             let h: TaskHandle[i64] = spawn(make_int);
+             let v: i64 = consume(h);
+         }",
+    );
+}
+
+#[test]
+fn scope_local_other_types_not_rejected() {
+    // Regression guard: the walker MUST fire only on
+    // ScopeLocal-marked types. Returning a plain Vec / String /
+    // Pool / TaskGroup (none of which impl ScopeLocal) stays clean.
+    typecheck_ok(
+        "fn make_vec() -> Vec[i64] { Vec.new() }
+         fn make_string() -> String { String.new() }
+         struct Holder {
+             v: Vec[i64],
+             s: String,
+         }
+         fn main() {
+             let h: Holder = Holder { v: make_vec(), s: make_string() };
+         }",
     );
 }

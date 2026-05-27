@@ -373,6 +373,13 @@ pub enum TypeErrorKind {
     /// payload, public type alias, public constant). See design.md
     /// § Struct Field Visibility and § Three-level visibility. (CR-18.)
     PrivateTypeInPublicSignature,
+    /// A `ScopeLocal` marker-trait type (e.g. `TaskHandle[T]`) appears
+    /// in an escape position — function return type, struct/enum field
+    /// type, or as the argument to `Sender.send`. The handle is bound to
+    /// the scope that created it and cannot be returned, stored, or sent
+    /// across a channel. See design.md § ScopeLocal. (Phase 6 line 218
+    /// slice 2.)
+    ScopeLocalEscape,
     /// A refutable pattern (one that may not match all values) appears where
     /// only irrefutable patterns are allowed — function parameters, closure
     /// parameters, `let` bindings. Use `if let` or `match` for refutable cases.
@@ -620,7 +627,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::MissingNonExhaustive
         | TypeErrorKind::ModuleBindingEffectfulInit
         | TypeErrorKind::ModuleBindingHeapType
-        | TypeErrorKind::ReassignToImmutableModuleBinding => None,
+        | TypeErrorKind::ReassignToImmutableModuleBinding
+        | TypeErrorKind::ScopeLocalEscape => None,
     }
 }
 
@@ -1175,6 +1183,12 @@ impl<'a> TypeChecker<'a> {
         self.validate_enum_payload_no_nested_enum();
         self.validate_derive_arithmetic();
         self.check_signature_visibility();
+        // Phase 6 line 218 slice 2 — reject ScopeLocal-marked types
+        // (e.g. `TaskHandle[T]`) appearing in escape positions:
+        // function/method return type, struct/enum field type. The
+        // channel-send escape check fires from
+        // `stdlib_io::infer_channel_method`'s Sender.send arm.
+        self.check_scope_local_escape();
         // Lint-level slice 4b follow-up — synthesize `unknown_lint`
         // warnings for every override naming a lint not in the
         // central registry. Runs as a pre-pass so the per-item

@@ -238,6 +238,44 @@ impl<'a> super::TypeChecker<'a> {
         if is_sender {
             match method {
                 "send" => {
+                    // Phase 6 line 218 slice 2 — ScopeLocal escape
+                    // check. If the channel's element type names a
+                    // type with `impl ScopeLocal for T {}` in scope
+                    // (stdlib's `TaskHandle[T]` at v1), reject the
+                    // send: ScopeLocal handles cannot be transferred
+                    // across the channel boundary. The outer-type
+                    // name match is sufficient (TaskHandle[i64] /
+                    // TaskHandle[String] all key off the bare
+                    // "TaskHandle" name); the parallel walker in
+                    // `items.rs::check_type_expr_scope_local` applies
+                    // the same rule for (a) function return and (b)
+                    // struct/enum field positions.
+                    //
+                    // v1 ships with a hardcoded `TaskHandle` entry.
+                    // `ScopeLocal` is sealed (users cannot `impl
+                    // ScopeLocal for MyType` per design.md), so the
+                    // set is closed and known to the compiler — when
+                    // a second stdlib ScopeLocal type lands (RAII
+                    // critical-section guards, scope-bound
+                    // iterators), it joins this match. The
+                    // collect_scope_local_types walker in items.rs
+                    // is the dynamic surface for the same set; the
+                    // hardcoded match here is its v1 mirror at the
+                    // call-site dispatch point.
+                    if let Type::Named { name, .. } = &elem {
+                        let is_scope_local = matches!(name.as_str(), "TaskHandle");
+                        if is_scope_local {
+                            self.type_error(
+                                format!(
+                                    "ScopeLocal type '{}' cannot be sent across a channel; the value \
+                                     is bound to the scope that created it",
+                                    name
+                                ),
+                                span.clone(),
+                                TypeErrorKind::ScopeLocalEscape,
+                            );
+                        }
+                    }
                     for arg in args {
                         let at = self.infer_expr(&arg.value);
                         self.check_assignable(&elem, &at, arg.value.span.clone());

@@ -2521,6 +2521,12 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::typechecker::TypeErrorKind::ModuleBindingHeapType => "E0251",
                 // Slice 5 — assignment to a module-level immutable `let`.
                 crate::typechecker::TypeErrorKind::ReassignToImmutableModuleBinding => "E0252",
+                // Phase 6 line 218 slice 2 — ScopeLocal escape
+                // diagnostic (design.md § ScopeLocal). Fires when a
+                // `ScopeLocal` marker-trait type appears in a
+                // function return, struct/enum field, or
+                // `Sender.send` argument.
+                crate::typechecker::TypeErrorKind::ScopeLocalEscape => "E0253",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
