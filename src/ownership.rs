@@ -452,6 +452,21 @@ pub enum OwnershipErrorKind {
         type_name: String,
         binding: String,
     },
+    /// Phase-7 line 197 sibling (E_CONCURRENT_PLAIN_STRUCT) — a plain
+    /// (non-shared, non-par) `struct` binding is referenced from two or
+    /// more concurrent branches of a `par {}` block. Per design.md §
+    /// Compiler-assisted migration from plain `struct` to `par struct`:
+    /// silent promotion is rejected (the field constraints differ
+    /// structurally — bare fields vs. `Atomic[T]` / `Mutex[T]` only), so
+    /// the compiler emits a structured error with a machine-applicable
+    /// fix-diff. Companion to [`ConcurrentSharedStruct`]: same detection
+    /// pass, same per-mut-field `fix_diff` wrap edits, same migration
+    /// shape — only the leading-keyword rewrite differs (insert `par `
+    /// before `struct` rather than replace `shared`).
+    ConcurrentPlainStruct {
+        type_name: String,
+        binding: String,
+    },
 }
 
 impl std::fmt::Display for OwnershipError {
@@ -587,6 +602,20 @@ pub struct OwnershipCheckResult {
     /// active vs suppressed fallbacks and surface AI-agent over-use of
     /// `#[allow]` (vs restructuring for zero-cost ownership).
     pub suppressed_rc_fn_keys: HashSet<String>,
+    /// Multi-edit `fix_diff` envelope keyed by the diagnostic's primary
+    /// span — phase-7 line 197 follow-up. `ConcurrentSharedStruct` and
+    /// `ConcurrentPlainStruct` populate this with the per-`mut`-field
+    /// `Mutex[T]` wrap edits derivable from each `StructField.ty.span`
+    /// (two pure-insertion edits per field: `Mutex[` prefix + `]`
+    /// suffix around the field's type). The keyword rename
+    /// (`shared struct`/`struct` → `par struct`) and the `mut ` keyword
+    /// stripping live in the suggestion prose until the parser exposes
+    /// keyword spans on `StructDef` (sibling follow-up). Indexed via a
+    /// sibling map keyed by `SpanKey::from_span(&err.span)` rather than
+    /// a new field on `OwnershipError` to keep the 17+ existing
+    /// construction sites unchanged — only the two new
+    /// concurrent-struct kinds need to participate.
+    pub error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
 }
 
 // ── Copy Type Detection ─────────────────────────────────────────
@@ -700,6 +729,13 @@ pub struct OwnershipChecker<'a> {
     /// Function keys where RC notes are suppressed via `#[allow(rc_fallback)]`.
     /// Consulted after Phase 2 when emitting flavor-annotated notes.
     pub(crate) suppressed_rc_fn_keys: HashSet<String>,
+    /// `fix_diff` envelope sidecar — phase-7 line 197 follow-up. Keyed
+    /// by the diagnostic's primary `SpanKey`, value is the list of
+    /// machine-applicable `TextEdit`s. Populated only by the
+    /// `concurrent_shared` pass for `ConcurrentSharedStruct` /
+    /// `ConcurrentPlainStruct` diagnostics; other passes leave it empty.
+    /// Surfaced to consumers via `OwnershipCheckResult.error_fix_diffs`.
+    pub(crate) error_fix_diffs: HashMap<crate::resolver::SpanKey, Vec<crate::resolver::TextEdit>>,
     /// Type name of each binding in scope for the current function.
     /// Used so RC trigger sites can look up `@no_rc` on the type.
     pub(crate) binding_type_names: HashMap<String, String>,
@@ -828,6 +864,7 @@ impl<'a> OwnershipChecker<'a> {
             current_function: String::new(),
             suppress_rc_notes: false,
             suppressed_rc_fn_keys: HashSet::new(),
+            error_fix_diffs: HashMap::new(),
             binding_type_names: HashMap::new(),
             binding_types: HashMap::new(),
             method_self_modes: collect_method_self_modes(program),
@@ -917,6 +954,7 @@ impl<'a> OwnershipChecker<'a> {
             slice_borrow_sources: self.slice_borrow_sources,
             queries: Vec::new(),
             suppressed_rc_fn_keys: self.suppressed_rc_fn_keys,
+            error_fix_diffs: self.error_fix_diffs,
         }
     }
 

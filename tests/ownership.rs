@@ -6055,3 +6055,237 @@ fn test_concurrent_shared_enum_fires() {
         "shared enum in two branches should fire E_CONCURRENT_SHARED_STRUCT"
     );
 }
+
+// ── E_CONCURRENT_PLAIN_STRUCT (phase-7 line 197 sibling) ────────
+//
+// Plain (non-shared) struct binding referenced from two or more
+// concurrent branches of a `par {}` block. Same detection mechanism
+// as the shared case, different migration target (`struct` → `par
+// struct` rather than `shared struct` → `par struct`).
+
+#[test]
+fn test_concurrent_plain_struct_fires_on_two_branch_use() {
+    let errors = ownership_errors(
+        "struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    let hit = errors
+        .iter()
+        .find(|e| {
+            matches!(
+                &e.kind,
+                OwnershipErrorKind::ConcurrentPlainStruct { type_name, binding }
+                    if type_name == "Counter" && binding == "c"
+            )
+        })
+        .expect("expected E_CONCURRENT_PLAIN_STRUCT error");
+    assert!(
+        hit.message.contains("plain struct"),
+        "diagnostic message should distinguish plain from shared; got: {}",
+        hit.message,
+    );
+    assert!(
+        hit.consume_span.is_some(),
+        "first-branch use should be threaded as the secondary span"
+    );
+    let suggestion = hit
+        .suggestion
+        .as_ref()
+        .expect("suggestion should be present");
+    assert!(
+        suggestion.contains("rename `struct Counter` to `par struct Counter`"),
+        "plain-struct suggestion should describe the keyword insertion (not the shared-struct rename); got: {suggestion}",
+    );
+    assert!(
+        suggestion.contains("Mutex"),
+        "suggestion should mention Mutex wrapping for mut fields"
+    );
+}
+
+#[test]
+fn test_concurrent_plain_struct_silent_when_only_one_branch_uses() {
+    // Sole-branch use — the rule's accept side carries over to plain
+    // struct too. Sibling to test_concurrent_shared_struct_silent_*.
+    let result = ownership_ok(
+        "struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn other_work(n: i64) -> i64 { n + 1 }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 other_work(7);\n\
+             }\n\
+         }",
+    );
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "sole-branch plain-struct use must not fire E_CONCURRENT_PLAIN_STRUCT"
+    );
+}
+
+#[test]
+fn test_concurrent_plain_struct_does_not_fire_on_shared_struct() {
+    // Kind-selector lock — the shared-struct case keeps firing the
+    // SHARED kind, not the PLAIN kind. Mirror of the original test
+    // `test_concurrent_shared_struct_does_not_fire_on_plain_struct`.
+    let parsed = karac::parse(
+        "shared struct Counter { val: i64 }\n\
+         fn use_a(c: Counter) -> i64 { c.val }\n\
+         fn use_b(c: Counter) -> i64 { c.val }\n\
+         fn main() {\n\
+             let c = Counter { val: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    assert!(
+        !result
+            .errors
+            .iter()
+            .any(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. })),
+        "shared struct must NOT fire E_CONCURRENT_PLAIN_STRUCT (the shared kind fires instead)"
+    );
+}
+
+// ── fix_diff envelope (phase-7 line 197 follow-up, both kinds) ──
+//
+// Both `ConcurrentSharedStruct` and `ConcurrentPlainStruct` populate
+// the sibling `error_fix_diffs` map keyed by the diagnostic's primary
+// span with per-`mut`-field `Mutex[T]` wrap edits (two pure-insertion
+// edits per field). Keyword rename + `mut ` stripping stay in
+// suggestion prose until parser exposes keyword spans on `StructDef`.
+
+#[test]
+fn test_concurrent_struct_fix_diff_wraps_each_mut_field() {
+    let parsed = karac::parse(
+        "shared struct Counter { val: i64, mut count: i64, mut tag: i64 }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0, count: 0, tag: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }",
+    );
+    assert!(parsed.errors.is_empty());
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result
+        .error_fix_diffs
+        .get(&key)
+        .expect("expected fix_diff edits for shared-struct diagnostic");
+    // Two mut fields (count, tag) → 4 edits (Mutex[ prefix + ] suffix
+    // per field). The immutable `val` field stays untouched.
+    assert_eq!(
+        edits.len(),
+        4,
+        "expected 4 edits (2 mut fields × 2 insertions); got {}",
+        edits.len(),
+    );
+    let prefix_count = edits.iter().filter(|e| e.replacement == "Mutex[").count();
+    let suffix_count = edits.iter().filter(|e| e.replacement == "]").count();
+    assert_eq!(prefix_count, 2, "expected 2 `Mutex[` prefix insertions");
+    assert_eq!(suffix_count, 2, "expected 2 `]` suffix insertions");
+    // Every edit is a pure insertion (length==0).
+    assert!(
+        edits.iter().all(|e| e.length == 0),
+        "all fix_diff edits must be pure insertions (length=0)"
+    );
+}
+
+#[test]
+fn test_concurrent_plain_struct_fix_diff_wraps_each_mut_field() {
+    let parsed = karac::parse(
+        "struct State { id: i64, mut count: i64 }\n\
+         fn use_a(s: State) { }\n\
+         fn use_b(s: State) { }\n\
+         fn main() {\n\
+             let s = State { id: 0, count: 0 };\n\
+             par {\n\
+                 use_a(s);\n\
+                 use_b(s);\n\
+             }\n\
+         }",
+    );
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. }))
+        .expect("expected ConcurrentPlainStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result
+        .error_fix_diffs
+        .get(&key)
+        .expect("expected fix_diff edits for plain-struct diagnostic");
+    // 1 mut field × 2 insertions = 2 edits
+    assert_eq!(edits.len(), 2, "expected 2 edits (1 mut field × 2)");
+    assert!(edits.iter().any(|e| e.replacement == "Mutex["));
+    assert!(edits.iter().any(|e| e.replacement == "]"));
+}
+
+#[test]
+fn test_concurrent_struct_fix_diff_empty_when_no_mut_fields() {
+    // A shared struct with only immutable fields needs no Mutex wrap —
+    // the migration's only mechanical edit is the keyword rename (which
+    // lives in suggestion prose, not the fix_diff edits, until the
+    // parser exposes keyword spans). `error_fix_diffs` is absent (or
+    // empty) for this shape.
+    let parsed = karac::parse(
+        "shared struct Tag { val: i64 }\n\
+         fn use_a(t: Tag) { }\n\
+         fn use_b(t: Tag) { }\n\
+         fn main() {\n\
+             let t = Tag { val: 0 };\n\
+             par {\n\
+                 use_a(t);\n\
+                 use_b(t);\n\
+             }\n\
+         }",
+    );
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    assert!(
+        result
+            .error_fix_diffs
+            .get(&key)
+            .is_none_or(|v| v.is_empty()),
+        "no mut fields → no fix_diff edits"
+    );
+}

@@ -2597,6 +2597,9 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 crate::ownership::OwnershipErrorKind::ConcurrentSharedStruct { .. } => {
                     "E_CONCURRENT_SHARED_STRUCT"
                 }
+                crate::ownership::OwnershipErrorKind::ConcurrentPlainStruct { .. } => {
+                    "E_CONCURRENT_PLAIN_STRUCT"
+                }
             };
             let replacement_json = err.replacement.as_ref().map(|r| {
                 format!(
@@ -2606,6 +2609,40 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                     json_string(&r.replacement),
                 )
             });
+            // Phase-7 line 197 follow-up: multi-edit fix_diff envelope.
+            // `ConcurrentSharedStruct` / `ConcurrentPlainStruct` carry
+            // their per-mut-field `Mutex[T]` wrap edits in the sibling
+            // `error_fix_diffs` map keyed by the diagnostic's primary
+            // span. Render as a JSON array `"fix_diff":[{...},{...}]`
+            // and splice into the diagnostic's extra_json slot. The
+            // single-edit `replacement` and multi-edit `fix_diff` are
+            // mutually exclusive in v1 (the new kinds emit
+            // `replacement: None`), so either-or is sufficient — when
+            // a future kind needs both, this site combines them.
+            let fix_diff_json = o
+                .error_fix_diffs
+                .get(&crate::resolver::SpanKey::from_span(&err.span))
+                .filter(|v| !v.is_empty())
+                .map(|edits| {
+                    let items: Vec<String> = edits
+                        .iter()
+                        .map(|e| {
+                            format!(
+                                "{{\"offset\":{},\"length\":{},\"text\":{}}}",
+                                e.offset,
+                                e.length,
+                                json_string(&e.replacement),
+                            )
+                        })
+                        .collect();
+                    format!("\"fix_diff\":[{}]", items.join(","))
+                });
+            let extra_json = match (replacement_json, fix_diff_json) {
+                (Some(r), Some(f)) => Some(format!("{r},{f}")),
+                (Some(r), None) => Some(r),
+                (None, Some(f)) => Some(f),
+                (None, None) => None,
+            };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -2616,7 +2653,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 filename,
                 span: &err.span,
                 suggestion: err.suggestion.as_deref(),
-                extra_json: replacement_json,
+                extra_json,
                 lint_name: None,
                 fix_it: None,
                 class: None,

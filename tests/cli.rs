@@ -7086,3 +7086,88 @@ fn test_cache_info_help_flag() {
     assert!(stdout.contains("info"));
     assert!(stdout.contains("key"));
 }
+
+// ── E_CONCURRENT_SHARED_STRUCT / E_CONCURRENT_PLAIN_STRUCT JSON ─
+//
+// Phase-7 line 197 follow-up: the diagnostic JSON envelope carries a
+// `fix_diff` array with the per-mut-field `Mutex[T]` wrap edits when
+// the struct has any `mut` fields. Cross-checks the cli emitter wires
+// the sibling `error_fix_diffs` map through correctly.
+
+#[test]
+fn test_json_concurrent_shared_struct_carries_fix_diff_array() {
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_l197_shared_fix_diff.kara");
+    std::fs::write(
+        &fixture,
+        "shared struct Counter { val: i64, mut count: i64 }\n\
+         fn use_a(c: Counter) { }\n\
+         fn use_b(c: Counter) { }\n\
+         fn main() {\n\
+             let c = Counter { val: 0, count: 0 };\n\
+             par {\n\
+                 use_a(c);\n\
+                 use_b(c);\n\
+             }\n\
+         }\n",
+    )
+    .expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_file(&fixture);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("E_CONCURRENT_SHARED_STRUCT"),
+        "expected E_CONCURRENT_SHARED_STRUCT code in JSON; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"fix_diff\":["),
+        "expected fix_diff array in JSON envelope; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"text\":\"Mutex[\""),
+        "expected `Mutex[` prefix insertion edit; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"text\":\"]\""),
+        "expected `]` suffix insertion edit; got: {stdout}",
+    );
+}
+
+#[test]
+fn test_json_concurrent_plain_struct_carries_fix_diff_array() {
+    let tmp_dir = std::env::temp_dir();
+    let fixture = tmp_dir.join("karac_l197_plain_fix_diff.kara");
+    std::fs::write(
+        &fixture,
+        "struct State { id: i64, mut count: i64 }\n\
+         fn use_a(s: State) { }\n\
+         fn use_b(s: State) { }\n\
+         fn main() {\n\
+             let s = State { id: 0, count: 0 };\n\
+             par {\n\
+                 use_a(s);\n\
+                 use_b(s);\n\
+             }\n\
+         }\n",
+    )
+    .expect("write fixture");
+    let out = karac_bin()
+        .args(["check", fixture.to_str().unwrap(), "--output=json"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_file(&fixture);
+    assert!(!out.status.success());
+    assert!(
+        stdout.contains("E_CONCURRENT_PLAIN_STRUCT"),
+        "expected E_CONCURRENT_PLAIN_STRUCT code in JSON; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("\"fix_diff\":["),
+        "expected fix_diff array in JSON envelope; got: {stdout}",
+    );
+}
