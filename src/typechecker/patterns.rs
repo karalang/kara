@@ -395,6 +395,13 @@ impl<'a> super::TypeChecker<'a> {
                     // motivation.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
+                } else if matches!(expected, Type::Pointer { .. }) {
+                    // Match-arm parallel to the `bind_pattern_types`
+                    // pointer case — record `*const T` / `*mut T` so
+                    // `raii_check` can detect raw-pointer-typed bindings
+                    // held across a yield point.
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), type_display(expected));
                 }
                 // PB sibling slice (2026-05-09): mirror
                 // `bind_pattern_types`'s sibling-table write so direct
@@ -948,6 +955,16 @@ impl<'a> super::TypeChecker<'a> {
                     // creating the binding's alloca.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), "bool".to_string());
+                } else if matches!(ty, Type::Pointer { .. }) {
+                    // Raw-pointer surface name (`*const T` / `*mut T`) so
+                    // `raii_check` can recognise raw-pointer-typed
+                    // bindings held across a yield point and reject them
+                    // as NOT-CancelSafe per the design spec (raw pointers
+                    // carry no Drop hook — a cancel during their live
+                    // range leaks whatever they reference). Codegen
+                    // ignores this entry; raw-pointer layout is fixed.
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), type_display(ty));
                 }
                 // PB sibling slice (2026-05-09): record the inner element
                 // type for `Vec[T]` / `Slice[T]` bindings so codegen can

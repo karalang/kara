@@ -495,3 +495,125 @@ fn binding_span_anchors_to_match_arm_pattern() {
         ch, bs.line, bs.column, line_text,
     );
 }
+
+// ── Phase 6 line 155 slice 4 — raw-pointer detection ──────────────
+//
+// Raw pointers (`*const T` / `*mut T`) carry no `Drop` hook, so a
+// cancel during their live range leaks whatever they reference. The
+// design.md v1 NOT-CancelSafe set includes raw pointers; slice 4
+// teaches `bind_pattern_types` / `check_pattern_against` to record
+// `type_display(Type::Pointer)` (yielding `*const T` / `*mut T`) into
+// `pattern_binding_types`, then adds a name-prefix arm to
+// `is_not_cancel_safe`. Detection is unconditional — the slice-2
+// `impl CancelSafe for X` opt-in does not apply (its walker only
+// matches single-segment `TypeKind::Path` targets), and the help
+// text is class-branched to omit the misleading `impl CancelSafe`
+// suggestion.
+
+#[test]
+fn raw_const_pointer_param_held_across_yield_rejected() {
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(p: *const u8) { fetch(); }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one E_RAII_ACROSS_YIELD for `*const u8` param held across yield: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].fn_key, "driver");
+    assert_eq!(errors[0].binding_name, "p");
+    assert_eq!(errors[0].type_name, "*const u8");
+}
+
+#[test]
+fn raw_mut_pointer_param_held_across_yield_rejected() {
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(p: *mut u32) { fetch(); }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one E_RAII_ACROSS_YIELD for `*mut u32` param held across yield: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].binding_name, "p");
+    assert_eq!(errors[0].type_name, "*mut u32");
+}
+
+#[test]
+fn raw_pointer_help_omits_impl_cancel_safe_suggestion() {
+    // Class-branched help text: raw pointers cannot opt into
+    // CancelSafe (no Drop to audit; slice 2's walker doesn't match
+    // pointer-type targets), so the help message must NOT suggest
+    // `impl CancelSafe for *const T`. Instead it points at safe-
+    // handle conversion as the remediation path.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(p: *const u8) { fetch(); }",
+    );
+    assert_eq!(errors.len(), 1);
+    let help = errors[0].help();
+    assert!(
+        !help.contains("impl CancelSafe"),
+        "raw-pointer help must not suggest `impl CancelSafe` (it cannot apply); got: {:?}",
+        help,
+    );
+    assert!(
+        help.contains("safe handle"),
+        "raw-pointer help must point at safe-handle conversion; got: {:?}",
+        help,
+    );
+}
+
+#[test]
+fn named_type_cancel_safe_opt_in_does_not_cover_raw_pointer_to_that_type() {
+    // The slice-2 opt-in walker matches single-segment
+    // `TypeKind::Path` impl targets; `*const Cell` is parsed as a
+    // pointer type, not a path, so an `impl CancelSafe for Cell`
+    // does NOT transitively cover `*const Cell`. Raw-pointer
+    // rejection in `is_not_cancel_safe` runs BEFORE the opt-in
+    // check, so even if a future opt-in form did register the
+    // pointee name, the raw-pointer rejection would still fire.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         marker trait CancelSafe;
+         shared struct Cell { v: i64 }
+         impl CancelSafe for Cell {}
+         fn driver(p: *const Cell) { fetch(); }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "named-type CancelSafe opt-in must not transitively cover raw pointers to that type: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].type_name, "*const Cell");
+}
+
+#[test]
+fn raw_pointer_in_vec_is_not_in_scope() {
+    // Documents the slice 4 scope limit: a Vec[*const T] binding
+    // records `Vec` as its surface type (the type-name recorder
+    // doesn't recurse into element types), so the slice-1 walk
+    // doesn't see the inner raw pointer. Transitive raw-pointer
+    // reachability is in the slice 4 "what this does NOT cover"
+    // footer — likely a separate sub-slice if the direct-binding
+    // detection is judged insufficient.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(ps: Vec[*const u8]) { fetch(); }",
+    );
+    assert!(
+        errors.is_empty(),
+        "Vec[*const u8] is out of scope for slice 4 — binding type is `Vec`, not `*const u8`: {:?}",
+        errors,
+    );
+}

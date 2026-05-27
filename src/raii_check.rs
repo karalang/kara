@@ -103,18 +103,44 @@ impl RaiiAcrossYieldError {
          cancellation, leaving owned resources in an undefined intermediate state"
     }
 
-    /// Fix-it hint pointing at the two remediation paths from the design
-    /// spec: release the binding before the yield, or opt the type into
-    /// the `CancelSafe` marker (slice 2 adds the marker itself; slice 1
-    /// surfaces the suggestion text up front so users see the migration
-    /// shape even before the marker lands).
+    /// Fix-it hint pointing at the remediation paths from the design
+    /// spec. The shape varies by NOT-CancelSafe class:
+    ///
+    /// - **Shared structs / enums:** "release X before the yield, or
+    ///   `impl CancelSafe for T` once the type's `Drop` impl is
+    ///   audited" — the slice-2 user-extensible opt-in surface.
+    /// - **Raw pointers (`*const T` / `*mut T`):** "release X before
+    ///   the yield, or convert the pointer to a safe handle". The
+    ///   `impl CancelSafe` suggestion is omitted — raw pointers have
+    ///   no `Drop` to audit, and slice 2's opt-in walker only matches
+    ///   single-segment `TypeKind::Path` targets (so
+    ///   `impl CancelSafe for *const T` wouldn't apply anyway).
     pub fn help(&self) -> String {
-        format!(
-            "release `{}` before the yield, or `impl CancelSafe for {}` once the type's `Drop` \
-             impl is audited to be safe under cancellation",
-            self.binding_name, self.type_name,
-        )
+        if is_raw_pointer_surface_name(&self.type_name) {
+            format!(
+                "release `{}` before the yield, or convert the pointer to a safe handle \
+                 (a `ref`/`mut ref` borrow, a `Box[T]`, or a Kāra-side wrapper) before yielding — \
+                 raw pointers have no `Drop` so they cannot opt into `CancelSafe`",
+                self.binding_name,
+            )
+        } else {
+            format!(
+                "release `{}` before the yield, or `impl CancelSafe for {}` once the type's `Drop` \
+                 impl is audited to be safe under cancellation",
+                self.binding_name, self.type_name,
+            )
+        }
     }
+}
+
+/// True if `type_name` is a raw-pointer surface name as recorded by
+/// `bind_pattern_types` / `check_pattern_against` (slice 4). The
+/// recorder writes `type_display(Type::Pointer)` which yields
+/// `*mut T` or `*const T` (note the trailing space after `mut` /
+/// `const` before the pointee). Nominal type names cannot otherwise
+/// begin with `*` per the lexer, so the prefix check is unambiguous.
+fn is_raw_pointer_surface_name(type_name: &str) -> bool {
+    type_name.starts_with("*const ") || type_name.starts_with("*mut ")
 }
 
 /// Run the RAII-across-yield check over `program`. Returns a flat list
@@ -212,18 +238,30 @@ fn collect_cancel_safe_opt_ins(program: &Program) -> std::collections::HashSet<S
 }
 
 /// Surface-name predicate that drives the diagnostic. Returns `true`
-/// when `type_name` is in the v1 NOT-cancel-safe closed enumeration
-/// (slice 1 — `shared struct` / `shared enum`) AND has no
-/// `impl CancelSafe for T` opt-in (slice 2). All other surface types
-/// fall through to "cancel-safe by default" at v1; once stdlib + the
-/// marker-trait stdlib seeding lands, the default flips to
-/// "opt-in cancel-safe" so the v1 stdlib set lives in code rather
-/// than as negative space.
+/// when `type_name` is in the v1 NOT-cancel-safe set:
+///
+/// - **Shared structs / enums** (slice 1 — Rc-rooted reachability)
+///   with no `impl CancelSafe for T` opt-in (slice 2's user-extensible
+///   override surface).
+/// - **Raw pointers** `*const T` / `*mut T` (slice 4 — no `Drop`
+///   hook, no way to release the pointee under cancellation). The
+///   slice-2 opt-in does NOT apply: its walker matches single-segment
+///   `TypeKind::Path` targets only, so `impl CancelSafe for *const T`
+///   wouldn't parse into a recognised opt-in even if a user wrote
+///   one — raw-pointer rejection is unconditional.
+///
+/// All other surface types fall through to "cancel-safe by default"
+/// at v1; once stdlib + the marker-trait stdlib seeding lands, the
+/// default flips to "opt-in cancel-safe" so the v1 stdlib set lives
+/// in code rather than as negative space.
 fn is_not_cancel_safe(
     type_name: &str,
     types: &TypeCheckResult,
     cancel_safe_opt_ins: &std::collections::HashSet<String>,
 ) -> bool {
+    if is_raw_pointer_surface_name(type_name) {
+        return true;
+    }
     if cancel_safe_opt_ins.contains(type_name) {
         return false;
     }
