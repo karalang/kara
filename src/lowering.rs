@@ -408,6 +408,11 @@ impl<'a> Lowerer<'a> {
             method: segments[1].clone(),
             turbofish: None,
             args: args.to_vec(),
+            // Synthetic lowering — no real `)` to point at. Placeholder
+            // span; consumers that care about the call's source extent
+            // (L205 lock-block edit emission) only fire on user-source
+            // method-call receivers, never on synthetic lowerings.
+            args_close_span: span.clone(),
         })
     }
 

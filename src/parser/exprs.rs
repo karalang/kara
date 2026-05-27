@@ -132,6 +132,7 @@ impl super::Parser {
                                 self.advance();
                                 let args = self.parse_arg_list()?;
                                 self.expect(&Token::RightParen)?;
+                                let args_close_span = self.tokens[self.pos - 1].span.clone();
                                 lhs = Expr {
                                     span: lhs.span.clone(),
                                     kind: ExprKind::MethodCall {
@@ -139,6 +140,7 @@ impl super::Parser {
                                         method,
                                         turbofish,
                                         args,
+                                        args_close_span,
                                     },
                                 };
                             } else {

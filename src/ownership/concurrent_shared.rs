@@ -43,6 +43,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
+use crate::ownership::{stdlib_method_self_borrow_kind, BorrowKind};
 use crate::resolver::{SpanKey, TextEdit};
 use crate::token::Span;
 
@@ -51,6 +52,44 @@ use super::{OwnershipError, OwnershipErrorKind, OwnershipMode};
 type BindingTypeMap = HashMap<SpanKey, String>;
 type ClosureCaptures = HashMap<SpanKey, Vec<(String, OwnershipMode)>>;
 type ClosureBindings = HashMap<String, Vec<String>>;
+
+/// L205 — bundles the two maps needed to decide whether a `MethodCall`
+/// mutates its receiver: the typechecker's per-call-site canonical
+/// `Type.method` key (`method_callee_types`) plus the receiver-mode
+/// classifier (`method_self_modes` for user impl methods; fallback to
+/// `stdlib_method_self_borrow_kind` for built-in `Vec`/`Map`/etc.
+/// methods). Threaded through the par-conflict scan so the lock-block
+/// edit emitter at `build_lock_block_edits_for_binding` can wrap
+/// mutating method-call writes (`c.field.push(x)`) alongside the
+/// L201b-shipped assign / compound-assign cases.
+struct MethodMutClassifier<'a> {
+    method_callee_types: &'a HashMap<SpanKey, String>,
+    method_self_modes: &'a HashMap<String, SelfParam>,
+}
+
+impl MethodMutClassifier<'_> {
+    /// Whether the method call at `method_call_span` mutates its
+    /// receiver. Returns `false` when the typechecker didn't record a
+    /// callee key (resolution failure upstream) or when the method is
+    /// a read-only / consuming receiver. Conservative default: if the
+    /// signal is missing, assume non-mutating (no wrap emitted).
+    fn is_mutating(&self, method_call_span: &Span) -> bool {
+        let key = match self
+            .method_callee_types
+            .get(&SpanKey::from_span(method_call_span))
+        {
+            Some(k) => k,
+            None => return false,
+        };
+        if let Some(self_param) = self.method_self_modes.get(key) {
+            return matches!(self_param, SelfParam::MutRef);
+        }
+        matches!(
+            stdlib_method_self_borrow_kind(key),
+            Some(BorrowKind::MutRef)
+        )
+    }
+}
 
 /// Discriminator carried alongside each tracked binding so one walk
 /// catches both diagnostic flavors without two parallel maps.
@@ -79,6 +118,10 @@ impl<'a> super::OwnershipChecker<'a> {
         let mut errors: Vec<OwnershipError> = Vec::new();
         let mut fix_diffs: HashMap<SpanKey, Vec<TextEdit>> = HashMap::new();
         let closure_captures = &self.closure_captures;
+        let classifier = MethodMutClassifier {
+            method_callee_types: &self.typecheck_result.method_callee_types,
+            method_self_modes: &self.method_self_modes,
+        };
         for item in &items {
             match item {
                 Item::Function(f) => {
@@ -92,6 +135,7 @@ impl<'a> super::OwnershipChecker<'a> {
                             &items,
                             closure_captures,
                             &closure_bindings,
+                            &classifier,
                             &mut errors,
                             &mut fix_diffs,
                         );
@@ -114,6 +158,7 @@ impl<'a> super::OwnershipChecker<'a> {
                                     &items,
                                     closure_captures,
                                     &closure_bindings,
+                                    &classifier,
                                     &mut errors,
                                     &mut fix_diffs,
                                 );
@@ -187,12 +232,14 @@ impl<'a> super::OwnershipChecker<'a> {
 /// Scan `body` for `ExprKind::Par` blocks; for each, walk every
 /// top-level statement (branch) collecting referenced names, and
 /// emit one diagnostic per binding present in more than one branch.
+#[allow(clippy::too_many_arguments)] // L205 threads classifier alongside existing detector args
 fn scan_block_for_par_conflicts(
     block: &Block,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
+    classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
@@ -203,6 +250,7 @@ fn scan_block_for_par_conflicts(
             program_items,
             closure_captures,
             closure_bindings,
+            classifier,
             errors,
             fix_diffs,
         );
@@ -214,6 +262,7 @@ fn scan_block_for_par_conflicts(
             program_items,
             closure_captures,
             closure_bindings,
+            classifier,
             errors,
             fix_diffs,
         );
@@ -394,12 +443,14 @@ fn collect_let_in_expr(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // L205 threads classifier alongside existing detector args
 fn scan_stmt_for_par_conflicts(
     stmt: &Stmt,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
+    classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
@@ -411,6 +462,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -424,6 +476,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -434,6 +487,7 @@ fn scan_stmt_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -445,6 +499,7 @@ fn scan_stmt_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -459,6 +514,7 @@ fn scan_stmt_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -470,6 +526,7 @@ fn scan_stmt_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -482,6 +539,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -491,6 +549,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -502,6 +561,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -511,6 +571,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -522,6 +583,7 @@ fn scan_stmt_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -529,12 +591,14 @@ fn scan_stmt_for_par_conflicts(
     }
 }
 
+#[allow(clippy::too_many_arguments)] // L205 threads classifier alongside existing detector args
 fn scan_expr_for_par_conflicts(
     expr: &Expr,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
+    classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
@@ -546,6 +610,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -556,6 +621,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -567,6 +633,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -586,6 +653,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -597,6 +665,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -613,6 +682,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -623,6 +693,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -634,6 +705,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -645,6 +717,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -659,6 +732,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -669,6 +743,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -680,6 +755,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -692,6 +768,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -702,6 +779,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -713,6 +791,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -725,6 +804,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -736,6 +816,7 @@ fn scan_expr_for_par_conflicts(
                         program_items,
                         closure_captures,
                         closure_bindings,
+                        classifier,
                         errors,
                         fix_diffs,
                     );
@@ -746,6 +827,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -758,6 +840,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -768,6 +851,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -780,6 +864,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -790,6 +875,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -802,6 +888,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -813,6 +900,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -822,6 +910,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -833,6 +922,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -842,6 +932,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -853,6 +944,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -865,6 +957,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -878,6 +971,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -891,6 +985,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -903,6 +998,7 @@ fn scan_expr_for_par_conflicts(
                 program_items,
                 closure_captures,
                 closure_bindings,
+                classifier,
                 errors,
                 fix_diffs,
             );
@@ -915,6 +1011,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -926,6 +1023,7 @@ fn scan_expr_for_par_conflicts(
                     program_items,
                     closure_captures,
                     closure_bindings,
+                    classifier,
                     errors,
                     fix_diffs,
                 );
@@ -940,12 +1038,14 @@ fn scan_expr_for_par_conflicts(
 /// Any binding appearing in two or more branches → emit the right
 /// diagnostic flavor at the second-branch use site, with the first-
 /// branch use threaded as the `consume_span` secondary.
+#[allow(clippy::too_many_arguments)] // L205 threads classifier alongside existing detector args
 fn detect_par_block_conflicts(
     par_body: &Block,
     tracked: &HashMap<String, TrackedBinding>,
     program_items: &[Item],
     closure_captures: &ClosureCaptures,
     closure_bindings: &ClosureBindings,
+    classifier: &MethodMutClassifier,
     errors: &mut Vec<OwnershipError>,
     fix_diffs: &mut HashMap<SpanKey, Vec<TextEdit>>,
 ) {
@@ -981,6 +1081,7 @@ fn detect_par_block_conflicts(
                         &name,
                         &binding.type_name,
                         program_items,
+                        classifier,
                     );
                     edits.extend(lock_edits);
                     if !edits.is_empty() {
@@ -1143,34 +1244,42 @@ fn build_fix_diff_edits(
 }
 
 /// Lock-block wrap edits for writes to `binding_name.<mut_field>`
-/// occurring textually inside `par_body`. Phase-7 L201b — the third
-/// half of the migration spec from design.md § Compiler-assisted
-/// migration from `shared struct` to `par struct` (steps 1 and 2 are
-/// the keyword rewrite + mut-strip + Mutex wrap from L201a; this is
-/// step 3).
+/// occurring textually inside `par_body`. Phase-7 L201b shipped the
+/// `Assign` / `CompoundAssign` cases; **L205** extends the walker to
+/// also wrap mutating *method-call* writes (`c.field.push(x)`,
+/// `c.field.clear()`, etc.) so the migration spec's step 3 (design.md
+/// § Compiler-assisted migration from `shared struct` to `par struct`)
+/// covers the canonical Vec/Map/Set/String mutation idioms.
 ///
-/// **Detection scope** (v1):
+/// **Detection scope** (v1 + L205):
 /// - Receiver shape: `Identifier(binding_name).<field>` — simple
 ///   binding-rooted field access. Chained projections
 ///   (`c.nested.field`), index accesses (`arr[0].field`), and
 ///   receivers on temporary expressions fall outside v1 and remain
 ///   the human review step.
-/// - Write shape: `StmtKind::Assign` and `StmtKind::CompoundAssign`
-///   targeting the field-access shape above. Mutating method calls
-///   (`c.field.push(x)`) require per-method mutability classification
-///   (the same machinery the ownership checker runs for body-level
-///   ownership analysis) and are a separate follow-up.
+/// - Write shape: `StmtKind::Assign`, `StmtKind::CompoundAssign`, and
+///   *statement-position* mutating `MethodCall`s on the same receiver
+///   shape. A method is "mutating" when its receiver-mode is
+///   `mut ref self` — `SelfParam::MutRef` for user impls (from
+///   `method_self_modes`), or `BorrowKind::MutRef` from the stdlib
+///   `Vec.push` / `Map.insert` / `String.push_str` / etc. table
+///   (`stdlib_method_self_borrow_kind`). The classifier handles both
+///   sources transparently. Method calls in non-statement position
+///   (e.g. an RHS expression contributing a value) are NOT wrapped —
+///   wrapping inside a value expression would require splitting the
+///   enclosing statement; the surrounding stmt is handled instead.
 /// - Containment: any depth inside `par_body` (nested `if` / `while`
 ///   / `for` / `match` / `block` blocks are traversed).
 /// - Field filter: only `mut` fields of the struct definition.
 ///
 /// **Edit shape**: two pure-insertion edits per write site —
 /// `lock <field> {\n    ` before the statement's start and `\n}` after
-/// the statement's end. Both derivable from the AST without source-
-/// text access (Kara's `lock` syntax takes a bare identifier, not an
-/// expression, so the wrap doesn't need to reconstruct the receiver
-/// from source). Indentation is a hint that the user reformats; the
-/// edit is correct syntax in either case.
+/// the statement's end. For method calls, the end-anchor is the
+/// closing `)` derived from `MethodCall.args_close_span` (parser-
+/// captured; the outer `Expr.span` covers only the receiver). For
+/// assigns it's `value.span.offset + value.span.length`. Both shapes
+/// leave the trailing `;` outside the wrap, becoming the lock
+/// statement's own terminator.
 ///
 /// Returns an empty vec when the struct has no mut fields, when no
 /// matching writes exist, or when the struct definition isn't found
@@ -1180,13 +1289,14 @@ fn build_lock_block_edits_for_binding(
     binding_name: &str,
     type_name: &str,
     program_items: &[Item],
+    classifier: &MethodMutClassifier,
 ) -> Vec<TextEdit> {
     let mut_fields = collect_mut_field_names(type_name, program_items);
     if mut_fields.is_empty() {
         return Vec::new();
     }
     let mut edits = Vec::new();
-    collect_lock_block_writes_in_block(par_body, binding_name, &mut_fields, &mut edits);
+    collect_lock_block_writes_in_block(par_body, binding_name, &mut_fields, classifier, &mut edits);
     edits
 }
 
@@ -1209,13 +1319,14 @@ fn collect_lock_block_writes_in_block(
     block: &Block,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
     out: &mut Vec<TextEdit>,
 ) {
     for stmt in &block.stmts {
-        collect_lock_block_writes_in_stmt(stmt, binding_name, mut_fields, out);
+        collect_lock_block_writes_in_stmt(stmt, binding_name, mut_fields, classifier, out);
     }
     if let Some(e) = &block.final_expr {
-        collect_lock_block_writes_in_expr(e, binding_name, mut_fields, out);
+        collect_lock_block_writes_in_expr(e, binding_name, mut_fields, classifier, out);
     }
 }
 
@@ -1223,6 +1334,7 @@ fn collect_lock_block_writes_in_stmt(
     stmt: &Stmt,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
     out: &mut Vec<TextEdit>,
 ) {
     match &stmt.kind {
@@ -1245,24 +1357,56 @@ fn collect_lock_block_writes_in_stmt(
             // Recurse into target / value to catch writes nested inside
             // RHS expressions (e.g. a block-expr value containing
             // another assign — rare but possible).
-            collect_lock_block_writes_in_expr(target, binding_name, mut_fields, out);
-            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(target, binding_name, mut_fields, classifier, out);
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, classifier, out);
+        }
+        StmtKind::Expr(e) => {
+            // L205 — mutating method call in statement position.
+            // `c.field.push(x);` parses as `StmtKind::Expr(MethodCall {
+            // object: FieldAccess { Identifier(c), field }, method,
+            // args, args_close_span })`. Wrap iff (a) the receiver
+            // matches `Identifier(binding_name).<mut_field>`, and (b)
+            // the classifier says the method takes a `mut ref self`
+            // receiver. Wrap end-anchor uses `args_close_span` (the
+            // `)` token captured at parse) so the wrap encloses the
+            // full call. Trailing `;` falls outside the wrap, becoming
+            // the lock-statement's own terminator (same shape as the
+            // assign cases above).
+            if let ExprKind::MethodCall {
+                object,
+                args_close_span,
+                ..
+            } = &e.kind
+            {
+                if classifier.is_mutating(&e.span) {
+                    if let Some(field) = matched_self_field_access(object, binding_name, mut_fields)
+                    {
+                        let wrap_start = e.span.offset;
+                        let wrap_end = args_close_span.offset + args_close_span.length;
+                        emit_lock_wrap_around(wrap_start, wrap_end, field, out);
+                    }
+                }
+            }
+            collect_lock_block_writes_in_expr(e, binding_name, mut_fields, classifier, out);
         }
         StmtKind::Let { value, .. } => {
-            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, classifier, out);
         }
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
-            collect_lock_block_writes_in_block(else_block, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, classifier, out);
+            collect_lock_block_writes_in_block(
+                else_block,
+                binding_name,
+                mut_fields,
+                classifier,
+                out,
+            );
         }
         StmtKind::LetUninit { .. } => {}
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
-        }
-        StmtKind::Expr(e) => {
-            collect_lock_block_writes_in_expr(e, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, classifier, out);
         }
     }
 }
@@ -1271,6 +1415,7 @@ fn collect_lock_block_writes_in_expr(
     expr: &Expr,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
     out: &mut Vec<TextEdit>,
 ) {
     match &expr.kind {
@@ -1282,48 +1427,72 @@ fn collect_lock_block_writes_in_expr(
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
-            collect_lock_block_writes_in_block(b, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(b, binding_name, mut_fields, classifier, out);
         }
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, out);
-            collect_lock_block_writes_in_block(then_block, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, classifier, out);
+            collect_lock_block_writes_in_block(
+                then_block,
+                binding_name,
+                mut_fields,
+                classifier,
+                out,
+            );
             if let Some(eb) = else_branch {
-                collect_lock_block_writes_in_expr(eb, binding_name, mut_fields, out);
+                collect_lock_block_writes_in_expr(eb, binding_name, mut_fields, classifier, out);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, out);
-            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, classifier, out);
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, classifier, out);
         }
         ExprKind::For { iterable, body, .. } => {
-            collect_lock_block_writes_in_expr(iterable, binding_name, mut_fields, out);
-            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(iterable, binding_name, mut_fields, classifier, out);
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, classifier, out);
         }
         ExprKind::Match { scrutinee, arms } => {
-            collect_lock_block_writes_in_expr(scrutinee, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(scrutinee, binding_name, mut_fields, classifier, out);
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    collect_lock_block_writes_in_expr(g, binding_name, mut_fields, out);
+                    collect_lock_block_writes_in_expr(g, binding_name, mut_fields, classifier, out);
                 }
-                collect_lock_block_writes_in_expr(&arm.body, binding_name, mut_fields, out);
+                collect_lock_block_writes_in_expr(
+                    &arm.body,
+                    binding_name,
+                    mut_fields,
+                    classifier,
+                    out,
+                );
             }
         }
         ExprKind::Call { callee, args } => {
-            collect_lock_block_writes_in_expr(callee, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(callee, binding_name, mut_fields, classifier, out);
             for a in args {
-                collect_lock_block_writes_in_expr(&a.value, binding_name, mut_fields, out);
+                collect_lock_block_writes_in_expr(
+                    &a.value,
+                    binding_name,
+                    mut_fields,
+                    classifier,
+                    out,
+                );
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            collect_lock_block_writes_in_expr(object, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(object, binding_name, mut_fields, classifier, out);
             for a in args {
-                collect_lock_block_writes_in_expr(&a.value, binding_name, mut_fields, out);
+                collect_lock_block_writes_in_expr(
+                    &a.value,
+                    binding_name,
+                    mut_fields,
+                    classifier,
+                    out,
+                );
             }
         }
         _ => {}

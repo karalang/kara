@@ -97,6 +97,16 @@ pub enum ExprKind {
         method: String,
         turbofish: Option<Vec<TypeExpr>>,
         args: Vec<CallArg>,
+        /// Span of the closing `)` token of the args list. The outer
+        /// `Expr.span` for a `MethodCall` covers only the receiver
+        /// (`lhs.span.clone()`); this sidecar lets code-edit consumers
+        /// (L205 lock-block wrapping; future `karac fix`-style rewrites)
+        /// derive the call's true end-of-extent without re-scanning
+        /// source text. Synthetic method calls produced by lowering use
+        /// a zero-length placeholder — those never reach user-source
+        /// edit emission because they don't sit inside `par` blocks
+        /// with user-bound shared/plain-struct receivers.
+        args_close_span: Span,
     },
     FieldAccess {
         object: Box<Expr>,

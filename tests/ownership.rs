@@ -6604,6 +6604,179 @@ fn test_l201b_lock_block_wraps_compound_assign() {
     );
 }
 
+// ── L205: mutating method-call lock wraps ───────────────────────
+//
+// L201b shipped lock wraps for `Assign` / `CompoundAssign` writes
+// (`c.field = x` / `c.field += 1`). L205 extends the walker to also
+// wrap statement-position mutating method calls — `c.field.push(x)`,
+// `c.field.clear()`, etc. Mutability is classified via
+// `method_self_modes` (user impls, `SelfParam::MutRef`) with fallback
+// to `stdlib_method_self_borrow_kind` (`Vec.push`/`Map.insert`/etc.
+// table, `BorrowKind::MutRef`). The wrap end-anchor uses the parser-
+// captured `MethodCall.args_close_span` (the `)` token) since the
+// outer `Expr.span` covers only the receiver.
+
+#[test]
+fn test_l205_lock_block_wraps_stdlib_vec_push() {
+    // Canonical case: `c.items.push(7);` inside par — `Vec.push`
+    // resolves to `BorrowKind::MutRef` via stdlib_method_self_borrow_kind,
+    // and `items` is the diagnosed binding's mut field. Wrap covers
+    // `c.items.push(7)` (the trailing `;` becomes the lock-statement's
+    // own terminator). Byte-precise offset pin against the receiver
+    // start and the `)` close position.
+    let src = "shared struct Counter { mut items: Vec[i64] }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { items: Vec[0i64; 0] };\n\
+                   par {\n\
+                       c.items.push(7);\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    let prefix = edits
+        .iter()
+        .find(|e| e.replacement.starts_with("lock items {"))
+        .expect("expected `lock items {` prefix insertion");
+    let suffix_offsets: Vec<usize> = edits
+        .iter()
+        .filter(|e| e.replacement == "\n}" && e.length == 0)
+        .map(|e| e.offset)
+        .collect();
+    assert_eq!(prefix.length, 0, "prefix must be a pure insertion");
+    let receiver_start = src.find("c.items.push(7);").expect("stmt anchor");
+    let call_end = src.find("c.items.push(7);").unwrap() + "c.items.push(7)".len();
+    assert_eq!(
+        prefix.offset, receiver_start,
+        "prefix anchored at receiver start (`c`)"
+    );
+    assert!(
+        suffix_offsets.contains(&call_end),
+        "suffix anchored at end of `)` (call_end={call_end}); got {suffix_offsets:?}",
+    );
+}
+
+#[test]
+fn test_l205_lock_block_wraps_user_mut_ref_self_method() {
+    // User-defined method with `mut ref self` receiver invoked on the
+    // outer struct's mut field — classifier looks the method up in
+    // `method_self_modes` (built from `collect_method_self_modes` over
+    // user impl blocks) and finds `SelfParam::MutRef`. Wrap fires
+    // identically to the stdlib path. The inner struct `Tracker` is
+    // the type stored in the outer `Counter.tracker` mut field; the
+    // call shape `c.tracker.bump()` matches L205's
+    // `Identifier(c).tracker.<method>` receiver gate.
+    let src = "struct Tracker { mut val: i64 }\n\
+               impl Tracker {\n\
+                   fn bump(mut ref self) { self.val = self.val + 1; }\n\
+               }\n\
+               shared struct Counter { mut tracker: Tracker }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { tracker: Tracker { val: 0 } };\n\
+                   par {\n\
+                       c.tracker.bump();\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock tracker {")),
+        "user-impl `mut ref self` method on a mut field should be wrapped via `method_self_modes`; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l205_lock_block_skips_immutable_method() {
+    // `c.items.len()` is a read (`Vec.len` → `BorrowKind::ImmRef`).
+    // Classifier returns false; no wrap emitted even though the
+    // receiver shape `Identifier(c).items` matches a mut field and
+    // the diagnostic fires. Pins that the classifier gate is load-
+    // bearing.
+    let src = "shared struct Counter { mut items: Vec[i64] }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { items: Vec[0i64; 0] };\n\
+                   par {\n\
+                       let _n = c.items.len();\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        "immutable method (`Vec.len`) must NOT trigger a lock wrap; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l205_lock_block_wraps_method_call_nested_in_par_if() {
+    // The L201b walker descends through nested control flow (if/while
+    // /for/match/...) and the L205 extension piggybacks on that walk.
+    // Verify a mutating method call buried inside an `if` body in a
+    // par branch still gets wrapped — pins that
+    // `collect_lock_block_writes_in_stmt`'s `StmtKind::Expr` arm runs
+    // at every depth, not just the outer par-branch level.
+    let src = "shared struct Counter { mut items: Vec[i64] }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { items: Vec[0i64; 0] };\n\
+                   par {\n\
+                       if true { c.items.push(7); }\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock items {")),
+        "method-call mutation nested inside `if` should still receive the lock wrap; got {edits:?}",
+    );
+}
+
 // ── L203: closure-captured shared bindings ──────────────────────
 //
 // The v1 detector only counted direct source-level references to the

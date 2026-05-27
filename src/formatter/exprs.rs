@@ -158,6 +158,7 @@ impl super::Formatter {
                 method,
                 turbofish,
                 args,
+                ..
             } => {
                 self.format_expr(object);
                 self.write_str(".");
