@@ -38,6 +38,7 @@ mod driver;
 mod entry_chains;
 mod expr_ops;
 mod exprs;
+mod file;
 mod functions;
 mod helpers;
 mod http;
@@ -1393,29 +1394,25 @@ impl<'ctx> Codegen<'ctx> {
             request_header_type,
             Some(Linkage::External),
         );
-        // Phase 8 `File` handle slice F3: extern declarations for the
-        // runtime/src/file.rs ABI surface. Each open/read/write/flush
-        // entry point returns a `KaracIoResult` struct (32 bytes; see
-        // `runtime/src/file.rs::KaracIoResult` for the field shape +
-        // ABI layout pin). LLVM models the struct return directly;
-        // Rust's `extern "C"` calling convention applies the target's
-        // native struct-return ABI (sret on x86_64 SystemV; x8 on
-        // AArch64), and matching the LLVM declaration to the struct
-        // type produces ABI-aligned code on both sides. F4 method
-        // codegen extracts fields via `build_extract_value`.
-        let i32_type = context.i32_type();
-        let io_result_type = context.struct_type(
-            &[
-                i64_type.into(), // value (handle-as-i64 or byte count)
-                i32_type.into(), // error_kind (0 = OK; 1..=7 = IoError variant tag)
-                i32_type.into(), // _pad (32-bit padding for natural alignment)
-                ptr_type.into(), // error_msg_ptr (owned bytes for IoError.Other; null otherwise)
-                i64_type.into(), // error_msg_len
-            ],
-            false,
-        );
-        // Open-family: (path_ptr, path_len) -> KaracIoResult.
-        let file_open_type = io_result_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        // Phase 8 `File` handle slice F3/F4: extern declarations for
+        // the `runtime/src/file.rs` ABI surface. Each open/read/write/
+        // flush entry point writes its `KaracIoResult` (32 bytes; see
+        // `runtime/src/file.rs::KaracIoResult`) into a caller-provided
+        // `*mut KaracIoResult` out-param rather than returning the
+        // struct by value. The struct exceeds the 16-byte register-
+        // return threshold on every supported target (System V x86_64
+        // / AAPCS AArch64), so a by-value return would route through
+        // sret-via-hidden-pointer (SystemV) or x8-indirect (AAPCS) —
+        // platform-specific ABIs that require matching `sret` / `byval`
+        // attributes on the LLVM side. F4's first cut tried the
+        // by-value shape and produced a corrupted-stack hang at the
+        // call boundary. The out-param shape is ABI-trivial. F4's
+        // method codegen allocas a stack slot, passes its address as
+        // the first arg, then loads the result fields from the slot.
+        let file_call_void_type = context.void_type();
+        // Open-family: (out: *mut KaracIoResult, path_ptr: *const u8, path_len: i64) -> void.
+        let file_open_type = file_call_void_type
+            .fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
         for sym in [
             "karac_runtime_file_open",
             "karac_runtime_file_create",
@@ -1423,20 +1420,28 @@ impl<'ctx> Codegen<'ctx> {
         ] {
             module.add_function(sym, file_open_type, Some(Linkage::External));
         }
-        // Read / write: (handle, buf_ptr, buf_len) -> KaracIoResult.
-        let file_rw_type =
-            io_result_type.fn_type(&[ptr_type.into(), ptr_type.into(), i64_type.into()], false);
+        // Read / write: (out, handle, buf_ptr, buf_len) -> void.
+        let file_rw_type = file_call_void_type.fn_type(
+            &[
+                ptr_type.into(),
+                ptr_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
         for sym in ["karac_runtime_file_read", "karac_runtime_file_write"] {
             module.add_function(sym, file_rw_type, Some(Linkage::External));
         }
-        // Flush: (handle) -> KaracIoResult.
-        let file_flush_type = io_result_type.fn_type(&[ptr_type.into()], false);
+        // Flush: (out, handle) -> void.
+        let file_flush_type =
+            file_call_void_type.fn_type(&[ptr_type.into(), ptr_type.into()], false);
         module.add_function(
             "karac_runtime_file_flush",
             file_flush_type,
             Some(Linkage::External),
         );
-        // Close: (handle) -> void. Called by F4's FreeFileHandle
+        // Close: (handle) -> void. Called by F4b's FreeFileHandle
         // cleanup action at scope exit.
         let file_close_type = context.void_type().fn_type(&[ptr_type.into()], false);
         module.add_function(

@@ -371,6 +371,24 @@ impl<'ctx> super::Codegen<'ctx> {
             let listener_val = self.compile_expr(&_args[0].value)?;
             return self.lower_websocket_accept(listener_val);
         }
+        // Phase 8 `File` handle slice F4: constructor dispatch.
+        // `File.open` / `.create` / `.append` lower to the matching
+        // `karac_runtime_file_*` extern; the KaracIoResult return
+        // unpacks into `Result[File, IoError]` via
+        // `Codegen::lower_kara_io_result`. The String `path` arg
+        // contributes the `{ptr, len}` pair the runtime needs;
+        // capacity is unused.
+        if type_name == "File" && matches!(method, "open" | "create" | "append") && _args.len() == 1
+        {
+            let sym = match method {
+                "open" => "karac_runtime_file_open",
+                "create" => "karac_runtime_file_create",
+                "append" => "karac_runtime_file_append",
+                _ => unreachable!(),
+            };
+            return self.compile_file_constructor(sym, &_args[0].value);
+        }
+
         if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
             {
                 let addr_val = self.compile_expr(&_args[0].value)?;

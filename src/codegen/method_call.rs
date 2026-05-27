@@ -51,6 +51,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 let self_val = self.compile_expr(object)?;
                 return self.lower_tcp_listener_accept(self_val);
             }
+            // Phase 8 `File` handle slice F4: instance method
+            // dispatch. `file.read(buf: mut Slice[u8])` /
+            // `file.write(buf: Slice[u8])` / `file.flush()` lower
+            // through `karac_runtime_file_*` externs; the
+            // KaracIoResult return unpacks into `Result[usize/Unit,
+            // IoError]` via `Codegen::lower_kara_io_result`. The
+            // receiver `self_val` is the `File` opaque pointer (per
+            // F3's `File` → opaque ptr lowering).
+            if key == "File.read" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.compile_file_read(self_val, buf_val);
+            }
+            if key == "File.write" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.compile_file_write(self_val, buf_val);
+            }
+            if key == "File.flush" && args.is_empty() {
+                let self_val = self.compile_expr(object)?;
+                return self.compile_file_flush(self_val);
+            }
             if key == "TcpStream.read" && args.len() == 1 {
                 let self_val = self.compile_expr(object)?;
                 let elem_ty: BasicTypeEnum = self.context.i8_type().into();

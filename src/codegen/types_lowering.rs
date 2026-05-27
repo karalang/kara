@@ -204,14 +204,14 @@ impl<'ctx> super::Codegen<'ctx> {
         self.context.struct_type(&[ptr_ty, i64_ty], false)
     }
 
-    /// Phase 8 `File` handle slice F3: ABI struct returned by every
-    /// `karac_runtime_file_*` extern in `runtime/src/file.rs`. Layout
-    /// `{ i64 value, i32 error_kind, i32 _pad, ptr error_msg_ptr,
-    /// i64 error_msg_len }` — 32 bytes, alignment 8, pinned by the
-    /// runtime crate's `test_io_result_layout_pinned`. F4 method
-    /// codegen extracts the fields via `build_extract_value` to build
-    /// `Result[T, IoError]` Ok/Err arms from one struct return.
-    #[allow(dead_code)] // F4 method codegen consumes this — declared at F3 so the type is stable.
+    /// Phase 8 `File` handle slice F3/F4: ABI struct the
+    /// `karac_runtime_file_*` externs write into via out-param.
+    /// Layout `{ i64 value, i32 error_kind, i32 _pad, ptr
+    /// error_msg_ptr, i64 error_msg_len }` — 32 bytes, alignment 8,
+    /// pinned by the runtime crate's `test_io_result_layout_pinned`.
+    /// F4 method codegen allocas a slot of this type, passes its
+    /// pointer to the runtime call, then GEPs + loads the field
+    /// values to construct the surface `Result[T, IoError]`.
     pub(super) fn kara_io_result_type(&self) -> StructType<'ctx> {
         let i64_ty = self.context.i64_type().into();
         let i32_ty = self.context.i32_type().into();

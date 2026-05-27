@@ -72,6 +72,43 @@ impl<'ctx> super::Codegen<'ctx> {
                         self.var_type_names.insert(name.clone(), type_name);
                         return Ok(());
                     }
+                    // Phase 8 `File` handle slice F4: same int→ptr
+                    // re-typing as the shared-struct path above. When
+                    // the user destructures `Ok(f)` against a
+                    // `Result[File, IoError]`, the Result enum-payload
+                    // word arrives as i64 (the Result lowering's
+                    // payload-word ABI); without converting back to
+                    // `ptr` here, downstream `f.read(...)` /
+                    // `f.write(...)` dispatch would call
+                    // `compile_expr(Identifier("f"))` and receive an
+                    // IntValue where the dispatch arms expect a
+                    // PointerValue. Stand-alone arm (not folded into
+                    // the shared-types check) because `File` isn't a
+                    // `shared struct` — it's an opaque handle the F3
+                    // lowering routes to `ptr`.
+                    if type_name == "File" {
+                        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+                        let ptr_val = match scrut {
+                            BasicValueEnum::IntValue(iv) => self
+                                .builder
+                                .build_int_to_ptr(iv, ptr_ty, &format!("{}.fileptr", name))
+                                .unwrap()
+                                .into(),
+                            BasicValueEnum::PointerValue(_) => scrut,
+                            _ => scrut,
+                        };
+                        let alloca = self.create_entry_alloca(fn_val, name, ptr_ty.into());
+                        self.builder.build_store(alloca, ptr_val).unwrap();
+                        self.variables.insert(
+                            name.clone(),
+                            VarSlot {
+                                ptr: alloca,
+                                ty: ptr_ty.into(),
+                            },
+                        );
+                        self.var_type_names.insert(name.clone(), type_name);
+                        return Ok(());
+                    }
                 }
 
                 // Struct-payload reconstruction: when the typechecker

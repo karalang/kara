@@ -1,4 +1,5 @@
-//! File handle runtime shim — Phase 8 stdlib `File` slice F2.
+//! File handle runtime shim — Phase 8 stdlib `File` slice F2 (with
+//! F4 design refinement: struct-return → out-param).
 //!
 //! Companion to `runtime/src/map.rs`'s shape for opaque-handle stdlib
 //! types. Wraps `std::fs::File` behind a stable `extern "C"` ABI so
@@ -7,11 +8,23 @@
 //!
 //! ## ABI surface
 //!
-//! Every entry point returns a `KaracIoResult` carrying both the
-//! operation's success payload (handle or byte count, depending on
-//! call kind) AND the IoError discriminator for the codegen-side
-//! Result construction. The kind tag follows the order of the
-//! `IoError` enum variants declared in `runtime/stdlib/io.kara`:
+//! Every entry point writes its `KaracIoResult` into a caller-provided
+//! `*mut KaracIoResult` out-param (first argument). The struct
+//! carries both the operation's success payload (handle or byte
+//! count, depending on call kind) AND the IoError discriminator for
+//! the codegen-side Result construction. F4's first cut returned the
+//! struct by value, but the 32-byte size exceeds the 16-byte
+//! register-return threshold on every supported target (System V
+//! x86_64 sret, AAPCS AArch64 indirect-via-x8) — modelling the
+//! resulting indirect-return ABI in LLVM IR requires `sret` / `byval`
+//! parameter attributes that must match Rust's exact lowering on
+//! each target. The out-param shape is ABI-trivial: no return value,
+//! callee writes into the caller-allocated slot. Codegen allocas a
+//! `KaracIoResult` slot in the function entry block, passes its
+//! pointer as the first argument, then GEPs + loads the field values.
+//!
+//! The kind tag follows the order of the `IoError` enum variants
+//! declared in `runtime/stdlib/io.kara`:
 //!
 //!   0 → Ok  (no error; consult `value`/`handle`)
 //!   1 → NotFound
@@ -187,28 +200,46 @@ unsafe fn read_path(path_ptr: *const u8, path_len: i64) -> Option<String> {
 }
 
 // ── extern "C" entry points ─────────────────────────────────────
+//
+// **ABI shape.** Every entry point writes its `KaracIoResult` into a
+// caller-provided `*mut KaracIoResult` out-param rather than
+// returning the struct by value. The struct is 32 bytes — past the
+// 16-byte register-return threshold on both x86_64 SystemV (sret via
+// hidden pointer) and AArch64 / Apple Darwin (indirect via x8 / x0).
+// Modelling indirect returns in LLVM IR requires explicit
+// `byval`/`sret` parameter attributes that must match Rust's exact
+// lowering on each target — F4's first cut returned the struct by
+// value, which produced an LLVM call that didn't match Rust's
+// extern "C" sret convention and corrupted the stack (silent hang
+// during the F4 smoke test, 2026-05-26). The out-param shape is
+// ABI-trivial: a `*mut KaracIoResult` first arg, the callee writes
+// into it, no return value. Codegen at F4 allocas a stack slot and
+// passes its address; the load-from-slot following the call extracts
+// the fields verbatim.
 
 /// Open `path` in read-only mode. Codegen emits this for `File.open(p)`.
 ///
 /// # Safety
 ///
-/// `path_ptr` must point to `path_len` valid bytes of UTF-8 text.
-/// Codegen always satisfies this via the Kāra String's `{ptr, len}`
-/// invariant. The returned `handle` (when `error_kind == 0`) is
-/// owned by the caller and must be released through
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `path_ptr` must point to `path_len` valid bytes of UTF-8
+/// text. On success (`out.error_kind == 0`) the handle in `out.value`
+/// is owned by the caller and must be released through
 /// `karac_runtime_file_close`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_open(
+    out: *mut KaracIoResult,
     path_ptr: *const u8,
     path_len: i64,
-) -> KaracIoResult {
+) {
     let Some(path) = read_path(path_ptr, path_len) else {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "path is not valid UTF-8",
         ));
+        return;
     };
-    match std::fs::OpenOptions::new().read(true).open(&path) {
+    *out = match std::fs::OpenOptions::new().read(true).open(&path) {
         Ok(f) => {
             let handle = Box::into_raw(Box::new(KaracFile {
                 inner: Mutex::new(f),
@@ -216,7 +247,7 @@ pub unsafe extern "C" fn karac_runtime_file_open(
             ok(handle as i64)
         }
         Err(e) => err(&e),
-    }
+    };
 }
 
 /// Open `path` in write+truncate mode (creating if absent). Codegen
@@ -227,16 +258,18 @@ pub unsafe extern "C" fn karac_runtime_file_open(
 /// See `karac_runtime_file_open`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_create(
+    out: *mut KaracIoResult,
     path_ptr: *const u8,
     path_len: i64,
-) -> KaracIoResult {
+) {
     let Some(path) = read_path(path_ptr, path_len) else {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "path is not valid UTF-8",
         ));
+        return;
     };
-    match std::fs::OpenOptions::new()
+    *out = match std::fs::OpenOptions::new()
         .write(true)
         .create(true)
         .truncate(true)
@@ -249,7 +282,7 @@ pub unsafe extern "C" fn karac_runtime_file_create(
             ok(handle as i64)
         }
         Err(e) => err(&e),
-    }
+    };
 }
 
 /// Open `path` in append mode (creating if absent, positioning writes
@@ -260,16 +293,18 @@ pub unsafe extern "C" fn karac_runtime_file_create(
 /// See `karac_runtime_file_open`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_append(
+    out: *mut KaracIoResult,
     path_ptr: *const u8,
     path_len: i64,
-) -> KaracIoResult {
+) {
     let Some(path) = read_path(path_ptr, path_len) else {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "path is not valid UTF-8",
         ));
+        return;
     };
-    match std::fs::OpenOptions::new()
+    *out = match std::fs::OpenOptions::new()
         .append(true)
         .create(true)
         .open(&path)
@@ -281,35 +316,38 @@ pub unsafe extern "C" fn karac_runtime_file_append(
             ok(handle as i64)
         }
         Err(e) => err(&e),
-    }
+    };
 }
 
-/// Read up to `buf_len` bytes from `handle` into `buf_ptr`. Returns
-/// the number of bytes read in `value` on success; zero means clean
-/// EOF (not an error).
+/// Read up to `buf_len` bytes from `handle` into `buf_ptr`. On success
+/// `out.value` holds the byte count (0 = clean EOF, not an error).
 ///
 /// # Safety
 ///
-/// `handle` must be a live pointer returned from `_open` / `_create` /
-/// `_append` and not yet closed. `buf_ptr` must point to writable
-/// memory of at least `buf_len` bytes; `buf_len >= 0`.
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `handle` must be a live pointer returned from `_open` /
+/// `_create` / `_append` and not yet closed. `buf_ptr` must point to
+/// writable memory of at least `buf_len` bytes; `buf_len >= 0`.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_read(
+    out: *mut KaracIoResult,
     handle: *mut KaracFile,
     buf_ptr: *mut u8,
     buf_len: i64,
-) -> KaracIoResult {
+) {
     if handle.is_null() {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "null file handle",
         ));
+        return;
     }
     if buf_len < 0 {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "negative buffer length",
         ));
+        return;
     }
     let file = &*handle;
     let mut guard = match file.inner.lock() {
@@ -317,35 +355,38 @@ pub unsafe extern "C" fn karac_runtime_file_read(
         Err(p) => p.into_inner(),
     };
     let buf = std::slice::from_raw_parts_mut(buf_ptr, buf_len as usize);
-    match guard.read(buf) {
+    *out = match guard.read(buf) {
         Ok(n) => ok(n as i64),
         Err(e) => err(&e),
-    }
+    };
 }
 
-/// Write up to `buf_len` bytes from `buf_ptr` to `handle`. Returns
-/// the number of bytes written in `value`.
+/// Write up to `buf_len` bytes from `buf_ptr` to `handle`. On success
+/// `out.value` holds the byte count.
 ///
 /// # Safety
 ///
 /// See `karac_runtime_file_read`; `buf_ptr` is read-only here.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_write(
+    out: *mut KaracIoResult,
     handle: *mut KaracFile,
     buf_ptr: *const u8,
     buf_len: i64,
-) -> KaracIoResult {
+) {
     if handle.is_null() {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "null file handle",
         ));
+        return;
     }
     if buf_len < 0 {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "negative buffer length",
         ));
+        return;
     }
     let file = &*handle;
     let mut guard = match file.inner.lock() {
@@ -353,35 +394,37 @@ pub unsafe extern "C" fn karac_runtime_file_write(
         Err(p) => p.into_inner(),
     };
     let buf = std::slice::from_raw_parts(buf_ptr, buf_len as usize);
-    match guard.write(buf) {
+    *out = match guard.write(buf) {
         Ok(n) => ok(n as i64),
         Err(e) => err(&e),
-    }
+    };
 }
 
-/// Flush the file's write buffer. Returns OK with `value == 0` on
-/// success.
+/// Flush the file's write buffer. On success `out.value == 0`.
 ///
 /// # Safety
 ///
-/// `handle` must be a live pointer returned from an open-family call.
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `handle` must be a live pointer returned from an open-family
+/// call.
 #[no_mangle]
-pub unsafe extern "C" fn karac_runtime_file_flush(handle: *mut KaracFile) -> KaracIoResult {
+pub unsafe extern "C" fn karac_runtime_file_flush(out: *mut KaracIoResult, handle: *mut KaracFile) {
     if handle.is_null() {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "null file handle",
         ));
+        return;
     }
     let file = &*handle;
     let mut guard = match file.inner.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    match guard.flush() {
+    *out = match guard.flush() {
         Ok(()) => ok(0),
         Err(e) => err(&e),
-    }
+    };
 }
 
 /// Close the file handle and free its memory. Called by codegen's
@@ -406,23 +449,26 @@ pub unsafe extern "C" fn karac_runtime_file_close(handle: *mut KaracFile) {
 /// exported here so codegen can call it once the surface lands —
 /// avoids a runtime-rebuild requirement when seek ships.
 ///
-/// `whence`: 0 = Start, 1 = Current, 2 = End. Returns the new
-/// position in `value` on success.
+/// `whence`: 0 = Start, 1 = Current, 2 = End. On success
+/// `out.value` holds the new position.
 ///
 /// # Safety
 ///
-/// `handle` must be a live pointer returned from an open-family call.
+/// `out` must point to a writable `KaracIoResult`. `handle` must be a
+/// live pointer returned from an open-family call.
 #[no_mangle]
 pub unsafe extern "C" fn karac_runtime_file_seek(
+    out: *mut KaracIoResult,
     handle: *mut KaracFile,
     whence: u8,
     offset: i64,
-) -> KaracIoResult {
+) {
     if handle.is_null() {
-        return err(&std::io::Error::new(
+        *out = err(&std::io::Error::new(
             std::io::ErrorKind::InvalidData,
             "null file handle",
         ));
+        return;
     }
     let file = &*handle;
     let mut guard = match file.inner.lock() {
@@ -434,16 +480,17 @@ pub unsafe extern "C" fn karac_runtime_file_seek(
         1 => SeekFrom::Current(offset),
         2 => SeekFrom::End(offset),
         _ => {
-            return err(&std::io::Error::new(
+            *out = err(&std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 "invalid seek whence",
             ));
+            return;
         }
     };
-    match guard.seek(pos) {
+    *out = match guard.seek(pos) {
         Ok(p) => ok(p as i64),
         Err(e) => err(&e),
-    }
+    };
 }
 
 // ── Tests ───────────────────────────────────────────────────────
@@ -465,6 +512,22 @@ mod tests {
         assert_eq!(size_of::<KaracIoResult>(), 32);
     }
 
+    /// Helper: allocate a fresh `KaracIoResult` slot and yield its
+    /// address as the `out` first-arg every test passes to the extern.
+    /// Returning the struct by value (vs. through `out`) is what F4's
+    /// first cut tripped over — the runtime tests use the same
+    /// out-param shape as codegen will, so the tests double as ABI
+    /// rehearsal for the F4 call sites.
+    fn fresh_result() -> KaracIoResult {
+        KaracIoResult {
+            value: 0,
+            error_kind: 0,
+            _pad: 0,
+            error_msg_ptr: ptr::null_mut(),
+            error_msg_len: 0,
+        }
+    }
+
     #[test]
     fn test_create_write_flush_open_read_roundtrip() {
         let tmp = std::env::temp_dir().join("karac_runtime_file_roundtrip.txt");
@@ -474,31 +537,36 @@ mod tests {
 
         unsafe {
             // Create
-            let res = karac_runtime_file_create(path_bytes.as_ptr(), path_bytes.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_create(&mut res, path_bytes.as_ptr(), path_bytes.len() as i64);
             assert_eq!(res.error_kind, 0);
             let handle = res.value as *mut KaracFile;
             assert!(!handle.is_null());
 
             // Write "hi\n"
             let data = b"hi\n";
-            let res = karac_runtime_file_write(handle, data.as_ptr(), data.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_write(&mut res, handle, data.as_ptr(), data.len() as i64);
             assert_eq!(res.error_kind, 0);
             assert_eq!(res.value, 3);
 
             // Flush
-            let res = karac_runtime_file_flush(handle);
+            let mut res = fresh_result();
+            karac_runtime_file_flush(&mut res, handle);
             assert_eq!(res.error_kind, 0);
 
             // Close (drops the handle)
             karac_runtime_file_close(handle);
 
             // Reopen + read
-            let res = karac_runtime_file_open(path_bytes.as_ptr(), path_bytes.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_open(&mut res, path_bytes.as_ptr(), path_bytes.len() as i64);
             assert_eq!(res.error_kind, 0);
             let handle = res.value as *mut KaracFile;
 
             let mut buf = [0u8; 8];
-            let res = karac_runtime_file_read(handle, buf.as_mut_ptr(), buf.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_read(&mut res, handle, buf.as_mut_ptr(), buf.len() as i64);
             assert_eq!(res.error_kind, 0);
             assert_eq!(res.value, 3);
             assert_eq!(&buf[..3], b"hi\n");
@@ -513,7 +581,8 @@ mod tests {
     fn test_open_nonexistent_returns_not_found() {
         let path = b"/nonexistent_karac_runtime_test_F2.txt";
         unsafe {
-            let res = karac_runtime_file_open(path.as_ptr(), path.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_open(&mut res, path.as_ptr(), path.len() as i64);
             assert_eq!(res.error_kind, 1, "expected NotFound tag");
             assert!(res.error_msg_ptr.is_null());
         }
@@ -535,12 +604,14 @@ mod tests {
         let path_bytes = path_str.as_bytes();
 
         unsafe {
-            let res = karac_runtime_file_append(path_bytes.as_ptr(), path_bytes.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_append(&mut res, path_bytes.as_ptr(), path_bytes.len() as i64);
             assert_eq!(res.error_kind, 0);
             let handle = res.value as *mut KaracFile;
 
             let data = b"second";
-            let res = karac_runtime_file_write(handle, data.as_ptr(), data.len() as i64);
+            let mut res = fresh_result();
+            karac_runtime_file_write(&mut res, handle, data.as_ptr(), data.len() as i64);
             assert_eq!(res.error_kind, 0);
 
             karac_runtime_file_close(handle);
