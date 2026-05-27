@@ -36,6 +36,7 @@ mod clone;
 pub mod event_loop;
 mod file;
 mod map;
+pub mod scheduler;
 
 use std::cell::Cell;
 use std::collections::VecDeque;
@@ -315,19 +316,25 @@ impl Drop for FrameGuard {
 
 /// Per-call shared state. One `Arc<ParCall>` per `karac_par_run` invocation;
 /// shared between the calling thread and every dispatched task.
-struct ParCall {
-    cancel: AtomicBool,
+///
+/// **Reused by `scheduler::karac_runtime_spawn` for fresh-task dispatch.**
+/// Each `spawn()` call builds a 1-task `ParCall` (with `remaining = 1`,
+/// `track_frames = false`, defaults elsewhere) and pushes one `Task` onto
+/// the global `Pool`. The cancel + notify machinery is reused for the
+/// spawn-side join wait. See `scheduler.rs` for the dispatch surface.
+pub(crate) struct ParCall {
+    pub(crate) cancel: AtomicBool,
     /// Number of tasks not yet completed (decremented by each task on
     /// finish, including skipped-due-to-cancel). Reaches 0 when the call
     /// is done; `notify` is signalled at that point.
-    remaining: Mutex<u32>,
-    notify: Condvar,
-    spawn_site_id: u32,
+    pub(crate) remaining: Mutex<u32>,
+    pub(crate) notify: Condvar,
+    pub(crate) spawn_site_id: u32,
     /// Calling thread's `CURRENT_FRAME` at the moment of the call,
     /// captured as a raw-pointer-as-`usize` (see soundness note above).
     /// Children's `parent` field points here when `track_frames` is true.
-    parent_addr: usize,
-    track_frames: bool,
+    pub(crate) parent_addr: usize,
+    pub(crate) track_frames: bool,
 }
 
 /// One unit of work for the pool. The `Arc<ParCall>` shared state plus a
@@ -340,15 +347,15 @@ struct ParCall {
 /// per dispatched task; for the workload sizes the runtime targets
 /// (1–18 workers per call), that's negligible vs the thread-scheduling
 /// overhead the pool was built to avoid.
-struct Task {
-    call: Arc<ParCall>,
-    branch_idx: u32,
-    run: Box<dyn FnOnce(&AtomicBool) + Send>,
+pub(crate) struct Task {
+    pub(crate) call: Arc<ParCall>,
+    pub(crate) branch_idx: u32,
+    pub(crate) run: Box<dyn FnOnce(&AtomicBool) + Send>,
 }
 
-struct Pool {
-    queue: Mutex<VecDeque<Task>>,
-    cv: Condvar,
+pub(crate) struct Pool {
+    pub(crate) queue: Mutex<VecDeque<Task>>,
+    pub(crate) cv: Condvar,
 }
 
 static POOL: OnceLock<Arc<Pool>> = OnceLock::new();
@@ -387,7 +394,7 @@ fn resolve_pool_workers() -> usize {
         .max(2)
 }
 
-fn pool() -> &'static Arc<Pool> {
+pub(crate) fn pool() -> &'static Arc<Pool> {
     POOL.get_or_init(|| {
         let n = resolve_pool_workers();
         let pool = Arc::new(Pool {

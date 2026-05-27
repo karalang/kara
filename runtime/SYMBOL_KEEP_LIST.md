@@ -127,6 +127,29 @@ Repr-C type also exported: `KaracSchedulerStats { polls: u64, ready_observations
 
 Repr-C type also exported: `KaracWakeup { token: u64, parked: *mut c_void, direction: u8 }` — written by `karac_runtime_event_loop_poll` into the caller-allocated buffer.
 
+#### `runtime/src/scheduler.rs`
+
+Phase 6 line 218 slice 3 (2026-05-27) — fresh-task dispatch for `spawn()`
+and (future-slice) `TaskGroup`. Codegen at every `spawn(closure)` call
+site emits a wrapper conforming to the `SpawnFn` signature, calls
+`karac_runtime_spawn` to submit it, and stores the returned handle
+address (as `i64`) into the `TaskHandle[T].task_id` field. `.join()`
+codegen calls back into `karac_runtime_task_join` against the same
+handle. Cross-platform.
+
+| Symbol | Signature (C ABI) | Purpose |
+|---|---|---|
+| `karac_runtime_spawn` | `unsafe extern "C" fn(fn_ptr: SpawnFn, env: *mut c_void, result_size: usize, result_align: usize) -> *mut KaracTaskHandle` | Submit a fresh task to the global worker pool. Allocates a handle + per-task result buffer; pushes a 1-task `Task` onto the same MPMC queue `karac_par_run` drains. |
+| `karac_runtime_task_join` | `unsafe extern "C" fn(handle: *mut KaracTaskHandle, out_slot: *mut u8) -> u8` | Block until the task reaches a terminal state, memcpy the result into `*out_slot` on `COMPLETED`, free the handle. Returns a `TASK_STATE_*` discriminant (`COMPLETED` = 1, `PANICKED` = 2, `CANCELLED` = 3). |
+| `karac_runtime_task_handle_free` | `unsafe extern "C" fn(handle: *mut KaracTaskHandle)` | Release a handle without joining. Caller must ensure the task has reached a terminal state (e.g. via prior `karac_runtime_task_state` poll). TaskGroup-side cleanup will route through here in slice 5. |
+| `karac_runtime_task_state` | `unsafe extern "C" fn(handle: *const KaracTaskHandle) -> u8` | Non-blocking peek at the task's state. Returns `PENDING` while in flight, or one of the terminal discriminants. |
+
+`SpawnFn` typedef: `unsafe extern "C" fn(env: *mut c_void, result_out: *mut u8, cancel: *const AtomicBool)`. Codegen-emitted wrappers read captured environments from `env`, run the user closure body, and memcpy the T-typed return value into `*result_out`.
+
+`KaracTaskHandle` is opaque to codegen (handle pointers flow through `i64` casts only); the runtime owns its layout (`state: AtomicU8`, `result_buf: *mut u8`, `result_layout: Layout`, `cancel: AtomicBool`, `notify_mutex: Mutex<()>`, `notify_cv: Condvar`).
+
+`TASK_STATE_*` discriminants pinned: `PENDING = 0`, `COMPLETED = 1`, `PANICKED = 2`, `CANCELLED = 3` (regression-guarded by `tests::task_state_constants_pinned`). `PANICKED` is API-future-proofing for `catch_panic[T]` integration; under v1's `panic = "abort"` release profile a panicking spawn closure aborts the process before reaching the terminal-state write.
+
 #### `runtime/src/clone.rs`
 
 | Symbol | Signature (C ABI) | Purpose |
