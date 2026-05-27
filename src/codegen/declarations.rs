@@ -189,6 +189,17 @@ enum BodyArg {
         lhs: Box<BodyArg>,
         rhs: Box<BodyArg>,
     },
+    /// Slice 8ah: free-function call returning a value. Recognised only
+    /// when the callee is a bare identifier whose name is NOT classified
+    /// as a network-yield callee in `callee_network_yield_effect` (a
+    /// yielding callee at this position must route through the state-
+    /// machine intercept rather than being lowered as a synchronous
+    /// call). Each arg must itself be a recognised `BodyArg`. Emission
+    /// looks up the LLVM `FunctionValue` via `module.get_function`,
+    /// materialises args, and emits `build_call`; the call's basic-
+    /// value result is returned (None when the callee is void or the
+    /// symbol isn't declared).
+    Call { name: String, args: Vec<BodyArg> },
 }
 
 /// Slice 8q: the closed integer-arithmetic op set the body-splitting
@@ -771,7 +782,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 // rule as the call-classification arms.
                 if let StmtKind::Let { value, pattern, .. } = &stmt.kind {
                     if let PatternKind::Binding(name) = &pattern.kind {
-                        if let Some(rhs) = recognize_body_arg(value, &current_names) {
+                        if let Some(rhs) = recognize_body_arg(
+                            value,
+                            &current_names,
+                            &program.callee_network_yield_effect,
+                        ) {
                             per_arm_stmts[cur_arm].push(BodySplitStmt::Let {
                                 name: name.clone(),
                                 rhs,
@@ -801,7 +816,11 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let StmtKind::Assign { target, value } = &stmt.kind {
                     if let ExprKind::Identifier(name) = &target.kind {
                         if current_names.contains(name) {
-                            if let Some(body_value) = recognize_body_arg(value, &current_names) {
+                            if let Some(body_value) = recognize_body_arg(
+                                value,
+                                &current_names,
+                                &program.callee_network_yield_effect,
+                            ) {
                                 per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
                                     name: name.clone(),
                                     value: body_value,
@@ -848,9 +867,14 @@ impl<'ctx> super::Codegen<'ctx> {
                                 | CompoundOp::Shl
                                 | CompoundOp::Shr => None,
                             };
-                            if let (Some(arith_op), Some(rhs)) =
-                                (arith_op, recognize_body_arg(value, &current_names))
-                            {
+                            if let (Some(arith_op), Some(rhs)) = (
+                                arith_op,
+                                recognize_body_arg(
+                                    value,
+                                    &current_names,
+                                    &program.callee_network_yield_effect,
+                                ),
+                            ) {
                                 let lhs = BodyArg::Slot(name.clone());
                                 per_arm_stmts[cur_arm].push(BodySplitStmt::Assign {
                                     name: name.clone(),
@@ -904,7 +928,13 @@ impl<'ctx> super::Codegen<'ctx> {
                         if let ExprKind::Identifier(name) = &callee.kind {
                             let body_args: Option<Vec<BodyArg>> = args
                                 .iter()
-                                .map(|a| recognize_body_arg(&a.value, &current_names))
+                                .map(|a| {
+                                    recognize_body_arg(
+                                        &a.value,
+                                        &current_names,
+                                        &program.callee_network_yield_effect,
+                                    )
+                                })
                                 .collect();
                             if let Some(body_args) = body_args {
                                 per_arm_stmts[cur_arm].push(BodySplitStmt::FreeFnCall {
@@ -937,7 +967,13 @@ impl<'ctx> super::Codegen<'ctx> {
                             .cloned();
                         let body_args: Option<Vec<BodyArg>> = args
                             .iter()
-                            .map(|a| recognize_body_arg(&a.value, &current_names))
+                            .map(|a| {
+                                recognize_body_arg(
+                                    &a.value,
+                                    &current_names,
+                                    &program.callee_network_yield_effect,
+                                )
+                            })
                             .collect();
                         if let (Some(receiver_field), Some(callee_key), Some(body_args)) =
                             (receiver_field, callee_key, body_args)
@@ -982,7 +1018,11 @@ impl<'ctx> super::Codegen<'ctx> {
             // i64 returns stay on the unit path until follow-on
             // slices widen the supported set.
             if let Some(final_expr) = fn_ast.body.final_expr.as_deref() {
-                terminal_return = recognize_body_arg(final_expr, &current_names);
+                terminal_return = recognize_body_arg(
+                    final_expr,
+                    &current_names,
+                    &program.callee_network_yield_effect,
+                );
             }
         }
 
@@ -2290,6 +2330,31 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 Some(result.into())
             }
+            BodyArg::Call { name, args } => {
+                // Slice 8ah: synchronous free-fn call returning a
+                // value. Look up the LLVM symbol; materialise each
+                // arg via the same helper; emit `build_call`. The
+                // call's basic-value result threads back through the
+                // caller's `.and_then` so the terminal field store
+                // (or let RHS / assign RHS / arg slot) receives the
+                // computed value. Void callees and any
+                // un-materialisable arg → `None` so the caller falls
+                // through to the conservative skip (terminal field
+                // keeps the `i64 0` placeholder).
+                let callee_fn = self.module.get_function(name)?;
+                let mut compiled: Vec<BasicMetadataValueEnum<'ctx>> =
+                    Vec::with_capacity(args.len());
+                for arg in args {
+                    let val = self.materialize_body_arg(arg, slot_map, name_hint)?;
+                    compiled.push(val.into());
+                }
+                let call_name = format!("{name}{name_hint}");
+                let call_site = self
+                    .builder
+                    .build_call(callee_fn, &compiled, &call_name)
+                    .expect("emit slice-8ah value-returning user call");
+                call_site.try_as_basic_value().basic()
+            }
         }
     }
 
@@ -3342,49 +3407,82 @@ fn count_yields_inside_span(
 /// `shl`/`shr`), and float arithmetic stay outside the recognised set
 /// — slice 8q's scope is integer arithmetic that unblocks compound-
 /// assign.
-fn recognize_body_arg(expr: &Expr, in_scope_names: &HashSet<String>) -> Option<BodyArg> {
+fn recognize_body_arg(
+    expr: &Expr,
+    in_scope_names: &HashSet<String>,
+    network_yield: &CalleeNetworkYieldEffectTable,
+) -> Option<BodyArg> {
     match &expr.kind {
         ExprKind::Integer(n, _) => Some(BodyArg::IntLit(*n)),
         ExprKind::Identifier(name) if in_scope_names.contains(name) => {
             Some(BodyArg::Slot(name.clone()))
         }
         ExprKind::Call { callee, args } => {
-            // Lowered binary arithmetic surface — see
-            // `src/lowering.rs::rewrite_binary`. Match the
-            // two-segment `Path` callee shape, restrict to integer
-            // primitive types, and accept the five arithmetic
-            // method names that map onto v1's LLVM int-arith ops.
-            let ExprKind::Path { segments, .. } = &callee.kind else {
-                return None;
-            };
-            if segments.len() != 2 {
-                return None;
+            // Two recognised shapes:
+            //   (1) Lowered binary arithmetic — `i64::add(a, b)` etc.
+            //       Two-segment `Path` callee, integer-primitive
+            //       owner, one of the five arithmetic method names
+            //       (`src/lowering.rs::rewrite_binary`).
+            //   (2) Slice 8ah: free-function call returning a value —
+            //       bare `Identifier` callee whose name is NOT marked
+            //       as a network-yield callee. Yielding callees at a
+            //       recognise position would have to route through
+            //       the state-machine intercept; lowering them as a
+            //       synchronous call here would skip the yield.
+            match &callee.kind {
+                ExprKind::Path { segments, .. } => {
+                    if segments.len() != 2 {
+                        return None;
+                    }
+                    let int_primitive = matches!(
+                        segments[0].as_str(),
+                        "i8" | "i16"
+                            | "i32"
+                            | "i64"
+                            | "u8"
+                            | "u16"
+                            | "u32"
+                            | "u64"
+                            | "usize"
+                            | "isize"
+                    );
+                    if !int_primitive {
+                        return None;
+                    }
+                    let arith_op = match segments[1].as_str() {
+                        "add" => BinaryArithOp::Add,
+                        "sub" => BinaryArithOp::Sub,
+                        "mul" => BinaryArithOp::Mul,
+                        "div" => BinaryArithOp::Div,
+                        "rem" => BinaryArithOp::Mod,
+                        _ => return None,
+                    };
+                    if args.len() != 2 {
+                        return None;
+                    }
+                    let lhs = recognize_body_arg(&args[0].value, in_scope_names, network_yield)?;
+                    let rhs = recognize_body_arg(&args[1].value, in_scope_names, network_yield)?;
+                    Some(BodyArg::Binary {
+                        op: arith_op,
+                        lhs: Box::new(lhs),
+                        rhs: Box::new(rhs),
+                    })
+                }
+                ExprKind::Identifier(name) => {
+                    if network_yield.get(name).copied().unwrap_or(false) {
+                        return None;
+                    }
+                    let body_args: Option<Vec<BodyArg>> = args
+                        .iter()
+                        .map(|a| recognize_body_arg(&a.value, in_scope_names, network_yield))
+                        .collect();
+                    Some(BodyArg::Call {
+                        name: name.clone(),
+                        args: body_args?,
+                    })
+                }
+                _ => None,
             }
-            let int_primitive = matches!(
-                segments[0].as_str(),
-                "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize"
-            );
-            if !int_primitive {
-                return None;
-            }
-            let arith_op = match segments[1].as_str() {
-                "add" => BinaryArithOp::Add,
-                "sub" => BinaryArithOp::Sub,
-                "mul" => BinaryArithOp::Mul,
-                "div" => BinaryArithOp::Div,
-                "rem" => BinaryArithOp::Mod,
-                _ => return None,
-            };
-            if args.len() != 2 {
-                return None;
-            }
-            let lhs = recognize_body_arg(&args[0].value, in_scope_names)?;
-            let rhs = recognize_body_arg(&args[1].value, in_scope_names)?;
-            Some(BodyArg::Binary {
-                op: arith_op,
-                lhs: Box::new(lhs),
-                rhs: Box::new(rhs),
-            })
         }
         _ => None,
     }

@@ -17885,14 +17885,47 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ah: terminal-arm call-returning-value ──
+    //
+    // Slice 8o + 8q recognised int literals, captured-local references,
+    // arm-local lets, and lowered binary arithmetic in the user
+    // function's final-expression position. Slice 8ah widens
+    // recognition to bare-identifier `Call` shapes (free-fn calls that
+    // return a value), closing the third final-expression class called
+    // out in slice 8i's note. Network-yield callees are filtered at
+    // recognition time so a yielding call in tail position still falls
+    // through to the placeholder rather than emitting a synchronous
+    // call that would skip its yield.
+
     #[test]
-    fn test_terminal_return_8o_unrecognised_final_expr_keeps_zero_fallback() {
-        // `fn driver(n: i64) -> i64 ... { fetch(); ident(n) }` — the
-        // user-function-call final expression is outside the recognised
-        // `BodyArg` set (slice 8q widens recognition to integer
-        // arithmetic via `Path`-callee Calls, but Identifier-callee
-        // user-fn calls remain unrecognised). So slice 8o falls back
-        // to slice-8i's placeholder `i64 0`.
+    fn test_terminal_return_8ah_uses_call_no_args() {
+        // `fn driver() -> i64 ... { fetch(); other_fn() }` where
+        // `other_fn` is a pure i64-returning callee — slice 8ah
+        // emits `call i64 @other_fn()` in the terminal arm and stores
+        // the result into the terminal return field.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn other_fn() -> i64 { 99 }
+             fn driver() -> i64 with sends(Network) receives(Network) { fetch(); other_fn() }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("%other_fn.return = call i64 @other_fn()"),
+            "terminal arm must emit named call to @other_fn:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %other_fn.return, ptr %kara.return.field_ptr"),
+            "terminal arm must store call result into terminal field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_terminal_return_8ah_uses_call_with_captured_arg() {
+        // `fn driver(n: i64) -> i64 ... { fetch(); ident(n) }` — `n`
+        // is a captured local; slice 8ah materialises it via the
+        // per-arm slot map and threads the loaded value as the
+        // synchronous call's arg.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
@@ -17901,8 +17934,45 @@ fn main() {
         );
         let body = extract_fn_ir(&ir, "__kara_poll_driver");
         assert!(
+            body.contains("%n.return = load i64, ptr %n.slot"),
+            "terminal arm must load n.slot via .return:\n{body}"
+        );
+        assert!(
+            body.contains("%ident.return = call i64 @ident(i64 %n.return)"),
+            "terminal arm must emit call passing the slot-loaded n:\n{body}"
+        );
+        assert!(
+            body.contains("store i64 %ident.return, ptr %kara.return.field_ptr"),
+            "terminal arm must store call result into terminal field:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_terminal_return_8ah_yielding_callee_keeps_zero_fallback() {
+        // `fn driver() -> i64 ... { let _x = 1; remote_fetch() }` —
+        // the tail call is itself a network-yield callee returning
+        // i64. Slice 8ah's recognition filter rejects yielding
+        // callees so the terminal field keeps the slice-8i `i64 0`
+        // placeholder rather than emitting a synchronous
+        // `call i64 @remote_fetch` that would skip the yield. The
+        // leading let ensures the body isn't trivially yield-only.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn remote_fetch() -> i64 with sends(Network) receives(Network) { 7 }
+             fn driver() -> i64 with sends(Network) receives(Network) {
+                 let _x = 1;
+                 remote_fetch()
+             }",
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            !body.contains("call i64 @remote_fetch"),
+            "yielding callee must NOT be lowered as a synchronous call \
+             in the terminal arm:\n{body}"
+        );
+        assert!(
             body.contains("store i64 0, ptr %kara.return.field_ptr"),
-            "unrecognised final expr must fall back to i64 0 placeholder:\n{body}"
+            "yielding tail callee must fall back to i64 0 placeholder:\n{body}"
         );
     }
 
@@ -18109,22 +18179,22 @@ fn main() {
 
     #[test]
     fn test_body_splitting_8l_skips_method_with_unrecognised_arg() {
-        // `fn driver(n: i64) { let h = ...; h.take(ident(n)); fetch(); }`
-        // — the user-function-call arg shape is outside the
-        // recognised `BodyArg` set (slice 8q widens recognition to
-        // integer arithmetic via `Path`-callee Calls, but Identifier-
-        // callee user-fn calls remain unrecognised). So the whole
-        // method call is silently skipped at body-splitting time.
-        // No `call void @Hub.take` appears in the poll-fn body.
+        // `fn driver(n: i64) { let h = ...; h.take(if n > 0 { n } else { 0 }); fetch(); }`
+        // — the `if`-expression arg shape stays outside the
+        // recognised `BodyArg` set (slice 8q widened to lowered
+        // integer arithmetic; slice 8ah widened to bare-identifier
+        // free-fn calls; if/match/block expressions remain
+        // unrecognised). So the whole method call is silently
+        // skipped at body-splitting time. No `call void @Hub.take`
+        // appears in the poll-fn body.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
              struct Hub { count: i64 }
              impl Hub { fn take(ref self, x: i64) {} }
-             fn ident(x: i64) -> i64 { x }
              fn driver(n: i64) with sends(Network) receives(Network) {
                  let h = Hub { count: 0 };
-                 h.take(ident(n));
+                 h.take(if n > 0 { n } else { 0 });
                  fetch();
              }",
         );
@@ -18213,20 +18283,20 @@ fn main() {
 
     #[test]
     fn test_body_splitting_8k_skips_unrecognised_arg_shape() {
-        // `fn driver(n: i64) { take(ident(n)); fetch(); }` — the user-
-        // function-call arg shape is outside the recognised `BodyArg`
-        // set (slice 8q widened recognition to integer arithmetic
-        // lowered to `Path` callees, but Identifier-callee Calls stay
-        // unrecognised). So the whole `take` call is silently skipped.
-        // The poll-fn body therefore emits no `call void @take`
+        // `fn driver(n: i64) { take(if n > 0 { n } else { 0 }); fetch(); }`
+        // — the `if`-expression arg shape stays outside the
+        // recognised `BodyArg` set (slice 8q widened to lowered
+        // integer arithmetic; slice 8ah widened to bare-identifier
+        // free-fn calls; if/match/block expressions remain
+        // unrecognised). So the whole `take` call is silently
+        // skipped — the poll-fn body emits no `call void @take`
         // between the reload prologue and the tag-store.
         let ir = ir_for_with_state_struct_layouts(
             "effect resource Network;
              pub fn fetch() with sends(Network) receives(Network) {}
              fn take(x: i64) {}
-             fn ident(x: i64) -> i64 { x }
              fn driver(n: i64) with sends(Network) receives(Network) {
-                 take(ident(n));
+                 take(if n > 0 { n } else { 0 });
                  fetch();
              }",
         );
