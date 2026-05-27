@@ -17,7 +17,7 @@ use crate::ast::*;
 
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum, StructType};
-use inkwell::values::{BasicMetadataValueEnum, FunctionValue, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, FunctionValue, PointerValue};
 use inkwell::AddressSpace;
 
 use super::state::{EnumDropKind, EnumLayout, SharedTypeInfo, SoaGroup, SoaLayout};
@@ -536,21 +536,22 @@ impl<'ctx> super::Codegen<'ctx> {
             };
             fields.push(ty);
         }
-        // Phase 6 line 26 slice 8i: append a terminal return-value
-        // field when the function's return type is non-unit. v1
-        // records `i64` returns only — other types (Vec, struct,
-        // user-named, etc.) skip the terminal field and continue
-        // to use the unit-return path. The terminal arm of the
-        // poll-fn writes a placeholder into this field before
-        // Ready; caller-side intercepts load it as the call's
-        // return value.
+        // Phase 6 line 26 slice 8i + 8ai: append a terminal return-
+        // value field when the function's return type lands in the
+        // state-machine supported set. Slice 8i v1 was `i64`-only;
+        // slice 8ai widens to integer / float primitives, `bool`,
+        // `char`, `Vec[T]` / `VecDeque[T]` / `String` / `str`
+        // (inline `{ptr, i64, i64}`), `Slice[T]` (`{ptr, i64}`),
+        // and concrete (non-shared) user structs. The terminal arm
+        // of the poll-fn writes a placeholder into this field
+        // before Ready; caller-side intercepts (slice 8d / 8g) load
+        // it through the typed entry in `state_machine_return_types`.
         if let Some(fn_ast) = fn_ast {
             if let Some(ret_te) = &fn_ast.return_type {
-                if is_i64_return_type(ret_te) {
-                    let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
-                    fields.push(i64_ty);
+                if let Some(ret_ty) = state_machine_return_type_for(self, ret_te) {
+                    fields.push(ret_ty);
                     self.state_machine_return_types
-                        .insert(emit_key.to_string(), i64_ty);
+                        .insert(emit_key.to_string(), ret_ty);
                 }
             }
         }
@@ -1411,7 +1412,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 // index in the state struct is `1 + N` where N is
                 // the captured-local count (tag at 0, captures at
                 // 1..=N, terminal at N+1).
-                if self.state_machine_return_types.contains_key(emit_key) {
+                if let Some(&ret_ty) = self.state_machine_return_types.get(emit_key) {
                     let terminal_idx = (layout.fields.len() + 1) as u32;
                     let terminal_ptr = self
                         .builder
@@ -1422,21 +1423,27 @@ impl<'ctx> super::Codegen<'ctx> {
                             "kara.return.field_ptr",
                         )
                         .expect("GEP terminal return-value field");
-                    // Slice 8o + 8q: when the walker captured the
-                    // user's final-expression value via
+                    // Slice 8o + 8q + 8ah: when the walker captured
+                    // the user's final-expression value via
                     // `terminal_return`, materialise it via the
                     // shared helper (`IntLit` → i64 const, `Slot`
                     // → load from per-arm slot map, `Binary` →
-                    // recursive int arithmetic). If
-                    // `terminal_return` is `None` (final expr not
-                    // recognised, or no trailing expr) or the
-                    // helper bails (slot lookup miss, non-IntValue
-                    // binary operand), fall back to the slice-8i
-                    // `i64 0` placeholder.
+                    // recursive int arithmetic, `Call` → typed
+                    // synchronous call). If `terminal_return` is
+                    // `None` (final expr not recognised, or no
+                    // trailing expr) or the helper bails (slot
+                    // lookup miss, non-IntValue binary operand,
+                    // void-returning call), fall back to a typed
+                    // zero of the registered terminal-field type.
+                    // Slice 8ai: the fallback widens from a
+                    // hardcoded `i64 0` to `ret_ty.const_zero()` so
+                    // the store stays well-typed for the widened
+                    // set (`i32` / `bool` / `Vec[T]` / `String` /
+                    // user struct, etc.).
                     let return_val: inkwell::values::BasicValueEnum<'ctx> = terminal_return
                         .as_ref()
                         .and_then(|arg| self.materialize_body_arg(arg, &slot_map, ".return"))
-                        .unwrap_or_else(|| self.context.i64_type().const_int(0, false).into());
+                        .unwrap_or_else(|| basic_zero_for_type(ret_ty));
                     self.builder
                         .build_store(terminal_ptr, return_val)
                         .expect("store terminal return value");
@@ -3101,16 +3108,79 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 }
 
-/// Detect whether a `TypeExpr` is the `i64` primitive — slice 8i's v1
-/// scope for non-unit returns through the state-struct terminal field.
-/// Other primitive widths (`i32`, `u64`, `bool`) and complex types
-/// (`Vec[T]`, user-named structs, etc.) are deferred to a follow-on
-/// slice that widens the supported return-type set.
-pub(super) fn is_i64_return_type(ty: &TypeExpr) -> bool {
-    matches!(
-        &ty.kind,
-        TypeKind::Path(p) if p.segments.len() == 1 && p.segments[0] == "i64"
-    )
+/// Phase 6 line 26 slice 8ai: zero / null constant for the given
+/// terminal-field type. Used as the conservative-skip placeholder
+/// when the body-splitting walker doesn't recognise the user's
+/// final expression. Mirrors the closed enumeration in
+/// `module_bindings.rs::basic_zero_const`; kept local so the slice's
+/// scope stays in declarations.rs. ScalableVectorType is unreachable
+/// here — the state-machine return-type set never produces one.
+pub(super) fn basic_zero_for_type<'ctx>(ty: BasicTypeEnum<'ctx>) -> BasicValueEnum<'ctx> {
+    match ty {
+        BasicTypeEnum::IntType(t) => t.const_zero().into(),
+        BasicTypeEnum::FloatType(t) => t.const_zero().into(),
+        BasicTypeEnum::PointerType(t) => t.const_zero().into(),
+        BasicTypeEnum::StructType(t) => t.const_zero().into(),
+        BasicTypeEnum::ArrayType(t) => t.const_zero().into(),
+        BasicTypeEnum::VectorType(t) => t.const_zero().into(),
+        BasicTypeEnum::ScalableVectorType(t) => t.const_zero().into(),
+    }
+}
+
+/// Phase 6 line 26 slice 8ai: resolve a network-boundary function's
+/// declared return type to its LLVM `BasicTypeEnum`, or `None` when
+/// the type isn't supported by the state-machine terminal-field path.
+/// Returning `Some` makes `emit_state_struct_types` append the
+/// terminal return-value field, register the entry in
+/// `state_machine_return_types`, and route the caller-side intercept
+/// (slice 8d / 8g) through the typed `GEP + load` of the terminal
+/// field. Returning `None` keeps the unit-return fallback (the
+/// caller-side intercept yields `i64 0`). Recognised v1 types:
+///   * integer / float primitives (`i8` / `i16` / `i32` / `i64`,
+///     `u8` / `u16` / `u32` / `u64`, `usize` / `isize`, `f32` /
+///     `f64`, `bool`, `char`).
+///   * `Vec[T]` / `VecDeque[T]` / `String` / `str` → the inline
+///     `{ptr, i64, i64}` slice descriptor (independent of `T`).
+///   * `Slice[T]` → the `{ptr, i64}` slice descriptor.
+///   * Concrete user struct (regular, non-shared) declared in the
+///     program — resolves through `struct_types`.
+///
+/// Tuples, refs / mut-refs, shared structs, opaque user types, and
+/// unknown name shapes return `None`. Mirrors `llvm_type_for_name`'s
+/// arm shape so the type returned here matches what
+/// `llvm_type_for_type_expr` would produce for the same `TypeExpr`.
+pub(super) fn state_machine_return_type_for<'ctx>(
+    cg: &super::Codegen<'ctx>,
+    ty: &TypeExpr,
+) -> Option<BasicTypeEnum<'ctx>> {
+    let TypeKind::Path(path) = &ty.kind else {
+        return None;
+    };
+    if path.segments.len() != 1 {
+        return None;
+    }
+    let name = path.segments[0].as_str();
+    match name {
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "usize" | "isize" | "f32"
+        | "f64" | "bool" | "char" => Some(cg.llvm_type_for_name(name)),
+        "String" | "str" | "Vec" | "VecDeque" => Some(cg.vec_struct_type().into()),
+        "Slice" => Some(cg.slice_struct_type().into()),
+        other => {
+            // Regular (non-shared) user struct. Shared structs are
+            // intentionally excluded — the line 31 RAII-across-yield
+            // gate forbids holding them across a suspension, and a
+            // value-returning shared struct from a yielding fn would
+            // also need refcount accounting through the terminal
+            // field that's out of v1 scope. Unknown names (type-
+            // params, enums, opaque user types) fall through to
+            // `None` so the function stays on the unit-return path.
+            if cg.struct_types.contains_key(other) {
+                Some(cg.llvm_type_for_name(other))
+            } else {
+                None
+            }
+        }
+    }
 }
 
 /// Locate the user-level `Function` AST node corresponding to a state-

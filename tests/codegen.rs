@@ -16586,6 +16586,171 @@ fn main() {
         );
     }
 
+    // ── Phase 6 line 26 slice 8ai: widened state-machine return types ─────
+    //
+    // Slice 8i registered only `i64`-returning network-boundary fns into
+    // `state_machine_return_types`. Slice 8ai widens the supported set to
+    // every integer / float primitive, `bool`, `char`, `Vec[T]` /
+    // `VecDeque[T]` / `String` / `str` (`{ptr, i64, i64}` slice
+    // descriptor), `Slice[T]` (`{ptr, i64}`), and concrete user structs.
+    // Each affected fn's state struct gains a terminal field sized to
+    // the registered type; the terminal-arm placeholder fallback is now
+    // a typed `const_zero` rather than a hardcoded `i64 0`. The caller-
+    // side intercept (slice 8d / 8g) already loads through the typed
+    // entry — no change there. Tests verify state-struct shape + typed
+    // placeholder per type class.
+
+    #[test]
+    fn test_8ai_i32_return_state_struct_terminal_field_is_i32() {
+        // Sources `x: i32` through a parameter rather than a bare
+        // literal because the integer-literal inference path lowers
+        // `0` to `i64` regardless of expected return-type context —
+        // an orthogonal typechecker / codegen gap not in slice 8ai's
+        // scope. The parameter form bypasses literal-inference and
+        // pins what slice 8ai actually tests: the registered
+        // terminal-field type for an `i32`-returning fn is `i32`.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(x: i32) -> i32 with sends(Network) receives(Network) { fetch(); x }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        assert!(
+            line.contains(", i32 }") && line.starts_with("%kara.state.driver = type { i32"),
+            "i32 return: state struct must terminate with the i32 terminal field:\n{line}"
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        // Final expression `x` is a captured-local i32 — slice 8ah
+        // recognises it as a `Slot` and emits a slot-load + store.
+        assert!(
+            body.contains("store i32 %x.return, ptr %kara.return.field_ptr"),
+            "i32 return: terminal arm must store typed i32 from x.slot:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_8ai_bool_return_state_struct_terminal_field_is_i1() {
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> bool with sends(Network) receives(Network) { fetch(); true }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        assert!(
+            line.contains("i32, i1"),
+            "bool return: state struct must be {{ i32 tag, i1 terminal }}:\n{line}"
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store i1 false, ptr %kara.return.field_ptr"),
+            "bool return: terminal arm must store typed-zero i1 placeholder:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_8ai_vec_return_state_struct_terminal_field_is_vec_struct() {
+        // Vec[T] lowers to the inline `{ptr, i64, i64}` slice
+        // descriptor — independent of T. Returning `Vec[i64]`
+        // produces a terminal field with that 3-word layout.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> Vec[i64] with sends(Network) receives(Network) { fetch(); Vec.new() }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        assert!(
+            line.contains("i32, { ptr, i64, i64 }"),
+            "Vec[i64] return: state struct must include the 3-word vec descriptor:\n{line}"
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store { ptr, i64, i64 } zeroinitializer, ptr %kara.return.field_ptr"),
+            "Vec[i64] return: terminal arm must store zeroinitializer placeholder:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_8ai_string_return_state_struct_terminal_field_is_vec_struct() {
+        // String shares Vec's `{ptr, i64, i64}` layout.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver() -> String with sends(Network) receives(Network) { fetch(); String.new() }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        assert!(
+            line.contains("i32, { ptr, i64, i64 }"),
+            "String return: state struct must include the 3-word string descriptor:\n{line}"
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store { ptr, i64, i64 } zeroinitializer, ptr %kara.return.field_ptr"),
+            "String return: terminal arm must store zeroinitializer placeholder:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_8ai_user_struct_return_state_struct_terminal_field_is_struct() {
+        // Concrete (non-shared) user struct: `Hub { count: i64 }`
+        // registers as an anonymous LLVM struct type `{ i64 }`
+        // (codegen uses `context.struct_type(...)`, not
+        // `opaque_struct_type`, so structs are referenced
+        // structurally rather than by name). The terminal field
+        // embeds the struct inline; the placeholder is a
+        // `zeroinitializer` of that anonymous shape.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             struct Hub { count: i64 }
+             fn driver() -> Hub with sends(Network) receives(Network) { fetch(); Hub { count: 0 } }",
+        );
+        let line = ir
+            .lines()
+            .find(|l| l.starts_with("%kara.state.driver = type {"))
+            .unwrap_or_else(|| panic!("no driver state struct in IR:\n{ir}"));
+        assert!(
+            line.contains("i32, { i64 }"),
+            "Hub return: state struct must include Hub's structural shape as terminal field:\n{line}"
+        );
+        let body = extract_fn_ir(&ir, "__kara_poll_driver");
+        assert!(
+            body.contains("store { i64 } zeroinitializer, ptr %kara.return.field_ptr"),
+            "Hub return: terminal arm must store zeroinitializer placeholder:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_8ai_caller_side_load_matches_widened_return_type() {
+        // The caller-side intercept loads through the typed entry in
+        // `state_machine_return_types` — verifies the load instruction
+        // for an `i32`-returning callee uses `load i32` rather than
+        // the i64 default. Parameter form avoids the integer-literal
+        // inference gap noted on the i32 state-struct test.
+        let ir = ir_for_with_state_struct_layouts(
+            "effect resource Network;
+             pub fn fetch() with sends(Network) receives(Network) {}
+             fn driver(x: i32) -> i32 with sends(Network) receives(Network) { fetch(); x }
+             fn run(x: i32) -> i32 { driver(x) }",
+        );
+        let body = extract_fn_ir(&ir, "run");
+        assert!(
+            body.contains("load i32, ptr %kara.return.field_ptr"),
+            "caller must load i32 from terminal field for an i32-returning callee:\n{body}"
+        );
+    }
+
     // ── Phase 6 line 26 slice 8j: method-call body-splitting ──────────────
     //
     // Mirrors slice 8h's free-function body-splitting for `<recv>.method()`
