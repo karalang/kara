@@ -253,3 +253,104 @@ fn no_types_argument_returns_empty_errors() {
         errors
     );
 }
+
+// ── Phase 6 line 155 slice 2 — CancelSafe marker trait + opt-in ───
+//
+// Slice 1 rejects every `shared struct` / `shared enum` held across a
+// yield point with no opt-out; slice 2 wires the diagnostic's promised
+// `impl CancelSafe for <T>` fix-it. v1 keeps the marker trait
+// user-declared (no implicit stdlib seeding) — tests declare
+// `marker trait CancelSafe;` inline alongside the opt-in impl.
+
+#[test]
+fn shared_struct_with_cancel_safe_opt_in_accepted() {
+    // Mirror of `shared_struct_self_held_across_yield_rejected` with
+    // the slice-2 opt-in added. The walker must short-circuit before
+    // the `is_shared` rejection arm; the diagnostic vanishes.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         marker trait CancelSafe;
+         shared struct Hub { count: i64 }
+         impl CancelSafe for Hub {}
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "expected zero RAII errors after `impl CancelSafe for Hub` opt-in: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn shared_enum_with_cancel_safe_opt_in_accepted() {
+    // Symmetric to the shared-struct case — the slice-2 walker matches
+    // by type name; struct vs. enum is not in the predicate.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         marker trait CancelSafe;
+         shared enum Status { Idle, Active(i64) }
+         impl CancelSafe for Status {}
+         impl Status {
+             fn drive(self) { fetch(); }
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "expected zero RAII errors after `impl CancelSafe for Status` opt-in: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn shared_struct_without_opt_in_still_rejected() {
+    // Slice-1 contract preserved: a shared struct with no
+    // `impl CancelSafe for T` still fires. This guards against an
+    // over-eager opt-in walker that would clear the closed
+    // enumeration in the absence of any matching impl.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         marker trait CancelSafe;
+         shared struct Hub { count: i64 }
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected slice-1 rejection unchanged when no opt-in present: {:?}",
+        errors
+    );
+    assert_eq!(errors[0].fn_key, "Hub.run");
+    assert_eq!(errors[0].type_name, "Hub");
+}
+
+#[test]
+fn cancel_safe_opt_in_is_strict_name_match() {
+    // Path-segment-equality is strict: an `impl CancelSafeButTypo for H`
+    // (or any other name that isn't exactly `CancelSafe`) must NOT
+    // count as an opt-in. Regression guard against a contains / prefix
+    // / case-insensitive walker.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         marker trait CancelSafeButTypo;
+         shared struct Hub { count: i64 }
+         impl CancelSafeButTypo for Hub {}
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected slice-1 rejection unchanged when opt-in trait name doesn't match: {:?}",
+        errors
+    );
+    assert_eq!(errors[0].type_name, "Hub");
+}
