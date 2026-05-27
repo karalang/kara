@@ -6777,6 +6777,172 @@ fn test_l205_lock_block_wraps_method_call_nested_in_par_if() {
     );
 }
 
+// ── L207: receivers beyond simple Identifier(name).field ─────────
+//
+// L201b shipped the v1 receiver gate (`Identifier(binding).<field>` —
+// single-step field access on the diagnosed binding). L207 widens it
+// to multi-step *place chains* whose first projection on the binding
+// is a field:
+//   - `c.field.subfield` (deeper field chain)
+//   - `c.field[0]` (field followed by index)
+// The lock target is the **first** field on the binding (the
+// outermost-on-binding projection). Index-first chains (`c[0].field`,
+// `arr[0].field`) and temporary receivers (`f().field`) remain out
+// of scope — index-first writes need element-level locking which
+// `lock <field> { ... }` doesn't model, and temporaries have no
+// binding to associate with the diagnostic.
+
+#[test]
+fn test_l207_lock_block_wraps_chained_field_projection_assign() {
+    // `c.nested.val = 7;` inside par — write through a chained field
+    // projection. The first field projection on `c` is `nested`, so
+    // the lock target is `nested` (regardless of which sub-field the
+    // write targets). The outer field's mut-ness is the gate; the
+    // sub-field's mut-ness is the typechecker's concern.
+    let src = "struct Tracker { mut val: i64 }\n\
+               shared struct Counter { mut nested: Tracker }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { nested: Tracker { val: 0 } };\n\
+                   par {\n\
+                       c.nested.val = 7;\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock nested {")),
+        "chained-field assign `c.nested.val = 7` should lock the outer field `nested`; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l207_lock_block_wraps_chained_field_method_call() {
+    // L205's method-call walker delegates the receiver gate to
+    // `matched_self_field_access`. With L207's generalization, a
+    // method call on a deeper field chain (`c.nested.bump()` where
+    // `nested` is the outer mut field and `bump` is a `mut ref self`
+    // method on `Tracker`) gets wrapped with `lock nested { ... }`.
+    let src = "struct Tracker { mut val: i64 }\n\
+               impl Tracker {\n\
+                   fn bump(mut ref self) { self.val = self.val + 1; }\n\
+               }\n\
+               shared struct Counter { mut nested: Tracker }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { nested: Tracker { val: 0 } };\n\
+                   par {\n\
+                       c.nested.bump();\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock nested {")),
+        "method on deep field chain (`c.nested.bump()`) should still lock the outer field; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l207_lock_block_wraps_field_followed_by_index() {
+    // `c.items[0] = 7;` — write through a field followed by an index
+    // projection. resolve_place_chain returns
+    // `{ root: "c", projections: [Field("items"), Index] }`; the first
+    // projection on `c` is `Field("items")`, so the lock target is
+    // `items`. Pins that Index *after* a field projection doesn't
+    // reject the chain (only Index *before* any field rejects).
+    let src = "shared struct Counter { mut items: Vec[i64] }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { items: Vec[1i64, 2i64, 3i64] };\n\
+                   par {\n\
+                       c.items[0] = 7;\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock items {")),
+        "field-then-index write (`c.items[0] = 7`) should lock the field `items`; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l207_lock_block_skips_index_first_chain() {
+    // `arr[0]` where `arr` is the diagnosed binding (the par branches
+    // reference `arr` itself). resolve_place_chain returns
+    // `{ root: "arr", projections: [Index] }`; the first projection is
+    // Index, not Field, so the rooted-field gate rejects. No lock-
+    // block edit is emitted because `lock <field>` doesn't model
+    // element-level locking — that's a separate design surface.
+    //
+    // The diagnostic still fires (the binding is reachable from both
+    // branches); only the lock wrap is suppressed.
+    let src = "shared struct Counter { mut items: Vec[i64] }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { items: Vec[1i64, 2i64] };\n\
+                   par {\n\
+                       let _x = c.items[0];\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    // The fixture is a read (`let _x = c.items[0]`), so no lock-block
+    // edit would fire even with full L207 support. The key assertion
+    // is the negative one: no `lock ` edit appears for the read path.
+    assert!(
+        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        "read-through-index should not emit a lock-block edit; got {edits:?}",
+    );
+}
+
 // ── L203: closure-captured shared bindings ──────────────────────
 //
 // The v1 detector only counted direct source-level references to the

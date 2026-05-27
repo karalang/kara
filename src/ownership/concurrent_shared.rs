@@ -43,7 +43,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::ast::*;
-use crate::ownership::{stdlib_method_self_borrow_kind, BorrowKind};
+use crate::ownership::{stdlib_method_self_borrow_kind, BorrowKind, PlaceExpr, Projection};
 use crate::resolver::{SpanKey, TextEdit};
 use crate::token::Span;
 
@@ -1503,24 +1503,90 @@ fn collect_lock_block_writes_in_expr(
 /// where `field` is in `mut_fields`. Filters chained projections,
 /// index access, deref, and other complex receiver shapes that v1
 /// leaves to the human review step.
+/// Resolve `target` to its rooted-field if it's a place chain rooted
+/// at `binding_name` whose **first projection on the binding** is a
+/// `Field` in `mut_fields`. L201b shipped the v1 shape (single-step
+/// `Identifier(binding_name).<field>`); L207 generalizes to multi-step
+/// projection chains where the first step off the binding is still a
+/// field access.
+///
+/// **Accepts** (returns `Some(first_field_on_binding)`):
+/// - `c.field` — v1 baseline (single field).
+/// - `c.field.subfield` — deeper field chain through `c.field`.
+/// - `c.field.subfield.subsubfield…` — any depth of field projections.
+/// - `c.field[0]` — field followed by index/range projection.
+/// - `c.field.0` — field followed by tuple index projection.
+/// - All of the above as receivers of mutating method calls
+///   (`c.field.subfield.push(x)`, `c.field[0].clear()`, etc. — the
+///   L205 caller passes `MethodCall.object` here).
+///
+/// **Rejects** (returns `None`):
+/// - Different root binding (`other.field`).
+/// - First projection on the binding isn't a `Field` — `c[0].field`
+///   (index-first), `c[0..3]` (range), `c.0` (tuple). Index-rooted
+///   writes need element-level locking semantics that don't map to
+///   `lock <field> { ... }`; out of L207 scope.
+/// - First field projection isn't a `mut` field of the diagnosed
+///   struct (e.g., write through an immutable field — would be a
+///   typecheck error anyway, but the gate keeps the function total).
+/// - Root isn't a bare identifier — temporaries (`f().field`),
+///   method-call results (`c.foo().field`), and other non-place
+///   receivers fall through here.
+///
+/// The returned `&String` is borrowed from `mut_fields`; the caller
+/// uses it immediately to format the lock prefix, so the lifetime
+/// works out.
 fn matched_self_field_access<'a>(
-    target: &'a Expr,
+    target: &Expr,
     binding_name: &str,
-    mut_fields: &HashSet<String>,
+    mut_fields: &'a HashSet<String>,
 ) -> Option<&'a String> {
-    let ExprKind::FieldAccess { object, field } = &target.kind else {
-        return None;
-    };
-    let ExprKind::Identifier(name) = &object.kind else {
-        return None;
-    };
-    if name != binding_name {
+    let place = resolve_place_chain(target)?;
+    if place.root != binding_name {
         return None;
     }
-    if !mut_fields.contains(field) {
-        return None;
+    let first_field = match place.projections.first()? {
+        Projection::Field(f) => f,
+        Projection::Index | Projection::Range => return None,
+    };
+    mut_fields.get(first_field)
+}
+
+/// Mirror of `OwnershipChecker::place_expr_root` for the
+/// concurrent-shared detector — same projection shapes, but free-
+/// standing (doesn't need `slice_binding_sources` resolution). Walks
+/// `expr` down through `FieldAccess` / `Index` / `TupleIndex` to find
+/// the root identifier and the projection chain root-to-leaf. Returns
+/// `None` for expressions that aren't place chains rooted at an
+/// identifier (literals, calls, struct literals, etc.).
+fn resolve_place_chain(expr: &Expr) -> Option<PlaceExpr> {
+    match &expr.kind {
+        ExprKind::Identifier(name) => Some(PlaceExpr {
+            root: name.clone(),
+            projections: Vec::new(),
+        }),
+        ExprKind::FieldAccess { object, field } => {
+            let mut p = resolve_place_chain(object)?;
+            p.projections.push(Projection::Field(field.clone()));
+            Some(p)
+        }
+        ExprKind::Index { object, index } => {
+            let mut p = resolve_place_chain(object)?;
+            let proj = if matches!(&index.kind, ExprKind::Range { .. }) {
+                Projection::Range
+            } else {
+                Projection::Index
+            };
+            p.projections.push(proj);
+            Some(p)
+        }
+        ExprKind::TupleIndex { object, .. } => {
+            let mut p = resolve_place_chain(object)?;
+            p.projections.push(Projection::Index);
+            Some(p)
+        }
+        _ => None,
     }
-    Some(field)
 }
 
 fn emit_lock_wrap_around(start: usize, end: usize, field: &str, out: &mut Vec<TextEdit>) {
