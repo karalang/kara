@@ -316,11 +316,20 @@ pub enum Command {
         /// Optional positional file argument. When provided, treats
         /// the named file as the migration scope (single-file mode);
         /// when omitted, walks up from CWD for `kara.toml` and uses
-        /// the project's `src/` tree as the scope. Single-file mode
-        /// is the v1 default-shape because the consumer-rewrite walk
-        /// (L215b) doesn't exist yet, so the project-wide form has
-        /// no behavioral advantage over single-file in this slice.
+        /// the project's `src/` tree as the scope (L215b4 project mode).
         file: Option<String>,
+        /// `--atomic` opts into the L215c Atomic[T] heuristic. When
+        /// set, project-mode classifies each mut field as Atomic[T]
+        /// (every observed write across the workspace is a bare `=`
+        /// assignment AND T is in the lock-free Copy set: `i32`,
+        /// `i64`, `u32`, `u64`, `usize`, `isize`, `bool`) or Mutex[T]
+        /// (anything else). Atomic-classified fields' consumer sites
+        /// are NOT lock-wrapped — the reviewer hand-converts to
+        /// `.store(v, Ordering)` / `.load(Ordering)`. Without the
+        /// flag the L215a–b4 default (all-Mutex with consumer wraps)
+        /// applies. Ignored in single-file mode (no workspace
+        /// visibility for the classifier).
+        atomic: bool,
     },
     /// Concept-level explainer surface. `karac explain --concept=closures`
     /// renders a per-concept page covering the relevant analysis rules,
@@ -552,7 +561,8 @@ pub fn execute(cmd: Command) {
             apply,
             force,
             file,
-        } => cmd_migrate(&type_name, apply, force, file.as_deref()),
+            atomic,
+        } => cmd_migrate(&type_name, apply, force, file.as_deref(), atomic),
     }
 }
 
@@ -6703,10 +6713,10 @@ fn cmd_fix(filename: &str, dry_run: bool) {
 /// not load-bearing. `--force` bypasses the check unconditionally.
 /// In project-mode the check runs from the project root; in single-
 /// file mode it runs from the file's parent directory.
-fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
+fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>, atomic: bool) {
     match file {
         Some(f) => cmd_migrate_single_file(type_name, apply, force, f),
-        None => cmd_migrate_project(type_name, apply, force),
+        None => cmd_migrate_project(type_name, apply, force, atomic),
     }
 }
 
@@ -6769,7 +6779,7 @@ fn cmd_migrate_single_file(type_name: &str, apply: bool, force: bool, filename: 
 /// the def-file's mut-field set is collected first, then every file's
 /// consumer rewrite runs with that set (using
 /// [`build_consumer_rewrite_edits_with_mut_fields`]).
-fn cmd_migrate_project(type_name: &str, apply: bool, force: bool) {
+fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, atomic: bool) {
     let cwd = match std::env::current_dir() {
         Ok(d) => d,
         Err(e) => {
@@ -6874,20 +6884,70 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool) {
         process::exit(1);
     }
 
-    // Stage 2: compute the def-file's mut-field set, then run the
-    // type-def + consumer rewrite per file with that set.
+    // Stage 1b: compute per-field Atomic/Mutex classification (L215c).
+    // Opt-in via `--atomic` flag — without the flag, the L215a–b4
+    // default behavior applies (every mut field is Mutex[T] and the
+    // consumer-rewrite wraps every site). Project-mode only — single-
+    // file mode lacks workspace visibility for the "every write is a
+    // bare `=` assign" judgment.
     let mut_fields = crate::ownership::collect_struct_mut_field_names(
         type_name,
         &def_files[0].pipeline.parsed.program.items,
     );
+    let field_kinds: std::collections::HashMap<String, crate::ownership::FieldWrapKind> = if atomic
+    {
+        let project_files: Vec<crate::ownership::ProjectMigrationFile<'_>> = prepared
+            .iter()
+            .map(|f| crate::ownership::ProjectMigrationFile {
+                program_items: &f.pipeline.parsed.program.items,
+                type_ctx: f.pipeline.typed.as_ref().map(|t| {
+                    crate::ownership::ConsumerRewriteTypeCtx {
+                        pattern_binding_types: &t.pattern_binding_types,
+                        method_callee_types: &t.method_callee_types,
+                    }
+                }),
+            })
+            .collect();
+        crate::ownership::classify_field_wrap_kinds(
+            type_name,
+            &mut_fields,
+            &def_files[0].pipeline.parsed.program.items,
+            &project_files,
+        )
+    } else {
+        std::collections::HashMap::new()
+    };
+    // Atomic-classified fields are dropped from the consumer-rewrite
+    // path — their bare assigns and reads stay as-is so the reviewer
+    // hand-converts to `.store()` / `.load()` per design.md
+    // § Compiler-assisted migration "manual at the review step" clause.
+    // The consumer walker still wraps Mutex-classified fields normally.
+    let mutex_only_fields: std::collections::HashSet<String> = mut_fields
+        .iter()
+        .filter(|f| {
+            !matches!(
+                field_kinds.get(*f),
+                Some(crate::ownership::FieldWrapKind::Atomic)
+            )
+        })
+        .cloned()
+        .collect();
+    let atomic_field_count = field_kinds
+        .values()
+        .filter(|k| matches!(k, crate::ownership::FieldWrapKind::Atomic))
+        .count();
 
+    // Stage 2: run the type-def + consumer rewrite per file with the
+    // classifier-aware emitter for the type def, and the Mutex-only
+    // subset for the consumer wrap.
     let mut plans: Vec<FileMigrationPlan> = Vec::with_capacity(prepared.len());
     for file in &prepared {
         let typedef_edits = if file.has_shared_def {
-            crate::ownership::build_fix_diff_edits(
+            crate::ownership::build_fix_diff_edits_with_field_kinds(
                 type_name,
                 crate::ownership::BindingKind::Shared,
                 &file.pipeline.parsed.program.items,
+                &field_kinds,
             )
         } else {
             Vec::new()
@@ -6904,7 +6964,7 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool) {
             type_name,
             &file.pipeline.parsed.program.items,
             type_ctx,
-            &mut_fields,
+            &mutex_only_fields,
         );
         let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
         edits.extend(consumer_edits);
@@ -6954,6 +7014,15 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool) {
     if !apply {
         println!(
             "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` across the project — including type-inferred bindings in each file that typechecks)"
+        );
+        if atomic_field_count > 0 {
+            println!(
+                "(note: {atomic_field_count} field(s) on `{type_name}` were classified as `Atomic[T]` — their consumer sites stay as bare `=` / read forms; hand-convert to `.store(v, Ordering)` / `.load(Ordering)` per design.md § Compiler-assisted migration)"
+            );
+        }
+    } else if atomic_field_count > 0 {
+        println!(
+            "(note: {atomic_field_count} field(s) on `{type_name}` were rewritten as `Atomic[T]` — their consumer sites stayed as bare `=` / read forms; hand-convert to `.store(v, Ordering)` / `.load(Ordering)` per design.md § Compiler-assisted migration)"
         );
     }
 }

@@ -33,7 +33,9 @@ mod rc_promote;
 // method-call classifier) when the full pipeline succeeded.
 pub(crate) use concurrent_shared::{
     build_consumer_rewrite_edits_in_program, build_consumer_rewrite_edits_with_mut_fields,
-    build_fix_diff_edits, collect_struct_mut_field_names, BindingKind, ConsumerRewriteTypeCtx,
+    build_fix_diff_edits, build_fix_diff_edits_with_field_kinds, classify_field_wrap_kinds,
+    collect_struct_mut_field_names, BindingKind, ConsumerRewriteTypeCtx, FieldWrapKind,
+    ProjectMigrationFile,
 };
 
 // ── Core Types ──────────────────────────────────────────────────

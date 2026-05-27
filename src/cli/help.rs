@@ -388,6 +388,14 @@ OPTIONS:
     --apply        Write the rewrite back to disk (default: dry-run).
     --force        Bypass the workspace dirty-check guard. Only honored
                    in `--apply` mode (dry-run never writes).
+    --atomic       Opt into the L215c Atomic[T] heuristic (project-mode
+                   only). Mut fields whose type is in the lock-free
+                   Copy set (`i32`, `i64`, `u32`, `u64`, `usize`,
+                   `isize`, `bool`) and whose observed workspace writes
+                   are all bare `=` assignments classify as `Atomic[T]`;
+                   everything else stays `Mutex[T]`. Atomic-classified
+                   fields' consumer sites stay as bare reads/writes —
+                   hand-convert to `.store(v, Ordering)` / `.load(Ordering)`.
     -h, --help     Print this message
 
 EXAMPLES:
@@ -396,7 +404,9 @@ EXAMPLES:
     karac migrate shared-to-par Counter src/main.kara
         # single-file dry-run
     karac migrate shared-to-par Counter --apply --force
-        # project-mode write, even with uncommitted changes"
+        # project-mode write, even with uncommitted changes
+    karac migrate shared-to-par Counter --atomic --apply
+        # project-mode write with the Atomic[T] heuristic enabled"
         }
         "init" => {
             "\

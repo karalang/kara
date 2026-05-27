@@ -777,12 +777,16 @@ fn parse_init_command(args: &[String]) -> Command {
     }
 }
 
-/// Parser for `karac migrate shared-to-par <Type> [<file>] [--apply] [--force]`.
+/// Parser for `karac migrate shared-to-par <Type> [<file>] [--apply] [--force] [--atomic]`.
 /// `<file>` is optional: when present, single-file mode runs against just
 /// that path; when omitted, project-mode discovers `kara.toml` and walks
-/// every module under `src/`. Only the `shared-to-par` migration kind is
-/// in scope today; future kinds (e.g. `plain-to-par`) would extend the
-/// positional-kind argument here.
+/// every module under `src/`. `--atomic` opts into the L215c Atomic[T]
+/// heuristic — when set, project-mode classifies each mut field as
+/// Atomic[T] (every observed write is bare `=` AND T is in the lock-
+/// free Copy set) or Mutex[T] (anything else). Without the flag the
+/// L215a–b4 default behavior (all-Mutex) applies. Only the
+/// `shared-to-par` migration kind is in scope today; future kinds
+/// (e.g. `plain-to-par`) would extend the positional-kind argument here.
 fn parse_migrate_command(args: &[String]) -> Command {
     if args.len() < 3 {
         eprintln!(
@@ -799,10 +803,12 @@ fn parse_migrate_command(args: &[String]) -> Command {
     let mut file: Option<String> = None;
     let mut apply = false;
     let mut force = false;
+    let mut atomic = false;
     for arg in args.iter().skip(3) {
         match arg.as_str() {
             "--apply" => apply = true,
             "--force" => force = true,
+            "--atomic" => atomic = true,
             flag if flag.starts_with("--") => {
                 eprintln!("error: unknown flag '{flag}' for `karac migrate`");
                 process::exit(1);
@@ -836,6 +842,7 @@ fn parse_migrate_command(args: &[String]) -> Command {
         apply,
         force,
         file,
+        atomic,
     }
 }
 

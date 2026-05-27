@@ -1213,6 +1213,33 @@ pub(crate) fn build_fix_diff_edits(
     kind: BindingKind,
     program_items: &[Item],
 ) -> Vec<TextEdit> {
+    build_fix_diff_edits_with_field_kinds(type_name, kind, program_items, &HashMap::new())
+}
+
+/// Per-field wrapper kind. The L215c Atomic heuristic classifies each
+/// mut field as either `Mutex` (the L215a–b4 default) or `Atomic`
+/// (workspace-write analysis confirms every observed write is a bare
+/// `=` assignment AND the field type is one of the lock-free Atomic-
+/// eligible Copy types). The classifier flows from the project-mode
+/// walker (`cmd_migrate_project`) into both the type-def emitter
+/// ([`build_fix_diff_edits_with_field_kinds`]) and the consumer-rewrite
+/// path (via mut-fields subsetting).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum FieldWrapKind {
+    Mutex,
+    Atomic,
+}
+
+/// L215c variant of [`build_fix_diff_edits`] that consults a per-field
+/// classifier to swap the wrap type from `Mutex[T]` to `Atomic[T]` for
+/// Atomic-classified fields. Fields not present in `field_kinds`
+/// default to `Mutex` (preserves L215a–b4 behavior).
+pub(crate) fn build_fix_diff_edits_with_field_kinds(
+    type_name: &str,
+    kind: BindingKind,
+    program_items: &[Item],
+    field_kinds: &HashMap<String, FieldWrapKind>,
+) -> Vec<TextEdit> {
     let Some(struct_def) = program_items.iter().find_map(|it| match it {
         Item::StructDef(s) if s.name == type_name => Some(s),
         _ => None,
@@ -1245,7 +1272,9 @@ pub(crate) fn build_fix_diff_edits(
             }
         }
     }
-    // (2) `mut ` strip + (3) `Mutex[T]` wrap, per mut field.
+    // (2) `mut ` strip + (3) wrap type per mut field. The wrap
+    // selector — `Mutex[` vs `Atomic[` — comes from `field_kinds`;
+    // absent entries default to `Mutex` to preserve the L215a–b4 path.
     for field in &struct_def.fields {
         if !field.is_mut {
             continue;
@@ -1262,10 +1291,14 @@ pub(crate) fn build_fix_diff_edits(
         }
         let ty_off = field.ty.span.offset;
         let ty_len = field.ty.span.length;
+        let wrap_prefix = match field_kinds.get(&field.name).copied() {
+            Some(FieldWrapKind::Atomic) => "Atomic[",
+            _ => "Mutex[",
+        };
         edits.push(TextEdit {
             offset: ty_off,
             length: 0,
-            replacement: "Mutex[".to_string(),
+            replacement: wrap_prefix.to_string(),
         });
         edits.push(TextEdit {
             offset: ty_off + ty_len,
@@ -1274,6 +1307,29 @@ pub(crate) fn build_fix_diff_edits(
         });
     }
     edits
+}
+
+/// Returns `true` when `ty` is a single-segment name in the lock-free
+/// Atomic-compatible Copy-eligible set the L215c heuristic uses. The
+/// set matches the platforms karac targets (x86_64 / aarch64): single-
+/// word integers (`i32`, `i64`, `u32`, `u64`, `usize`, `isize`) and
+/// `bool`. Floats are excluded — most CPUs lack native atomic float
+/// instructions, so the runtime would emulate via CAS loops which the
+/// reviewer is unlikely to want hidden behind an automatic migration.
+pub(crate) fn is_atomic_eligible_type(ty: &TypeExpr) -> bool {
+    let TypeKind::Path(p) = &ty.kind else {
+        return false;
+    };
+    if p.segments.len() != 1 {
+        return false;
+    }
+    if p.generic_args.as_ref().is_some_and(|args| !args.is_empty()) {
+        return false;
+    }
+    matches!(
+        p.segments[0].as_str(),
+        "i32" | "i64" | "u32" | "u64" | "usize" | "isize" | "bool"
+    )
 }
 
 /// Consumer-site rewrite edits for `karac migrate shared-to-par <Type>`.
@@ -2248,6 +2304,445 @@ fn matched_self_field_access<'a>(
         Projection::Index | Projection::Range => return None,
     };
     mut_fields.get(first_field)
+}
+
+/// L215c walker that tags fields of `<Type>` bindings as "disqualified
+/// from Atomic[T]" when it sees a non-bare write — compound assign
+/// (`c.field += v`) or mutating method call (`c.field.push(v)`). Bare
+/// `=` assigns do NOT disqualify (they map cleanly to `Atomic.store`).
+fn collect_atomic_disqualifying_writes_in_block(
+    block: &Block,
+    binding_name: &str,
+    candidate_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
+    disqualified: &mut HashSet<String>,
+) {
+    for stmt in &block.stmts {
+        collect_atomic_disqualifying_writes_in_stmt(
+            stmt,
+            binding_name,
+            candidate_fields,
+            classifier,
+            disqualified,
+        );
+    }
+    if let Some(e) = &block.final_expr {
+        collect_atomic_disqualifying_writes_in_expr(
+            e,
+            binding_name,
+            candidate_fields,
+            classifier,
+            disqualified,
+        );
+    }
+}
+
+fn collect_atomic_disqualifying_writes_in_stmt(
+    stmt: &Stmt,
+    binding_name: &str,
+    candidate_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
+    disqualified: &mut HashSet<String>,
+) {
+    match &stmt.kind {
+        StmtKind::CompoundAssign { target, value, .. } => {
+            if let Some(field) = matched_self_field_access(target, binding_name, candidate_fields) {
+                disqualified.insert(field.clone());
+            }
+            collect_atomic_disqualifying_writes_in_expr(
+                target,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_expr(
+                value,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        StmtKind::Assign { target, value } => {
+            // Bare `=` does not disqualify — it maps to `Atomic.store`.
+            // Still recurse into the RHS for nested writes.
+            collect_atomic_disqualifying_writes_in_expr(
+                target,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_expr(
+                value,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        StmtKind::Expr(e) => {
+            if let ExprKind::MethodCall { object, .. } = &e.kind {
+                if classifier.is_mutating(&e.span) {
+                    if let Some(field) =
+                        matched_self_field_access(object, binding_name, candidate_fields)
+                    {
+                        disqualified.insert(field.clone());
+                    }
+                }
+            }
+            collect_atomic_disqualifying_writes_in_expr(
+                e,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        StmtKind::Let { value, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                value,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                value,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_block(
+                else_block,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_atomic_disqualifying_writes_in_block(
+                body,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+    }
+}
+
+fn collect_atomic_disqualifying_writes_in_expr(
+    expr: &Expr,
+    binding_name: &str,
+    candidate_fields: &HashSet<String>,
+    classifier: &MethodMutClassifier,
+    disqualified: &mut HashSet<String>,
+) {
+    // Mutating method call in rvalue position: `let r = c.field.push(x);`
+    // — still disqualifies even though the method-call's return value
+    // is consumed by the let.
+    if let ExprKind::MethodCall { object, .. } = &expr.kind {
+        if classifier.is_mutating(&expr.span) {
+            if let Some(field) = matched_self_field_access(object, binding_name, candidate_fields) {
+                disqualified.insert(field.clone());
+            }
+        }
+    }
+    // Recurse into sub-expressions. The walker is shape-agnostic — it
+    // descends through every expression form that can house a nested
+    // write or method call.
+    match &expr.kind {
+        ExprKind::FieldAccess { object, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                object,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::Index { object, index } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                object,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_expr(
+                index,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                object,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            for a in args {
+                collect_atomic_disqualifying_writes_in_expr(
+                    &a.value,
+                    binding_name,
+                    candidate_fields,
+                    classifier,
+                    disqualified,
+                );
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                callee,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            for a in args {
+                collect_atomic_disqualifying_writes_in_expr(
+                    &a.value,
+                    binding_name,
+                    candidate_fields,
+                    classifier,
+                    disqualified,
+                );
+            }
+        }
+        ExprKind::Binary { left, right, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                left,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_expr(
+                right,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::Unary { operand, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                operand,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::Block(b) => {
+            collect_atomic_disqualifying_writes_in_block(
+                b,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                condition,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_block(
+                then_block,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            if let Some(eb) = else_branch {
+                collect_atomic_disqualifying_writes_in_expr(
+                    eb,
+                    binding_name,
+                    candidate_fields,
+                    classifier,
+                    disqualified,
+                );
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                condition,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_block(
+                body,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_atomic_disqualifying_writes_in_expr(
+                iterable,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+            collect_atomic_disqualifying_writes_in_block(
+                body,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        ExprKind::Loop { body, .. } => {
+            collect_atomic_disqualifying_writes_in_block(
+                body,
+                binding_name,
+                candidate_fields,
+                classifier,
+                disqualified,
+            );
+        }
+        _ => {
+            // Leaf forms (literals, identifiers, path nodes, etc.) and
+            // forms that don't carry binding-field write sites in v1 —
+            // skip. New expression shapes that could carry writes
+            // (e.g. async block, try-expr) extend this match the same
+            // way `collect_lock_block_writes_in_expr` does.
+        }
+    }
+}
+
+/// Project-mode L215c entry: given the def-file's struct definition,
+/// the mut-field set, and every walked file's parsed items, return a
+/// per-field classification (`Atomic` vs `Mutex`). A field is Atomic-
+/// eligible iff (a) its declared type is in the lock-free Atomic Copy
+/// set ([`is_atomic_eligible_type`]) AND (b) every observed write
+/// across the workspace is a bare `=` assignment — no compound assign,
+/// no mutating method call. Fields outside the Atomic-eligible type
+/// set always classify as `Mutex`; fields with any disqualifying
+/// write also classify as `Mutex`.
+pub(crate) fn classify_field_wrap_kinds(
+    type_name: &str,
+    mut_fields: &HashSet<String>,
+    def_program_items: &[Item],
+    consumer_files: &[ProjectMigrationFile<'_>],
+) -> HashMap<String, FieldWrapKind> {
+    let mut field_kinds: HashMap<String, FieldWrapKind> = HashMap::new();
+    let Some(struct_def) = def_program_items.iter().find_map(|it| match it {
+        Item::StructDef(s) if s.name == type_name => Some(s),
+        _ => None,
+    }) else {
+        return field_kinds;
+    };
+    // (1) Seed each mut field with its by-type eligibility.
+    let mut atomic_candidates: HashSet<String> = HashSet::new();
+    for field in &struct_def.fields {
+        if !field.is_mut {
+            continue;
+        }
+        if !mut_fields.contains(&field.name) {
+            continue;
+        }
+        if is_atomic_eligible_type(&field.ty) {
+            atomic_candidates.insert(field.name.clone());
+        } else {
+            field_kinds.insert(field.name.clone(), FieldWrapKind::Mutex);
+        }
+    }
+    if atomic_candidates.is_empty() {
+        return field_kinds;
+    }
+    // (2) Walk every consumer file. For each binding of `<Type>`,
+    // tag any field that has a disqualifying write. Disqualified
+    // fields fall back to `Mutex` in the final classification.
+    let mut disqualified: HashSet<String> = HashSet::new();
+    for file in consumer_files {
+        let method_self_modes = collect_method_self_modes_in_items(file.program_items);
+        let empty_callee_types: HashMap<SpanKey, String> = HashMap::new();
+        let classifier = MethodMutClassifier {
+            method_callee_types: file
+                .type_ctx
+                .as_ref()
+                .map(|c| c.method_callee_types)
+                .unwrap_or(&empty_callee_types),
+            method_self_modes: &method_self_modes,
+        };
+        visit_each_function(file.program_items, &mut |params, body| {
+            let mut bindings: Vec<String> = Vec::new();
+            for p in params {
+                if let Some(name) = p.name() {
+                    if type_expr_is_single_segment_named(&p.ty, type_name) {
+                        bindings.push(name.to_string());
+                    }
+                    if let Some(ctx) = &file.type_ctx {
+                        let key = SpanKey::from_span(&p.pattern.span);
+                        if ctx.pattern_binding_types.get(&key).map(|s| s.as_str())
+                            == Some(type_name)
+                        {
+                            bindings.push(name.to_string());
+                        }
+                    }
+                }
+            }
+            collect_typed_bindings_in_block(body, type_name, file.type_ctx.as_ref(), &mut bindings);
+            bindings.sort();
+            bindings.dedup();
+            for binding_name in &bindings {
+                collect_atomic_disqualifying_writes_in_block(
+                    body,
+                    binding_name,
+                    &atomic_candidates,
+                    &classifier,
+                    &mut disqualified,
+                );
+            }
+        });
+    }
+    // (3) Atomic-eligible fields not in `disqualified` → Atomic;
+    // disqualified or non-eligible → Mutex.
+    for field in &atomic_candidates {
+        let kind = if disqualified.contains(field) {
+            FieldWrapKind::Mutex
+        } else {
+            FieldWrapKind::Atomic
+        };
+        field_kinds.insert(field.clone(), kind);
+    }
+    field_kinds
+}
+
+/// Project-mode L215c bundle threaded into [`classify_field_wrap_kinds`].
+/// Each entry is one walked file's parsed items + an optional typecheck
+/// snapshot for the inferred-binding / mutating-method-call paths.
+pub(crate) struct ProjectMigrationFile<'a> {
+    pub program_items: &'a [Item],
+    pub type_ctx: Option<ConsumerRewriteTypeCtx<'a>>,
 }
 
 /// Mirror of `OwnershipChecker::place_expr_root` for the

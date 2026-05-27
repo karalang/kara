@@ -8167,3 +8167,194 @@ fn test_migrate_single_file_mode_unchanged_with_explicit_path() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ── L215c: Atomic[T] heuristic ──────────────────────────────────
+
+#[test]
+fn test_migrate_l215c_atomic_when_only_bare_assigns() {
+    // Counter with a single `mut count: i64` field. Consumer only
+    // does `c.count = N` (bare =). Both conditions for Atomic met:
+    // (a) type is in the lock-free Copy set, (b) every observed
+    // write across the workspace is bare =. Expected: type-def emits
+    // `Atomic[i64]`, not `Mutex[i64]`.
+    let tmp = scratch_project("migrate-l215c-atomic");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("→ `Atomic[`"),
+        "expected Atomic[ wrap; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("→ `Mutex[`"),
+        "should NOT emit Mutex[ when Atomic-eligible; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("classified as `Atomic[T]`"),
+        "expected note about Atomic-classified fields; stdout={stdout}",
+    );
+    // Critically: Atomic-classified fields are dropped from the
+    // consumer-rewrite path — `c.count = 1` should remain unwrapped
+    // (no `lock self.count {` insert anywhere in the diff).
+    assert!(
+        !stdout.contains("lock self.count {"),
+        "Atomic-classified consumer sites should NOT be lock-wrapped; stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_mutex_when_compound_assign() {
+    // Same Counter, but consumer uses `c.count += 1` (compound assign)
+    // — disqualifies the field from Atomic. Expected: type-def emits
+    // `Mutex[i64]` and the consumer write gets a lock-wrap.
+    let tmp = scratch_project("migrate-l215c-compound");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count += 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("→ `Mutex[`"),
+        "expected Mutex[ wrap (compound assign disqualifies); stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("→ `Atomic[`"),
+        "should NOT emit Atomic[ when compound assign present; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("lock self.count {"),
+        "consumer compound assign should be lock-wrapped; stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_mutex_when_non_eligible_type() {
+    // Counter with a `mut items: Vec[i64]` field — type isn't in the
+    // Atomic-eligible Copy set. Expected: type-def emits `Mutex[Vec[i64]]`
+    // regardless of how the field is written.
+    let tmp = scratch_project("migrate-l215c-noneligible-type");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/q.kara"),
+        "pub shared struct Q {\n    mut items: Vec[i64],\n}\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Q", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("→ `Mutex[`"),
+        "non-eligible type should default to Mutex[; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("→ `Atomic[`"),
+        "should NOT emit Atomic[ for non-eligible type; stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_single_file_always_mutex() {
+    // Single-file mode lacks workspace visibility — even when the
+    // only observed write is bare =, single-file emits Mutex[T].
+    // Pinning this behavior so the heuristic stays project-mode-only.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn bump(c: ref Counter) { c.count = 1; }\n\nfn main() {}\n";
+    let path = migrate_scratch_file("l215c_single_file", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "single-file dry-run should succeed");
+    assert!(
+        stdout.contains("→ `Mutex[`"),
+        "single-file mode always emits Mutex[; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("→ `Atomic[`"),
+        "single-file mode should NEVER emit Atomic[; stdout={stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_l215c_mixed_fields_atomic_and_mutex() {
+    // Counter with two Atomic-eligible-typed fields where the writes
+    // diverge: `mut count: i64` only sees bare = (→ Atomic[i64]) and
+    // `mut total: i64` sees a compound += (→ Mutex[i64]). Two wrap
+    // types in one type def, with the consumer-side compound assign
+    // getting a lock-wrap.
+    let tmp = scratch_project("migrate-l215c-mixed");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n    mut total: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n    c.total += 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    let atomic_wraps = stdout.matches("→ `Atomic[`").count();
+    let mutex_wraps = stdout.matches("→ `Mutex[`").count();
+    assert_eq!(
+        atomic_wraps, 1,
+        "expected exactly 1 Atomic[ wrap (for count); stdout={stdout}",
+    );
+    assert_eq!(
+        mutex_wraps, 1,
+        "expected exactly 1 Mutex[ wrap (for total); stdout={stdout}",
+    );
+    // count is Atomic — should NOT be lock-wrapped at consumer site.
+    assert!(
+        !stdout.contains("lock self.count {"),
+        "Atomic count should not get a consumer wrap; stdout={stdout}",
+    );
+    // total is Mutex — its compound-assign SHOULD be lock-wrapped.
+    assert!(
+        stdout.contains("lock self.total {"),
+        "Mutex total should get a consumer wrap; stdout={stdout}",
+    );
+}
