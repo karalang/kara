@@ -59,15 +59,17 @@ COMMANDS:
     fix <file>        Apply machine-applicable suggestions (e.g. resolver
                       `did you mean` corrections) to a .kara file. Use
                       --dry-run to preview without writing.
-    migrate shared-to-par <Type> <file>
+    migrate shared-to-par <Type> [<file>]
                       Preemptively migrate a `shared struct` to `par struct`.
                       Rewrites the type definition (keyword rename, `mut `
-                      strip, `Mutex[T]` wrap on every mut field). Dry-run
+                      strip, `Mutex[T]` wrap on every mut field) and every
+                      consumer site (assigns, compound-assigns, reads, and
+                      mutating method calls wrap in `lock self.field {{ ... }}`).
+                      With `<file>` omitted, walks every module under the
+                      project's `src/` (discovered via `kara.toml`). Dry-run
                       by default; use --apply to write. The dirty-workspace
                       guard refuses --apply on a non-clean tree unless
-                      --force is set. Consumer-site `lock` blocks at each
-                      read/write of the migrated type are a separate hand-
-                      review step in this v1 surface.
+                      --force is set.
     repl              Launch the interactive REPL. Items (fn/struct/...)
                       accumulate across cells; statement cells run as the
                       body of an implicit `fn main()`. Type :help inside
@@ -352,13 +354,12 @@ OPTIONS:
 karac migrate - Preemptive type migration tool
 
 USAGE:
-    karac migrate shared-to-par <Type> <file.kara> [--apply] [--force]
+    karac migrate shared-to-par <Type> [<file.kara>] [--apply] [--force]
 
 DETAILS:
-    Foundation slice (phase-7 L215a). Rewrites a `shared struct <Type>`
-    definition to `par struct <Type>` with every bare `mut` field
-    converted to `Mutex[T]`:
-      - Keyword rename:   `shared struct Foo` → `par struct Foo`
+    Rewrites a `shared struct <Type>` definition to `par struct <Type>`
+    with every bare `mut` field converted to `Mutex[T]`:
+      - Keyword rename:    `shared struct Foo` → `par struct Foo`
       - Mut keyword strip: `mut field: T`     → `field: T`
       - Field type wrap:   `field: T`         → `field: Mutex[T]`
     Same edit emitter the `E_CONCURRENT_SHARED_STRUCT` fix-diff path
@@ -366,31 +367,36 @@ DETAILS:
     preemptively against the type definition rather than at first
     concurrent access.
 
-    Consumer-site `lock self.field { ... }` blocks at every read/write
-    of bindings of the migrated type are NOT applied automatically in
-    this slice (tracked as the L215b follow-up — needs workspace-wide
-    binding-type discovery). The user reviews the type-definition diff,
-    applies it, then hand-completes consumer migrations.
+    Consumer-site `lock self.field { ... }` blocks wrap every read,
+    assign, compound-assign, and mutating method call against bindings
+    of the migrated type. Annotated bindings (`let c: Counter = ...`)
+    fire from parse-only data; inferred bindings (`let c = make_counter()`)
+    require the file to typecheck.
+
+    Pass `<file.kara>` to migrate a single file. Omit it to run in
+    project-mode: the tool discovers the project root via `kara.toml`
+    and walks every `.kara` module under `src/`. Exactly one walked
+    module must contain `shared struct <Type>`.
 
     Defaults to dry-run mode: prints each edit's offset, original text,
     and replacement to stdout in source order. `--apply` writes the
-    rewrite back to the file. In `--apply` mode the workspace dirty-
-    check refuses to run when `git status --porcelain` reports any
+    rewrite back to disk. In `--apply` mode the workspace dirty-check
+    refuses to run when `git status --porcelain` reports any
     modifications, unless `--force` is passed.
 
 OPTIONS:
-    --apply        Write the rewrite back to the file (default: dry-run).
+    --apply        Write the rewrite back to disk (default: dry-run).
     --force        Bypass the workspace dirty-check guard. Only honored
                    in `--apply` mode (dry-run never writes).
     -h, --help     Print this message
 
 EXAMPLES:
+    karac migrate shared-to-par Counter
+        # project-mode dry-run — walk every module under ./src/
     karac migrate shared-to-par Counter src/main.kara
-        # dry-run — print the type-definition rewrite
-    karac migrate shared-to-par Counter src/main.kara --apply
-        # write the rewrite (clean workspace required)
-    karac migrate shared-to-par Counter src/main.kara --apply --force
-        # write the rewrite even with uncommitted changes"
+        # single-file dry-run
+    karac migrate shared-to-par Counter --apply --force
+        # project-mode write, even with uncommitted changes"
         }
         "init" => {
             "\

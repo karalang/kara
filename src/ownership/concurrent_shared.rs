@@ -1335,6 +1335,23 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
     type_ctx: Option<ConsumerRewriteTypeCtx<'_>>,
 ) -> Vec<TextEdit> {
     let mut_fields = collect_mut_field_names(type_name, program_items);
+    build_consumer_rewrite_edits_with_mut_fields(type_name, program_items, type_ctx, &mut_fields)
+}
+
+/// Project-mode entry (L215b4). The cross-file walk computes mut-field
+/// names once (in the file that defines `shared struct <Type>`) and
+/// reuses them for every consumer file's rewrite. The default
+/// `build_consumer_rewrite_edits_in_program` looks up mut-fields in the
+/// local `program_items`, which silently no-ops on consumer-only files
+/// — this entry takes the def-file's `mut_fields` directly so consumer
+/// modules participate. Use [`collect_struct_mut_field_names`] to
+/// extract the set from the def-file's parsed items.
+pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
+    type_name: &str,
+    program_items: &[Item],
+    type_ctx: Option<ConsumerRewriteTypeCtx<'_>>,
+    mut_fields: &HashSet<String>,
+) -> Vec<TextEdit> {
     if mut_fields.is_empty() {
         return Vec::new();
     }
@@ -1391,12 +1408,12 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
             collect_lock_block_writes_in_block(
                 body,
                 binding_name,
-                &mut_fields,
+                mut_fields,
                 &classifier,
                 WrapShape::SelfPrefix,
                 &mut edits,
             );
-            collect_lock_block_reads_in_block(body, binding_name, &mut_fields, &mut edits);
+            collect_lock_block_reads_in_block(body, binding_name, mut_fields, &mut edits);
         }
     });
     // Drop edits inside par bodies — those are the par-conflict
@@ -1407,6 +1424,17 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
             .any(|(s, en)| *s <= e.offset && e.offset < *en)
     });
     edits
+}
+
+/// Public access to the mut-field collector for project-mode callers
+/// (L215b4). The def-file's parse feeds this; the resulting set is
+/// passed verbatim to [`build_consumer_rewrite_edits_with_mut_fields`]
+/// for every other file in the workspace walk.
+pub(crate) fn collect_struct_mut_field_names(
+    type_name: &str,
+    program_items: &[Item],
+) -> HashSet<String> {
+    collect_mut_field_names(type_name, program_items)
 }
 
 /// Typecheck-derived data threaded into

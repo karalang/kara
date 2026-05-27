@@ -7965,3 +7965,205 @@ fn test_migrate_discovers_inferred_binding_alongside_annotated() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+// ── L215b4: project-mode (cross-file) walk ──────────────────────
+
+#[test]
+fn test_migrate_project_mode_walks_modules() {
+    // `shared struct Counter` lives in src/counter.kara; src/main.kara
+    // declares an annotated binding of that type and assigns its mut field.
+    // Project-mode (no <file> arg) should pick up both: the type-def
+    // rewrite in counter.kara AND the consumer write-wrap in main.kara.
+    let tmp = scratch_project("migrate-project-walk");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "project-mode dry-run should succeed; stderr={stderr}; stdout={stdout}",
+    );
+    // Header announces multi-file scope.
+    assert!(
+        stdout.contains("across 2 file(s)"),
+        "expected `across 2 file(s)` in header; stdout={stdout}",
+    );
+    // Type-def file: keyword rename + Mutex wrap.
+    assert!(
+        stdout.contains("counter.kara"),
+        "expected counter.kara in output; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("`shared` → `par`"),
+        "expected keyword rename edit; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("→ `Mutex[`"),
+        "expected Mutex wrap edit; stdout={stdout}",
+    );
+    // Consumer file: lock-wrap insert.
+    assert!(
+        stdout.contains("main.kara"),
+        "expected main.kara in output; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("lock self.count {"),
+        "expected `lock self.count {{` consumer wrap; stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_project_mode_apply_rewrites_all_files() {
+    let tmp = scratch_project("migrate-project-apply");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    let counter_path = tmp.join("src/counter.kara");
+    let main_path = tmp.join("src/main.kara");
+    write(
+        &counter_path,
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &main_path,
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--apply", "--force"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let counter_after = std::fs::read_to_string(&counter_path).unwrap();
+    let main_after = std::fs::read_to_string(&main_path).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        out.status.success(),
+        "project-mode apply should succeed; stderr={stderr}; stdout={stdout}",
+    );
+    // Both files report an `applied N` confirmation line.
+    let applied = stdout.matches("applied ").count();
+    assert_eq!(
+        applied, 2,
+        "expected 2 `applied N` lines (one per file); stdout={stdout}",
+    );
+    // Type-def file post-rewrite.
+    assert!(
+        counter_after.contains("par struct Counter"),
+        "counter.kara should have `par struct Counter`; got: {counter_after}",
+    );
+    assert!(
+        counter_after.contains("count: Mutex[i64]"),
+        "counter.kara should wrap field type; got: {counter_after}",
+    );
+    // Consumer file post-rewrite.
+    assert!(
+        main_after.contains("lock self.count {"),
+        "main.kara should wrap the write site; got: {main_after}",
+    );
+}
+
+#[test]
+fn test_migrate_project_mode_errors_when_struct_missing() {
+    let tmp = scratch_project("migrate-project-missing");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(
+        stderr.contains("no `shared struct Counter`"),
+        "expected helpful project-mode error; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_migrate_project_mode_no_kara_toml_errors() {
+    // No kara.toml in tmp dir or its ancestors (under /tmp).
+    let tmp = scratch_project("migrate-project-no-manifest");
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(
+        stderr.contains("kara.toml"),
+        "expected error to mention kara.toml; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_migrate_project_mode_errors_when_struct_in_multiple_files() {
+    let tmp = scratch_project("migrate-project-dup");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/a.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/b.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter"])
+        .output()
+        .unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(!out.status.success(), "expected non-zero exit");
+    assert!(
+        stderr.contains("multiple") && stderr.contains("Counter"),
+        "expected duplicate-struct error; stderr={stderr}",
+    );
+}
+
+#[test]
+fn test_migrate_single_file_mode_unchanged_with_explicit_path() {
+    // Single-file invocation still works the same as before L215b4 —
+    // passing an explicit <file> short-circuits project-mode.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("single_file_unchanged", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "single-file dry-run should succeed");
+    assert!(
+        stdout.contains("would apply"),
+        "single-file dry-run shape unchanged; got: {stdout}",
+    );
+    // Project-mode header must NOT appear in single-file mode.
+    assert!(
+        !stdout.contains("across "),
+        "single-file mode should not emit project-mode header; got: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}

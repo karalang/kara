@@ -777,9 +777,11 @@ fn parse_init_command(args: &[String]) -> Command {
     }
 }
 
-/// Parser for `karac migrate shared-to-par <Type> [--apply] [--force] [<file>]`.
-/// Phase-7 L215a foundation slice. Only the `shared-to-par` migration kind
-/// is in scope today; future kinds (e.g. `plain-to-par`) would extend the
+/// Parser for `karac migrate shared-to-par <Type> [<file>] [--apply] [--force]`.
+/// `<file>` is optional: when present, single-file mode runs against just
+/// that path; when omitted, project-mode discovers `kara.toml` and walks
+/// every module under `src/`. Only the `shared-to-par` migration kind is
+/// in scope today; future kinds (e.g. `plain-to-par`) would extend the
 /// positional-kind argument here.
 fn parse_migrate_command(args: &[String]) -> Command {
     if args.len() < 3 {

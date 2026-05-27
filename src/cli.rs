@@ -6684,14 +6684,16 @@ fn cmd_fix(filename: &str, dry_run: bool) {
 /// [`crate::ownership::build_fix_diff_edits`], and prints (dry-run) or
 /// writes (`--apply`) the resulting edits.
 ///
-/// **Scope (v1, L215a).** Type-definition rewrite only: keyword rename
-/// (`shared` → `par`), `mut ` strip per mut field, `Mutex[T]` wrap per
-/// mut field. Consumer-site rewrites (`lock self.field { ... }` blocks
-/// across every read/write of bindings of `<Type>` in the workspace) are
-/// the L215b follow-up — they need a workspace-wide binding walker that
-/// doesn't exist yet, so the v1 surface produces a starting-point diff
-/// and lets the programmer hand-finish per the design spec's "manual at
-/// the review step" clause (design.md § Compiler-assisted migration).
+/// **Scope (v1, L215a–L215b4).** Type-definition rewrite (keyword rename
+/// `shared` → `par`, `mut ` strip per mut field, `Mutex[T]` wrap per mut
+/// field) plus consumer-site `lock self.field { ... }` wraps across every
+/// read/write of bindings of `<Type>` — annotated bindings (L215b1),
+/// `lock self.field` wrap shape + read-site rewrite (L215b2), typecheck-
+/// resolved inferred bindings + mutating-method-call wraps (L215b3), and
+/// cross-file workspace walk (L215b4). When the file argument is omitted,
+/// the tool discovers the project root via `kara.toml`, walks every
+/// `.kara` module under `src/`, and runs the per-file rewrite pipeline
+/// against each.
 ///
 /// **Workspace dirty-check** (`--apply` only). When `--apply` is set
 /// without `--force`, the tool refuses to run if `git status --porcelain`
@@ -6699,49 +6701,318 @@ fn cmd_fix(filename: &str, dry_run: bool) {
 /// of `git` (or running outside a repo) is treated as "no dirt to
 /// guard against" rather than an error — the guard is opportunistic,
 /// not load-bearing. `--force` bypasses the check unconditionally.
+/// In project-mode the check runs from the project root; in single-
+/// file mode it runs from the file's parent directory.
 fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
-    // v1 only supports single-file mode (consumer rewrite needs a project-
-    // wide walk anyway, so the project-mode default has no behavioral
-    // advantage today). When the file argument is omitted, point at the
-    // current directory's `src/main.kara` as a convention; a future
-    // L215b consumer-walk slice will replace this with `walker::walk_project`.
-    let filename: String = match file {
-        Some(f) => f.to_string(),
-        None => {
+    match file {
+        Some(f) => cmd_migrate_single_file(type_name, apply, force, f),
+        None => cmd_migrate_project(type_name, apply, force),
+    }
+}
+
+/// Single-file migration (L215a–b3 surface). When the user passes
+/// `<file.kara>` explicitly, only that file is parsed + rewritten — the
+/// struct definition must live in the named file or the tool errors.
+fn cmd_migrate_single_file(type_name: &str, apply: bool, force: bool, filename: &str) {
+    let source = read_source(filename);
+    let outcome = compute_migration_edits_for_file(filename, &source, type_name);
+    match outcome {
+        FileMigrationOutcome::ParseFailed(msgs) => {
+            for m in &msgs {
+                eprintln!("{m}");
+            }
+            process::exit(1);
+        }
+        FileMigrationOutcome::WrongKind => {
             eprintln!(
-                "error: `karac migrate shared-to-par` currently requires a file argument (v1 surface — workspace walk lands in the L215b follow-up)"
+                "error: `{type_name}` is not a `shared struct` — `karac migrate shared-to-par` only applies to `shared struct` definitions (run `karac fix` on a `par {{ ... }}` diagnostic instead)"
             );
             process::exit(1);
         }
-    };
-    let source = read_source(&filename);
-    let mut pipeline = Pipeline::new(&filename, &source);
-    if pipeline.has_parse_errors() {
-        for err in &pipeline.parsed.errors {
+        FileMigrationOutcome::NoStructDef => {
             eprintln!(
-                "error[parse]: {}:{}:{}: {}",
-                filename, err.span.line, err.span.column, err.message
+                "error: no struct named `{type_name}` found in `{filename}` — `karac migrate shared-to-par` rewrites the type definition in place, so the type must be defined in the migration file"
             );
+            process::exit(1);
         }
+        FileMigrationOutcome::Ok(plan) => {
+            if plan.edits.is_empty() {
+                println!("(no migration edits needed for `{type_name}` in {filename})");
+                return;
+            }
+            if apply && !force && workspace_has_uncommitted_changes(filename) {
+                eprintln!(
+                    "error: workspace has uncommitted changes — refusing to run `karac migrate --apply` without `--force`"
+                );
+                eprintln!(
+                    "       commit or stash pending work first, or re-run with `--force` to bypass the guard."
+                );
+                process::exit(1);
+            }
+            emit_migration_for_file(&plan, apply);
+            if !apply {
+                println!(
+                    "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` in this file — including type-inferred bindings when the file typechecks. Cross-file walks now run by default when `<file>` is omitted; see project-mode below)"
+                );
+            }
+        }
+    }
+}
+
+/// Project-mode migration (L215b4). Discovers the project root via
+/// `kara.toml`, walks every module under `src/`, runs the per-file
+/// rewrite pipeline against each, and aggregates the results. Exactly
+/// one walked file must contain `shared struct <Type>`; zero or more
+/// than one is a hard error. Files with no edits are silently skipped.
+///
+/// The pass is two-stage so that consumer-only modules participate:
+/// the def-file's mut-field set is collected first, then every file's
+/// consumer rewrite runs with that set (using
+/// [`build_consumer_rewrite_edits_with_mut_fields`]).
+fn cmd_migrate_project(type_name: &str, apply: bool, force: bool) {
+    let cwd = match std::env::current_dir() {
+        Ok(d) => d,
+        Err(e) => {
+            eprintln!("error: cannot read current directory: {e}");
+            process::exit(1);
+        }
+    };
+    let Some(root) = manifest::discover_project_root(&cwd) else {
+        eprintln!(
+            "error: `karac migrate shared-to-par` could not find a `kara.toml` in the current directory or any ancestor — run from inside a project, or pass an explicit `<file.kara>` argument for single-file mode"
+        );
+        process::exit(1);
+    };
+    let walked = match walker::walk_project(&root, WalkerOpts::default()) {
+        Ok(w) => w,
+        Err(e) => {
+            eprintln!("error: cannot walk project at `{}`: {}", root.display(), e);
+            process::exit(1);
+        }
+    };
+
+    // Stage 1: parse every file (resolve + typecheck for type_ctx), find
+    // the def-file, and collect its mut-field set. Parse errors abort —
+    // a file that doesn't parse can't be safely rewritten. Typecheck
+    // errors degrade gracefully (L215b3 "manual at the review step").
+    struct PreparedFile {
+        filename: String,
+        source: String,
+        pipeline: Pipeline,
+        has_shared_def: bool,
+        has_wrong_kind: bool,
+    }
+    let mut prepared: Vec<PreparedFile> = Vec::new();
+    for module in &walked.modules {
+        let filename = module.file.to_string_lossy().into_owned();
+        let source = match std::fs::read_to_string(&module.file) {
+            Ok(s) => s,
+            Err(e) => {
+                eprintln!("error: cannot read `{}`: {e}", module.file.display());
+                process::exit(1);
+            }
+        };
+        let mut pipeline = Pipeline::new(&filename, &source);
+        if pipeline.has_parse_errors() {
+            for err in &pipeline.parsed.errors {
+                eprintln!(
+                    "error[parse]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                );
+            }
+            process::exit(1);
+        }
+        pipeline.resolve();
+        pipeline.typecheck();
+        let struct_def = pipeline
+            .parsed
+            .program
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Item::StructDef(s) if s.name == type_name => Some(s),
+                _ => None,
+            });
+        let (has_shared_def, has_wrong_kind) = match struct_def {
+            Some(s) if s.is_shared => (true, false),
+            Some(_) => (false, true),
+            None => (false, false),
+        };
+        prepared.push(PreparedFile {
+            filename,
+            source,
+            pipeline,
+            has_shared_def,
+            has_wrong_kind,
+        });
+    }
+
+    let def_files: Vec<&PreparedFile> = prepared.iter().filter(|p| p.has_shared_def).collect();
+    let wrong_kind_files: Vec<&PreparedFile> =
+        prepared.iter().filter(|p| p.has_wrong_kind).collect();
+    if def_files.is_empty() && !wrong_kind_files.is_empty() {
+        eprintln!(
+            "error: `{type_name}` is not a `shared struct` (found a non-shared definition in `{}`) — `karac migrate shared-to-par` only applies to `shared struct` definitions",
+            wrong_kind_files[0].filename
+        );
         process::exit(1);
     }
-    // L215b3: run resolve + typecheck to populate the binding-type map
-    // and the method-callee-type map used by the consumer-rewrite path
-    // for inferred-binding discovery and mutating-method-call wraps.
-    // Graceful degradation per design.md "manual at the review step"
-    // clause: even when typecheck reports errors, the partial
-    // pattern_binding_types map carries data for the bindings that did
-    // typecheck, so the rewrite covers strictly more cases than parse-
-    // only. The `pipeline.typed` snapshot is `None` only when resolve
-    // failed upstream and typecheck couldn't run at all.
+    if def_files.is_empty() {
+        eprintln!(
+            "error: no `shared struct {type_name}` found in any module under `{}/src/` — `karac migrate shared-to-par` rewrites the type definition in place, so the type must be defined somewhere in the project",
+            root.display()
+        );
+        process::exit(1);
+    }
+    if def_files.len() > 1 {
+        let names: Vec<String> = def_files.iter().map(|p| p.filename.clone()).collect();
+        eprintln!(
+            "error: multiple `shared struct {type_name}` definitions found across the project ({} files); each migration target must be unique. Files: {}",
+            def_files.len(),
+            names.join(", ")
+        );
+        process::exit(1);
+    }
+
+    // Stage 2: compute the def-file's mut-field set, then run the
+    // type-def + consumer rewrite per file with that set.
+    let mut_fields = crate::ownership::collect_struct_mut_field_names(
+        type_name,
+        &def_files[0].pipeline.parsed.program.items,
+    );
+
+    let mut plans: Vec<FileMigrationPlan> = Vec::with_capacity(prepared.len());
+    for file in &prepared {
+        let typedef_edits = if file.has_shared_def {
+            crate::ownership::build_fix_diff_edits(
+                type_name,
+                crate::ownership::BindingKind::Shared,
+                &file.pipeline.parsed.program.items,
+            )
+        } else {
+            Vec::new()
+        };
+        let type_ctx =
+            file.pipeline
+                .typed
+                .as_ref()
+                .map(|t| crate::ownership::ConsumerRewriteTypeCtx {
+                    pattern_binding_types: &t.pattern_binding_types,
+                    method_callee_types: &t.method_callee_types,
+                });
+        let consumer_edits = crate::ownership::build_consumer_rewrite_edits_with_mut_fields(
+            type_name,
+            &file.pipeline.parsed.program.items,
+            type_ctx,
+            &mut_fields,
+        );
+        let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
+        edits.extend(consumer_edits);
+        edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+        edits.dedup_by(|a, b| {
+            a.offset == b.offset && a.length == b.length && a.replacement == b.replacement
+        });
+        if edits.is_empty() {
+            continue;
+        }
+        plans.push(FileMigrationPlan {
+            filename: file.filename.clone(),
+            source: file.source.clone(),
+            edits,
+        });
+    }
+
+    if plans.is_empty() {
+        println!(
+            "(no migration edits needed for `{type_name}` across {} module(s) under {})",
+            walked.modules.len(),
+            root.display()
+        );
+        return;
+    }
+
+    if apply && !force && workspace_has_uncommitted_changes(&root.to_string_lossy()) {
+        eprintln!(
+            "error: workspace has uncommitted changes — refusing to run `karac migrate --apply` without `--force`"
+        );
+        eprintln!(
+            "       commit or stash pending work first, or re-run with `--force` to bypass the guard."
+        );
+        process::exit(1);
+    }
+
+    let total_edits: usize = plans.iter().map(|p| p.edits.len()).sum();
+    if !apply {
+        println!(
+            "would apply {total_edits} migration edit(s) across {} file(s) for `{type_name}`:",
+            plans.len()
+        );
+    }
+    for plan in &plans {
+        emit_migration_for_file(plan, apply);
+    }
+    if !apply {
+        println!(
+            "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` across the project — including type-inferred bindings in each file that typechecks)"
+        );
+    }
+}
+
+/// Outcome of running the migration pipeline against a single file.
+enum FileMigrationOutcome {
+    /// Parse failed; the inner messages are pre-formatted error lines.
+    ParseFailed(Vec<String>),
+    /// A struct named `<Type>` exists in this file but is not a
+    /// `shared struct` (`shared-to-par` is the only migration kind today,
+    /// so a plain struct of the same name is "you ran the wrong tool").
+    WrongKind,
+    /// No struct named `<Type>` in this file. Single-file mode treats
+    /// this as a hard error (the def must live in the migration file);
+    /// project-mode bypasses this enum entirely and computes consumer
+    /// edits via [`build_consumer_rewrite_edits_with_mut_fields`].
+    NoStructDef,
+    /// File defines `shared struct <Type>` and edits were computed.
+    Ok(FileMigrationPlan),
+}
+
+/// Per-file rewrite payload — `filename` + `source` are carried through
+/// so the emitter can compute line/column previews and the apply path
+/// can write the rewritten bytes back without re-reading.
+struct FileMigrationPlan {
+    filename: String,
+    source: String,
+    edits: Vec<crate::resolver::TextEdit>,
+}
+
+/// Run the parse → resolve → typecheck → rewrite pipeline against a
+/// single file's source. Shared between single-file and project-mode
+/// entry points. The struct-definition lookup happens here so the
+/// caller can distinguish the three "no struct def in this file" /
+/// "struct def is a plain struct" / "struct def is shared" cases.
+fn compute_migration_edits_for_file(
+    filename: &str,
+    source: &str,
+    type_name: &str,
+) -> FileMigrationOutcome {
+    let mut pipeline = Pipeline::new(filename, source);
+    if pipeline.has_parse_errors() {
+        let msgs: Vec<String> = pipeline
+            .parsed
+            .errors
+            .iter()
+            .map(|err| {
+                format!(
+                    "error[parse]: {}:{}:{}: {}",
+                    filename, err.span.line, err.span.column, err.message
+                )
+            })
+            .collect();
+        return FileMigrationOutcome::ParseFailed(msgs);
+    }
     pipeline.resolve();
     pipeline.typecheck();
 
-    // Locate the struct + decide which BindingKind to emit. The migration
-    // subcommand is `shared-to-par`, so the source struct must be a
-    // `shared struct`; a plain struct of the same name is a "you ran the
-    // wrong tool" diagnostic. A missing struct definition is a hard error.
-    let Some(struct_def) = pipeline
+    let struct_def = pipeline
         .parsed
         .program
         .items
@@ -6749,32 +7020,22 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         .find_map(|it| match it {
             Item::StructDef(s) if s.name == type_name => Some(s),
             _ => None,
-        })
-    else {
-        eprintln!(
-            "error: no struct named `{type_name}` found in `{filename}` — `karac migrate shared-to-par` rewrites the type definition in place, so the type must be defined in the migration file"
-        );
-        process::exit(1);
+        });
+    let has_shared_def = match struct_def {
+        Some(s) if s.is_shared => true,
+        Some(_) => return FileMigrationOutcome::WrongKind,
+        None => false,
     };
-    if !struct_def.is_shared {
-        eprintln!(
-            "error: `{type_name}` is not a `shared struct` — `karac migrate shared-to-par` only applies to `shared struct` definitions (run `karac fix` on a `par {{ ... }}` diagnostic instead)"
-        );
-        process::exit(1);
-    }
 
-    let typedef_edits = crate::ownership::build_fix_diff_edits(
-        type_name,
-        crate::ownership::BindingKind::Shared,
-        &pipeline.parsed.program.items,
-    );
-    // L215b3: thread typecheck-derived data into the consumer-rewrite
-    // walker so inferred bindings (`let c = make_counter()`) and
-    // mutating method-call writes (`c.field.push(x)`) get wrapped. When
-    // typecheck didn't run to completion (e.g. resolve errors aborted
-    // the pipeline before typecheck), `pipeline.typed` is `None` and the
-    // walker falls back to L215b1/b2's parse-only behavior (annotated
-    // bindings only, no mutating-method-call wraps).
+    let typedef_edits = if has_shared_def {
+        crate::ownership::build_fix_diff_edits(
+            type_name,
+            crate::ownership::BindingKind::Shared,
+            &pipeline.parsed.program.items,
+        )
+    } else {
+        Vec::new()
+    };
     let type_ctx = pipeline
         .typed
         .as_ref()
@@ -6787,58 +7048,44 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         &pipeline.parsed.program.items,
         type_ctx,
     );
+
     let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
     edits.extend(consumer_edits);
-    if edits.is_empty() {
-        // No mut fields and the rename collapses to a single keyword edit
-        // — but build_fix_diff_edits always emits the rename for Shared,
-        // so an empty result here means the struct's kind_keyword_span
-        // was a synthetic placeholder (prelude stub), which can't happen
-        // for a user-source definition. Treat as a "nothing to migrate"
-        // signal and exit cleanly.
-        println!("(no migration edits needed for `{type_name}` in {filename})");
-        return;
-    }
-
-    if apply && !force && workspace_has_uncommitted_changes(&filename) {
-        eprintln!(
-            "error: workspace has uncommitted changes — refusing to run `karac migrate --apply` without `--force`"
-        );
-        eprintln!(
-            "       commit or stash pending work first, or re-run with `--force` to bypass the guard."
-        );
-        process::exit(1);
-    }
-
-    // Sort edits descending by offset so the apply loop's offsets stay
-    // stable (same discipline as `cmd_fix`). build_fix_diff_edits emits
-    // in source order; the consumer sort here is a defense-in-depth
-    // peer of the cmd_fix path.
-    let mut sorted: Vec<crate::resolver::TextEdit> = edits;
-    sorted.sort_by_key(|e| std::cmp::Reverse(e.offset));
-    // Dedup any consumer edits that re-emit the same insertion the
-    // type-def pass already produced (e.g. an inserted `]` after the
-    // field type would collide with an inserted lock-wrap close at the
-    // same offset). Keep the first occurrence; same offset+length+
-    // replacement signature → drop the duplicate. Defense-in-depth —
-    // the type-def and consumer paths emit at structurally disjoint
-    // offsets today (struct-def vs fn-body), but the discipline matches
-    // `cmd_fix`'s overlap-drop guard.
-    sorted.dedup_by(|a, b| {
+    edits.sort_by_key(|e| std::cmp::Reverse(e.offset));
+    edits.dedup_by(|a, b| {
         a.offset == b.offset && a.length == b.length && a.replacement == b.replacement
     });
 
+    if has_shared_def {
+        FileMigrationOutcome::Ok(FileMigrationPlan {
+            filename: filename.to_string(),
+            source: source.to_string(),
+            edits,
+        })
+    } else {
+        FileMigrationOutcome::NoStructDef
+    }
+}
+
+/// Render the dry-run preview block or apply the plan to disk. Shared
+/// between single-file and project-mode emitters so the per-file
+/// output shape stays identical across both paths. The single-file
+/// dry-run footer and the project-mode top-level header/footer are
+/// emitted by the respective callers, not here.
+fn emit_migration_for_file(plan: &FileMigrationPlan, apply: bool) {
+    let filename = &plan.filename;
+    let source = &plan.source;
+    let sorted = &plan.edits;
     if !apply {
         println!(
             "would apply {} migration edit(s) to {filename}:",
             sorted.len()
         );
         for edit in sorted.iter().rev() {
-            // Render in source order for human readability.
             let original = source
                 .get(edit.offset..edit.offset.saturating_add(edit.length))
                 .unwrap_or("<?>");
-            let (line, col) = crate::byte_offset_to_line_col(&source, edit.offset);
+            let (line, col) = crate::byte_offset_to_line_col(source, edit.offset);
             let preview = if edit.length == 0 {
                 format!("(insert) → `{}`", edit.replacement)
             } else {
@@ -6846,14 +7093,11 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
             };
             println!("  {filename}:{line}:{col}: {preview}");
         }
-        println!(
-            "(dry-run — re-run with `--apply` to write changes; consumer-site lock-block wraps cover assign / compound-assign writes, reads, and mutating method calls against bindings of `{type_name}` in this file — including type-inferred bindings when the file typechecks. Cross-file walks remain a hand-review step — see L215b4 follow-up)"
-        );
         return;
     }
 
     let mut rewritten = source.clone();
-    for edit in &sorted {
+    for edit in sorted {
         let end = edit.offset.saturating_add(edit.length);
         if end > rewritten.len() {
             eprintln!(
@@ -6865,14 +7109,11 @@ fn cmd_migrate(type_name: &str, apply: bool, force: bool, file: Option<&str>) {
         }
         rewritten.replace_range(edit.offset..end, &edit.replacement);
     }
-    if let Err(e) = std::fs::write(&filename, &rewritten) {
+    if let Err(e) = std::fs::write(filename, &rewritten) {
         eprintln!("error: failed to write {filename}: {e}");
         process::exit(1);
     }
-    println!(
-        "applied {} migration edit(s) to {filename} (consumer-site assign/compound-assign writes, reads, and mutating method calls wrapped automatically — including type-inferred bindings when the file typechecks; review cross-file consumers by hand — see `docs/design.md § Compiler-assisted migration`)",
-        sorted.len()
-    );
+    println!("applied {} migration edit(s) to {filename}", sorted.len());
 }
 
 /// Returns `true` when `git status --porcelain` reports any modified
