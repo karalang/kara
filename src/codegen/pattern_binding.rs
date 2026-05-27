@@ -107,6 +107,11 @@ impl<'ctx> super::Codegen<'ctx> {
                             },
                         );
                         self.var_type_names.insert(name.clone(), type_name);
+                        // F4b — register the File-typed binding for
+                        // scope-exit close. The drain emits
+                        // `karac_runtime_file_close(load(file_alloca))`
+                        // when this scope frame unwinds.
+                        self.track_file_var(alloca);
                         return Ok(());
                     }
                 }

@@ -558,6 +558,17 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Phase 8 `File` handle slice F4b: register a File-typed binding
+    /// for scope-exit close. Pushed at the pattern-binding site in
+    /// `pattern_binding.rs` when `type_name == "File"` fires the
+    /// int→ptr re-typing arm. The drain emits
+    /// `karac_runtime_file_close(load(file_alloca))` on exit.
+    pub(super) fn track_file_var(&mut self, file_alloca: PointerValue<'ctx>) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeFileHandle { file_alloca });
+        }
+    }
+
     /// Phase 7.2 Slice DP — resolve a let-binding's surface enum name
     /// from the let-statement's annotation and RHS shape, for the
     /// `track_enum_var` registration site. Tries in order:
@@ -1278,6 +1289,25 @@ impl<'ctx> super::Codegen<'ctx> {
                         .build_call(self.karac_map_free_fn, &[handle.into()], "")
                         .unwrap();
                 }
+            }
+            // Phase 8 `File` handle slice F4b — close the file fd at
+            // scope exit. Load the handle from its alloca, hand it to
+            // `karac_runtime_file_close` which reconstructs the Box
+            // and drops it (releasing the OS fd via std::fs::File's
+            // own Drop). Null-handle is a no-op on the runtime side.
+            CleanupAction::FreeFileHandle { file_alloca } => {
+                let handle = self
+                    .builder
+                    .build_load(ptr_ty, *file_alloca, "cleanup.file.handle")
+                    .unwrap()
+                    .into_pointer_value();
+                let close_fn = self
+                    .module
+                    .get_function("karac_runtime_file_close")
+                    .expect("karac_runtime_file_close declared in Codegen::new");
+                self.builder
+                    .build_call(close_fn, &[handle.into()], "")
+                    .unwrap();
             }
             // Phase 7.2 Slice DP — invoke the per-enum drop
             // function on the alloca. The drop fn takes a

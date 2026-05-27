@@ -254,6 +254,18 @@ pub(crate) enum CleanupAction<'ctx> {
         /// / `Set[shared T]` leak (2026-05-16).
         key_shared_heap_type: Option<StructType<'ctx>>,
     },
+    /// Phase 8 `File` handle slice F4b: scope-exit close for a
+    /// pattern-bound File handle. The alloca holds the opaque `ptr`
+    /// the F4 `match Ok(f) => ...` destructure stored after int→ptr
+    /// re-typing. The drain emits `karac_runtime_file_close(load(file_alloca))`
+    /// — null-handle is a no-op on the runtime side, so we don't
+    /// guard here. Mirrors `FreeMapHandle`'s shape minus the
+    /// per-element drop logic (File has no inner heap state — just
+    /// the OS fd that std::fs::File's Drop handles).
+    FreeFileHandle {
+        /// Alloca that holds the opaque `*mut KaracFile` pointer.
+        file_alloca: PointerValue<'ctx>,
+    },
     /// Run a per-enum drop function on a value-type (non-shared) enum
     /// alloca at scope exit. The drop function is synthesized once per
     /// enum type by `emit_enum_drop_switch` (one `__karac_drop_<EnumName>`
