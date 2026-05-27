@@ -54,12 +54,54 @@ use inkwell::values::BasicValueEnum;
 use inkwell::AddressSpace;
 
 impl<'ctx> super::Codegen<'ctx> {
-    /// Lower `spawn(closure)` — for free fn and the TaskGroup-method
-    /// receiver-discard cases. Returns a `TaskHandle { task_id: i64 }`
-    /// struct value with `task_id = <runtime handle ptr> as i64`.
+    /// Lower `spawn(closure)` — for the free-fn shape. Returns a
+    /// `TaskHandle { task_id: i64 }` struct value where `task_id` is
+    /// the runtime-side `*mut KaracTaskHandle` cast to `i64`. The free
+    /// shape does NOT register the child with any container — it
+    /// produces an orphan task that the user must `.join()` explicitly
+    /// (or accept that it outlives the function with `panic = "abort"`
+    /// semantics on drop).
     pub(super) fn lower_spawn_call(
         &mut self,
         closure_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        self.lower_spawn_shared(closure_expr, None)
+    }
+
+    /// Lower `tg.spawn(closure)` — the TaskGroup-method shape. Same
+    /// machinery as the free `spawn()` plus a
+    /// `karac_runtime_taskgroup_register(group, child_handle)` call
+    /// before the wrap, so `tg`'s scope-exit drop sees the child in
+    /// its registry. The receiver `tg_val` carries the group pointer
+    /// in its `i64 id` field (cast back to pointer via `inttoptr`).
+    pub(super) fn lower_taskgroup_spawn(
+        &mut self,
+        tg_val: BasicValueEnum<'ctx>,
+        closure_expr: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        // Extract group_ptr from TaskGroup.id (i64 → ptr via inttoptr).
+        let id_int = self
+            .builder
+            .build_extract_value(tg_val.into_struct_value(), 0, "tg.id")
+            .unwrap()
+            .into_int_value();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let group_ptr = self
+            .builder
+            .build_int_to_ptr(id_int, ptr_ty, "tg.ptr")
+            .unwrap();
+        self.lower_spawn_shared(closure_expr, Some(group_ptr.into()))
+    }
+
+    /// Shared codegen for `spawn(closure)` and `tg.spawn(closure)`. The
+    /// `group_ptr` parameter — when `Some(...)` — is registered with
+    /// `karac_runtime_taskgroup_register` after the spawn FFI returns
+    /// and before the `TaskHandle` wrap. `None` skips the registration
+    /// (free-fn `spawn`).
+    fn lower_spawn_shared(
+        &mut self,
+        closure_expr: &Expr,
+        group_ptr: Option<BasicValueEnum<'ctx>>,
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let (params, body) = match &closure_expr.kind {
             ExprKind::Closure { params, body, .. } => (params.as_slice(), body.as_ref()),
@@ -310,6 +352,20 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap_basic()
             .into_pointer_value();
         let _ = outer_fn; // touched for assertion clarity above
+
+        // Phase 6 line 218 slice 5: register the child with the
+        // TaskGroup so drop can wait for it. Skipped for free `spawn`
+        // (no container to register with).
+        if let Some(g) = group_ptr {
+            let register_fn = self
+                .module
+                .get_function("karac_runtime_taskgroup_register")
+                .expect("karac_runtime_taskgroup_register declared in Codegen::new");
+            let _ = self
+                .builder
+                .build_call(register_fn, &[g.into(), handle_ptr.into()], "")
+                .unwrap();
+        }
 
         // 6. Wrap into `TaskHandle { task_id: handle_ptr as i64 }`.
         let i64_ty = self.context.i64_type();

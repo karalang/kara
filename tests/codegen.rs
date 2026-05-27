@@ -23083,6 +23083,107 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
         }
     }
 
+    // ── Phase 6 line 218 slice 5: TaskGroup.new / TaskGroup.spawn-register / TaskGroup.drop ──
+
+    /// All three TaskGroup runtime FFI declarations are emitted.
+    #[test]
+    fn test_taskgroup_ffi_declarations_present() {
+        let ir = ir_for("fn nop() {}");
+        for sym in [
+            "declare ptr @karac_runtime_taskgroup_new",
+            "declare void @karac_runtime_taskgroup_register",
+            "declare void @karac_runtime_taskgroup_join_and_free",
+        ] {
+            assert!(ir.contains(sym), "expected `{sym}` declaration; ir:\n{ir}");
+        }
+    }
+
+    /// `let tg = TaskGroup.new()` lowers to `call ptr @karac_runtime_taskgroup_new()`
+    /// followed by `ptrtoint` of the result into the i64 `id` field.
+    #[test]
+    fn test_taskgroup_new_lowers_to_runtime_call() {
+        let src = r#"
+            fn driver() {
+                let _tg = TaskGroup.new();
+            }
+        "#;
+        let ir = ir_for(src);
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("call ptr @karac_runtime_taskgroup_new"),
+            "TaskGroup.new() should call runtime allocator; body:\n{body}"
+        );
+        assert!(
+            body.contains("ptrtoint ptr"),
+            "TaskGroup.new() result should be cast to i64; body:\n{body}"
+        );
+    }
+
+    /// `tg.spawn(closure)` emits the spawn FFI + a child-registration
+    /// call against the receiver's group pointer.
+    #[test]
+    fn test_taskgroup_spawn_registers_child_with_group() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() {
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| make_zero());
+            }
+        "#;
+        let ir = ir_for(src);
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        // Both spawn and register must appear in the driver body.
+        assert!(
+            body.contains("call ptr @karac_runtime_spawn"),
+            "driver body should call spawn; body:\n{body}"
+        );
+        assert!(
+            body.contains("call void @karac_runtime_taskgroup_register"),
+            "tg.spawn(...) should register the child with the group; body:\n{body}"
+        );
+    }
+
+    /// `@TaskGroup.drop` body invokes `karac_runtime_taskgroup_join_and_free`
+    /// on the group pointer recovered from `self.id`.
+    #[test]
+    fn test_taskgroup_drop_calls_join_and_free() {
+        let src = r#"
+            fn driver() {
+                let _tg = TaskGroup.new();
+            }
+        "#;
+        let ir = ir_for(src);
+        let drop_body = function_body(&ir, "TaskGroup.drop").expect("@TaskGroup.drop emitted");
+        assert!(
+            drop_body.contains("call void @karac_runtime_taskgroup_join_and_free"),
+            "TaskGroup.drop should call join_and_free; body:\n{drop_body}"
+        );
+        assert!(
+            drop_body.contains("inttoptr"),
+            "drop should cast i64 id back to a pointer; body:\n{drop_body}"
+        );
+    }
+
+    /// The scope-exit drop synthesizer wires `@karac_drop_TaskGroup` at
+    /// the let-binding's scope exit, so a `let tg = TaskGroup.new()`
+    /// without explicit drop still joins on function return.
+    #[test]
+    fn test_taskgroup_scope_exit_drop_wraps_runtime_join() {
+        let src = r#"
+            fn driver() {
+                let _tg = TaskGroup.new();
+            }
+        "#;
+        let ir = ir_for(src);
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        // Either @karac_drop_TaskGroup (wrapper synth) or
+        // @TaskGroup.drop (raw drop) is invoked at scope exit.
+        assert!(
+            body.contains("@karac_drop_TaskGroup") || body.contains("@TaskGroup.drop"),
+            "driver should invoke TaskGroup drop at scope exit; body:\n{body}"
+        );
+    }
+
     /// Locate a function definition body by name and return its lines
     /// from the opening `{` (exclusive) through the closing `}`.
     /// Returns `None` if the function is not defined in the IR. Counts

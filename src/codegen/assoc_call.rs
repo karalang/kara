@@ -26,6 +26,42 @@ impl<'ctx> super::Codegen<'ctx> {
         _args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
         let args = _args;
+        // Phase 6 line 218 slice 5: `TaskGroup.new()` — allocate a
+        // runtime-side group via `karac_runtime_taskgroup_new()` and
+        // wrap the returned pointer (cast to i64) as `TaskGroup { id: <i64> }`.
+        // The slice-1 stdlib stub body returns `TaskGroup { id: 0 }`;
+        // this intercept replaces that lowering with the FFI call so
+        // `tg.spawn(...)` (slice 5 child-registration) and `tg`'s
+        // implicit `Drop` (slice 5 wait-for-children) can find a real
+        // scheduler-side container at the pointer.
+        if type_name == "TaskGroup" && method == "new" && _args.is_empty() {
+            let new_fn = self
+                .module
+                .get_function("karac_runtime_taskgroup_new")
+                .expect("karac_runtime_taskgroup_new declared in Codegen::new");
+            let call = self
+                .builder
+                .build_call(new_fn, &[], "__taskgroup_new")
+                .unwrap();
+            let group_ptr = call
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_pointer_value();
+            let i64_ty = self.context.i64_type();
+            let id = self
+                .builder
+                .build_ptr_to_int(group_ptr, i64_ty, "taskgroup.id")
+                .unwrap();
+            let group_struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+            let undef = group_struct_ty.get_undef();
+            let result = self
+                .builder
+                .build_insert_value(undef, id, 0, "task_group")
+                .unwrap()
+                .into_struct_value();
+            return Ok(result.into());
+        }
+
         // Numeric primitive From: `T.from(x)` for integer/float widening.
         // Codegen currently represents all ints as LLVM i64 and floats as
         // f64, so widening is a passthrough at this layer. When narrower

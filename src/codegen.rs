@@ -1672,6 +1672,41 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Phase 6 line 218 slice 5 — TaskGroup container FFI.
+        //
+        // `karac_runtime_taskgroup_new() -> ptr` — allocate a fresh
+        // group; address is stored as `i64` in `TaskGroup.id`.
+        let taskgroup_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_taskgroup_new",
+            taskgroup_new_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_taskgroup_register(group: ptr, child: ptr)`
+        // — register a freshly spawned child handle with the group.
+        // Codegen emits this immediately after `karac_runtime_spawn`
+        // returns inside the `tg.spawn(closure)` lowering path.
+        let taskgroup_register_ty = context
+            .void_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_taskgroup_register",
+            taskgroup_register_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_taskgroup_join_and_free(group: ptr)` — block
+        // until every registered child reaches a terminal state, then
+        // free the group. Invoked from the hand-rolled `@TaskGroup.drop`
+        // LLVM body emitted by `emit_hardcoded_stdlib_drop_bodies`.
+        let taskgroup_join_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_taskgroup_join_and_free",
+            taskgroup_join_ty,
+            Some(Linkage::External),
+        );
+
         // `karac_runtime_ws_send_text(fd: i32, msg_ptr: *const u8,
         // msg_len: i64) -> i64` — backs the encode + write step
         // inside `WebSocket.send_text`'s codegen lowering. Caller

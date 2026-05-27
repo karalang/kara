@@ -1150,6 +1150,77 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             self.emit_tcp_drop_body_for(type_name);
         }
+
+        // Phase 6 line 218 slice 5: `TaskGroup.drop` hand-rolled body.
+        // Loads `self.id` (i64), casts to `*KaracTaskGroupHandle`, calls
+        // `karac_runtime_taskgroup_join_and_free(group_ptr)`. The
+        // runtime helper blocks until every registered child reaches a
+        // terminal state, then frees the group itself. Slice 1's stdlib
+        // declares `impl Drop for TaskGroup` so `drop_method_keys`
+        // contains `"TaskGroup"` when the prelude is in scope.
+        if program.drop_method_keys.contains_key("TaskGroup") {
+            self.emit_taskgroup_drop_body();
+        }
+    }
+
+    /// Hand-roll `@TaskGroup.drop(ptr) -> void`. Body:
+    ///
+    /// ```text
+    /// %id_ptr = getelementptr {i64}, ptr %self, i32 0, i32 0
+    /// %id     = load i64, ptr %id_ptr
+    /// %g_ptr  = inttoptr i64 %id to ptr
+    /// call void @karac_runtime_taskgroup_join_and_free(ptr %g_ptr)
+    /// ret void
+    /// ```
+    fn emit_taskgroup_drop_body(&mut self) {
+        let fn_name = "TaskGroup.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let join_fn = match self
+            .module
+            .get_function("karac_runtime_taskgroup_join_and_free")
+        {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i64_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let id_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "id_ptr")
+            .unwrap();
+        let id = self
+            .builder
+            .build_load(i64_ty, id_ptr, "id")
+            .unwrap()
+            .into_int_value();
+        let group_ptr = self
+            .builder
+            .build_int_to_ptr(id, ptr_ty, "group_ptr")
+            .unwrap();
+        self.builder
+            .build_call(join_fn, &[group_ptr.into()], "")
+            .unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
     }
 
     /// Hand-roll a `@<type_name>.drop(ptr) -> void` LLVM function whose

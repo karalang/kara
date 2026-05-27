@@ -369,6 +369,127 @@ pub unsafe extern "C" fn karac_runtime_task_state(handle: *const KaracTaskHandle
     (*handle).state.load(Ordering::Acquire)
 }
 
+// ── TaskGroup container — slice 5 ──────────────────────────────────────────
+//
+// Structured-concurrency boundary per design.md § Explicit Concurrency.
+// Every `tg.spawn(closure)` call site registers the returned handle with
+// the group; `TaskGroup.drop` joins every registered child before
+// returning. Children that haven't reached a terminal state by the time
+// drop runs are blocked on (the same Condvar `karac_runtime_task_join`
+// waits on); children that have completed are reaped without blocking.
+//
+// **v1 cancel-propagation discipline.** A child that panics aborts the
+// process under `panic = "abort"` (Rust auto-aborts panics crossing
+// `extern "C"` boundaries — see `karac_runtime_spawn`'s wrapper
+// commentary). Fail-fast cancel propagation — flipping the
+// `KaracTaskHandle.cancel` flag of every sibling on the first panicked
+// child — is a follow-on slice (5b) that pairs with `catch_panic[T]`
+// when the unwind-aware build profile lands. v1 ships the wait-for-all
+// path because (i) the panic=abort posture makes the v1 panic case
+// rare and unrecoverable anyway; (ii) the cooperative-cancel surface
+// (where a child voluntarily checks the cancel flag and returns early)
+// is the more useful surface and lands independently as the per-handle
+// AtomicBool already plumbed in slice 3 — slice 5b will expose
+// `TaskGroup.cancel()` (user-callable) routing to the same flag.
+
+/// Runtime-side container for a `TaskGroup` value. Heap-allocated by
+/// `karac_runtime_taskgroup_new`; freed by
+/// `karac_runtime_taskgroup_join_and_free` at scope exit.
+///
+/// `children` holds raw pointers to child `KaracTaskHandle`s. The
+/// pointers are valid for the duration of the group's lifetime: every
+/// registered child handle is joined and freed inside
+/// `karac_runtime_taskgroup_join_and_free`'s loop, so no child outlives
+/// the group.
+pub struct KaracTaskGroupHandle {
+    children: Mutex<Vec<*mut KaracTaskHandle>>,
+}
+
+// SAFETY: see `KaracTaskHandle`'s Send/Sync impl. The same reasoning
+// applies — children raw pointers are exclusively read by the
+// `karac_runtime_taskgroup_join_and_free` loop in the drop-emitter
+// thread, after every spawn site that registered them has completed
+// (the spawn site's `karac_runtime_taskgroup_register` is a
+// happens-before edge with the join read via the Mutex).
+unsafe impl Send for KaracTaskGroupHandle {}
+unsafe impl Sync for KaracTaskGroupHandle {}
+
+/// Allocate a fresh `KaracTaskGroupHandle` and return its raw pointer
+/// (cast to `i64` on the kara side as the `TaskGroup.id` field).
+#[no_mangle]
+pub extern "C" fn karac_runtime_taskgroup_new() -> *mut KaracTaskGroupHandle {
+    Box::into_raw(Box::new(KaracTaskGroupHandle {
+        children: Mutex::new(Vec::new()),
+    }))
+}
+
+/// Register a freshly spawned child handle with the group. Called by
+/// codegen at every `tg.spawn(closure)` site, right after
+/// `karac_runtime_spawn` returns and before the `TaskHandle { task_id:
+/// <child_ptr> as i64 }` wrap.
+///
+/// # Safety
+///
+/// - `group` must be a non-null pointer produced by
+///   `karac_runtime_taskgroup_new` and not already freed.
+/// - `child` must be a non-null `*mut KaracTaskHandle` produced by
+///   `karac_runtime_spawn` for a closure spawned via this group's
+///   `tg.spawn()` call.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_taskgroup_register(
+    group: *mut KaracTaskGroupHandle,
+    child: *mut KaracTaskHandle,
+) {
+    if group.is_null() || child.is_null() {
+        return;
+    }
+    let g = &*group;
+    let mut children = g.children.lock().unwrap_or_else(|p| p.into_inner());
+    children.push(child);
+}
+
+/// Block until every registered child has reached a terminal state,
+/// then free the group itself. Each child handle is consumed
+/// (`karac_runtime_task_join` frees it) — the runtime invariant that
+/// each handle is joined or freed exactly once is upheld because
+/// registration is the only path that adds entries here, every entry
+/// is joined here, and the group cannot be referenced again after
+/// this returns (codegen emits the call from `@TaskGroup.drop`).
+///
+/// **Discards each child's result.** TaskGroup's design.md contract
+/// is "wait for children", not "collect children's results"; explicit
+/// `.join()` on individual handles is the user-facing surface for
+/// result extraction. Slice 5 ships join-and-discard via a
+/// null-handled-out-slot `karac_runtime_task_join` call (the runtime
+/// skips the result memcpy when `out_slot == null`).
+///
+/// # Safety
+///
+/// `group` must be a non-null pointer produced by
+/// `karac_runtime_taskgroup_new` and not already freed.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_taskgroup_join_and_free(group: *mut KaracTaskGroupHandle) {
+    if group.is_null() {
+        return;
+    }
+    // Drain children outside the lock so a child whose closure body
+    // calls `tg.spawn(...)` recursively (unlikely but defensible)
+    // doesn't deadlock on a re-entrant lock acquire.
+    let children: Vec<*mut KaracTaskHandle> = {
+        let g = &*group;
+        let mut guard = g.children.lock().unwrap_or_else(|p| p.into_inner());
+        std::mem::take(&mut *guard)
+    };
+    for child in children {
+        // `karac_runtime_task_join` blocks until terminal, frees the
+        // handle, returns the terminal discriminant. v1 discards the
+        // discriminant — see commentary above.
+        let _status = karac_runtime_task_join(child, std::ptr::null_mut());
+    }
+    // Reclaim the group itself.
+    drop(Box::from_raw(group));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -566,5 +687,89 @@ mod tests {
         assert_eq!(TASK_STATE_COMPLETED, 1);
         assert_eq!(TASK_STATE_PANICKED, 2);
         assert_eq!(TASK_STATE_CANCELLED, 3);
+    }
+
+    // ── TaskGroup container — slice 5 tests ──────────────────────
+
+    #[test]
+    fn taskgroup_new_returns_non_null_handle() {
+        unsafe {
+            let g = karac_runtime_taskgroup_new();
+            assert!(!g.is_null());
+            // Empty groups must still drain + free cleanly.
+            karac_runtime_taskgroup_join_and_free(g);
+        }
+    }
+
+    #[test]
+    fn taskgroup_drains_registered_children_on_join_and_free() {
+        // Spawn 16 tasks, register each with the group, join+free the
+        // group, verify the shared counter reaches the expected sum.
+        let counter = AtomicU32::new(0);
+        unsafe {
+            let group = karac_runtime_taskgroup_new();
+            for _ in 0..16 {
+                let h = karac_runtime_spawn(
+                    inc_counter_wrapper,
+                    &counter as *const AtomicU32 as *mut c_void,
+                    0,
+                    1,
+                );
+                assert!(!h.is_null());
+                karac_runtime_taskgroup_register(group, h);
+            }
+            // Drop equivalent: join all + free group.
+            karac_runtime_taskgroup_join_and_free(group);
+            // All 16 children must have completed before drop returned.
+            assert_eq!(counter.load(AtomicOrdering::Relaxed), 16);
+        }
+    }
+
+    #[test]
+    fn taskgroup_join_and_free_handles_null_gracefully() {
+        unsafe {
+            // Null group is a no-op (defensive contract, matches the
+            // `karac_runtime_taskgroup_register` null guard above).
+            karac_runtime_taskgroup_join_and_free(std::ptr::null_mut());
+        }
+    }
+
+    #[test]
+    fn taskgroup_register_null_inputs_are_no_ops() {
+        unsafe {
+            let g = karac_runtime_taskgroup_new();
+            // null child is silently skipped.
+            karac_runtime_taskgroup_register(g, std::ptr::null_mut());
+            // null group + null child are silently skipped.
+            karac_runtime_taskgroup_register(std::ptr::null_mut(), std::ptr::null_mut());
+            karac_runtime_taskgroup_join_and_free(g);
+        }
+    }
+
+    #[test]
+    fn taskgroup_with_i64_returning_children_drains_correctly() {
+        // Mix of i64-returning children; results are discarded by
+        // taskgroup_join_and_free (slice 5 contract — wait for children,
+        // don't collect results). Verify the children all reached
+        // terminal state by joining the group then trying to read state
+        // would be impossible (handles freed); instead, verify the
+        // group's drop returned (test-thread continues) — implicit.
+        let env_val: i64 = 100;
+        unsafe {
+            let group = karac_runtime_taskgroup_new();
+            for _ in 0..4 {
+                let h = karac_runtime_spawn(
+                    add_one_wrapper,
+                    &env_val as *const i64 as *mut c_void,
+                    std::mem::size_of::<i64>(),
+                    std::mem::align_of::<i64>(),
+                );
+                karac_runtime_taskgroup_register(group, h);
+            }
+            // No timeout — drop must return in bounded time. If the
+            // join hangs, the test framework's per-test timeout
+            // (defaults to 60s in cargo test) will catch it.
+            karac_runtime_taskgroup_join_and_free(group);
+        }
     }
 }
