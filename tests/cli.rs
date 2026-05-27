@@ -7429,9 +7429,10 @@ fn test_migrate_help_lists_kind_and_flags() {
 
 #[test]
 fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
-    // Canonical L215b1 case: a `let c: Counter` binding with an assign
-    // write — the migrate path emits a `lock count { c.count = 5 }` wrap
-    // around the assignment in addition to the type-def rewrite.
+    // Canonical L215b1 case + L215b2 self-prefix shape: a `let c: Counter`
+    // binding with an assign write — the migrate path emits a
+    // `lock self.count { ... }` wrap and rewrites the binding root
+    // `c` to `self` inside the wrap body (design.md line 8522).
     let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    c.count = 5;\n}\n";
     let path = migrate_scratch_file("consumer_assign", original);
     let out = karac_bin()
@@ -7456,12 +7457,16 @@ fn test_migrate_wraps_assign_writes_against_typed_let_binding() {
         "type-def rewrite missing; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("lock count {"),
-        "expected consumer-site `lock count {{` wrap; got: {rewritten}",
+        rewritten.contains("lock self.count {"),
+        "expected L215b2 self-prefix `lock self.count {{` wrap; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("c.count = 5"),
-        "wrapped assign body must remain present; got: {rewritten}",
+        rewritten.contains("self.count = 5"),
+        "binding `c` should be rewritten to `self` inside the wrap body; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("c.count = 5"),
+        "original `c.count = 5` should have been rewritten to `self.count = 5`; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -7490,12 +7495,20 @@ fn test_migrate_wraps_writes_through_ref_parameter() {
         String::from_utf8_lossy(&out.stderr),
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
-    // Both function bodies should have their `c.count = ...` writes wrapped.
-    let lock_wrap_count = rewritten.matches("lock count {").count();
+    // Both function bodies should have their `c.count = ...` writes
+    // wrapped with the L215b2 self-prefix shape.
+    let lock_wrap_count = rewritten.matches("lock self.count {").count();
     assert_eq!(
         lock_wrap_count, 2,
-        "expected two lock-count wraps (one per ref-param fn); got {lock_wrap_count} in: {rewritten}",
+        "expected two `lock self.count` wraps (one per ref-param fn); got {lock_wrap_count} in: {rewritten}",
     );
+    // The value-side `c.count` in `c.count = c.count + 1` should also be
+    // binding-rewritten to `self.count` inside the wrap.
+    assert!(
+        rewritten.contains("self.count = self.count + 1"),
+        "value-side `c.count` should be rewritten to `self.count` inside the wrap; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
 }
 
 #[test]
@@ -7517,15 +7530,15 @@ fn test_migrate_skips_writes_inside_par_block() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    // Two pure-insertion edits per wrap (prefix + suffix). Outside-par
-    // assign produces one wrap = two insertions. Inside-par assigns
-    // would produce four insertions if not filtered. Sum: 4 type-def
-    // edits + 2 consumer edits = 6 total.
+    // Three edits per outside-par write under L215b2 (1 binding-rewrite
+    // `c` → `self` + 2 wrap insertions: prefix + suffix). Inside-par
+    // assigns would contribute six more edits if not filtered.
+    // Sum: 4 type-def + 3 consumer = 7 total.
     assert!(
-        stdout.contains("would apply 6 migration edit(s)"),
-        "expected 6 edits (4 type-def + 2 consumer for the single outside-par write); got: {stdout}",
+        stdout.contains("would apply 7 migration edit(s)"),
+        "expected 7 edits (4 type-def + 3 consumer for the single outside-par write); got: {stdout}",
     );
-    let prefix_count = stdout.matches("(insert) → `lock count {").count();
+    let prefix_count = stdout.matches("(insert) → `lock self.count {").count();
     assert_eq!(
         prefix_count, 1,
         "expected one consumer-write wrap (the outside-par assign); got {prefix_count} in: {stdout}",
@@ -7557,12 +7570,12 @@ fn test_migrate_wraps_compound_assign() {
     );
     let rewritten = std::fs::read_to_string(&path).unwrap();
     assert!(
-        rewritten.contains("lock count {"),
-        "compound-assign should be wrapped; got: {rewritten}",
+        rewritten.contains("lock self.count {"),
+        "compound-assign should be wrapped with L215b2 self-prefix shape; got: {rewritten}",
     );
     assert!(
-        rewritten.contains("c.count += 1"),
-        "compound-assign body must remain; got: {rewritten}",
+        rewritten.contains("self.count += 1"),
+        "compound-assign body's binding `c` should be rewritten to `self`; got: {rewritten}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -7586,15 +7599,15 @@ fn test_migrate_skips_writes_to_non_mut_fields() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    let lock_count = stdout.matches("(insert) → `lock count {").count();
-    let lock_name = stdout.matches("(insert) → `lock name {").count();
+    let lock_count = stdout.matches("(insert) → `lock self.count {").count();
+    let lock_name = stdout.matches("(insert) → `lock self.name {").count();
     assert_eq!(
         lock_count, 1,
-        "expected single `lock count` wrap for the mut field; got {lock_count}",
+        "expected single `lock self.count` wrap for the mut field; got {lock_count}",
     );
     assert_eq!(
         lock_name, 0,
-        "expected zero `lock name` wraps for the non-mut field; got {lock_name} in: {stdout}",
+        "expected zero `lock self.name` wraps for the non-mut field; got {lock_name} in: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
@@ -7617,8 +7630,9 @@ fn test_migrate_ignores_bindings_of_other_types() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
-    // Exactly one wrap for the single Counter write.
-    let wraps = stdout.matches("(insert) → `lock count {").count();
+    // Exactly one wrap for the single Counter write — `n` is an i64
+    // binding, so its assignment site shouldn't show up at all.
+    let wraps = stdout.matches("(insert) → `lock self.count {").count();
     assert_eq!(
         wraps, 1,
         "expected exactly one wrap for the c.count write; got {wraps} in: {stdout}",
@@ -7644,17 +7658,160 @@ fn test_migrate_dry_run_lists_consumer_edits_in_addition_to_typedef() {
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
     assert!(out.status.success(), "dry-run should succeed");
+    // 4 type-def + 3 consumer (1 binding-rewrite + 2 wrap insertions
+    // for the single L215b2 self-prefix write) = 7 total.
     assert!(
-        stdout.contains("would apply 6 migration edit(s)"),
-        "expected 6 edits (4 type-def + 2 consumer wrap insertions); got: {stdout}",
+        stdout.contains("would apply 7 migration edit(s)"),
+        "expected 7 edits (4 type-def + 3 consumer for the single write); got: {stdout}",
     );
     assert!(
         stdout.contains("`shared` → `par`"),
         "type-def keyword rename should still appear; got: {stdout}",
     );
     assert!(
-        stdout.contains("(insert) → `lock count {"),
+        stdout.contains("(insert) → `lock self.count {"),
         "consumer wrap prefix should appear in dry-run; got: {stdout}",
+    );
+    assert!(
+        stdout.contains("`c` → `self`"),
+        "binding-rewrite edit should appear in dry-run; got: {stdout}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_wraps_read_site() {
+    // L215b2: every `<binding>.<mut_field>` rvalue use gets a value-
+    // expression wrap. A `let x = c.count;` should rewrite to
+    // `let x = lock self.count { self.count };` — a single replacement
+    // edit covering the full `c.count` span.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn read(c: ref Counter) -> i64 {\n    let x: i64 = c.count;\n    x\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("consumer_read_site", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("let x: i64 = lock self.count { self.count };"),
+        "expected read-site wrap on `c.count` rvalue; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("c.count"),
+        "original `c.count` should have been subsumed by the read wrap; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_read_wrap_skips_assign_targets() {
+    // L215b2: the read walker must NOT independently wrap reads that
+    // are already inside a write-wrapped statement — otherwise the
+    // output would have nested locks on the same field. For
+    // `c.count = c.count + 1`, both the target and the value RHS get
+    // binding-rewritten to `self.count` (one wrap, no nested wraps).
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn bump(c: ref Counter) {\n    c.count = c.count + 1;\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("consumer_read_skip_write_target", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    // Exactly one `lock self.count` opener — the outer write-wrap.
+    // A nested read-wrap would produce a second occurrence.
+    let lock_count = rewritten.matches("lock self.count {").count();
+    assert_eq!(
+        lock_count, 1,
+        "expected exactly one `lock self.count` wrap (no nested read-wrap); got {lock_count} in: {rewritten}",
+    );
+    // Both sides of the assign should have their binding rewritten.
+    assert!(
+        rewritten.contains("self.count = self.count + 1"),
+        "expected the value-side `c.count` to be binding-rewritten to `self.count` inside the wrap; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_wraps_read_inside_if_condition() {
+    // L215b2: reads inside if-conditions, binary expressions, etc.
+    // should also receive the read-wrap.
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn check(c: ref Counter) -> i64 {\n    if c.count > 0 {\n        1\n    } else {\n        0\n    }\n}\n\nfn main() {}\n";
+    let path = migrate_scratch_file("consumer_read_if_cond", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "migrate --apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr),
+    );
+    let rewritten = std::fs::read_to_string(&path).unwrap();
+    assert!(
+        rewritten.contains("if lock self.count { self.count } > 0"),
+        "expected if-condition read of `c.count` to be wrapped; got: {rewritten}",
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
+fn test_migrate_skips_reads_inside_par_block() {
+    // L215b2: reads inside `par { ... }` blocks belong to the `karac fix`
+    // diagnostic path, not the preemptive migrate. The par-span filter
+    // must drop them like it drops par-internal writes (L215b1).
+    let original = "shared struct Counter {\n    mut count: i64,\n}\n\nfn main() {\n    let c: Counter = Counter { count: 0 };\n    let outside: i64 = c.count;\n    par {\n        let inside_a: i64 = c.count;\n        let inside_b: i64 = c.count;\n    }\n}\n";
+    let path = migrate_scratch_file("consumer_skip_reads_par", original);
+    let out = karac_bin()
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            path.to_str().unwrap(),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "dry-run should succeed");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    // Exactly one read-wrap (the outside-par read). The two inside-par
+    // reads must be filtered out.
+    let read_wraps = stdout
+        .matches("`c.count` → `lock self.count { self.count }`")
+        .count();
+    assert_eq!(
+        read_wraps, 1,
+        "expected one read-wrap (outside the par block); got {read_wraps} in: {stdout}",
     );
     let _ = std::fs::remove_file(&path);
 }
