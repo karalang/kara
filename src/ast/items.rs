@@ -280,6 +280,19 @@ pub struct StructDef {
     pub is_pub: bool,
     pub is_private: bool,
     pub is_shared: bool,
+    /// Span of the `struct` keyword token itself (always present).
+    /// Powers byte-precise rewrites — `E_CONCURRENT_PLAIN_STRUCT`'s
+    /// fix_diff inserts `par ` immediately before this offset. Synthetic
+    /// `StructDef`s built outside the parser (prelude, codegen prelude
+    /// shims, tests) may carry a zero-length placeholder span; consumers
+    /// that need the keyword position should gate on `kind_keyword_span`
+    /// being meaningful instead of relying on this span alone.
+    pub struct_keyword_span: Span,
+    /// Span of the `shared` (or future `par`) keyword preceding `struct`,
+    /// when present. `None` for plain `struct` definitions. Powers the
+    /// `E_CONCURRENT_SHARED_STRUCT` fix_diff's rename edit (replace this
+    /// span with `par`). See L201a in phase-7 tracker.
+    pub kind_keyword_span: Option<Span>,
     pub no_rc: bool,
     pub name: String,
     pub generic_params: Option<GenericParams>,
@@ -316,7 +329,17 @@ pub struct StructField {
     pub doc_comment: Option<String>,
     pub is_pub: bool,
     pub is_mut: bool,
+    /// Span of the `mut` keyword token, when present (Some iff
+    /// `is_mut`). Powers the `E_CONCURRENT_*_STRUCT` fix_diff's
+    /// `mut ` strip edit: deletion runs from `mut_keyword_span.offset`
+    /// to `name_span.offset` so trailing whitespace is included
+    /// (parser preserves the source's exact spacing). See L201a.
+    pub mut_keyword_span: Option<Span>,
     pub name: String,
+    /// Span of the field's identifier token. Always present (even when
+    /// no `mut` keyword precedes); used as the end-anchor for the
+    /// `mut ` strip-range computation.
+    pub name_span: Span,
     pub ty: TypeExpr,
 }
 

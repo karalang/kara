@@ -58,7 +58,7 @@ impl super::Parser {
                 self.parse_function(attributes, is_pub, is_private, false)?,
             )),
             Token::Struct => Some(Item::StructDef(
-                self.parse_struct_def(attributes, is_pub, is_private, false)?,
+                self.parse_struct_def(attributes, is_pub, is_private, false, None)?,
             )),
             Token::Union => Some(Item::UnionDef(
                 self.parse_union_def(attributes, is_pub, is_private)?,
@@ -67,11 +67,16 @@ impl super::Parser {
                 self.parse_enum_def(attributes, is_pub, is_private, false)?,
             )),
             Token::Shared => {
+                let shared_kw_span = self.current_span();
                 self.advance();
                 match self.peek_token() {
-                    Token::Struct => Some(Item::StructDef(
-                        self.parse_struct_def(attributes, is_pub, is_private, true)?,
-                    )),
+                    Token::Struct => Some(Item::StructDef(self.parse_struct_def(
+                        attributes,
+                        is_pub,
+                        is_private,
+                        true,
+                        Some(shared_kw_span),
+                    )?)),
                     Token::Enum => Some(Item::EnumDef(
                         self.parse_enum_def(attributes, is_pub, is_private, true)?,
                     )),
@@ -1039,8 +1044,10 @@ impl super::Parser {
         is_pub: bool,
         is_private: bool,
         is_shared: bool,
+        kind_keyword_span: Option<Span>,
     ) -> Option<StructDef> {
         let start = self.current_span();
+        let struct_keyword_span = self.current_span();
         self.expect(&Token::Struct)?;
         let name = self.expect_identifier()?;
         let name_span = self.span_from(&start);
@@ -1075,6 +1082,8 @@ impl super::Parser {
             is_pub,
             is_private,
             is_shared,
+            struct_keyword_span,
+            kind_keyword_span,
             no_rc,
             name,
             generic_params,
@@ -1213,10 +1222,23 @@ impl super::Parser {
             let start = self.current_span();
             let attributes = self.parse_attributes();
             let is_pub = self.eat(&Token::Pub);
-            let is_mut = self.eat(&Token::Mut);
+            let mut_keyword_span = if self.check(&Token::Mut) {
+                let s = self.current_span();
+                self.advance();
+                Some(s)
+            } else {
+                None
+            };
+            let is_mut = mut_keyword_span.is_some();
+            let name_token_span = self.current_span();
             let name = self.expect_identifier()?;
-            let name_span = self.span_from(&start);
-            self.check_ident_class(&name, IdentClass::Value, "struct field", name_span);
+            let name_span_from_start = self.span_from(&start);
+            self.check_ident_class(
+                &name,
+                IdentClass::Value,
+                "struct field",
+                name_span_from_start,
+            );
             self.expect(&Token::Colon)?;
             let ty = self.parse_type()?;
             let doc_comment = self.take_pending_doc();
@@ -1226,7 +1248,9 @@ impl super::Parser {
                 doc_comment,
                 is_pub,
                 is_mut,
+                mut_keyword_span,
                 name,
+                name_span: name_token_span,
                 ty,
             });
             if !self.eat(&Token::Comma) {

@@ -974,7 +974,8 @@ fn detect_par_block_conflicts(
                         use_span.clone(),
                         prev_span.clone(),
                     );
-                    let edits = build_fix_diff_edits(&binding.type_name, program_items);
+                    let edits =
+                        build_fix_diff_edits(&binding.type_name, binding.kind, program_items);
                     if !edits.is_empty() {
                         fix_diffs.insert(SpanKey::from_span(&err.span), edits);
                     }
@@ -1021,11 +1022,11 @@ fn build_concurrent_struct_error(
     );
     let suggestion = match tracked.kind {
         BindingKind::Shared => format!(
-            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `shared struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. call sites that previously relied on implicit `Rc`-clone now produce `Arc`-clone semantics\nor run `karac migrate shared-to-par {ty}` for a preemptive workspace rewrite.",
+            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `shared struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. call sites that previously relied on implicit `Rc`-clone now produce `Arc`-clone semantics\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword rewrite, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step. Or run `karac migrate shared-to-par {ty}` for a preemptive workspace rewrite.",
             ty = tracked.type_name,
         ),
         BindingKind::Plain => format!(
-            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. consumers that took the value by ownership now share an `Arc` clone\nThe machine-applicable `fix_diff` covers the per-field `Mutex[T]` wraps; the keyword rewrite and `mut ` stripping are left as the human review step.",
+            "convert `{ty}` to `par struct` and wrap mut fields in `Mutex[T]`/`Atomic[T]`. The migration is structural:\n  1. rename `struct {ty}` to `par struct {ty}`\n  2. wrap each bare `mut` field in `Mutex[T]` (refine to `Atomic[T]` post-review where lock-free access is appropriate)\n  3. insert `lock field {{ ... }}` blocks at every write site within `par` regions\n  4. consumers that took the value by ownership now share an `Arc` clone\nThe machine-applicable `fix_diff` covers steps 1 and 2 (keyword insert, `mut ` stripping, and per-field `Mutex[T]` wrap); steps 3 and 4 remain the human review step.",
             ty = tracked.type_name,
         ),
     };
@@ -1039,15 +1040,38 @@ fn build_concurrent_struct_error(
     }
 }
 
-/// For every `mut field: T` in the matching `StructDef`, build two
-/// pure-insertion `TextEdit`s — `Mutex[` prefix before `ty.span.offset`
-/// and `]` suffix after `ty.span.offset + ty.span.length`. Order
-/// matters only for downstream diff rendering; both ends of one field
-/// don't overlap with another field's edits, so the consumer can apply
-/// them in any order as long as offsets stay stable (apply back-to-
-/// front per the standard `karac fix` discipline). Returns an empty
-/// vec when no matching struct is found or it has no mut fields.
-fn build_fix_diff_edits(type_name: &str, program_items: &[Item]) -> Vec<TextEdit> {
+/// Build the `fix_diff` edit list for a `ConcurrentSharedStruct` or
+/// `ConcurrentPlainStruct` diagnostic. Three edit families are emitted
+/// per affected `StructDef`:
+///
+/// 1. **Keyword rewrite** — `Shared` kind replaces the `shared` keyword
+///    with `par` (replacement edit); `Plain` kind inserts `par ` before
+///    the `struct` keyword (pure insertion). Driven by
+///    `StructDef.kind_keyword_span` / `struct_keyword_span` (parser-
+///    captured per L201a). When the kind/struct span is a synthetic
+///    zero-width placeholder (prelude stubs), the keyword rewrite
+///    silently skips — those defs never resolve to a real par-block
+///    binding, so the path is unreachable in practice but the guard
+///    keeps the function total.
+/// 2. **`mut ` keyword strip** — for every `mut` field, delete the run
+///    from `mut_keyword_span.offset` to `name_span.offset`. The
+///    deletion length is derived from the two parser-captured spans
+///    rather than a fixed `"mut ".len()` so intervening whitespace
+///    (tabs, multiple spaces, embedded comments) gets removed too —
+///    the source text doesn't need to be re-scanned.
+/// 3. **`Mutex[T]` wrap** — pure-insertion `Mutex[` prefix before
+///    `field.ty.span.offset` and `]` suffix after the type span, for
+///    every `mut` field. Pre-existing edit family from the L197 fix-
+///    diff slice.
+///
+/// Edits are emitted in source order; the consumer applies them back-
+/// to-front (standard `karac fix` discipline) so offsets stay stable.
+/// Returns an empty vec when no matching `StructDef` is found.
+fn build_fix_diff_edits(
+    type_name: &str,
+    kind: BindingKind,
+    program_items: &[Item],
+) -> Vec<TextEdit> {
     let Some(struct_def) = program_items.iter().find_map(|it| match it {
         Item::StructDef(s) if s.name == type_name => Some(s),
         _ => None,
@@ -1055,9 +1079,45 @@ fn build_fix_diff_edits(type_name: &str, program_items: &[Item]) -> Vec<TextEdit
         return Vec::new();
     };
     let mut edits = Vec::new();
+    // (1) Keyword rewrite — drives the `shared struct`/`struct` →
+    // `par struct` half of the migration.
+    match kind {
+        BindingKind::Shared => {
+            if let Some(kw) = &struct_def.kind_keyword_span {
+                if kw.length > 0 {
+                    edits.push(TextEdit {
+                        offset: kw.offset,
+                        length: kw.length,
+                        replacement: "par".to_string(),
+                    });
+                }
+            }
+        }
+        BindingKind::Plain => {
+            let sk = &struct_def.struct_keyword_span;
+            if sk.length > 0 {
+                edits.push(TextEdit {
+                    offset: sk.offset,
+                    length: 0,
+                    replacement: "par ".to_string(),
+                });
+            }
+        }
+    }
+    // (2) `mut ` strip + (3) `Mutex[T]` wrap, per mut field.
     for field in &struct_def.fields {
         if !field.is_mut {
             continue;
+        }
+        if let Some(mut_kw) = &field.mut_keyword_span {
+            let strip_end = field.name_span.offset;
+            if strip_end > mut_kw.offset {
+                edits.push(TextEdit {
+                    offset: mut_kw.offset,
+                    length: strip_end - mut_kw.offset,
+                    replacement: String::new(),
+                });
+            }
         }
         let ty_off = field.ty.span.offset;
         let ty_len = field.ty.span.length;

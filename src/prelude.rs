@@ -713,6 +713,14 @@ fn stub_struct(name: &str, span: &Span) -> Item {
         is_pub: true,
         is_private: false,
         is_shared: false,
+        // Synthetic prelude stub — no real source position for the
+        // `struct` keyword. Carries the item's full span as a benign
+        // placeholder; fix_diff edit emission only consults this when
+        // a `ConcurrentPlainStruct` diagnostic resolves to the matching
+        // StructDef, which never happens for prelude stubs (they don't
+        // appear in user `par` blocks).
+        struct_keyword_span: span.clone(),
+        kind_keyword_span: None,
         no_rc: false,
         name: name.to_string(),
         generic_params: stub_generics(name, span),

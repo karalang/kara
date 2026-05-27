@@ -339,7 +339,14 @@ impl super::Parser {
             let start = self.current_span();
             let attributes = self.parse_attributes();
             let is_pub = self.eat(&Token::Pub);
-            let is_mut = self.eat(&Token::Mut);
+            let mut_keyword_span = if self.check(&Token::Mut) {
+                let s = self.current_span();
+                self.advance();
+                Some(s)
+            } else {
+                None
+            };
+            let is_mut = mut_keyword_span.is_some();
             // Field-modifier `weak` per design.md § Shared Types — Weak
             // references. `mut weak field: T` and `weak field: T` are
             // both legal; the modifier wraps the parsed field type in
@@ -352,9 +359,15 @@ impl super::Parser {
             } else {
                 None
             };
+            let name_token_span = self.current_span();
             let name = self.expect_identifier()?;
-            let name_span = self.span_from(&start);
-            self.check_ident_class(&name, IdentClass::Value, "struct field", name_span);
+            let name_span_from_start = self.span_from(&start);
+            self.check_ident_class(
+                &name,
+                IdentClass::Value,
+                "struct field",
+                name_span_from_start,
+            );
             self.expect(&Token::Colon)?;
             let inner_ty = self.parse_type()?;
             let ty = if let Some(span) = weak_modifier_span {
@@ -372,7 +385,9 @@ impl super::Parser {
                 doc_comment,
                 is_pub,
                 is_mut,
+                mut_keyword_span,
                 name,
+                name_span: name_token_span,
                 ty,
             });
             if !self.eat(&Token::Comma) {

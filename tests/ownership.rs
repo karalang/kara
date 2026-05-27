@@ -6169,9 +6169,12 @@ fn test_concurrent_plain_struct_does_not_fire_on_shared_struct() {
 //
 // Both `ConcurrentSharedStruct` and `ConcurrentPlainStruct` populate
 // the sibling `error_fix_diffs` map keyed by the diagnostic's primary
-// span with per-`mut`-field `Mutex[T]` wrap edits (two pure-insertion
-// edits per field). Keyword rename + `mut ` stripping stay in
-// suggestion prose until parser exposes keyword spans on `StructDef`.
+// span. L201a (2026-05-26) grew the edit list to three families:
+// (1) keyword rewrite — `shared` → `par` for shared, insert `par `
+// before `struct` for plain; (2) `mut ` keyword strip per mut field;
+// (3) `Mutex[T]` wrap (two pure-insertion edits) per mut field. The
+// previous L197-slice tests asserted only (3); the new tests below
+// extend coverage to (1) and (2) while preserving (3).
 
 #[test]
 fn test_concurrent_struct_fix_diff_wraps_each_mut_field() {
@@ -6201,23 +6204,27 @@ fn test_concurrent_struct_fix_diff_wraps_each_mut_field() {
         .error_fix_diffs
         .get(&key)
         .expect("expected fix_diff edits for shared-struct diagnostic");
-    // Two mut fields (count, tag) → 4 edits (Mutex[ prefix + ] suffix
-    // per field). The immutable `val` field stays untouched.
+    // Two mut fields (count, tag) → 4 Mutex-wrap edits (prefix +
+    // suffix per field) + 2 `mut ` strip edits (one per mut field) +
+    // 1 `shared` → `par` keyword rename = 7 edits total. The
+    // immutable `val` field stays untouched.
     assert_eq!(
         edits.len(),
-        4,
-        "expected 4 edits (2 mut fields × 2 insertions); got {}",
+        7,
+        "expected 7 edits (1 keyword rename + 2 mut strips + 2 mut fields × 2 wraps); got {}",
         edits.len(),
     );
     let prefix_count = edits.iter().filter(|e| e.replacement == "Mutex[").count();
     let suffix_count = edits.iter().filter(|e| e.replacement == "]").count();
+    let rename_count = edits.iter().filter(|e| e.replacement == "par").count();
+    let strip_count = edits
+        .iter()
+        .filter(|e| e.replacement.is_empty() && e.length > 0)
+        .count();
     assert_eq!(prefix_count, 2, "expected 2 `Mutex[` prefix insertions");
     assert_eq!(suffix_count, 2, "expected 2 `]` suffix insertions");
-    // Every edit is a pure insertion (length==0).
-    assert!(
-        edits.iter().all(|e| e.length == 0),
-        "all fix_diff edits must be pure insertions (length=0)"
-    );
+    assert_eq!(rename_count, 1, "expected 1 `shared` → `par` rename");
+    assert_eq!(strip_count, 2, "expected 2 `mut ` strip deletions");
 }
 
 #[test]
@@ -6247,19 +6254,36 @@ fn test_concurrent_plain_struct_fix_diff_wraps_each_mut_field() {
         .error_fix_diffs
         .get(&key)
         .expect("expected fix_diff edits for plain-struct diagnostic");
-    // 1 mut field × 2 insertions = 2 edits
-    assert_eq!(edits.len(), 2, "expected 2 edits (1 mut field × 2)");
+    // 1 mut field × 2 wraps + 1 mut strip + 1 `par ` keyword insert = 4 edits.
+    assert_eq!(
+        edits.len(),
+        4,
+        "expected 4 edits (1 `par ` insert + 1 mut strip + 1 mut field × 2 wraps); got {}",
+        edits.len(),
+    );
     assert!(edits.iter().any(|e| e.replacement == "Mutex["));
     assert!(edits.iter().any(|e| e.replacement == "]"));
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement == "par " && e.length == 0),
+        "expected a pure-insertion `par ` edit"
+    );
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.is_empty() && e.length > 0),
+        "expected a `mut ` strip deletion"
+    );
 }
 
 #[test]
-fn test_concurrent_struct_fix_diff_empty_when_no_mut_fields() {
-    // A shared struct with only immutable fields needs no Mutex wrap —
-    // the migration's only mechanical edit is the keyword rename (which
-    // lives in suggestion prose, not the fix_diff edits, until the
-    // parser exposes keyword spans). `error_fix_diffs` is absent (or
-    // empty) for this shape.
+fn test_concurrent_struct_fix_diff_keyword_rename_only_when_no_mut_fields() {
+    // A shared struct with only immutable fields still gets the
+    // `shared` → `par` keyword rename edit (the migration's structural
+    // half), even though no Mutex wrap or mut strip applies. Pre-L201a
+    // this case emitted zero edits; post-L201a the keyword rename
+    // remains.
     let parsed = karac::parse(
         "shared struct Tag { val: i64 }\n\
          fn use_a(t: Tag) { }\n\
@@ -6281,12 +6305,143 @@ fn test_concurrent_struct_fix_diff_empty_when_no_mut_fields() {
         .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
         .expect("expected ConcurrentSharedStruct error");
     let key = karac::resolver::SpanKey::from_span(&err.span);
-    assert!(
-        result
-            .error_fix_diffs
-            .get(&key)
-            .is_none_or(|v| v.is_empty()),
-        "no mut fields → no fix_diff edits"
+    let edits = result
+        .error_fix_diffs
+        .get(&key)
+        .expect("expected fix_diff edits (keyword rename) for shared-struct diagnostic");
+    assert_eq!(
+        edits.len(),
+        1,
+        "expected exactly 1 edit (keyword rename only); got {}",
+        edits.len(),
+    );
+    assert_eq!(edits[0].replacement, "par");
+}
+
+// ── L201a: keyword rewrite + mut-strip edits — byte precision ─────
+//
+// Pin the new edit kinds at exact source offsets so a parser regression
+// (drift in `kind_keyword_span` / `struct_keyword_span` / `mut_keyword_span`
+// / `name_span`) is caught immediately. The source positions are computed
+// from the test fixture so they survive whitespace-insensitive edits to
+// the test header.
+
+#[test]
+fn test_l201a_shared_keyword_rename_targets_shared_token() {
+    // Verify the rename edit covers exactly the `shared` token (6
+    // bytes) and is positioned at the keyword's offset, not the start
+    // of the struct definition. Source picks an isolated `shared`
+    // (no `pub` modifier) to keep the byte offset trivial: line 1
+    // starts at offset 0, `shared` begins at column 1 → offset 0.
+    let src = "shared struct Counter { val: i64 }\n\
+               fn use_a(c: Counter) { }\n\
+               fn use_b(c: Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { val: 0 };\n\
+                   par {\n\
+                       use_a(c);\n\
+                       use_b(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    let rename = edits
+        .iter()
+        .find(|e| e.replacement == "par")
+        .expect("expected `shared` → `par` rename edit");
+    let shared_off = src.find("shared").unwrap();
+    assert_eq!(rename.offset, shared_off, "rename offset must hit `shared`");
+    assert_eq!(rename.length, 6, "rename must consume the 6-byte `shared`");
+}
+
+#[test]
+fn test_l201a_plain_keyword_insert_targets_struct_token() {
+    // Plain struct: insert `par ` immediately before the `struct`
+    // token. Verify the edit is a pure insertion (length=0) at the
+    // exact offset of `struct`, so applying it produces `par struct
+    // State { ... }`.
+    let src = "struct State { id: i64 }\n\
+               fn use_a(s: State) { }\n\
+               fn use_b(s: State) { }\n\
+               fn main() {\n\
+                   let s = State { id: 0 };\n\
+                   par {\n\
+                       use_a(s);\n\
+                       use_b(s);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentPlainStruct { .. }))
+        .expect("expected ConcurrentPlainStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    let insert = edits
+        .iter()
+        .find(|e| e.replacement == "par ")
+        .expect("expected `par ` insert edit");
+    let struct_off = src.find("struct").unwrap();
+    assert_eq!(
+        insert.offset, struct_off,
+        "insert offset must be at `struct`"
+    );
+    assert_eq!(insert.length, 0, "insert must be pure (length=0)");
+}
+
+#[test]
+fn test_l201a_mut_strip_covers_mut_and_trailing_whitespace() {
+    // The mut-strip deletion runs from `mut_keyword_span.offset` to
+    // `name_span.offset` — i.e. consumes `mut` AND the source-text
+    // whitespace before the field name. Test fixture uses a single
+    // space (the common case); the strip-end must land precisely on
+    // the field-name offset so any text edit applied to the buffer
+    // produces `field_name: T` with no leading whitespace artifacts.
+    let src = "shared struct Counter { mut count: i64 }\n\
+               fn use_a(c: Counter) { }\n\
+               fn use_b(c: Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { count: 0 };\n\
+                   par {\n\
+                       use_a(c);\n\
+                       use_b(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    let strip = edits
+        .iter()
+        .find(|e| e.replacement.is_empty() && e.length > 0)
+        .expect("expected a `mut ` strip deletion edit");
+    let mut_off = src.find("mut count").unwrap();
+    let name_off = src.find("count: i64").unwrap();
+    assert_eq!(strip.offset, mut_off, "strip must start at the `mut` token");
+    assert_eq!(
+        strip.length,
+        name_off - mut_off,
+        "strip must extend to the field name offset (includes trailing whitespace)"
     );
 }
 
