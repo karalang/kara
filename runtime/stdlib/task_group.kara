@@ -1,0 +1,192 @@
+// runtime/stdlib/task_group.kara
+//
+// Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` / `spawn`
+// stdlib surface. Typechecker-only landing.
+//
+// **What slice 1 lands.** Type declarations + method signatures only;
+// compilation to LLVM fails at codegen until slice 4 lands. The kara
+// source declaring `spawn(closure)` and `TaskGroup.spawn(closure)`
+// parses + typechecks; downstream phases (effect inference, ownership
+// analysis, etc.) compose against the declared surface.
+//
+// **Effect set on `spawn` itself.** v1 ships the simpler shape that
+// matches the existing `Server.serve(addr, handler)` precedent in
+// `http.kara`: free-fn declarations carry CONCRETE effect sets, not
+// `with E` effect-polymorphism (the `with E` shape on free fns is
+// typechecker-supported only for trait methods today per Theme 6;
+// http.kara's comment block at lines 188–191 documents the same v1
+// fallback). `spawn` therefore declares no effect at v1 — the
+// spawned closure's effects propagate through the closure body's
+// effect inference, not through a polymorphic parameter on `spawn`.
+// When free-fn `with E` ships, the signatures here lift additively to
+// `fn spawn[T, with E](f: Fn() -> T with E) -> TaskHandle[T] with E`
+// per design.md § Explicit Concurrency lines 9337 and 9357–9366.
+//
+// **ScopeLocal enforcement — slice 2.** Per the design,
+// `TaskHandle[T]` is a `ScopeLocal` marker-trait type — rejected in
+// three positions (function return, struct/enum field, channel
+// `send` argument). v1 slice 1 declares the types without the marker
+// impl; slice 2 of this entry adds the sealed `marker trait
+// ScopeLocal;` + compiler-emitted `impl ScopeLocal for TaskHandle[T]
+// { }` + typechecker enforcement.
+//
+// **Drop dispatch — slice 5.** `impl Drop for TaskGroup` is declared
+// here; the v1 stub body is empty. Slice 5 of this entry hand-rolls
+// the `@TaskGroup.drop` LLVM body in codegen to call
+// `karac_runtime_taskgroup_join(scope_id)` — wait-for-children +
+// fail-fast cancel per design.md § Parallel Failure and Cleanup.
+// Mirrors the `@TcpStream.drop` precedent in slice 9d of line 17.
+
+// `TaskGroup` is a scope-local fan-out container. Carries a `id: i64`
+// handle into the runtime scheduler's per-scope task registry — slice
+// 3 of this entry allocates the scope ID at `TaskGroup.new()`,
+// records child task IDs into the slot on every `.spawn(closure)`
+// call, and joins/cancels on Drop. v1 keeps the field shape as a
+// single `i64` (mirrors `Pool { handle_id: i64 }`) — the scheduler
+// can expand its per-scope state behind the handle without bumping
+// the kara-side struct layout.
+struct TaskGroup {
+    id: i64,
+}
+
+// `TaskHandle[T]` is the join handle returned by every `spawn` call.
+// The `task_id` indexes into the scheduler's task table; slice 4
+// codegen synthesizes the closure as a state machine, registers it
+// with `karac_runtime_scheduler_register`, and packs the returned
+// task ID into a `TaskHandle[T] { task_id }` literal. Slice 2 of this
+// entry marks `TaskHandle[T]` as `ScopeLocal` so the typechecker
+// rejects function returns / struct fields / channel sends that
+// would let the handle outlive its spawning scope.
+//
+// **Why not opaque (`struct TaskHandle[T] { }`)?** The empty-struct
+// shape (mirrors `Channel[T] { }`) works for types whose dispatch
+// lives entirely in `infer_*_method` arms. `TaskHandle[T]`'s
+// `.join()` codegen needs the task ID at hand to issue the
+// `karac_runtime_task_join` FFI; a non-zero-size field keeps the
+// value carrying its scheduler-side identity through ownership +
+// codegen passes unchanged.
+struct TaskHandle[T] {
+    task_id: i64,
+}
+
+impl TaskGroup {
+    // Create a fresh `TaskGroup` with its own scope ID. v1 stub
+    // returns `TaskGroup { id: 0 }`; slice 3 (runtime scheduler
+    // pool) wires this to `karac_runtime_taskgroup_new() -> i64`,
+    // which returns a fresh scope ID and seeds the scheduler's
+    // per-scope task registry with an empty entry.
+    //
+    // **No declared effects.** `TaskGroup.new()` allocates a scope-ID
+    // slot in the scheduler's registry; v1 ships this as effect-free
+    // because the registry is process-private and the allocation is
+    // bounded (one per active TaskGroup). If a workload surfaces a
+    // need to track scope-ID allocation as an effect, the resource
+    // declaration lifts here additively.
+    #[compiler_builtin]
+    fn new() -> TaskGroup {
+        TaskGroup { id: 0 }
+    }
+
+    // Spawn a child task within this group. The closure runs
+    // concurrently with the spawner; the child task joins before the
+    // group's drop completes (design.md § TaskGroup — "All tasks in
+    // the group join when the TaskGroup is dropped"). On cancellation
+    // (any child errs or panics, or the group itself receives a
+    // cancel signal), drop triggers fail-fast cancellation of all
+    // remaining children.
+    //
+    // **v1 fixed-effects.** Declared as effect-free at v1 per the
+    // file-level comment block — the spawned closure's effects
+    // propagate via effect inference on the closure body, not via a
+    // `with E` polymorphic parameter. The compiler reasons about
+    // effect conflicts between the spawned task and subsequent code
+    // through the closure's inferred effects (see design.md §
+    // Effect semantics of spawn).
+    //
+    // **`mut ref self` shape.** The method takes `mut ref self`
+    // because spawning a child registers a new task in the group's
+    // scheduler-side state — a mutation of the group's per-scope
+    // task registry. The kara-side `id: i64` doesn't change, but
+    // ownership analysis sees the call as a write through the
+    // group's borrow, which composes correctly with the scope-exit
+    // drop's "wait for all spawned children" contract.
+    #[compiler_builtin]
+    fn spawn[T](mut ref self, f: Fn() -> T) -> TaskHandle[T] {
+        TaskHandle { task_id: 0 }
+    }
+}
+
+impl[T] TaskHandle[T] {
+    // Block the calling state machine until this task completes,
+    // then return its result. If the task panicked or was cancelled,
+    // `.join()`'s lowering (slice 4 codegen) propagates the failure
+    // mode through the same channel as a normal panic — v1's
+    // panic-to-`printf+exit(1)` shape carries through here unchanged.
+    // Structured panic recovery is gated on `std.panic` (separate
+    // Phase 8 item).
+    //
+    // **Consuming `self`.** The handle is consumed by `.join()` —
+    // the result is delivered exactly once. Calling `.join()` on a
+    // handle that's already been moved is a typechecker error (same
+    // rule as any owned-receiver consume). If the task hasn't
+    // completed yet, the calling state machine parks via the
+    // scheduler-side wait mechanism until the wakeup arrives.
+    //
+    // **Slice 4 lowering.** Codegen emits a
+    // `karac_runtime_task_join(self.task_id) -> T` FFI call. The
+    // parking is internal to the runtime helper — the kara surface
+    // sees a synchronous-looking call that returns T.
+    #[compiler_builtin]
+    fn join(self) -> T {
+        // Stub body — codegen replaces via the slice 4 lowering.
+        // Returns `self.task_id` cast through T-shape is not
+        // representable in pure kara; the body remains a never-
+        // executed stub mirroring the `WebSocket.recv_text` etc.
+        // pattern in `ws.kara`. The actual return path is via the
+        // runtime helper invoked from the lowering.
+        loop { }
+    }
+}
+
+// Close-on-drop for `TaskGroup`. The user-Drop dispatch chain emits
+// `@karac_drop_TaskGroup` at scope exit; slice 5 of this entry
+// hand-rolls the `@TaskGroup.drop` LLVM body in
+// `src/codegen/synth_drop.rs` (mirror of `@TcpStream.drop` from
+// slice 9d of line 17) to invoke
+// `karac_runtime_taskgroup_join(self.id)` — block until every
+// spawned child completes, propagating fail-fast cancellation if
+// any child errs/panics. The stub body below never executes —
+// codegen replaces it via `emit_hardcoded_stdlib_drop_bodies`.
+impl Drop for TaskGroup {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+// Free-function `spawn` — unscoped task creation. Equivalent to
+// `TaskGroup.spawn` but uses an ambient process-wide scope rather
+// than a user-controlled `TaskGroup` scope. Returns a `TaskHandle[T]`
+// that, when dropped without `.join()`, still joins at the enclosing
+// kara function's scope exit (the `ScopeLocal` marker — slice 2 of
+// this entry — enforces that the handle cannot outlive that scope).
+//
+// **Why both `spawn` and `TaskGroup.spawn`?** Per design.md §
+// Explicit Concurrency, `TaskGroup.spawn` is the canonical shape for
+// dynamic accept-loops (`loop { let conn = listener.accept()?;
+// group.spawn(|| handle(conn)) }`); free `spawn` is the convenient
+// shape for one-off concurrent tasks where building a TaskGroup
+// just to hold a single child is ceremony. Both compile to the same
+// state-machine registration in slice 4 — the free `spawn` just
+// uses the enclosing function's implicit scope ID.
+//
+// **Existing ownership-side recognition.** The walker
+// (`src/ownership/par_helpers.rs`) already recognises `spawn(closure)`
+// as a par-region boundary (Phase 7 codegen entry "OwnershipChecker
+// Phase 2: spawn(closure) and Sender.send(closure)" shipped
+// 2026-05-18) — that work treated `spawn` as a bare-identifier call
+// regardless of whether the callee was actually declared. This entry
+// lands the declaration so the call resolves to a real stdlib item;
+// the boundary-detection behavior is unchanged.
+#[compiler_builtin]
+fn spawn[T](f: Fn() -> T) -> TaskHandle[T] {
+    TaskHandle { task_id: 0 }
+}

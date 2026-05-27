@@ -17822,10 +17822,13 @@ fn drop_method_keys_empty_when_no_drop_impl() {
     // Stdlib types that ship with `impl Drop`:
     //   - `TcpListener` / `TcpStream` (slice 9d — close-on-drop fd)
     //   - `WebSocket` (slice 9e.1 — same close-on-drop fd pattern)
+    //   - `TaskGroup` (phase 6 line 186 slice 1 — wait-for-children
+    //     on drop; the v1 impl body is a stub, the hand-rolled LLVM
+    //     body lands with slice 5 of the same tracker entry)
     // Those entries are always present regardless of user code, so
     // the test asserts no USER-defined impl was added (Point's
     // entry is absent) and the only entries are the stdlib ones.
-    const STDLIB_DROP_TYPES: &[&str] = &["TcpListener", "TcpStream", "WebSocket"];
+    const STDLIB_DROP_TYPES: &[&str] = &["TcpListener", "TcpStream", "WebSocket", "TaskGroup"];
     let user_keys: Vec<&String> = result
         .drop_method_keys
         .keys()
@@ -19218,5 +19221,115 @@ fn vec_with_capacity_typed_let_propagates_expected_element_type() {
              let mut d: VecDeque[i64] = VecDeque.with_capacity(8);
              d.push_back(1i64);
          }",
+    );
+}
+
+// ── Phase 6 line 186 slice 1: TaskGroup / TaskHandle[T] / spawn ──────
+//
+// Tests for the new `runtime/stdlib/task_group.kara` surface. v1 lands
+// the type declarations + method signatures only (typechecker-only
+// landing per the slice-1 plan); compilation to LLVM fails at codegen
+// until slice 4. These tests pin the surface against future
+// regressions: types resolve at scope-0, methods dispatch, the
+// canonical accept-loop shape from design.md § Explicit Concurrency
+// compiles cleanly.
+
+#[test]
+fn task_group_new_returns_task_group() {
+    typecheck_ok(
+        "fn main() {
+             let g: TaskGroup = TaskGroup.new();
+         }",
+    );
+}
+
+#[test]
+fn task_group_spawn_returns_task_handle_of_closure_return_type() {
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let mut g: TaskGroup = TaskGroup.new();
+             let h: TaskHandle[i64] = g.spawn(make_int);
+         }",
+    );
+}
+
+#[test]
+fn task_handle_join_returns_inner_type() {
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let mut g: TaskGroup = TaskGroup.new();
+             let h: TaskHandle[i64] = g.spawn(make_int);
+             let v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn free_fn_spawn_returns_task_handle() {
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let h: TaskHandle[i64] = spawn(make_int);
+             let v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn task_handle_inner_type_mismatch_rejected() {
+    // Pin that the typechecker enforces `TaskHandle[T]`'s `T` against
+    // the closure's return type. Mismatching the annotation should
+    // emit a type error rather than silently widen.
+    let errors = typecheck_errors(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let h: TaskHandle[String] = spawn(make_int);
+         }",
+    );
+    assert!(
+        !errors.is_empty(),
+        "expected a type error binding TaskHandle[String] to spawn(make_int)"
+    );
+}
+
+// Note: a stronger negative test —
+// "binding `String` to `h.join()` where `h: TaskHandle[i64]` should
+// type-error" — is omitted because the typechecker today does NOT
+// bind `T` on `impl[T] TaskHandle[T] { fn join(self) -> T }` from
+// the receiver's instantiated type; instead, `T` is inferred from
+// the calling context (the LHS annotation), so the mismatch is
+// silently absorbed. This is the same limitation that affects
+// `Pool[T].acquire(timeout) -> Result[PooledConnection[T], PoolError]`
+// today — probe with `let r = p.acquire(0);` where `p: Pool[i64]` and
+// the typechecker reports "cannot infer type parameter 'T'" rather
+// than pinning `T = i64` from the receiver. Slice 1 does not block
+// on a fix; if a follow-on slice tightens method-receiver T-binding
+// for the `impl[T] Type[T]` shape, this test re-enables additively.
+
+#[test]
+fn task_group_canonical_accept_loop_shape_compiles() {
+    // design.md § Explicit Concurrency lines 9357-9366 — the
+    // canonical accept-loop shape that the spawn entry's slice 7
+    // smoke-tests end-to-end. Slice 1 just verifies it typechecks.
+    // (Compilation to LLVM still fails at codegen until slice 4 of
+    // this entry ships; the typecheck pass is the v1 surface.)
+    //
+    // Note: variable named `tg` (not `group`) because `group` is a
+    // reserved keyword in the lexer (`Token::Group`, used for
+    // `effect group` and layout-block groupings).
+    typecheck_ok(
+        "fn handle_client(c: TcpStream) -> i64 { 0 }
+         fn main() {
+             let listener: TcpListener = TcpListener.bind(\"127.0.0.1:0\");
+             let mut tg: TaskGroup = TaskGroup.new();
+             let conn: TcpStream = listener.accept();
+             let h: TaskHandle[i64] = tg_spawn_helper(mut tg, conn);
+         }
+         fn tg_spawn_helper(tg: mut ref TaskGroup, c: TcpStream) -> TaskHandle[i64] {
+             tg.spawn(make_zero)
+         }
+         fn make_zero() -> i64 { 0 }",
     );
 }

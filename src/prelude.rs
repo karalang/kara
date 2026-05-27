@@ -179,6 +179,14 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "Pool",
     "PooledConnection",
     "PoolError",
+    // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` from
+    // `runtime/stdlib/task_group.kara`. `TaskGroup` is the
+    // scope-local fan-out container per design.md § Explicit
+    // Concurrency lines 9357–9366; `TaskHandle[T]` is the join
+    // handle returned by every `spawn` call. The free-fn `spawn`
+    // counterpart lives in `PRELUDE_FUNCTIONS` below.
+    "TaskGroup",
+    "TaskHandle",
 ];
 
 /// Operator and conversion trait names visible without import. Lets
@@ -446,6 +454,13 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // RFC 6455 text-frame send/recv. Depends on `tcp.kara` for the
     // `TcpError` enum reused as the structured-error type.
     ("ws.kara", include_str!("../runtime/stdlib/ws.kara")),
+    // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` /
+    // free-fn `spawn`. Typechecker-only landing at v1 (codegen
+    // ships with slice 4 of the same tracker entry).
+    (
+        "task_group.kara",
+        include_str!("../runtime/stdlib/task_group.kara"),
+    ),
     (
         "encoding.kara",
         include_str!("../runtime/stdlib/encoding.kara"),
@@ -619,6 +634,17 @@ pub const PRELUDE_FUNCTIONS: &[&str] = &[
     // additive on top of the typechecker / codegen wiring.
     "size_of",
     "align_of",
+    // Phase 6 line 186 slice 1 — free-fn `spawn[T](f: Fn() -> T) ->
+    // TaskHandle[T]`. Counterpart to `TaskGroup.spawn`; uses an
+    // ambient process-wide scope rather than a user-controlled
+    // `TaskGroup` scope. See `runtime/stdlib/task_group.kara`. The
+    // ownership-side walker (`src/ownership/par_helpers.rs`) has
+    // recognised bare-identifier `spawn` as a par-region boundary
+    // since the Phase 7 codegen entry "OwnershipChecker Phase 2"
+    // shipped 2026-05-18 — registering the name here promotes the
+    // call from "boundary-detected unknown callee" to a real
+    // stdlib item without changing the boundary-detection behavior.
+    "spawn",
 ];
 
 /// Synthetic span used for every stub item the prelude module emits. The
