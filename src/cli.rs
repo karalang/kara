@@ -926,6 +926,12 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
                 err.yield_span.column,
                 err.message(),
             );
+            if let Some(ref bs) = err.binding_span {
+                eprintln!(
+                    "  note: binding declared here at {}:{}:{}",
+                    filename, bs.line, bs.column,
+                );
+            }
             eprintln!("  help: {}", err.help());
         }
     }
@@ -1677,6 +1683,13 @@ struct ScopeEntry {
     /// pattern span. When `None`, `type_override` carries the surface
     /// type directly.
     span_key: Option<crate::resolver::SpanKey>,
+    /// Source `Span` of the binding's introducing pattern, threaded
+    /// into `StateStructField.binding_span` so `raii_check` can anchor
+    /// a "binding declared here" secondary highlight. `SpanKey` is
+    /// lossy (offset+length only), so the full `Span` is carried in
+    /// parallel rather than reconstructed. `None` mirrors `span_key:
+    /// None` (synthetic bindings like `self`).
+    binding_span: Option<crate::token::Span>,
     type_override: Option<String>,
 }
 
@@ -1706,6 +1719,7 @@ fn walk_fn_for_state_struct_layout(
         walker.scope.push(ScopeEntry {
             name: "self".to_string(),
             span_key: None,
+            binding_span: None,
             type_override: impl_target_type.map(|s| s.to_string()),
         });
     }
@@ -1714,6 +1728,7 @@ fn walk_fn_for_state_struct_layout(
             walker.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -1745,6 +1760,7 @@ impl StateStructLayoutWalker<'_> {
                 self.fields.push(crate::ast::StateStructField {
                     name: entry.name.clone(),
                     type_name,
+                    binding_span: entry.binding_span.clone(),
                 });
             }
         }
@@ -1767,6 +1783,7 @@ impl StateStructLayoutWalker<'_> {
             self.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -1785,6 +1802,7 @@ impl StateStructLayoutWalker<'_> {
             self.scope.push(ScopeEntry {
                 name,
                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                binding_span: Some(span),
                 type_override: None,
             });
         }
@@ -1801,6 +1819,7 @@ impl StateStructLayoutWalker<'_> {
                     self.scope.push(ScopeEntry {
                         name,
                         span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                        binding_span: Some(span),
                         type_override: None,
                     });
                 }
@@ -1811,6 +1830,7 @@ impl StateStructLayoutWalker<'_> {
                 self.scope.push(ScopeEntry {
                     name: name.clone(),
                     span_key: Some(crate::resolver::SpanKey::from_span(name_span)),
+                    binding_span: Some(name_span.clone()),
                     type_override: None,
                 });
             }
@@ -1826,6 +1846,7 @@ impl StateStructLayoutWalker<'_> {
                     self.scope.push(ScopeEntry {
                         name,
                         span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                        binding_span: Some(span),
                         type_override: None,
                     });
                 }
@@ -1932,6 +1953,7 @@ impl StateStructLayoutWalker<'_> {
                             self.scope.push(ScopeEntry {
                                 name,
                                 span_key: Some(crate::resolver::SpanKey::from_span(&span)),
+                                binding_span: Some(span),
                                 type_override: None,
                             });
                         }
@@ -2726,6 +2748,10 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         for err in raii {
             id_counter += 1;
             let message = err.message();
+            let extra_json = err
+                .binding_span
+                .as_ref()
+                .map(|bs| format!("\"binding_span\":{{{}}}", span_to_json(bs, filename)));
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -2736,7 +2762,7 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 filename,
                 span: &err.yield_span,
                 suggestion: None,
-                extra_json: None,
+                extra_json,
                 lint_name: None,
                 fix_it: None,
                 class: None,
@@ -3519,18 +3545,32 @@ fn cmd_run(
                             err.yield_span.column,
                             err.message(),
                         );
+                        if let Some(ref bs) = err.binding_span {
+                            eprintln!(
+                                "  note: binding declared here at {}:{}:{}",
+                                filename, bs.line, bs.column,
+                            );
+                        }
                         eprintln!("  help: {}", err.help());
                     }
                 }
                 OutputMode::Json => emit_json_output(&pipeline),
                 OutputMode::Jsonl => {
                     for err in raii {
+                        let binding_span_json = err
+                            .binding_span
+                            .as_ref()
+                            .map(|bs| {
+                                format!(",\"binding_span\":{{{}}}", span_to_json(bs, filename))
+                            })
+                            .unwrap_or_default();
                         emit_jsonl_event(
                             "diagnostic",
                             &format!(
-                                "\"severity\":\"error\",\"phase\":\"raii_check\",\"code\":\"E_RAII_ACROSS_YIELD\",{},\"message\":{}",
+                                "\"severity\":\"error\",\"phase\":\"raii_check\",\"code\":\"E_RAII_ACROSS_YIELD\",{},\"message\":{}{}",
                                 span_to_json(&err.yield_span, filename),
                                 json_string(&err.message()),
+                                binding_span_json,
                             ),
                         );
                     }

@@ -202,6 +202,16 @@ pub struct StateStructField {
     /// materialize the LLVM shape; `None` entries fall through to the
     /// existing primitive-sizing path.
     pub type_name: Option<String>,
+    /// Span of the binding's introducing pattern — the `let` /
+    /// parameter / match-arm binding position the user wrote. Used by
+    /// `raii_check` to anchor a "binding declared here" secondary
+    /// highlight at the source position the user needs to act on
+    /// (release the binding, or `impl CancelSafe` for its type).
+    /// `None` for `self` (no source-level pattern; receiver shape lives
+    /// in the impl signature) and for synthetic bindings without a
+    /// recorded pattern span. Codegen ignores this field — it's
+    /// diagnostic-only.
+    pub binding_span: Option<crate::token::Span>,
 }
 
 /// State-struct layout synthesized per network-boundary function. The

@@ -354,3 +354,144 @@ fn cancel_safe_opt_in_is_strict_name_match() {
     );
     assert_eq!(errors[0].type_name, "Hub");
 }
+
+// ── Phase 6 line 155 slice 5 — binding-construction span anchoring ─
+//
+// Slice 1 anchors the diagnostic at the *yield-point* span and names
+// the binding in the message; slice 5 threads the binding's
+// introducing-pattern span through `StateStructField.binding_span`
+// and `RaiiAcrossYieldError.binding_span` so the cli.rs formatter can
+// emit a "binding declared here" secondary highlight. Tests pin the
+// secondary span to the source position the user needs to act on,
+// per binding-introduction shape (parameter, `let`, match-arm). The
+// `self` shape stays `None` — there is no source-level pattern for
+// `self`, mirroring the existing `ScopeEntry.span_key: None`
+// convention for synthetic bindings.
+
+#[test]
+fn binding_span_anchors_to_parameter_pattern() {
+    // Parameter shape — the binding's introducing position is the
+    // parameter declaration (the `h` token in `h: Hub`). Slice 5
+    // anchors the secondary highlight there.
+    let source = "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         fn driver(h: Hub) { fetch(); }";
+    let (_program, _typed, errors) = run_raii_check(source);
+    assert_eq!(errors.len(), 1, "expected one RAII error: {:?}", errors);
+    let bs = errors[0]
+        .binding_span
+        .as_ref()
+        .expect("parameter binding must carry a binding_span");
+    // The `h` token starts at column 21 of the parameter line —
+    // `         fn driver(h: Hub)` (9 leading spaces of source-indent
+    // + `fn driver(` = 19 chars, then `h` at column 20). Locate
+    // dynamically rather than hardcoding so the assertion stays
+    // robust against minor source rewrites.
+    let line_idx = bs.line - 1;
+    let line_text = source.lines().nth(line_idx).expect("line in range");
+    let col_idx = bs.column - 1;
+    let ch = line_text
+        .chars()
+        .nth(col_idx)
+        .expect("column within line bounds");
+    assert_eq!(
+        ch, 'h',
+        "binding_span column must point at the `h` binding token; got `{}` at line {} col {} (line text: {:?})",
+        ch, bs.line, bs.column, line_text,
+    );
+}
+
+#[test]
+fn binding_span_anchors_to_let_pattern() {
+    // `let h: Hub = ...` shape — binding_span anchors at the `h`
+    // token in the `let` pattern, NOT at the `let` keyword itself
+    // and NOT at the value expression.
+    let source = "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         fn make() -> Hub { Hub { count: 0 } }
+         fn driver() {
+             let h: Hub = make();
+             fetch();
+         }";
+    let (_program, _typed, errors) = run_raii_check(source);
+    assert_eq!(errors.len(), 1, "expected one RAII error: {:?}", errors);
+    let bs = errors[0]
+        .binding_span
+        .as_ref()
+        .expect("let binding must carry a binding_span");
+    let line_text = source.lines().nth(bs.line - 1).expect("line in range");
+    let ch = line_text
+        .chars()
+        .nth(bs.column - 1)
+        .expect("column within line bounds");
+    assert_eq!(
+        ch, 'h',
+        "binding_span column must point at the `h` binding token in the `let` pattern; got `{}` at line {} col {} (line text: {:?})",
+        ch, bs.line, bs.column, line_text,
+    );
+}
+
+#[test]
+fn binding_span_is_none_for_self_receiver() {
+    // `self` has no source-level introducing pattern (`SelfParam` is
+    // a `Owned`/`Ref`/`MutRef` enum, no Span). The walker pushes
+    // `binding_span: None` for the synthetic `self` entry; the error
+    // surface preserves that.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         impl Hub {
+             fn run(self) { fetch(); }
+         }",
+    );
+    assert_eq!(errors.len(), 1, "expected one RAII error: {:?}", errors);
+    assert_eq!(errors[0].binding_name, "self");
+    assert!(
+        errors[0].binding_span.is_none(),
+        "self receiver has no source-level pattern; binding_span must stay None (got {:?})",
+        errors[0].binding_span,
+    );
+}
+
+#[test]
+fn binding_span_anchors_to_match_arm_pattern() {
+    // Match-arm binding — `Held(h)` introduces `h` at the match-arm
+    // pattern position. Slice 5 threads the binding span through
+    // `walk_expr_with_pattern`.
+    let source = "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         shared struct Hub { count: i64 }
+         shared enum Slot { Held(Hub), Empty }
+         fn driver(s: Slot) {
+             match s {
+                 Held(h) => { fetch(); }
+                 Empty => {}
+             }
+         }";
+    let (_program, _typed, errors) = run_raii_check(source);
+    // Expect TWO errors: outer `s: Slot` (shared enum param) AND
+    // inner `h: Hub` (shared struct from the match arm). Filter to
+    // the `h` binding to verify its binding_span lands at the match
+    // arm pattern position.
+    let h_error = errors
+        .iter()
+        .find(|e| e.binding_name == "h")
+        .unwrap_or_else(|| panic!("expected an error for binding `h`; got {:?}", errors));
+    let bs = h_error
+        .binding_span
+        .as_ref()
+        .expect("match-arm binding must carry a binding_span");
+    let line_text = source.lines().nth(bs.line - 1).expect("line in range");
+    let ch = line_text
+        .chars()
+        .nth(bs.column - 1)
+        .expect("column within line bounds");
+    assert_eq!(
+        ch, 'h',
+        "binding_span must point at the `h` token in the match-arm pattern; got `{}` at line {} col {} (line text: {:?})",
+        ch, bs.line, bs.column, line_text,
+    );
+}

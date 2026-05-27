@@ -70,10 +70,18 @@ pub struct RaiiAcrossYieldError {
     /// message ("holding 'binding' (type 'TypeName')").
     pub type_name: String,
     /// Span of the first yield-point call site in the function body —
-    /// the suspension boundary the binding cannot live across. Slice 1
-    /// anchors the diagnostic here; slice 3 will additionally surface
-    /// the binding's introducing pattern span as a secondary highlight.
+    /// the suspension boundary the binding cannot live across. The
+    /// primary anchor for the diagnostic.
     pub yield_span: Span,
+    /// Span of the binding's introducing pattern (parameter, `let`,
+    /// match-arm). Threaded through `StateStructField.binding_span`
+    /// from `StateStructLayoutWalker`; emitted as a secondary
+    /// "binding declared here" highlight by the cli.rs diagnostic
+    /// formatter (plain / JSON / JSONL). `None` when the binding has
+    /// no source-level pattern — at v1 this is only `self` (whose
+    /// `ScopeEntry.span_key` is `None`); future synthetic bindings
+    /// follow the same convention.
+    pub binding_span: Option<Span>,
 }
 
 impl RaiiAcrossYieldError {
@@ -156,6 +164,7 @@ pub fn check_raii_across_yield(
                     binding_name: field.name.clone(),
                     type_name: type_name.clone(),
                     yield_span: first_yp.span.clone(),
+                    binding_span: field.binding_span.clone(),
                 });
             }
         }

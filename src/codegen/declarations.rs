@@ -58,10 +58,12 @@ pub(super) fn synthesize_park_on_fd_layout(_program: &Program) -> Option<StateSt
             StateStructField {
                 name: "fd".to_string(),
                 type_name: Some("i32".to_string()),
+                binding_span: None,
             },
             StateStructField {
                 name: "direction".to_string(),
                 type_name: Some("u8".to_string()),
+                binding_span: None,
             },
         ],
     })
