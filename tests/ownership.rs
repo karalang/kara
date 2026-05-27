@@ -6445,6 +6445,165 @@ fn test_l201a_mut_strip_covers_mut_and_trailing_whitespace() {
     );
 }
 
+// ── L201b: lock-block insertion at par-internal write sites ─────
+//
+// Third edit family for E_CONCURRENT_*_STRUCT fix_diff. For each
+// write to a `binding.<mut_field>` form occurring textually inside a
+// par block (any nesting depth), emit two pure-insertion edits
+// wrapping the statement in `lock <field> {\n    ... \n}`. The
+// wrap target is the bare field name — Kara's `lock` takes an
+// identifier, not an expression, so no source-text reconstruction is
+// needed. Existing tests' fixtures contain no writes, so their edit
+// counts are unaffected.
+
+#[test]
+fn test_l201b_lock_block_wraps_assign_in_par_branch() {
+    // Canonical case: `par { c.count = ...; ... }` — assignment to
+    // a mut field of the diagnosed binding, textually inside the par
+    // block. Emits prefix `lock count {\n    ` at stmt start and
+    // suffix `\n}` at stmt end (both pure insertions).
+    let src = "shared struct Counter { mut count: i64 }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { count: 0 };\n\
+                   par {\n\
+                       c.count = 7;\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    let prefix = edits
+        .iter()
+        .find(|e| e.replacement.starts_with("lock count {"))
+        .expect("expected `lock count {` prefix insertion");
+    let suffix = edits
+        .iter()
+        .find(|e| e.replacement == "\n}")
+        .expect("expected `\\n}` suffix insertion");
+    assert_eq!(prefix.length, 0, "prefix must be a pure insertion");
+    assert_eq!(suffix.length, 0, "suffix must be a pure insertion");
+    let target_start = src.find("c.count = 7;").expect("stmt anchor");
+    // Suffix anchors right before the trailing `;` so the wrap covers
+    // `target = value` exactly; the `;` falls through as the lock-
+    // statement's own terminator (`lock f { ... };`).
+    let value_end = src.find("7;").expect("value anchor") + 1;
+    assert_eq!(prefix.offset, target_start, "prefix at target start");
+    assert_eq!(suffix.offset, value_end, "suffix at value end (before `;`)");
+}
+
+#[test]
+fn test_l201b_lock_block_skips_immutable_field_writes() {
+    // The lock wrap only applies to writes to fields the struct
+    // declared as `mut`. A diagnostic-firing fixture with an
+    // assignment to an immutable field would be a typecheck error,
+    // so the realistic shape is "struct has both mut and immutable
+    // fields, par contains only an assign to the immutable one" —
+    // but immutable-field assigns are rejected at parse. Pin the
+    // simpler guard: a struct with ONLY immutable fields produces no
+    // lock-block edits even when the diagnostic fires.
+    let src = "shared struct Tag { val: i64 }\n\
+               fn use_a(t: Tag) { }\n\
+               fn use_b(t: Tag) { }\n\
+               fn main() {\n\
+                   let t = Tag { val: 0 };\n\
+                   par {\n\
+                       use_a(t);\n\
+                       use_b(t);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        !edits.iter().any(|e| e.replacement.starts_with("lock ")),
+        "no mut fields → no lock-block wrap edits; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l201b_lock_block_wraps_nested_assign_inside_par_if() {
+    // The walker descends into nested blocks (if/while/match/...)
+    // inside a par branch. Verify an assignment buried inside an
+    // `if` body still gets wrapped — pinning the recursive walk.
+    let src = "shared struct Counter { mut count: i64 }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { count: 0 };\n\
+                   par {\n\
+                       if true { c.count = 7; }\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock count {")),
+        "nested assign inside `if` should still receive the lock wrap; got {edits:?}",
+    );
+}
+
+#[test]
+fn test_l201b_lock_block_wraps_compound_assign() {
+    // `c.count += 1` is a CompoundAssign in the AST — equally a
+    // write, equally needs synchronization. Pin that the walker
+    // covers both StmtKind variants.
+    let src = "shared struct Counter { mut count: i64 }\n\
+               fn use_a(c: ref Counter) { }\n\
+               fn main() {\n\
+                   let c = Counter { count: 0 };\n\
+                   par {\n\
+                       c.count += 1;\n\
+                       use_a(c);\n\
+                   }\n\
+               }";
+    let parsed = karac::parse(src);
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    let result = karac::ownershipcheck(&parsed.program, &typed);
+    let err = result
+        .errors
+        .iter()
+        .find(|e| matches!(&e.kind, OwnershipErrorKind::ConcurrentSharedStruct { .. }))
+        .expect("expected ConcurrentSharedStruct error");
+    let key = karac::resolver::SpanKey::from_span(&err.span);
+    let edits = result.error_fix_diffs.get(&key).expect("expected fix_diff");
+    assert!(
+        edits
+            .iter()
+            .any(|e| e.replacement.starts_with("lock count {")),
+        "compound-assign write should also be wrapped; got {edits:?}",
+    );
+}
+
 // ── L203: closure-captured shared bindings ──────────────────────
 //
 // The v1 detector only counted direct source-level references to the

@@ -974,8 +974,15 @@ fn detect_par_block_conflicts(
                         use_span.clone(),
                         prev_span.clone(),
                     );
-                    let edits =
+                    let mut edits =
                         build_fix_diff_edits(&binding.type_name, binding.kind, program_items);
+                    let lock_edits = build_lock_block_edits_for_binding(
+                        par_body,
+                        &name,
+                        &binding.type_name,
+                        program_items,
+                    );
+                    edits.extend(lock_edits);
                     if !edits.is_empty() {
                         fix_diffs.insert(SpanKey::from_span(&err.span), edits);
                     }
@@ -1133,6 +1140,231 @@ fn build_fix_diff_edits(
         });
     }
     edits
+}
+
+/// Lock-block wrap edits for writes to `binding_name.<mut_field>`
+/// occurring textually inside `par_body`. Phase-7 L201b — the third
+/// half of the migration spec from design.md § Compiler-assisted
+/// migration from `shared struct` to `par struct` (steps 1 and 2 are
+/// the keyword rewrite + mut-strip + Mutex wrap from L201a; this is
+/// step 3).
+///
+/// **Detection scope** (v1):
+/// - Receiver shape: `Identifier(binding_name).<field>` — simple
+///   binding-rooted field access. Chained projections
+///   (`c.nested.field`), index accesses (`arr[0].field`), and
+///   receivers on temporary expressions fall outside v1 and remain
+///   the human review step.
+/// - Write shape: `StmtKind::Assign` and `StmtKind::CompoundAssign`
+///   targeting the field-access shape above. Mutating method calls
+///   (`c.field.push(x)`) require per-method mutability classification
+///   (the same machinery the ownership checker runs for body-level
+///   ownership analysis) and are a separate follow-up.
+/// - Containment: any depth inside `par_body` (nested `if` / `while`
+///   / `for` / `match` / `block` blocks are traversed).
+/// - Field filter: only `mut` fields of the struct definition.
+///
+/// **Edit shape**: two pure-insertion edits per write site —
+/// `lock <field> {\n    ` before the statement's start and `\n}` after
+/// the statement's end. Both derivable from the AST without source-
+/// text access (Kara's `lock` syntax takes a bare identifier, not an
+/// expression, so the wrap doesn't need to reconstruct the receiver
+/// from source). Indentation is a hint that the user reformats; the
+/// edit is correct syntax in either case.
+///
+/// Returns an empty vec when the struct has no mut fields, when no
+/// matching writes exist, or when the struct definition isn't found
+/// in `program_items`.
+fn build_lock_block_edits_for_binding(
+    par_body: &Block,
+    binding_name: &str,
+    type_name: &str,
+    program_items: &[Item],
+) -> Vec<TextEdit> {
+    let mut_fields = collect_mut_field_names(type_name, program_items);
+    if mut_fields.is_empty() {
+        return Vec::new();
+    }
+    let mut edits = Vec::new();
+    collect_lock_block_writes_in_block(par_body, binding_name, &mut_fields, &mut edits);
+    edits
+}
+
+fn collect_mut_field_names(type_name: &str, program_items: &[Item]) -> HashSet<String> {
+    let Some(struct_def) = program_items.iter().find_map(|it| match it {
+        Item::StructDef(s) if s.name == type_name => Some(s),
+        _ => None,
+    }) else {
+        return HashSet::new();
+    };
+    struct_def
+        .fields
+        .iter()
+        .filter(|f| f.is_mut)
+        .map(|f| f.name.clone())
+        .collect()
+}
+
+fn collect_lock_block_writes_in_block(
+    block: &Block,
+    binding_name: &str,
+    mut_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) {
+    for stmt in &block.stmts {
+        collect_lock_block_writes_in_stmt(stmt, binding_name, mut_fields, out);
+    }
+    if let Some(e) = &block.final_expr {
+        collect_lock_block_writes_in_expr(e, binding_name, mut_fields, out);
+    }
+}
+
+fn collect_lock_block_writes_in_stmt(
+    stmt: &Stmt,
+    binding_name: &str,
+    mut_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) {
+    match &stmt.kind {
+        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+            if let Some(field) = matched_self_field_access(target, binding_name, mut_fields) {
+                // The parser sets `stmt.span` to the target's span only
+                // (see src/parser/stmts.rs's Assign / CompoundAssign
+                // arms), so `stmt.span.offset + stmt.span.length`
+                // points one past the target's first token, not past
+                // the value. Anchor the wrap from the target's start
+                // (== stmt span start) to the value's end so the
+                // wrapped statement covers `target = value` in full;
+                // the trailing `;` falls outside the wrap, becoming
+                // the lock-statement's own terminator (`lock f { ... };`
+                // is a valid lock-expression-statement form).
+                let wrap_start = target.span.offset;
+                let wrap_end = value.span.offset + value.span.length;
+                emit_lock_wrap_around(wrap_start, wrap_end, field, out);
+            }
+            // Recurse into target / value to catch writes nested inside
+            // RHS expressions (e.g. a block-expr value containing
+            // another assign — rare but possible).
+            collect_lock_block_writes_in_expr(target, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
+        }
+        StmtKind::Let { value, .. } => {
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
+        }
+        StmtKind::LetElse {
+            value, else_block, ..
+        } => {
+            collect_lock_block_writes_in_expr(value, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(else_block, binding_name, mut_fields, out);
+        }
+        StmtKind::LetUninit { .. } => {}
+        StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
+        }
+        StmtKind::Expr(e) => {
+            collect_lock_block_writes_in_expr(e, binding_name, mut_fields, out);
+        }
+    }
+}
+
+fn collect_lock_block_writes_in_expr(
+    expr: &Expr,
+    binding_name: &str,
+    mut_fields: &HashSet<String>,
+    out: &mut Vec<TextEdit>,
+) {
+    match &expr.kind {
+        ExprKind::Block(b)
+        | ExprKind::Par(b)
+        | ExprKind::Seq(b)
+        | ExprKind::Try(b)
+        | ExprKind::Unsafe(b)
+        | ExprKind::LabeledBlock { body: b, .. }
+        | ExprKind::Loop { body: b, .. }
+        | ExprKind::Lock { body: b, .. } => {
+            collect_lock_block_writes_in_block(b, binding_name, mut_fields, out);
+        }
+        ExprKind::If {
+            condition,
+            then_block,
+            else_branch,
+        } => {
+            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(then_block, binding_name, mut_fields, out);
+            if let Some(eb) = else_branch {
+                collect_lock_block_writes_in_expr(eb, binding_name, mut_fields, out);
+            }
+        }
+        ExprKind::While {
+            condition, body, ..
+        } => {
+            collect_lock_block_writes_in_expr(condition, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
+        }
+        ExprKind::For { iterable, body, .. } => {
+            collect_lock_block_writes_in_expr(iterable, binding_name, mut_fields, out);
+            collect_lock_block_writes_in_block(body, binding_name, mut_fields, out);
+        }
+        ExprKind::Match { scrutinee, arms } => {
+            collect_lock_block_writes_in_expr(scrutinee, binding_name, mut_fields, out);
+            for arm in arms {
+                if let Some(g) = &arm.guard {
+                    collect_lock_block_writes_in_expr(g, binding_name, mut_fields, out);
+                }
+                collect_lock_block_writes_in_expr(&arm.body, binding_name, mut_fields, out);
+            }
+        }
+        ExprKind::Call { callee, args } => {
+            collect_lock_block_writes_in_expr(callee, binding_name, mut_fields, out);
+            for a in args {
+                collect_lock_block_writes_in_expr(&a.value, binding_name, mut_fields, out);
+            }
+        }
+        ExprKind::MethodCall { object, args, .. } => {
+            collect_lock_block_writes_in_expr(object, binding_name, mut_fields, out);
+            for a in args {
+                collect_lock_block_writes_in_expr(&a.value, binding_name, mut_fields, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Return the field name iff `target` is `Identifier(binding_name).<field>`
+/// where `field` is in `mut_fields`. Filters chained projections,
+/// index access, deref, and other complex receiver shapes that v1
+/// leaves to the human review step.
+fn matched_self_field_access<'a>(
+    target: &'a Expr,
+    binding_name: &str,
+    mut_fields: &HashSet<String>,
+) -> Option<&'a String> {
+    let ExprKind::FieldAccess { object, field } = &target.kind else {
+        return None;
+    };
+    let ExprKind::Identifier(name) = &object.kind else {
+        return None;
+    };
+    if name != binding_name {
+        return None;
+    }
+    if !mut_fields.contains(field) {
+        return None;
+    }
+    Some(field)
+}
+
+fn emit_lock_wrap_around(start: usize, end: usize, field: &str, out: &mut Vec<TextEdit>) {
+    out.push(TextEdit {
+        offset: start,
+        length: 0,
+        replacement: format!("lock {field} {{\n    "),
+    });
+    out.push(TextEdit {
+        offset: end,
+        length: 0,
+        replacement: "\n}".to_string(),
+    });
 }
 
 fn collect_identifier_uses_in_stmt(
