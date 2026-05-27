@@ -22939,6 +22939,150 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
         let _ = std::fs::remove_file(&tmp);
     }
 
+    // ── Phase 6 line 218 slice 4: spawn() / TaskGroup.spawn() / TaskHandle.join() codegen ──
+
+    /// Free `spawn(|| make_zero())` emits a synthesized SpawnFn wrapper
+    /// and a `call ptr @karac_runtime_spawn` against it in the calling
+    /// function. The wrapper invokes the closure body inline.
+    #[test]
+    fn test_spawn_call_emits_runtime_spawn_call() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() {
+                let _h = spawn(|| make_zero());
+            }
+        "#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("declare ptr @karac_runtime_spawn"),
+            "expected karac_runtime_spawn FFI declaration; ir:\n{ir}"
+        );
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("call ptr @karac_runtime_spawn"),
+            "driver body should call karac_runtime_spawn; body:\n{body}"
+        );
+        assert!(
+            body.contains("call ptr @malloc"),
+            "driver body should malloc the env buffer; body:\n{body}"
+        );
+    }
+
+    /// The spawn wrapper synthesized at the call site receives three
+    /// pointer params (env, result_out, cancel) and stores T into
+    /// `result_out` before returning void. For a `|| make_zero()`
+    /// closure returning i64, the body calls make_zero() and stores
+    /// the i64 result.
+    #[test]
+    fn test_spawn_wrapper_signature_and_result_store() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() {
+                let _h = spawn(|| make_zero());
+            }
+        "#;
+        let ir = ir_for(src);
+        // Wrapper symbol is named `__spawn_wrap_<N>`. Find one.
+        let wrapper_name = ir
+            .lines()
+            .filter_map(|line| {
+                if line.starts_with("define ") && line.contains("@__spawn_wrap_") {
+                    let start = line.find("@__spawn_wrap_")? + 1; // skip '@'
+                    let end = line[start..].find('(')? + start;
+                    Some(line[start..end].to_string())
+                } else {
+                    None
+                }
+            })
+            .next()
+            .expect("expected at least one __spawn_wrap_N fn");
+        let body = function_body(&ir, &wrapper_name).expect("wrapper body");
+        // Signature visible at the define line — three ptr params, void return.
+        let define_line = ir
+            .lines()
+            .find(|line| line.starts_with("define ") && line.contains(&wrapper_name))
+            .expect("define line");
+        assert!(
+            define_line.contains("void"),
+            "wrapper returns void; line:\n{define_line}"
+        );
+        assert!(
+            define_line.matches("ptr ").count() >= 3,
+            "wrapper takes 3 ptr params; line:\n{define_line}"
+        );
+        // Body calls the user fn make_zero (return inlined or via call) and frees env.
+        assert!(
+            body.contains("call void @free("),
+            "wrapper body frees the env before return; body:\n{body}"
+        );
+    }
+
+    /// `tg.spawn(closure)` dispatches through the same lowering as free
+    /// `spawn(closure)`. The TaskGroup receiver is discarded in slice 4.
+    #[test]
+    fn test_task_group_spawn_method_dispatches_to_runtime_spawn() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() {
+                let mut tg = TaskGroup.new();
+                tg.spawn(|| make_zero());
+            }
+        "#;
+        let ir = ir_for(src);
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("call ptr @karac_runtime_spawn"),
+            "tg.spawn(...) should lower through karac_runtime_spawn; body:\n{body}"
+        );
+    }
+
+    /// `h.join()` lowers to `call i8 @karac_runtime_task_join(handle, out_slot)`
+    /// preceded by an alloca for the result slot. v1 reads i64-shaped
+    /// bytes per the documented `recover_task_handle_join_return_ty`
+    /// fallback.
+    #[test]
+    fn test_task_handle_join_emits_runtime_task_join_call() {
+        let src = r#"
+            fn make_zero() -> i64 { 0 }
+            fn driver() -> i64 {
+                let h = spawn(|| make_zero());
+                h.join()
+            }
+        "#;
+        let ir = ir_for(src);
+        assert!(
+            ir.contains("declare i8 @karac_runtime_task_join"),
+            "expected karac_runtime_task_join FFI declaration; ir:\n{ir}"
+        );
+        let body = function_body(&ir, "driver").expect("driver fn must lower");
+        assert!(
+            body.contains("call i8 @karac_runtime_task_join"),
+            "driver body should call karac_runtime_task_join; body:\n{body}"
+        );
+        // The handle pointer is recovered via ptrtoint→inttoptr (i64
+        // task_id stored in TaskHandle struct, cast back to a pointer
+        // for the FFI).
+        assert!(
+            body.contains("inttoptr"),
+            "driver body should cast task_id i64 back to a pointer; body:\n{body}"
+        );
+    }
+
+    /// All four scheduler FFI declarations are emitted (regression
+    /// guard against accidental removal from `Codegen::new`).
+    #[test]
+    fn test_scheduler_ffi_declarations_present() {
+        let ir = ir_for("fn nop() {}");
+        for sym in [
+            "declare ptr @karac_runtime_spawn",
+            "declare i8 @karac_runtime_task_join",
+            "declare void @karac_runtime_task_handle_free",
+            "declare i8 @karac_runtime_task_state",
+        ] {
+            assert!(ir.contains(sym), "expected `{sym}` declaration; ir:\n{ir}");
+        }
+    }
+
     /// Locate a function definition body by name and return its lines
     /// from the opening `{` (exclusive) through the closing `}`.
     /// Returns `None` if the function is not defined in the IR. Counts

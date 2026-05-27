@@ -221,6 +221,16 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_print(&name, args);
         }
 
+        // Phase 6 line 218 slice 4: free `spawn(closure) -> TaskHandle[T]`
+        // dispatch. Intercepted before the generic-fn path so the slice-1
+        // stub body (`TaskHandle { task_id: 0 }`) never lowers. The
+        // closure literal is recognised at the call site; bare-identifier
+        // closures fall back to a placeholder (zero-handle) per the
+        // task_group.rs documented limitation.
+        if name == "spawn" && args.len() == 1 {
+            return self.lower_spawn_call(&args[0].value);
+        }
+
         // Layout-introspection intrinsics. Intercepted before the
         // generic-call lookup so the `{ 0 }` placeholder body in
         // `runtime/stdlib/intrinsics.kara` is never lowered. The

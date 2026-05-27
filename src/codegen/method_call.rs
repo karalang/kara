@@ -174,6 +174,35 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 return self.lower_websocket_send_binary_masked(self_val, buf_val);
             }
+            // Phase 6 line 218 slice 4: `tg.spawn(closure)` dispatch.
+            // The TaskGroup receiver is discarded in v1 — slice 5's
+            // TaskGroup.drop integration will wire the per-handle cancel
+            // flag through the receiver. v1 lowers identically to the
+            // free `spawn(closure)` path: synthesize the SpawnFn wrapper,
+            // malloc + populate env, call karac_runtime_spawn, return
+            // the TaskHandle struct.
+            if key == "TaskGroup.spawn" && args.len() == 1 {
+                // Compile and discard the receiver for side-effect
+                // accuracy (no side effects today — TaskGroup.new()
+                // returns a value-typed struct — but the call shape may
+                // grow). The lowering for spawn itself doesn't read
+                // self_val in v1.
+                let _self_val = self.compile_expr(object)?;
+                return self.lower_spawn_call(&args[0].value);
+            }
+            // Phase 6 line 218 slice 4: `h.join()` dispatch. Lowers to
+            // `karac_runtime_task_join(handle, &out_slot)` then reads
+            // T from the slot. The return type T is recovered from the
+            // enclosing function's `let v: T = h.join()` annotation
+            // (typechecker doesn't bind T from receiver for the
+            // `impl[T] T<T> { fn m(self) -> T }` shape today — see slice
+            // 1's surfaced typechecker gap). Falls back to i64 when no
+            // annotation is recoverable.
+            if key == "TaskHandle.join" && args.is_empty() {
+                let self_val = self.compile_expr(object)?;
+                let return_ty = self.recover_task_handle_join_return_ty(call_span);
+                return self.lower_task_handle_join(self_val, return_ty);
+            }
         }
 
         // Phase 6 line 26 slice 8g: method-call network-boundary intercept.

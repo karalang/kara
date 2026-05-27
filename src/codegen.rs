@@ -57,6 +57,7 @@ mod stmts;
 mod synth;
 mod synth_display;
 mod synth_drop;
+mod task_group;
 mod tcp;
 mod types_lowering;
 mod vec_method;
@@ -1606,6 +1607,68 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_tcp_close",
             tcp_close_ty,
+            Some(Linkage::External),
+        );
+
+        // Phase 6 line 218 slice 4 — spawn / TaskHandle.join / handle-free FFI.
+        //
+        // `karac_runtime_spawn(fn_ptr: ptr, env: ptr, result_size: usize,
+        // result_align: usize) -> ptr` — submit a fresh closure-task to
+        // the global worker pool. The `fn_ptr` is a codegen-synthesized
+        // `extern "C" fn(env, result_out, cancel)` wrapper that reads
+        // captures from `env`, runs the closure body, memcpys the
+        // T-typed return value into `*result_out`. The returned pointer
+        // is the runtime-side `KaracTaskHandle` — codegen casts it to
+        // i64 and stores into the `TaskHandle.task_id` field. See
+        // `runtime/src/scheduler.rs` slice 3.
+        let usize_ty = if std::mem::size_of::<usize>() == 8 {
+            context.i64_type()
+        } else {
+            context.i32_type()
+        };
+        let spawn_ty = ptr_type.fn_type(
+            &[
+                ptr_type.into(), // fn_ptr (SpawnFn)
+                ptr_type.into(), // env
+                usize_ty.into(), // result_size
+                usize_ty.into(), // result_align
+            ],
+            false,
+        );
+        module.add_function("karac_runtime_spawn", spawn_ty, Some(Linkage::External));
+
+        // `karac_runtime_task_join(handle: ptr, out_slot: ptr) -> u8`
+        // — block until the task reaches a terminal state, memcpy the
+        // result into `*out_slot` on COMPLETED, free the handle, return
+        // a `TASK_STATE_*` discriminant (1 = COMPLETED, 2 = PANICKED,
+        // 3 = CANCELLED).
+        let task_join_ty = context
+            .i8_type()
+            .fn_type(&[ptr_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_task_join",
+            task_join_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_task_handle_free(handle: ptr)` — release a
+        // handle without joining. Used by TaskGroup-side cleanup (slice
+        // 5) for unjoined handles. Caller must ensure the task has
+        // reached a terminal state before calling.
+        let task_handle_free_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_task_handle_free",
+            task_handle_free_ty,
+            Some(Linkage::External),
+        );
+
+        // `karac_runtime_task_state(handle: ptr) -> u8` — non-blocking
+        // peek at the task's lifecycle state. Used by TaskGroup.drop's
+        // poll-before-free path (slice 5) and by tests.
+        let task_state_ty = context.i8_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_task_state",
+            task_state_ty,
             Some(Linkage::External),
         );
 
