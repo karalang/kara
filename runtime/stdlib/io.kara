@@ -96,7 +96,15 @@ impl File {
     #[compiler_builtin]
     fn read(ref self, buf: mut Slice[u8]) -> Result[usize, IoError] with reads(FileSystem) { Err(IoError.Other("placeholder")) }
 
+    // `write` soils the cancel-safe state of the receiver: buffered
+    // OS-level writes may remain unflushed, and cancelling between
+    // `write` and `flush` would discard the pending bytes silently.
+    // The slice-3 RAII-across-yield walker reads this attribute and
+    // rejects a yield while any `File` binding has an unflushed
+    // write. Clear method: `flush` (also `sync_all` once seek/sync
+    // ship; only `flush` is in the v1 surface).
     #[compiler_builtin]
+    #[cancel_unsafe_until(method = "flush")]
     fn write(ref self, buf: Slice[u8]) -> Result[usize, IoError] with writes(FileSystem) { Err(IoError.Other("placeholder")) }
 
     #[compiler_builtin]

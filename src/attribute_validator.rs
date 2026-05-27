@@ -77,6 +77,14 @@ const RECOGNIZED_BARE_ATTRIBUTES: &[&str] = &[
     // source; `no_rc` opts a `shared struct` out of RC.
     "compiler_builtin",
     "no_rc",
+    // Phase-6 line 155 slice 3 — flow-sensitive RAII-across-yield.
+    // `#[cancel_unsafe_until(method = "<clear>")]` on an impl method
+    // declares "calling this method puts the receiver into a
+    // cancel-unsafe state until `<clear>` is called on the same
+    // receiver". Read by `raii_check` to track per-binding state
+    // across yield points; consumers outside `raii_check` accept the
+    // attribute silently. v1 seeds `File.write` (clear = `flush`).
+    "cancel_unsafe_until",
     // General item annotations.
     "derive",
     "must_use",

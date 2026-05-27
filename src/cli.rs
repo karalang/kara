@@ -972,6 +972,12 @@ fn print_text_diagnostics(pipeline: &Pipeline) {
                     filename, bs.line, bs.column,
                 );
             }
+            if let Some(ref sv) = err.state_violation {
+                eprintln!(
+                    "  note: soiled by `.{}()` here at {}:{}:{}",
+                    sv.soiling_method, filename, sv.soil_span.line, sv.soil_span.column,
+                );
+            }
             eprintln!("  help: {}", err.help());
         }
     }
@@ -2788,10 +2794,26 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
         for err in raii {
             id_counter += 1;
             let message = err.message();
-            let extra_json = err
-                .binding_span
-                .as_ref()
-                .map(|bs| format!("\"binding_span\":{{{}}}", span_to_json(bs, filename)));
+            let mut extra_parts: Vec<String> = Vec::new();
+            if let Some(ref bs) = err.binding_span {
+                extra_parts.push(format!(
+                    "\"binding_span\":{{{}}}",
+                    span_to_json(bs, filename)
+                ));
+            }
+            if let Some(ref sv) = err.state_violation {
+                extra_parts.push(format!(
+                    "\"state_violation\":{{\"soiling_method\":{},\"clear_method_name\":{},\"soil_span\":{{{}}}}}",
+                    json_string(&sv.soiling_method),
+                    json_string(&sv.clear_method_name),
+                    span_to_json(&sv.soil_span, filename),
+                ));
+            }
+            let extra_json = if extra_parts.is_empty() {
+                None
+            } else {
+                Some(extra_parts.join(","))
+            };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),
                 severity: "error",
@@ -3591,6 +3613,12 @@ fn cmd_run(
                                 filename, bs.line, bs.column,
                             );
                         }
+                        if let Some(ref sv) = err.state_violation {
+                            eprintln!(
+                                "  note: soiled by `.{}()` here at {}:{}:{}",
+                                sv.soiling_method, filename, sv.soil_span.line, sv.soil_span.column,
+                            );
+                        }
                         eprintln!("  help: {}", err.help());
                     }
                 }
@@ -3604,13 +3632,26 @@ fn cmd_run(
                                 format!(",\"binding_span\":{{{}}}", span_to_json(bs, filename))
                             })
                             .unwrap_or_default();
+                        let state_violation_json = err
+                            .state_violation
+                            .as_ref()
+                            .map(|sv| {
+                                format!(
+                                    ",\"state_violation\":{{\"soiling_method\":{},\"clear_method_name\":{},\"soil_span\":{{{}}}}}",
+                                    json_string(&sv.soiling_method),
+                                    json_string(&sv.clear_method_name),
+                                    span_to_json(&sv.soil_span, filename),
+                                )
+                            })
+                            .unwrap_or_default();
                         emit_jsonl_event(
                             "diagnostic",
                             &format!(
-                                "\"severity\":\"error\",\"phase\":\"raii_check\",\"code\":\"E_RAII_ACROSS_YIELD\",{},\"message\":{}{}",
+                                "\"severity\":\"error\",\"phase\":\"raii_check\",\"code\":\"E_RAII_ACROSS_YIELD\",{},\"message\":{}{}{}",
                                 span_to_json(&err.yield_span, filename),
                                 json_string(&err.message()),
                                 binding_span_json,
+                                state_violation_json,
                             ),
                         );
                     }

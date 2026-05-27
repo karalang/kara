@@ -617,3 +617,232 @@ fn raw_pointer_in_vec_is_not_in_scope() {
         errors,
     );
 }
+
+// ── Phase 6 line 155 slice 3a — flow-sensitive File annotation ──────
+//
+// `File.write` carries `#[cancel_unsafe_until(method = "flush")]` in
+// `runtime/stdlib/io.kara`. The slice-3 walker reads that attribute,
+// tracks per-binding state through each network-boundary function
+// body, and emits a `StateViolation`-bearing `E_RAII_ACROSS_YIELD`
+// when a soiled binding survives to a yield point without being
+// cleared by the matching `flush()` call.
+
+#[test]
+fn file_write_then_yield_rejected() {
+    // Linear `write; fetch` is the v1 cancel-leak pattern this slice
+    // is designed to catch. The walker sees `f.write(data)` first
+    // (Soiled), then `fetch()` (network yield), and emits one error
+    // carrying the StateViolation payload pinning the soil method
+    // and the missing clear method.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, data: Slice[u8]) {
+             let _w = f.write(data);
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "expected one E_RAII_ACROSS_YIELD for `f` soiled by .write across yield: {:?}",
+        errors
+    );
+    assert_eq!(errors[0].fn_key, "driver");
+    assert_eq!(errors[0].binding_name, "f");
+    assert_eq!(errors[0].type_name, "File");
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("slice-3 violation must carry state_violation payload");
+    assert_eq!(sv.soiling_method, "write");
+    assert_eq!(sv.clear_method_name, "flush");
+}
+
+#[test]
+fn file_write_then_flush_then_yield_accepted() {
+    // The clearing call lands before the yield: state flips back to
+    // Clean and the walker emits no error.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, data: Slice[u8]) {
+             let _w = f.write(data);
+             let _f = f.flush();
+             fetch();
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "write-then-flush-then-yield must accept: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn file_param_without_write_held_across_yield_accepted() {
+    // The binding's surface type is cancel-safe; only the soiling
+    // call would have changed state. Without a write, no soil, no
+    // diagnostic.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File) {
+             fetch();
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "File held across yield with no preceding write must accept: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn file_write_violation_carries_state_help_text() {
+    // Help text class-branches on `state_violation`: it should name
+    // the specific clear method (`flush`) rather than the generic
+    // `impl CancelSafe` fix-it. Pins the diagnostic surface so users
+    // see the literal remediation call.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, data: Slice[u8]) {
+             let _w = f.write(data);
+             fetch();
+         }",
+    );
+    assert_eq!(errors.len(), 1);
+    let help = errors[0].help();
+    assert!(
+        help.contains("f.flush()"),
+        "help must name the clear method literally: got {help:?}"
+    );
+    assert!(
+        help.contains("pending `write`"),
+        "help must name the soiling method: got {help:?}"
+    );
+    assert!(
+        !help.contains("impl CancelSafe"),
+        "slice-3 help must not surface the impl-CancelSafe fix-it (that's for shared-type rejection): got {help:?}"
+    );
+    let message = errors[0].message();
+    assert!(
+        message.contains("pending `write`") && message.contains("f.flush"),
+        "message must surface both soiling and clearing method names: got {message:?}",
+    );
+}
+
+#[test]
+fn file_two_writes_then_one_flush_then_yield_accepted() {
+    // A second write *before* the flush still ends Clean — the
+    // clearing call covers all preceding writes (the OS-level
+    // `flush` does indeed flush every buffered byte, not just the
+    // most recent). Pins the "one clear closes any prior soil"
+    // semantic of the v1 state machine.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, a: Slice[u8], b: Slice[u8]) {
+             let _w1 = f.write(a);
+             let _w2 = f.write(b);
+             let _r = f.flush();
+             fetch();
+         }",
+    );
+    assert!(
+        errors.is_empty(),
+        "two writes followed by one flush before yield must accept: {:?}",
+        errors,
+    );
+}
+
+#[test]
+fn file_write_flush_write_then_yield_rejected() {
+    // The clear handles the first write, but the second write
+    // re-soils. The walker should reject — pins the "Soil → Clean →
+    // Soil → yield" sequence triggers detection.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, a: Slice[u8], b: Slice[u8]) {
+             let _w1 = f.write(a);
+             let _r = f.flush();
+             let _w2 = f.write(b);
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "second write after a flush must re-soil and trigger detection: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].binding_name, "f");
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("expected state_violation payload on re-soil case");
+    assert_eq!(sv.soiling_method, "write");
+}
+
+#[test]
+fn file_two_yields_emit_one_error_per_binding() {
+    // Dedup contract: a binding held Soiled across multiple yield
+    // points should produce one error per (binding, fn_key) pair,
+    // not one per yield. Matches the slice-1 walk's emission shape.
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         fn driver(f: File, data: Slice[u8]) {
+             let _w = f.write(data);
+             fetch();
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "multiple yields under a single Soiled binding must dedup to one error: {:?}",
+        errors,
+    );
+}
+
+#[test]
+fn user_annotated_type_participates() {
+    // The slice-3 walker is type-agnostic — any
+    // `#[cancel_unsafe_until]`-annotated method participates,
+    // not just File.write. Pins the user-extensibility surface
+    // so a future BufReader / database transaction stdlib type
+    // plugs in by annotating its soiling methods (no walker
+    // changes needed).
+    let (_program, _typed, errors) = run_raii_check(
+        "effect resource Network;
+         pub fn fetch() with sends(Network) receives(Network) {}
+         struct Tx { }
+         impl Tx {
+             #[cancel_unsafe_until(method = \"commit\")]
+             fn put(ref self, k: String, v: String) { }
+             fn commit(ref self) { }
+         }
+         fn driver(tx: Tx) {
+             tx.put(\"a\", \"b\");
+             fetch();
+         }",
+    );
+    assert_eq!(
+        errors.len(),
+        1,
+        "user-annotated cancel-unsafe method must participate in slice-3 walk: {:?}",
+        errors,
+    );
+    assert_eq!(errors[0].fn_key, "driver");
+    assert_eq!(errors[0].binding_name, "tx");
+    assert_eq!(errors[0].type_name, "Tx");
+    let sv = errors[0]
+        .state_violation
+        .as_ref()
+        .expect("user-annotated violation must carry state_violation payload");
+    assert_eq!(sv.soiling_method, "put");
+    assert_eq!(sv.clear_method_name, "commit");
+}

@@ -33,21 +33,54 @@
 //! alongside their opt-in impl. Stdlib seeding lands when stdlib
 //! infrastructure does.
 //!
+//! ## Slice 3a — flow-sensitive detection (File seeding)
+//!
+//! [`collect_cancel_unsafe_annotations`] walks every impl method for
+//! `#[cancel_unsafe_until(method = "<clear>")]` attributes, building a
+//! `type_name → (soiling_method → clearing_method)` table.
+//! [`check_state_flow_for_program`] then walks every network-boundary
+//! function body and threads a per-binding state map through the walk:
+//! a soiling `MethodCall` (e.g. `f.write(buf)` on a `File` binding)
+//! flips the binding's state to `Soiled`, the matching clearing call
+//! (`f.flush()`) flips it back to `Clean`, and any yield point reached
+//! while a binding is `Soiled` emits a `RaiiAcrossYieldError` with the
+//! [`StateViolation`] payload describing which method soiled and what
+//! clear method to call before the yield.
+//!
+//! v1 implementation is linear forward flow with no branch merging —
+//! every soiling call met in source-traversal order soils, every
+//! clearing call clears, irrespective of whether the call was inside
+//! an `if` / `match` arm / loop body. This biases toward false
+//! positives over false negatives (a soil in any reachable branch
+//! propagates to the yield, even if the runtime path that would have
+//! reached the yield also cleared). Precise branch merging is a
+//! follow-on; the v1 surface is enough to catch the design.md "File
+//! before fsync" pattern and to enable BufReader to plug in by
+//! annotating its buffer-soiling read methods.
+//!
 //! ## What this module does NOT do (yet)
 //!
-//! - Flow-sensitive detection (`File` before fsync; `BufReader` while
-//!   buffer non-empty; database transaction handles pre-commit) — these
-//!   need the stdlib types to exist first plus a per-binding live-range
-//!   pass that tracks observed state changes. Tracker: phase 6 line 155
-//!   slice 3.
-//! - Raw pointer detection (`*const T` / `*mut T`) — these are part of
-//!   the v1 NOT-CancelSafe set per the spec but don't currently appear
-//!   in `pattern_binding_types`. Tracker: phase 6 line 155 slice 4.
-//! - Precise binding-construction span anchoring — slice 1 uses the
-//!   yield-point span as the primary anchor + the function name in the
-//!   message; a later slice will thread the binding pattern's
-//!   introducing span as a secondary highlight. Tracker: phase 6 line
-//!   155 slice 5.
+//! - Flow-sensitive detection beyond File — `BufReader[R]` while buffer
+//!   non-empty, database transaction handles pre-commit. The
+//!   infrastructure shipped here is type-agnostic (any
+//!   `#[cancel_unsafe_until(method = ...)]` annotated method
+//!   participates), but the stdlib types themselves don't exist yet.
+//!   Tracker: phase 6 line 155 slice 3 (BufReader sub-slice).
+//! - Branch-precise flow analysis — see the "v1 implementation" note
+//!   above; `if c { f.flush(); } else { f.flush(); } yield` correctly
+//!   accepts (both branches clear) but mutually-exclusive shapes like
+//!   `if c { f.write(); } else { f.flush(); } yield` may miss the
+//!   soil in the then-branch.
+//! - Soiling via methods on object subexpressions — only
+//!   `Identifier(name).M(...)` and `self.M(...)` are tracked; calls
+//!   through field access (`record.handle.write(...)`), index
+//!   (`files[i].write(...)`), or other complex receiver shapes fall
+//!   through unmodified.
+//! - Soiling propagation across function calls — a helper function
+//!   that takes a `File` by `mut ref self` and writes to it is not
+//!   re-walked from the caller's flow state. Effect-typed propagation
+//!   ("any fn whose receiver is `cancel_unsafe`-annotated returns
+//!   with the soiling-state set") is a separate slice.
 
 use crate::ast::*;
 use crate::token::Span;
@@ -82,6 +115,35 @@ pub struct RaiiAcrossYieldError {
     /// `ScopeEntry.span_key` is `None`); future synthetic bindings
     /// follow the same convention.
     pub binding_span: Option<Span>,
+    /// `Some` for slice-3 flow-sensitive violations — the binding's
+    /// surface type itself is cancel-safe (so slices 1/2/4 don't fire),
+    /// but a [`#[cancel_unsafe_until]`](collect_cancel_unsafe_annotations)
+    /// method was called on it without the matching clearing method
+    /// before the yield. `None` for slice-1 / slice-2 / slice-4
+    /// rejections, where the surface type itself is unconditionally
+    /// non-cancel-safe.
+    pub state_violation: Option<StateViolation>,
+}
+
+/// Companion payload for slice-3 flow-sensitive [`RaiiAcrossYieldError`]s.
+/// Names the soiling method that put the binding into the cancel-unsafe
+/// state and the clearing method the user must call before yielding to
+/// restore cancel-safety.
+#[derive(Debug, Clone)]
+pub struct StateViolation {
+    /// Surface name of the method whose call soiled the binding —
+    /// the method name (right of the dot), not the full `Type.method`
+    /// key. E.g. `"write"` for `f.write(buf)`.
+    pub soiling_method: String,
+    /// Span of the soiling `MethodCall` expression — the call site
+    /// the user can act on. Emitted as a "soiled by call here"
+    /// secondary highlight.
+    pub soil_span: Span,
+    /// Method name (right of the dot) that, when called on the same
+    /// binding, restores it to a cancel-safe state. E.g. `"flush"`.
+    /// Threaded into the `help:` text so the user sees the literal
+    /// method to call.
+    pub clear_method_name: String,
 }
 
 impl RaiiAcrossYieldError {
@@ -89,11 +151,30 @@ impl RaiiAcrossYieldError {
     /// `error[E_RAII_ACROSS_YIELD]` is added by the diagnostic formatter
     /// in `src/cli.rs` (mirrors the other phase error types — they each
     /// expose the body, the formatter prepends the namespaced code).
+    ///
+    /// For slice-3 flow-sensitive violations ([`state_violation`]
+    /// is `Some`), the body names the soiling method and the missing
+    /// clearing call rather than the surface-type identity.
+    ///
+    /// [`state_violation`]: RaiiAcrossYieldError::state_violation
     pub fn message(&self) -> String {
-        format!(
-            "holding `{}` (type `{}`) across a suspension point in `{}` is not cancel-safe",
-            self.binding_name, self.type_name, self.fn_key,
-        )
+        if let Some(ref sv) = self.state_violation {
+            format!(
+                "holding `{}` (type `{}`) with pending `{}` across a suspension point in `{}` — \
+                 call `{}.{}` before yielding to restore cancel-safety",
+                self.binding_name,
+                self.type_name,
+                sv.soiling_method,
+                self.fn_key,
+                self.binding_name,
+                sv.clear_method_name,
+            )
+        } else {
+            format!(
+                "holding `{}` (type `{}`) across a suspension point in `{}` is not cancel-safe",
+                self.binding_name, self.type_name, self.fn_key,
+            )
+        }
     }
 
     /// Trailing diagnostic note explaining the cancel-leak hazard.
@@ -116,6 +197,13 @@ impl RaiiAcrossYieldError {
     ///   single-segment `TypeKind::Path` targets (so
     ///   `impl CancelSafe for *const T` wouldn't apply anyway).
     pub fn help(&self) -> String {
+        if let Some(ref sv) = self.state_violation {
+            return format!(
+                "call `{}.{}()` before the suspension point to clear the pending `{}` state, \
+                 or release `{}` entirely before yielding",
+                self.binding_name, sv.clear_method_name, sv.soiling_method, self.binding_name,
+            );
+        }
         if is_raw_pointer_surface_name(&self.type_name) {
             format!(
                 "release `{}` before the yield, or convert the pointer to a safe handle \
@@ -191,9 +279,14 @@ pub fn check_raii_across_yield(
                     type_name: type_name.clone(),
                     yield_span: first_yp.span.clone(),
                     binding_span: field.binding_span.clone(),
+                    state_violation: None,
                 });
             }
         }
+    }
+    let annotations = collect_cancel_unsafe_annotations(program);
+    if !annotations.is_empty() {
+        errors.extend(check_state_flow_for_program(program, types, &annotations));
     }
     errors
 }
@@ -276,4 +369,660 @@ fn is_not_cancel_safe(
         }
     }
     false
+}
+
+// ── Slice 3 — flow-sensitive `#[cancel_unsafe_until]` detection ──────
+
+/// Map of `type_name → (soiling_method → clearing_method)` collected
+/// from every `impl <Type> { #[cancel_unsafe_until(method = "<clear>")]
+/// fn <soil>(...) ... }` annotation in the program. The inner map's
+/// keys are the soiling method names (left of "→ Soiled") and the
+/// values are the clearing method names (the call that flips
+/// "→ Clean"). v1 stdlib seeding: `{"File": {"write": "flush"}}`.
+///
+/// Outer map is keyed by the impl block's single-segment target type
+/// name — matches the slice-2 opt-in walker's scope. Multi-segment
+/// target paths and generic-impl forms are out of scope at v1; the
+/// walker silently skips them.
+type CancelUnsafeAnnotations =
+    std::collections::HashMap<String, std::collections::HashMap<String, String>>;
+
+/// Walk `program.items` for `#[cancel_unsafe_until(method = "<name>")]`
+/// attributes on impl methods. Returns the collected
+/// [`CancelUnsafeAnnotations`] table. The attribute must carry exactly
+/// one named arg, `method = "<string>"`; malformed shapes (missing
+/// arg, non-string value, wrong arg name) are silently ignored — the
+/// attribute-validation pass already rejects unknown attribute names,
+/// and the bare-name registry accepts `cancel_unsafe_until` so the
+/// parse-side is well-formed; we treat slice-3 as best-effort over
+/// the well-formed cases and let any future shape-validator
+/// (slice-3b?) escalate malformed shapes to errors.
+fn collect_cancel_unsafe_annotations(program: &Program) -> CancelUnsafeAnnotations {
+    let mut out: CancelUnsafeAnnotations = std::collections::HashMap::new();
+    accumulate_annotations_from_items(&program.items, &mut out);
+    // Stdlib bake (`runtime/stdlib/*.kara`) declares impls outside of
+    // `program.items` — `register_baked_stdlib` registers methods into
+    // the typechecker's env directly, and `synthetic_prelude_items`
+    // splices StructDefs but not their impl blocks. Walk the baked
+    // programs explicitly so v1 stdlib annotations (`File.write`)
+    // participate without the caller having to splice impl blocks in.
+    for (_, stdlib_program) in crate::prelude::STDLIB_PROGRAMS.iter() {
+        accumulate_annotations_from_items(&stdlib_program.items, &mut out);
+    }
+    out
+}
+
+fn accumulate_annotations_from_items(items: &[Item], out: &mut CancelUnsafeAnnotations) {
+    for item in items {
+        let Item::ImplBlock(imp) = item else { continue };
+        let TypeKind::Path(ref target_path) = imp.target_type.kind else {
+            continue;
+        };
+        if target_path.segments.len() != 1 {
+            continue;
+        }
+        let type_name = &target_path.segments[0];
+        for impl_item in &imp.items {
+            let ImplItem::Method(m) = impl_item else {
+                continue;
+            };
+            for attr in &m.attributes {
+                if !attr.is_bare("cancel_unsafe_until") {
+                    continue;
+                }
+                let mut clear: Option<String> = None;
+                for arg in &attr.args {
+                    if arg.name.as_deref() != Some("method") {
+                        continue;
+                    }
+                    let Some(ref v) = arg.value else { continue };
+                    if let ExprKind::StringLit(s) = &v.kind {
+                        clear = Some(s.clone());
+                        break;
+                    }
+                }
+                if let Some(c) = clear {
+                    out.entry(type_name.clone())
+                        .or_default()
+                        .insert(m.name.clone(), c);
+                }
+            }
+        }
+    }
+}
+
+/// Per-binding tracked state during the flow walk. `Clean` is the
+/// default for every binding the walker pushes onto its scope; once
+/// a `#[cancel_unsafe_until]`-annotated method is called on the
+/// binding, state flips to `Soiled` with the soiling-call's span
+/// and the clearing method name pinned. A subsequent call to the
+/// clearing method on the same binding flips back to `Clean`.
+#[derive(Debug, Clone)]
+enum BindingState {
+    Clean,
+    Soiled {
+        soiling_method: String,
+        soil_span: Span,
+        clear_method_name: String,
+    },
+}
+
+/// Walker state for one function body's flow-sensitive cancel-unsafe
+/// state tracking. Mirrors `cli::YieldPointWalker`'s scope-discipline
+/// (push on binding introduction, truncate on block exit) and enriches
+/// each scope slot with the binding's surface type name — used to
+/// resolve which `CancelUnsafeAnnotations` table to consult at each
+/// `MethodCall`.
+///
+/// State map is keyed by binding name and threaded linearly through
+/// the walk. v1 does no branch merging: a soil seen anywhere in
+/// source-traversal order before a yield triggers the error,
+/// regardless of whether the soil + yield were in mutually-exclusive
+/// branches. See module doc comment for the v1 fidelity statement.
+struct StateFlowWalker<'a> {
+    annotations: &'a CancelUnsafeAnnotations,
+    method_callee_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    pattern_binding_types: &'a std::collections::HashMap<crate::resolver::SpanKey, String>,
+    /// In-scope bindings with their resolved surface type name (looked
+    /// up at push time from `pattern_binding_types`, or threaded from
+    /// the impl's target type for `self`). `None` for bindings whose
+    /// type the typechecker didn't record (primitives, untyped patterns)
+    /// — those can never participate in cancel-unsafe annotations so
+    /// the walker skips them at `MethodCall` resolution.
+    scope: Vec<(String, Option<String>, Option<Span>)>,
+    /// Per-binding state map. Bindings missing from the map are
+    /// implicitly `Clean` — only Soiled bindings carry an entry.
+    /// Keyed by the source-level binding name (same shape as
+    /// `state_struct_layouts` fields and yield-points captured-locals).
+    state: std::collections::HashMap<String, BindingState>,
+    /// Function key (free fn name or `Type.method`) currently being
+    /// walked — threaded into emitted errors' `fn_key`.
+    fn_key: String,
+    /// Set of network-yield callee keys: when a `Call` or `MethodCall`
+    /// matches one of these, the current Soiled bindings get errors.
+    network_yield: &'a std::collections::HashMap<String, bool>,
+    /// Per-(binding_name, fn_key) dedup — only one error per binding
+    /// per fn even if the binding is held Soiled across multiple
+    /// yield points. Matches the slice-1 walk's per-binding-once
+    /// emission contract.
+    emitted: std::collections::HashSet<String>,
+    /// Output bucket; collected errors flushed back to the caller.
+    errors: Vec<RaiiAcrossYieldError>,
+}
+
+/// Run the slice-3 flow-sensitive walker over every network-boundary
+/// function in `program` (every fn with at least one entry in
+/// `state_struct_layouts`). Returns a flat list of
+/// `RaiiAcrossYieldError`s with `state_violation: Some(_)`.
+///
+/// `annotations` is the program's collected `#[cancel_unsafe_until]`
+/// table from [`collect_cancel_unsafe_annotations`]. The caller
+/// (`check_raii_across_yield`) shortcircuits this whole pass when
+/// `annotations.is_empty()` — no soiling rules means no possible
+/// state violations.
+fn check_state_flow_for_program(
+    program: &Program,
+    types: &TypeCheckResult,
+    annotations: &CancelUnsafeAnnotations,
+) -> Vec<RaiiAcrossYieldError> {
+    let mut out = Vec::new();
+    for item in &program.items {
+        match item {
+            Item::Function(func) => {
+                let key = func.name.clone();
+                if !program.state_struct_layouts.contains_key(&key) {
+                    continue;
+                }
+                check_state_flow_for_fn(program, types, annotations, &key, func, None, &mut out);
+            }
+            Item::ImplBlock(imp) => {
+                let target = match &imp.target_type.kind {
+                    TypeKind::Path(p) => match p.segments.last() {
+                        Some(s) => s.clone(),
+                        None => continue,
+                    },
+                    _ => continue,
+                };
+                for impl_item in &imp.items {
+                    let ImplItem::Method(m) = impl_item else {
+                        continue;
+                    };
+                    let key = format!("{}.{}", target, m.name);
+                    if !program.state_struct_layouts.contains_key(&key) {
+                        continue;
+                    }
+                    check_state_flow_for_fn(
+                        program,
+                        types,
+                        annotations,
+                        &key,
+                        m,
+                        Some(&target),
+                        &mut out,
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    out
+}
+
+fn check_state_flow_for_fn(
+    program: &Program,
+    types: &TypeCheckResult,
+    annotations: &CancelUnsafeAnnotations,
+    fn_key: &str,
+    func: &Function,
+    impl_target_type: Option<&str>,
+    out: &mut Vec<RaiiAcrossYieldError>,
+) {
+    let mut walker = StateFlowWalker {
+        annotations,
+        method_callee_types: &types.method_callee_types,
+        pattern_binding_types: &types.pattern_binding_types,
+        scope: Vec::new(),
+        state: std::collections::HashMap::new(),
+        fn_key: fn_key.to_string(),
+        network_yield: &program.callee_network_yield_effect,
+        emitted: std::collections::HashSet::new(),
+        errors: Vec::new(),
+    };
+    if func.self_param.is_some() {
+        walker.scope.push((
+            "self".to_string(),
+            impl_target_type.map(|s| s.to_string()),
+            None,
+        ));
+    }
+    for p in &func.params {
+        for (name, span) in p.pattern.binding_name_spans() {
+            let span_key = crate::resolver::SpanKey::from_span(&span);
+            let ty = walker.pattern_binding_types.get(&span_key).cloned();
+            walker.scope.push((name, ty, Some(span)));
+        }
+    }
+    walker.walk_block(&func.body);
+    out.extend(walker.errors);
+}
+
+impl StateFlowWalker<'_> {
+    /// Look up the surface type recorded for the given binding name.
+    /// Returns `None` for synthetic / untyped bindings — those can't
+    /// participate in cancel-unsafe state tracking.
+    fn type_of(&self, binding_name: &str) -> Option<&str> {
+        for (name, ty, _) in self.scope.iter().rev() {
+            if name == binding_name {
+                return ty.as_deref();
+            }
+        }
+        None
+    }
+
+    fn binding_span_of(&self, binding_name: &str) -> Option<Span> {
+        for (name, _, span) in self.scope.iter().rev() {
+            if name == binding_name {
+                return span.clone();
+            }
+        }
+        None
+    }
+
+    fn emit_for_soiled(&mut self, binding_name: &str, yield_span: &Span) {
+        let Some(state) = self.state.get(binding_name) else {
+            return;
+        };
+        let BindingState::Soiled {
+            soiling_method,
+            soil_span,
+            clear_method_name,
+        } = state.clone()
+        else {
+            return;
+        };
+        if !self.emitted.insert(binding_name.to_string()) {
+            return;
+        }
+        let type_name = self.type_of(binding_name).unwrap_or("?").to_string();
+        let binding_span = self.binding_span_of(binding_name);
+        self.errors.push(RaiiAcrossYieldError {
+            fn_key: self.fn_key.clone(),
+            binding_name: binding_name.to_string(),
+            type_name,
+            yield_span: yield_span.clone(),
+            binding_span,
+            state_violation: Some(StateViolation {
+                soiling_method,
+                soil_span,
+                clear_method_name,
+            }),
+        });
+    }
+
+    fn record_yield(&mut self, yield_span: &Span) {
+        let soiled: Vec<String> = self
+            .state
+            .iter()
+            .filter_map(|(name, s)| match s {
+                BindingState::Soiled { .. } => Some(name.clone()),
+                BindingState::Clean => None,
+            })
+            .collect();
+        for name in soiled {
+            self.emit_for_soiled(&name, yield_span);
+        }
+    }
+
+    /// Source-level binding name targeted by `expr`, if `expr` is a
+    /// shape the slice-3 walker tracks. Returns `Some("self")` for
+    /// `SelfValue` receivers, `Some(name)` for identifier receivers,
+    /// and `None` for everything else (field access, index, complex
+    /// subexpressions — out of scope at v1).
+    fn receiver_binding(expr: &Expr) -> Option<String> {
+        match &expr.kind {
+            ExprKind::Identifier(n) => Some(n.clone()),
+            ExprKind::SelfValue => Some("self".to_string()),
+            _ => None,
+        }
+    }
+
+    fn apply_method_call(&mut self, method_name: &str, object: &Expr, call_span: &Span) {
+        let Some(binding_name) = Self::receiver_binding(object) else {
+            return;
+        };
+        let Some(type_name) = self.type_of(&binding_name).map(str::to_string) else {
+            return;
+        };
+        let Some(methods) = self.annotations.get(&type_name) else {
+            return;
+        };
+        if let Some(clear_name) = methods.get(method_name) {
+            self.state.insert(
+                binding_name,
+                BindingState::Soiled {
+                    soiling_method: method_name.to_string(),
+                    soil_span: call_span.clone(),
+                    clear_method_name: clear_name.clone(),
+                },
+            );
+            return;
+        }
+        // Clearing: if the current state names this method as the clear method, flip to Clean.
+        let should_clear = matches!(
+            self.state.get(&binding_name),
+            Some(BindingState::Soiled { clear_method_name, .. }) if clear_method_name == method_name,
+        );
+        if should_clear {
+            self.state.insert(binding_name, BindingState::Clean);
+        }
+    }
+
+    fn callee_key(&self, callee: &Expr, expr_span: &Span) -> Option<String> {
+        match &callee.kind {
+            ExprKind::Identifier(name) => Some(name.clone()),
+            ExprKind::Path { segments, .. } => Some(segments.join(".")),
+            ExprKind::FieldAccess { .. } | ExprKind::MethodCall { .. } => None,
+            _ => self
+                .method_callee_types
+                .get(&crate::resolver::SpanKey::from_span(expr_span))
+                .cloned(),
+        }
+    }
+
+    fn walk_block(&mut self, block: &Block) {
+        let scope_mark = self.scope.len();
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_block_with_pattern(&mut self, pat: &Pattern, block: &Block) {
+        let scope_mark = self.scope.len();
+        for (name, span) in pat.binding_name_spans() {
+            let span_key = crate::resolver::SpanKey::from_span(&span);
+            let ty = self.pattern_binding_types.get(&span_key).cloned();
+            self.scope.push((name, ty, Some(span)));
+        }
+        for stmt in &block.stmts {
+            self.walk_stmt(stmt);
+        }
+        if let Some(ref expr) = block.final_expr {
+            self.walk_expr(expr);
+        }
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_expr_with_pattern(&mut self, pat: &Pattern, expr: &Expr) {
+        let scope_mark = self.scope.len();
+        for (name, span) in pat.binding_name_spans() {
+            let span_key = crate::resolver::SpanKey::from_span(&span);
+            let ty = self.pattern_binding_types.get(&span_key).cloned();
+            self.scope.push((name, ty, Some(span)));
+        }
+        self.walk_expr(expr);
+        self.scope.truncate(scope_mark);
+    }
+
+    fn walk_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Let { value, pattern, .. } => {
+                self.walk_expr(value);
+                for (name, span) in pattern.binding_name_spans() {
+                    let span_key = crate::resolver::SpanKey::from_span(&span);
+                    let ty = self.pattern_binding_types.get(&span_key).cloned();
+                    self.scope.push((name, ty, Some(span)));
+                }
+            }
+            StmtKind::LetUninit {
+                name, name_span, ..
+            } => {
+                self.scope
+                    .push((name.clone(), None, Some(name_span.clone())));
+            }
+            StmtKind::LetElse {
+                value,
+                pattern,
+                else_block,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block(else_block);
+                for (name, span) in pattern.binding_name_spans() {
+                    let span_key = crate::resolver::SpanKey::from_span(&span);
+                    let ty = self.pattern_binding_types.get(&span_key).cloned();
+                    self.scope.push((name, ty, Some(span)));
+                }
+            }
+            StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
+                self.walk_block(body);
+            }
+            StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+                self.walk_expr(target);
+                self.walk_expr(value);
+            }
+            StmtKind::Expr(expr) => self.walk_expr(expr),
+        }
+    }
+
+    fn walk_expr(&mut self, expr: &Expr) {
+        match &expr.kind {
+            ExprKind::Call { callee, args } => {
+                self.walk_expr(callee);
+                for arg in args {
+                    self.walk_expr(&arg.value);
+                }
+                if let Some(key) = self.callee_key(callee, &expr.span) {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        self.record_yield(&expr.span);
+                    }
+                }
+            }
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+                ..
+            } => {
+                self.walk_expr(object);
+                for arg in args {
+                    self.walk_expr(&arg.value);
+                }
+                // Resolve callee key first — if this MethodCall is itself
+                // a yield point, the soiled-state snapshot must be taken
+                // BEFORE the soil/clear flip below (otherwise a method
+                // call that is both a yield AND soiling would miss its
+                // own pre-call snapshot — not a current shape but
+                // defensible against future stdlib annotations).
+                if let Some(key) = self
+                    .method_callee_types
+                    .get(&crate::resolver::SpanKey::from_span(&expr.span))
+                    .cloned()
+                {
+                    if self.network_yield.get(&key).copied().unwrap_or(false) {
+                        self.record_yield(&expr.span);
+                    }
+                }
+                self.apply_method_call(method, object, &expr.span);
+            }
+            ExprKind::Binary { left, right, .. } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Unary { operand, .. } => self.walk_expr(operand),
+            ExprKind::Question(inner) => self.walk_expr(inner),
+            ExprKind::OptionalChain { object, args, .. } => {
+                self.walk_expr(object);
+                if let Some(arglist) = args {
+                    for arg in arglist {
+                        self.walk_expr(&arg.value);
+                    }
+                }
+            }
+            ExprKind::NilCoalesce { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::FieldAccess { object, .. } | ExprKind::TupleIndex { object, .. } => {
+                self.walk_expr(object)
+            }
+            ExprKind::Index { object, index } => {
+                self.walk_expr(object);
+                self.walk_expr(index);
+            }
+            ExprKind::Block(b)
+            | ExprKind::Unsafe(b)
+            | ExprKind::Try(b)
+            | ExprKind::Seq(b)
+            | ExprKind::Par(b) => self.walk_block(b),
+            ExprKind::If {
+                condition,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
+            }
+            ExprKind::IfLet {
+                value,
+                pattern,
+                then_block,
+                else_branch,
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, then_block);
+                if let Some(eb) = else_branch {
+                    self.walk_expr(eb);
+                }
+            }
+            ExprKind::Match { scrutinee, arms } => {
+                self.walk_expr(scrutinee);
+                for arm in arms {
+                    if let Some(ref g) = arm.guard {
+                        let scope_mark = self.scope.len();
+                        for (name, span) in arm.pattern.binding_name_spans() {
+                            let span_key = crate::resolver::SpanKey::from_span(&span);
+                            let ty = self.pattern_binding_types.get(&span_key).cloned();
+                            self.scope.push((name, ty, Some(span)));
+                        }
+                        self.walk_expr(g);
+                        self.scope.truncate(scope_mark);
+                    }
+                    self.walk_expr_with_pattern(&arm.pattern, &arm.body);
+                }
+            }
+            ExprKind::While {
+                condition, body, ..
+            } => {
+                self.walk_expr(condition);
+                self.walk_block(body);
+            }
+            ExprKind::WhileLet {
+                value,
+                pattern,
+                body,
+                ..
+            } => {
+                self.walk_expr(value);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+                ..
+            } => {
+                self.walk_expr(iterable);
+                self.walk_block_with_pattern(pattern, body);
+            }
+            ExprKind::Loop { body, .. } | ExprKind::LabeledBlock { body, .. } => {
+                self.walk_block(body)
+            }
+            ExprKind::Closure { .. } => {}
+            ExprKind::Return(Some(e)) => self.walk_expr(e),
+            ExprKind::Return(None) => {}
+            ExprKind::Break { value, .. } => {
+                if let Some(v) = value {
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::Continue { .. } => {}
+            ExprKind::Tuple(items) | ExprKind::ArrayLiteral(items) => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::PrefixCollectionLiteral { items, .. } => {
+                for e in items {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::RepeatLiteral { value, count, .. } => {
+                self.walk_expr(value);
+                self.walk_expr(count);
+            }
+            ExprKind::MapLiteral(pairs) => {
+                for (k, v) in pairs {
+                    self.walk_expr(k);
+                    self.walk_expr(v);
+                }
+            }
+            ExprKind::StructLiteral { fields, spread, .. } => {
+                for f in fields {
+                    self.walk_expr(&f.value);
+                }
+                if let Some(s) = spread {
+                    self.walk_expr(s);
+                }
+            }
+            ExprKind::Pipe { left, right } => {
+                self.walk_expr(left);
+                self.walk_expr(right);
+            }
+            ExprKind::Cast { expr, .. } => self.walk_expr(expr),
+            ExprKind::Range { start, end, .. } => {
+                if let Some(s) = start {
+                    self.walk_expr(s);
+                }
+                if let Some(e) = end {
+                    self.walk_expr(e);
+                }
+            }
+            ExprKind::Lock { body, .. } => self.walk_block(body),
+            ExprKind::Providers { bindings, body } => {
+                for b in bindings {
+                    self.walk_expr(&b.value);
+                }
+                self.walk_block(body);
+            }
+            ExprKind::Integer(_, _)
+            | ExprKind::Float(_, _)
+            | ExprKind::CharLit(_)
+            | ExprKind::ByteLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::MultiStringLit(_)
+            | ExprKind::CStringLit { .. }
+            | ExprKind::Bool(_)
+            | ExprKind::Identifier(_)
+            | ExprKind::Path { .. }
+            | ExprKind::SelfValue
+            | ExprKind::SelfType
+            | ExprKind::PipePlaceholder
+            | ExprKind::OffsetOf { .. }
+            | ExprKind::Error => {}
+            ExprKind::InterpolatedStringLit(parts) => {
+                for part in parts {
+                    if let crate::ast::ParsedInterpolationPart::Expr(e) = part {
+                        self.walk_expr(e);
+                    }
+                }
+            }
+        }
+    }
 }
