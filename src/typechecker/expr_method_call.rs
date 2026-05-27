@@ -497,6 +497,32 @@ impl<'a> super::TypeChecker<'a> {
         args: &[CallArg],
         span: &Span,
     ) -> Type {
+        // Phase 6 line 170 slice 3a — cross-task-safe boundary check at
+        // `tg.spawn(closure)` call sites. Fires before any other dispatch
+        // so the outer-scope snapshot taken inside
+        // `check_cross_task_safe_captures` reflects the scope at the
+        // call site, before the closure body's typecheck pushes its
+        // own params. Gated on `method == "spawn"` + receiver type
+        // resolving to `TaskGroup` so the check only fires on the
+        // intended call shape. `infer_expr` on the receiver is
+        // idempotent for an already-typechecked identifier (the
+        // expr_types entry is just re-asserted), so the pre-inference
+        // here has no side-effect downstream of the dispatch fallthrough.
+        if method == "spawn" && args.len() == 1 {
+            if let ExprKind::Closure { .. } = &args[0].value.kind {
+                let recv_ty = self.infer_expr(object);
+                if let Type::Named { name, .. } = &recv_ty {
+                    if name == "TaskGroup" {
+                        self.check_cross_task_safe_captures(
+                            &args[0].value,
+                            span,
+                            "TaskGroup.spawn",
+                        );
+                    }
+                }
+            }
+        }
+
         // Strict-provenance `ptr` module — `ptr.addr(p)`, `ptr.with_addr(p, a)`,
         // `ptr.from_exposed(a)`, etc. (design.md § Pointer Provenance, v60
         // item 20). Routes through the generic-aware dispatch path because

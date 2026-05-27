@@ -62,8 +62,10 @@
 //! slice ships the standalone walker + unit tests so the integration
 //! slice has a stable input contract.
 
+use crate::typechecker::env::{EnumInfo, StructInfo};
 use crate::typechecker::types::{type_display, Type};
 use crate::typechecker::TypeCheckResult;
+use std::collections::HashMap;
 
 /// Diagnostic-shaped path through the type tree from a root binding's
 /// type to the cross-task-unsafe leaf that's transitively reachable.
@@ -129,14 +131,28 @@ impl CrossTaskUnsafeFixIt {
 /// `Named { name, args }` shapes that resolve to a user-defined struct
 /// in `types.struct_info` walk each field's type; same for `enum_info`.
 pub fn is_cross_task_safe(ty: &Type, types: &TypeCheckResult) -> Result<(), CrossTaskUnsafePath> {
+    is_cross_task_safe_with(ty, &types.struct_info, &types.enum_info)
+}
+
+/// Variant of [`is_cross_task_safe`] that takes the struct / enum index
+/// maps directly. Used by the boundary-site enforcement check (slice 3)
+/// which runs mid-typecheck — the canonical `TypeCheckResult` hasn't
+/// been materialised yet, but `TypeChecker.env.structs` / `env.enums`
+/// hold the same shape data.
+pub fn is_cross_task_safe_with(
+    ty: &Type,
+    struct_info: &HashMap<String, StructInfo>,
+    enum_info: &HashMap<String, EnumInfo>,
+) -> Result<(), CrossTaskUnsafePath> {
     let root = type_display(ty);
     let mut path: Vec<String> = Vec::new();
-    walk(ty, types, &mut path, &root)
+    walk(ty, struct_info, enum_info, &mut path, &root)
 }
 
 fn walk(
     ty: &Type,
-    types: &TypeCheckResult,
+    struct_info: &HashMap<String, StructInfo>,
+    enum_info: &HashMap<String, EnumInfo>,
     path: &mut Vec<String>,
     root: &str,
 ) -> Result<(), CrossTaskUnsafePath> {
@@ -182,39 +198,39 @@ fn walk(
         Type::Tuple(elems) => {
             for (i, elem) in elems.iter().enumerate() {
                 path.push(format!("tuple element {}", i));
-                walk(elem, types, path, root)?;
+                walk(elem, struct_info, enum_info, path, root)?;
                 path.pop();
             }
         }
         Type::Array { element, .. } => {
             path.push("array element".to_string());
-            walk(element, types, path, root)?;
+            walk(element, struct_info, enum_info, path, root)?;
             path.pop();
         }
         Type::Slice { element, .. } => {
             path.push("slice element".to_string());
-            walk(element, types, path, root)?;
+            walk(element, struct_info, enum_info, path, root)?;
             path.pop();
         }
         Type::Arc(inner) => {
             // Arc itself is safe but its inner might transitively reach
             // an unsafe leaf — `Arc[Rc[T]]` is still bad.
             path.push("Arc inner".to_string());
-            walk(inner, types, path, root)?;
+            walk(inner, struct_info, enum_info, path, root)?;
             path.pop();
         }
         Type::Ref(inner) | Type::MutRef(inner) | Type::Weak(inner) => {
-            walk(inner, types, path, root)?;
+            walk(inner, struct_info, enum_info, path, root)?;
         }
         Type::Named { name, args } => {
             // Walk type args first — `Vec[Rc[T]]` catches Rc here.
             for (i, arg) in args.iter().enumerate() {
                 path.push(format!("`{}` arg {}", name, i));
-                walk(arg, types, path, root)?;
+                walk(arg, struct_info, enum_info, path, root)?;
                 path.pop();
             }
             // Then transitively walk user struct fields / enum variants.
-            if let Some(info) = types.struct_info.get(name) {
+            if let Some(info) = struct_info.get(name) {
                 if info.is_shared {
                     return Err(CrossTaskUnsafePath {
                         root: root.to_string(),
@@ -225,10 +241,10 @@ fn walk(
                 }
                 for (field_name, field_ty, _is_pub) in &info.fields {
                     path.push(format!("field '{}'", field_name));
-                    walk(field_ty, types, path, root)?;
+                    walk(field_ty, struct_info, enum_info, path, root)?;
                     path.pop();
                 }
-            } else if let Some(info) = types.enum_info.get(name) {
+            } else if let Some(info) = enum_info.get(name) {
                 if info.is_shared {
                     return Err(CrossTaskUnsafePath {
                         root: root.to_string(),
@@ -244,7 +260,7 @@ fn walk(
                         VariantTypeInfo::Tuple(fields) => {
                             for (i, field_ty) in fields.iter().enumerate() {
                                 path.push(format!("variant '{}' payload {}", variant_name, i));
-                                walk(field_ty, types, path, root)?;
+                                walk(field_ty, struct_info, enum_info, path, root)?;
                                 path.pop();
                             }
                         }
@@ -254,7 +270,7 @@ fn walk(
                                     "variant '{}' field '{}'",
                                     variant_name, field_name
                                 ));
-                                walk(field_ty, types, path, root)?;
+                                walk(field_ty, struct_info, enum_info, path, root)?;
                                 path.pop();
                             }
                         }

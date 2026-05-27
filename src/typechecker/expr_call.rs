@@ -141,6 +141,21 @@ impl<'a> super::TypeChecker<'a> {
     }
 
     pub(super) fn infer_call(&mut self, callee: &Expr, args: &[CallArg], span: &Span) -> Type {
+        // Phase 6 line 170 slice 3a — cross-task-safe boundary check at
+        // `spawn(closure)` call sites. Fires before any other dispatch so
+        // the outer-scope snapshot taken inside
+        // `check_cross_task_safe_captures` doesn't include the closure
+        // params (those get pushed onto the local scope only when the
+        // closure body's typecheck runs, deeper in this function). When
+        // the callee isn't bare `spawn` or the arg isn't a closure
+        // literal, the call is a no-op — regular dispatch follows
+        // unchanged.
+        if let ExprKind::Identifier(name) = &callee.kind {
+            if name == "spawn" && args.len() == 1 && self.local_scope.lookup("spawn").is_none() {
+                self.check_cross_task_safe_captures(&args[0].value, span, "spawn");
+            }
+        }
+
         // Uppercase-receiver method-dispatch rewrite. The parser at
         // `src/parser/exprs.rs` 1298–1326 greedily wraps `X.method(args)`
         // in `Call(Path([X, method]))` whenever `X` starts uppercase —

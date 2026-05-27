@@ -2537,6 +2537,13 @@ fn collect_diagnostics(pipeline: &Pipeline) -> DiagnosticJson {
                 // function return, struct/enum field, or
                 // `Sender.send` argument.
                 crate::typechecker::TypeErrorKind::ScopeLocalEscape => "E0253",
+                // Phase 6 line 170 slice 3a — cross-task-safe boundary
+                // check at `spawn(closure)` / `TaskGroup.spawn(closure)`
+                // call sites. Fires when a captured binding's type
+                // reaches a cross-task-unsafe leaf (`Rc[T]`, `shared`,
+                // `OnceCell[T]`, raw pointer) per
+                // `src/cross_task_safe.rs`'s closed structural list.
+                crate::typechecker::TypeErrorKind::CrossTaskUnsafeCapture => "E0254",
             };
             diags.add(DiagEntry {
                 id: &format!("d{id_counter}"),

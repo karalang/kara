@@ -21,6 +21,7 @@ use std::collections::{HashMap, HashSet};
 mod bounds;
 mod closures;
 mod const_eval;
+mod cross_task_check;
 mod derives;
 pub mod env;
 mod env_build;
@@ -556,6 +557,12 @@ pub enum TypeErrorKind {
     /// rule fires regardless of whether the pipeline reaches the
     /// ownership pass. Code `E_REASSIGN_TO_IMMUTABLE_MODULE_BINDING`.
     ReassignToImmutableModuleBinding,
+    /// Phase 6 line 170 slice 3a — a `spawn(closure)` / `TaskGroup.spawn(closure)`
+    /// call site captures a binding whose type reaches a cross-task-unsafe
+    /// leaf (`Rc[T]`, `shared struct`, `shared enum`, `OnceCell[T]`, raw
+    /// pointer) per the closed structural list in `src/cross_task_safe.rs`.
+    /// Code `E_NOT_CROSS_TASK`.
+    CrossTaskUnsafeCapture,
 }
 
 /// Map a `TypeErrorKind` to its broad-category `DiagnosticClass`
@@ -628,7 +635,8 @@ pub(crate) fn class_for_type_error_kind(
         | TypeErrorKind::ModuleBindingEffectfulInit
         | TypeErrorKind::ModuleBindingHeapType
         | TypeErrorKind::ReassignToImmutableModuleBinding
-        | TypeErrorKind::ScopeLocalEscape => None,
+        | TypeErrorKind::ScopeLocalEscape
+        | TypeErrorKind::CrossTaskUnsafeCapture => None,
     }
 }
 

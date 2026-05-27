@@ -19501,3 +19501,244 @@ fn scope_local_other_types_not_rejected() {
          }",
     );
 }
+
+// ── Phase 6 line 170 slice 3a: cross-task-safe boundary check ──────
+//
+// design.md § Cross-task-safe Set + Structural Send Replacement —
+// a closure passed to `spawn(...)` / `TaskGroup.spawn(...)` is rejected
+// when any of its captured bindings' types reach a cross-task-unsafe
+// leaf (`shared struct/enum`, `Rc[T]`, `OnceCell[T]`, raw pointer).
+// Walker: `src/cross_task_safe.rs`; boundary hook:
+// `src/typechecker/cross_task_check.rs`.
+//
+// Direct-hit `Rc[T]` and `OnceCell[T]` aren't directly nameable in
+// user kara source at v1 (per the slice-1 deferred-test note);
+// shared structs and raw pointers are, and the walker's transitive
+// rule catches the rest via `Vec[*mut u8]` / struct field tests.
+
+#[test]
+fn spawn_capturing_primitive_only_accepted() {
+    // Positive case: closure body captures a Copy primitive — every
+    // reachable leaf is safe, no diagnostic fires.
+    typecheck_ok(
+        "fn main() {
+             let x: i64 = 42;
+             let h: TaskHandle[i64] = spawn(|| x + 1);
+             let _v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn taskgroup_spawn_capturing_primitive_only_accepted() {
+    // Same positive case via TaskGroup.spawn — the boundary check
+    // routes through the same walker.
+    typecheck_ok(
+        "fn main() {
+             let x: i64 = 42;
+             let mut tg: TaskGroup = TaskGroup.new();
+             tg.spawn(|| { let _y: i64 = x + 1; });
+         }",
+    );
+}
+
+#[test]
+fn spawn_capturing_shared_struct_rejected_with_par_fix_it() {
+    let errors = typecheck_errors(
+        "shared struct Cache { value: i64 }
+         impl Cache { fn get(ref self) -> i64 { self.value } }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let h: TaskHandle[i64] = spawn(|| c.get());
+             let _v: i64 = h.join();
+         }",
+    );
+    let cross_task = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture);
+    let cross_task = cross_task.unwrap_or_else(|| {
+        panic!(
+            "expected CrossTaskUnsafeCapture on shared-struct capture in spawn closure, got: {:?}",
+            errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+        )
+    });
+    assert!(
+        cross_task.message.contains("E_NOT_CROSS_TASK"),
+        "diagnostic message should carry E_NOT_CROSS_TASK code, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("`c`"),
+        "diagnostic should name the captured binding `c`, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("Cache"),
+        "diagnostic should name `Cache` as the unsafe shape, got: {}",
+        cross_task.message,
+    );
+    assert!(
+        cross_task.message.contains("`par`"),
+        "fix-it text should suggest the `par` form, got: {}",
+        cross_task.message,
+    );
+}
+
+#[test]
+fn taskgroup_spawn_capturing_shared_struct_rejected_with_par_fix_it() {
+    // Same rejection, but via the method-dispatch path.
+    let errors = typecheck_errors(
+        "shared struct Cache { value: i64 }
+         impl Cache { fn get(ref self) -> i64 { self.value } }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let mut tg: TaskGroup = TaskGroup.new();
+             tg.spawn(|| { let _v: i64 = c.get(); });
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
+                && e.message.contains("TaskGroup.spawn")
+                && e.message.contains("`c`")
+                && e.message.contains("Cache")),
+        "expected CrossTaskUnsafeCapture on shared-struct capture in tg.spawn closure, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn spawn_capturing_raw_pointer_rejected_with_atomic_or_channel_fix_it() {
+    let errors = typecheck_errors(
+        "fn use_ptr(p: *mut u8) {
+             let h: TaskHandle[i64] = spawn(|| p as i64);
+             let _v: i64 = h.join();
+         }
+         fn main() {}",
+    );
+    let cross_task = errors
+        .iter()
+        .find(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture)
+        .unwrap_or_else(|| {
+            panic!(
+                "expected CrossTaskUnsafeCapture on raw-ptr capture, got: {:?}",
+                errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+            )
+        });
+    assert!(
+        cross_task.message.contains("Atomic") || cross_task.message.contains("channel"),
+        "raw-ptr fix-it should mention Atomic[*mut T] or channel transfer, got: {}",
+        cross_task.message,
+    );
+}
+
+#[test]
+fn spawn_capturing_vec_of_raw_pointers_rejected_transitively() {
+    // Transitive case: the capture's outer type is `Vec[*mut u8]`,
+    // which is safe at the outer Named { name: "Vec", ... } shape but
+    // unsafe at the inner arg's `*mut u8`. The walker's transitive
+    // recursion catches this via the `Vec` arg position. The diagnostic
+    // renders the capture type via `type_display`, which uses Rust-
+    // style angle brackets — `Vec<*mut u8>` — rather than Kāra source
+    // brackets `Vec[*mut u8]` (a cross-codebase display convention
+    // separate from this slice's scope).
+    let errors = typecheck_errors(
+        "fn use_vec(v: Vec[*mut u8]) {
+             let h: TaskHandle[i64] = spawn(|| v.len() as i64);
+             let _v: i64 = h.join();
+         }
+         fn main() {}",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
+                && e.message.contains("`v`")
+                && e.message.contains("Vec<*mut u8>")
+                && e.message.contains("`Vec` arg")),
+        "expected transitive CrossTaskUnsafeCapture through Vec[*mut u8], got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn spawn_capturing_struct_with_shared_field_rejected_through_field_path() {
+    // Transitive case: capture binding has user-struct type `Holder`,
+    // whose `cache` field is a shared struct. The walker recurses into
+    // `Holder`'s struct_info fields and finds the leak at
+    // `field 'cache'`. Kāra forbids `ref` at call sites — the parameter's
+    // mode is declared on the callee — so the read goes through a
+    // method to keep the closure body well-formed.
+    let errors = typecheck_errors(
+        "shared struct Cache { value: i64 }
+         struct Holder { cache: Cache, count: i64 }
+         impl Holder { fn count(ref self) -> i64 { self.count } }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let holder: Holder = Holder { cache: c, count: 0 };
+             let task: TaskHandle[i64] = spawn(|| holder.count());
+             let _v: i64 = task.join();
+         }",
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.kind == TypeErrorKind::CrossTaskUnsafeCapture
+                && e.message.contains("`holder`")
+                && (e.message.contains("field 'cache'") || e.message.contains("field `cache`"))),
+        "expected CrossTaskUnsafeCapture through Holder.cache field, got: {:?}",
+        errors.iter().map(|e| &e.message).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn spawn_with_no_captures_accepted() {
+    // Closure body uses only globally-resolved names (free fn `make_int`,
+    // not a local binding), so there are no captures at all. The walker
+    // returns an empty capture list and no diagnostic fires.
+    typecheck_ok(
+        "fn make_int() -> i64 { 42 }
+         fn main() {
+             let h: TaskHandle[i64] = spawn(|| make_int());
+             let _v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn spawn_with_vec_of_primitive_capture_accepted() {
+    // Positive case: Vec[i64] is a safe collection — every reachable
+    // leaf through the Named-arg recursion is a primitive. (Arc[T] is
+    // the canonical cross-task-safe handle per design.md but
+    // currently has no stdlib surface; Vec[i64] exercises the same
+    // walker recursion path through `Named { args }` and is in scope
+    // today.)
+    typecheck_ok(
+        "fn main() {
+             let v: Vec[i64] = Vec.new();
+             let h: TaskHandle[i64] = spawn(|| v.len() as i64);
+             let _r: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn local_binding_shadowing_captured_outer_skips_check() {
+    // Regression guard: the walker's shadow-stack discipline drops a
+    // body-local binding's name from the capture set. Here `c` is
+    // shadowed by a body-local `let`, so the outer `c: Cache` is NOT
+    // captured and the boundary check stays silent. (The body's local
+    // `c` is `i64`, safe.)
+    typecheck_ok(
+        "shared struct Cache { value: i64 }
+         fn main() {
+             let c: Cache = Cache { value: 0 };
+             let h: TaskHandle[i64] = spawn(|| {
+                 let c: i64 = 1;
+                 c + 1
+             });
+             let _v: i64 = h.join();
+         }",
+    );
+}
