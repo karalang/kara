@@ -22688,6 +22688,83 @@ fn main() {
         );
     }
 
+    // ── Phase 8 File handle slice F5 — ?-propagation ──────────────────
+    //
+    // Validates that `?` on a `Result[File, IoError]` (or
+    // `Result[T, IoError]` for any T) early-returns the IoError to the
+    // caller's Result. The mechanism reuses the existing 4-word Result
+    // payload path widened at phase-8 line 435 slice 2 (2026-05-21);
+    // Json.parse exercised the Ok-with-4-word-payload case, F5
+    // validates the Err-with-multi-word-payload case (IoError variant
+    // tag + optional String message for the Other variant). No
+    // codegen changes at F5 — the existing `compile_question` path
+    // handles this shape correctly.
+    //
+    // The tests run a compiled binary that calls a helper returning
+    // `Result[i64, IoError]` and uses `?` to propagate `File.open`'s
+    // Err arm; the caller matches the propagated IoError variant.
+
+    #[test]
+    fn test_e2e_file_open_question_propagates_not_found() {
+        // `File.open` on a nonexistent path returns
+        // `Err(IoError.NotFound)`; `?` propagates that Err verbatim to
+        // the helper's caller. The match arm in `main` then matches
+        // the propagated variant — pins the IoError tag pass-through.
+        let out = run_program(
+            r#"
+fn try_open(path: String) -> Result[i64, IoError] with reads(FileSystem) {
+    let _f = File.open(path)?;
+    Ok(0_i64)
+}
+fn main() with reads(FileSystem) {
+    match try_open("/nonexistent_karac_f5_test.txt") {
+        Ok(_) => println("unexpected-ok"),
+        Err(e) => match e {
+            IoError.NotFound => println("propagated-NotFound"),
+            _ => println("propagated-other"),
+        },
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "propagated-NotFound");
+        }
+    }
+
+    #[test]
+    fn test_e2e_file_open_question_passes_through_ok() {
+        // Successful File.open returns `Ok(File)`; `?` extracts the
+        // File and the helper's terminal `Ok(0_i64)` propagates as the
+        // caller's Result. Pins that the Ok path doesn't accidentally
+        // wrap the success as Err. Uses the host OS to create the
+        // tempfile (test-harness pre-condition), then exercises the
+        // compiled Kāra path.
+        let tmp = std::env::temp_dir().join("karac_e2e_file_f5_open_ok.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"seed").expect("temp write");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn try_open(path: String) -> Result[i64, IoError] with reads(FileSystem) {{
+    let _f = File.open(path)?;
+    Ok(0_i64)
+}}
+fn main() with reads(FileSystem) {{
+    match try_open("{path}") {{
+        Ok(_) => println("ok-passthrough"),
+        Err(_) => println("unexpected-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "ok-passthrough");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
     /// Locate a function definition body by name and return its lines
     /// from the opening `{` (exclusive) through the closing `}`.
     /// Returns `None` if the function is not defined in the IR. Counts
