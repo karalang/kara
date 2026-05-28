@@ -37,6 +37,7 @@ pub mod event_loop;
 mod file;
 mod map;
 pub mod scheduler;
+pub mod tls;
 
 use std::cell::Cell;
 use std::collections::VecDeque;

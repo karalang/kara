@@ -53,6 +53,28 @@ bytes = "1"
 # explicit and the API surface is self-contained.
 mio = { version = "1", features = ["os-poll", "os-ext", "net"] }
 
+# Phase 6 line 236 slice 1 (TLS / HTTPS server-side stdlib): rustls backs
+# `runtime/src/tls.rs` — pure-Rust TLS implementation, no openssl link
+# dependency. `default-features = false` strips out `aws_lc_rs` (heavy
+# build, needs nasm) in favor of `ring`, which is what `ureq` already
+# pulls into the lockfile via `rustls 0.23.39`. v1 surface keeps it
+# minimal: `std` + `tls12` (broad client compat) + `ring` (crypto
+# provider). Server-side configuration only; client auth + custom roots
+# land additively when a real consumer needs them. `rustls-pemfile`
+# parses the PEM bytes the FFI receives at `tls_config_new` into
+# rustls's `CertificateDer` / `PrivateKeyDer` types.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+rustls-pemfile = "2"
+
+[dev-dependencies]
+# Hermetic test-cert generation for `src/tls.rs`'s unit tests. Slice 4
+# of the TLS entry ships checked-in cert fixtures under
+# `tests/fixtures/tls/`; until then, slice-1 round-trip / handshake-
+# failure tests generate a fresh self-signed cert per test run via
+# rcgen. `ring` feature so the dev-time crypto matches the prod
+# provider rustls is built against here.
+rcgen = { version = "0.14", default-features = false, features = ["pem", "ring", "crypto"] }
+
 # Note: the runtime's release-profile `panic = "abort"` setting lives in
 # the workspace root `Cargo.toml` (cargo ignores `[profile.*]` in
 # non-root manifests with a warning). See the workspace Cargo.toml's
