@@ -1,0 +1,85 @@
+// main.kara — Flagship Demo 1: minimal HTTP+WebSocket server, slice 1 (plaintext `ws://`).
+//
+// Smallest viable Kāra source that holds N idle WebSocket connections
+// over plain TCP. Used as the M1 / M2 / M3 verification gate per
+// `docs/implementation_checklist/phase-6-runtime.md` line 170 — the
+// per-milestone bench harness (slice 3 of the same entry) opens N
+// concurrent ws:// connections against this server and measures
+// connect-establishment latency, per-connection memory cost, and
+// steady-state P99 latency under churn. M1's target is 100K stable
+// idle connections on a single Linux box; M2 doubles, M3 hits 1M+.
+//
+// **What this slice ships.** Plaintext `ws://` only. TLS lands in
+// slice 2 of the line-170 entry once the `TLS / HTTPS server-side
+// stdlib` entry (5 sub-slices: rustls FFI, TlsListener/TlsStream,
+// WebSocket-over-TLS, test-cert fixtures, design.md update) lands.
+// The diff between slice 1 and slice 2 is minimal — swap
+// `TcpListener.bind` for `TlsListener.bind_tls(addr, cert, key)`; the
+// rest of the accept-loop and per-connection handler are unchanged
+// because `WebSocket.accept(listener)` is parameterised on listener
+// type (slice 9e.2 of phase-6 line 17 shipped 2026-05-25).
+//
+// **Architecture.** Single accept thread, fan-out per connection
+// through `TaskGroup.spawn`:
+//   1. Bind a `TcpListener` on `127.0.0.1:<port>` (port defaults to
+//      `:0` for ephemeral so the bench harness reads back the chosen
+//      port via stdout `BOUND_PORT=<n>` convention from slice 8 of
+//      phase-6 line 17 `tcp.kara`).
+//   2. In a loop: call `WebSocket.accept(listener)` (which parks on
+//      the listener's read-readiness, accepts the next TCP connection,
+//      and performs the RFC 6455 HTTP-upgrade handshake — all in one
+//      shot, see `ws.kara` slice 9e.2 lines 67–103).
+//   3. `tg.spawn(|| handle_connection(ws))` — the spawned closure
+//      move-captures the freshly-bound `ws` into the per-task handler.
+//      `TaskGroup.spawn`'s slot is `OnceFn() -> T` (per slice 8 of
+//      phase-6 line 218, shipped 2026-05-27) so the consuming capture
+//      typechecks cleanly.
+//
+// **Per-connection handler.** Reads frames in a `recv_text` loop
+// until the peer disconnects (`Ok(0)` = clean EOF) or a protocol/IO
+// error fires. For the idle-connection demo the loop is a pure
+// "wait-and-wake" pattern: the parking primitive (`karac_park_on_fd`)
+// suspends the task on the connection's read-readiness, so 100K idle
+// connections occupy ~100K parked tasks in the scheduler's wait-set,
+// not 100K running threads. The `Drop` impl on `WebSocket` (slice 9d
+// of phase-6 line 17) closes the fd when the task exits, so a clean
+// peer disconnect doesn't leak file descriptors.
+//
+// **What slice 1 deliberately omits.**
+//   - **No echo.** M1's target is *idle* connections; echo would
+//     introduce per-frame CPU and stdout traffic that confounds the
+//     memory + latency measurements.
+//   - **No structured logging.** `std.tracing` integration lands when
+//     the demo grows beyond smoke-test (slice 3+ of line 170).
+//   - **No graceful shutdown.** The loop runs until interrupted
+//     (SIGINT / process kill). M1 verification scripts already handle
+//     subprocess lifecycle externally.
+//   - **No max-connection cap.** Defer to OS-level `ulimit -n`; the
+//     `#[concurrency(max_tasks: N)]` knob on `TaskGroup` lands when a
+//     real cap-shaped requirement surfaces.
+
+fn handle_connection(ws: WebSocket) {
+    let mut buf: Array[u8, 4096] = [0u8; 4096];
+    loop {
+        let r = ws.recv_text(mut buf);
+        match r {
+            Result.Ok(n) => {
+                if n == 0 {
+                    break;
+                }
+            }
+            Result.Err(_) => {
+                break;
+            }
+        }
+    }
+}
+
+fn main() {
+    let listener: TcpListener = TcpListener.bind("127.0.0.1:0");
+    let mut tg: TaskGroup = TaskGroup.new();
+    loop {
+        let ws: WebSocket = WebSocket.accept(listener);
+        tg.spawn(|| handle_connection(ws));
+    }
+}

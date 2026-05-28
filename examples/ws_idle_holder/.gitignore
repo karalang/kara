@@ -1,0 +1,3 @@
+# `karac build` writes the demo binary at the project root.
+# Reproduce via the README's "How to run" recipe.
+ws_idle_holder
