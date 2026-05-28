@@ -13,9 +13,27 @@
 use crate::ast::*;
 
 use inkwell::types::{BasicMetadataTypeEnum, BasicTypeEnum};
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
+use inkwell::values::{BasicMetadataValueEnum, BasicValue, BasicValueEnum};
 use inkwell::AddressSpace;
+use inkwell::AtomicOrdering;
 use inkwell::IntPredicate;
+
+/// Natural alignment (bytes) for an Atomic primitive lowering. LLVM's
+/// `load atomic` / `store atomic` require alignment ≥ the type's size
+/// in bytes; the v1 Atomic codegen surface admits power-of-two-byte
+/// integer widths (i8/i16/i32/i64/usize/i128) per the gate in
+/// `compile_atomic_method`. Narrower / non-power-of-two widths (e.g.
+/// `i1` from `Atomic[bool]`) are rejected at the dispatch site with a
+/// clear diagnostic; the rounding-up branch here is defensive only.
+fn atomic_alignment_for(ty: BasicTypeEnum<'_>) -> u32 {
+    match ty {
+        BasicTypeEnum::IntType(it) => {
+            let bits = it.get_bit_width();
+            bits.div_ceil(8).max(1)
+        }
+        _ => 8,
+    }
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     pub(super) fn compile_method_call(
@@ -844,6 +862,27 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_json_stringify(recv_val);
         }
 
+        // `Atomic[T].load(ord)` / `Atomic[T].store(value, ord)` —
+        // compiler-builtin dispatch for the transparent Atomic wrapper.
+        // Two receiver shapes supported:
+        //   1. Identifier `a` where `var_type_names["a"] == "Atomic"`
+        //      (populated by the let-stmt Atomic-RHS recognizer in
+        //      `compile_stmt`).
+        //   2. FieldAccess `c.count` where struct `Counter`'s `count`
+        //      field has declared type `Atomic[T]` (recorded in
+        //      `struct_field_type_names`). This is the shape the
+        //      `karac migrate --atomic` consumer-rewrite emits
+        //      (L215c-cons), so the migration tool's output compiles
+        //      under codegen without further hand-conversion.
+        // Both shapes route through `compile_atomic_method`, which
+        // resolves the receiver's storage pointer + element LLVM type,
+        // pattern-matches the trailing `MemoryOrdering.X` qualified-
+        // variant arg into an `inkwell::AtomicOrdering`, and emits
+        // `load atomic` / `store atomic`.
+        if (method == "load" || method == "store") && self.is_atomic_receiver(object) {
+            return self.compile_atomic_method(object, method, args);
+        }
+
         // User impl-block method on a struct receiver: route `obj.method(args)`
         // through the `Type.method` function emitted by the impl-block pass.
         // Requires knowing the object's declared type; the typechecker stashes
@@ -952,6 +991,259 @@ impl<'ctx> super::Codegen<'ctx> {
              or mark the test `#[ignore]` if the method is genuinely deferred)",
             method, receiver_desc
         ))
+    }
+
+    /// True iff `object` is a receiver shape whose static type is
+    /// `Atomic[T]` — either an Identifier `a` (var_type_names registers
+    /// "Atomic" via the let-stmt RHS recognizer in `compile_stmt`) or a
+    /// FieldAccess `c.field` where `c`'s struct registers `field`'s
+    /// declared type as `Atomic` in `struct_field_type_names`.
+    /// Companion gate to `compile_atomic_method`.
+    fn is_atomic_receiver(&self, object: &Expr) -> bool {
+        match &object.kind {
+            ExprKind::Identifier(name) => {
+                matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Atomic")
+            }
+            ExprKind::FieldAccess { object, field } => {
+                if let Some(obj_ty) = self.type_name_of_expr(object) {
+                    if let Some(field_names) = self.struct_field_names.get(obj_ty.as_str()) {
+                        if let Some(idx) = field_names.iter().position(|n| n == field) {
+                            if let Some(field_ty_names) =
+                                self.struct_field_type_names.get(obj_ty.as_str())
+                            {
+                                return field_ty_names.get(idx).and_then(|n| n.as_deref())
+                                    == Some("Atomic");
+                            }
+                        }
+                    }
+                }
+                false
+            }
+            _ => false,
+        }
+    }
+
+    /// Codegen for `Atomic[T].load(MemoryOrdering.X)` and
+    /// `Atomic[T].store(value, MemoryOrdering.X)`. Resolves the
+    /// receiver's storage pointer + element LLVM type, parses the
+    /// trailing `MemoryOrdering.X` qualified-variant arg into an
+    /// `inkwell::AtomicOrdering`, and emits `load atomic` / `store
+    /// atomic` against the slot. Supports both Identifier receivers
+    /// (`a.load(...)` where `a` is a top-level Atomic[T] binding) and
+    /// FieldAccess receivers (`c.field.load(...)` where `c.field` is
+    /// an Atomic-typed struct field — the shape the `karac migrate
+    /// --atomic` consumer-rewrite emits). The receiver gate runs in
+    /// `is_atomic_receiver` upstream.
+    fn compile_atomic_method(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[CallArg],
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (storage_ptr, elem_ty) = self.resolve_atomic_storage(object)?;
+        // LLVM requires atomic load/store on a power-of-two-byte
+        // integer (i8/i16/i32/i64/i128 plus pointer/float of those
+        // widths). Reject narrower / odd-width integers explicitly so
+        // the user sees a clear codegen diagnostic rather than an
+        // opaque LLVM verifier failure. `Atomic[bool]` is the most
+        // likely shape this catches today — its codegen support is
+        // deferred (would require widening to i8 at the slot, with
+        // zext/trunc wrappers around .load / .store); the L215c
+        // classifier still admits `bool` fields for the migration
+        // tool, so this diagnostic also names the deferred follow-up
+        // as the path forward.
+        if let BasicTypeEnum::IntType(it) = elem_ty {
+            let bw = it.get_bit_width();
+            if bw < 8 || !bw.is_power_of_two() {
+                return Err(format!(
+                    "codegen: Atomic[T] requires T to be a power-of-two-byte integer \
+                     (i8/i16/i32/i64/i128/usize); received {}-bit integer. `Atomic[bool]` \
+                     codegen is deferred — track as a separate slice.",
+                    bw
+                ));
+            }
+        }
+        match method {
+            "load" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "codegen: Atomic.load takes 1 MemoryOrdering argument, got {}",
+                        args.len()
+                    ));
+                }
+                let ordering = self.parse_memory_ordering(&args[0].value)?;
+                if matches!(
+                    ordering,
+                    AtomicOrdering::Release | AtomicOrdering::AcquireRelease
+                ) {
+                    return Err(format!(
+                        "codegen: Atomic.load rejects MemoryOrdering.{:?} (LLVM forbids \
+                         Release / AcqRel on a load); use Relaxed / Acquire / SeqCst",
+                        ordering
+                    ));
+                }
+                let loaded = self
+                    .builder
+                    .build_load(elem_ty, storage_ptr, "atomic.load")
+                    .unwrap();
+                let inst = loaded
+                    .as_instruction_value()
+                    .expect("build_load produces an instruction with an instruction value");
+                let align = atomic_alignment_for(elem_ty);
+                inst.set_alignment(align).map_err(|e| {
+                    format!("codegen: set_alignment failed on atomic load: {:?}", e)
+                })?;
+                inst.set_atomic_ordering(ordering).map_err(|e| {
+                    format!(
+                        "codegen: set_atomic_ordering failed on atomic load: {:?}",
+                        e
+                    )
+                })?;
+                Ok(loaded)
+            }
+            "store" => {
+                if args.len() != 2 {
+                    return Err(format!(
+                        "codegen: Atomic.store takes (value, MemoryOrdering), got {} args",
+                        args.len()
+                    ));
+                }
+                let value = self.compile_expr(&args[0].value)?;
+                let ordering = self.parse_memory_ordering(&args[1].value)?;
+                if matches!(
+                    ordering,
+                    AtomicOrdering::Acquire | AtomicOrdering::AcquireRelease
+                ) {
+                    return Err(format!(
+                        "codegen: Atomic.store rejects MemoryOrdering.{:?} (LLVM forbids \
+                         Acquire / AcqRel on a store); use Relaxed / Release / SeqCst",
+                        ordering
+                    ));
+                }
+                let store_inst = self.builder.build_store(storage_ptr, value).unwrap();
+                let align = atomic_alignment_for(elem_ty);
+                store_inst.set_alignment(align).map_err(|e| {
+                    format!("codegen: set_alignment failed on atomic store: {:?}", e)
+                })?;
+                store_inst.set_atomic_ordering(ordering).map_err(|e| {
+                    format!(
+                        "codegen: set_atomic_ordering failed on atomic store: {:?}",
+                        e
+                    )
+                })?;
+                // Stores return unit — fill the expression slot with the
+                // i64-0 placeholder used elsewhere for void returns.
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            _ => unreachable!("compile_atomic_method gated on method in {{load, store}}"),
+        }
+    }
+
+    /// Recover the (storage pointer, element LLVM type) pair for an
+    /// `Atomic[T]` receiver. Identifier path reads from `variables`;
+    /// FieldAccess path GEPs to the struct field. Element type is the
+    /// LLVM type of the inner primitive (Atomic[T] is laid out
+    /// transparently as T — see `llvm_type_for_type_expr`'s Atomic
+    /// arm).
+    fn resolve_atomic_storage(
+        &mut self,
+        object: &Expr,
+    ) -> Result<(inkwell::values::PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+        match &object.kind {
+            ExprKind::Identifier(name) => {
+                let slot =
+                    self.variables.get(name.as_str()).copied().ok_or_else(|| {
+                        format!("codegen: Atomic receiver '{}' has no slot", name)
+                    })?;
+                Ok((slot.ptr, slot.ty))
+            }
+            ExprKind::FieldAccess {
+                object: inner,
+                field,
+            } => {
+                let obj_ty_name = self.type_name_of_expr(inner).ok_or_else(|| {
+                    format!(
+                        "codegen: Atomic field receiver '.{}' has unknown object type",
+                        field
+                    )
+                })?;
+                let field_names = self
+                    .struct_field_names
+                    .get(obj_ty_name.as_str())
+                    .cloned()
+                    .ok_or_else(|| {
+                        format!("codegen: struct '{}' has no registered fields", obj_ty_name)
+                    })?;
+                let idx = field_names.iter().position(|n| n == field).ok_or_else(|| {
+                    format!("codegen: struct '{}' has no field '{}'", obj_ty_name, field)
+                })? as u32;
+                let struct_ty = *self.struct_types.get(obj_ty_name.as_str()).ok_or_else(|| {
+                    format!(
+                        "codegen: struct '{}' has no LLVM type (shared structs not \
+                             supported as Atomic field receivers)",
+                        obj_ty_name
+                    )
+                })?;
+                let inner_name = if let ExprKind::Identifier(n) = &inner.kind {
+                    n.clone()
+                } else {
+                    return Err(format!(
+                        "codegen: Atomic FieldAccess receiver must be `<identifier>.{}` \
+                         in v1 (got nested receiver)",
+                        field
+                    ));
+                };
+                let base_ptr = self.get_data_ptr(&inner_name).ok_or_else(|| {
+                    format!(
+                        "codegen: Atomic field receiver base '{}' has no storage ptr",
+                        inner_name
+                    )
+                })?;
+                let field_ptr = self
+                    .builder
+                    .build_struct_gep(struct_ty, base_ptr, idx, "atomic.field.ptr")
+                    .map_err(|e| format!("codegen: struct_gep failed: {:?}", e))?;
+                let elem_ty = struct_ty.get_field_type_at_index(idx).ok_or_else(|| {
+                    format!(
+                        "codegen: struct '{}' field {} index out of range",
+                        obj_ty_name, idx
+                    )
+                })?;
+                Ok((field_ptr, elem_ty))
+            }
+            _ => Err(format!(
+                "codegen: Atomic method receiver shape {:?} not supported in v1",
+                std::mem::discriminant(&object.kind)
+            )),
+        }
+    }
+
+    /// Parse the canonical `MemoryOrdering.X` qualified-variant
+    /// expression into an `inkwell::AtomicOrdering`. Mirrors the
+    /// interpreter's `MemoryOrdering` qualified-variant recognizer at
+    /// `src/interpreter/eval_call.rs:474+`. The Kāra surface spelling
+    /// for `Relaxed` maps to LLVM's `Monotonic`; all others map by
+    /// name.
+    fn parse_memory_ordering(&self, expr: &Expr) -> Result<AtomicOrdering, String> {
+        if let ExprKind::Path { segments, .. } = &expr.kind {
+            if segments.len() == 2 && segments[0] == "MemoryOrdering" {
+                return match segments[1].as_str() {
+                    "Relaxed" => Ok(AtomicOrdering::Monotonic),
+                    "Acquire" => Ok(AtomicOrdering::Acquire),
+                    "Release" => Ok(AtomicOrdering::Release),
+                    "AcqRel" => Ok(AtomicOrdering::AcquireRelease),
+                    "SeqCst" => Ok(AtomicOrdering::SequentiallyConsistent),
+                    other => Err(format!(
+                        "codegen: unknown MemoryOrdering variant '{}'",
+                        other
+                    )),
+                };
+            }
+        }
+        Err(
+            "codegen: Atomic.load / .store ordering arg must be a MemoryOrdering.X variant literal"
+                .to_string(),
+        )
     }
 
     /// Slice 3 of the strict-provenance work (line 511). Lower one of

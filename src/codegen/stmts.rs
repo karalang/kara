@@ -810,6 +810,25 @@ impl<'ctx> super::Codegen<'ctx> {
                             .insert(var_name.clone(), self.context.i8_type().into());
                         self.string_vars.insert(var_name.clone());
                     }
+                    // Atomic[T] inferred from `let a = Atomic.new(v)` —
+                    // the slot stores `v`'s primitive directly (see the
+                    // Atomic arm in `llvm_type_for_type_expr`); we only
+                    // need `var_type_names[a] = "Atomic"` here so
+                    // `a.load(ord)` / `a.store(v, ord)` route through
+                    // the atomic-memory-op arm in `compile_method_call`
+                    // instead of the user-impl-block lookup (which
+                    // would fail — `Atomic.load` / `.store` are
+                    // compiler-builtins, not user methods). Covers both
+                    // inferred (`let a = Atomic.new(0)`) and
+                    // annotated (`let a: Atomic[i64] = Atomic.new(0)`)
+                    // forms since the canonical constructor shape is
+                    // the same; `pattern_binding_types` doesn't carry
+                    // "Atomic" because the baked `struct Atomic[T]` is
+                    // not fed into the typechecker's struct registry.
+                    if self.is_atomic_new_call(value) {
+                        self.var_type_names
+                            .insert(var_name.clone(), "Atomic".to_string());
+                    }
                     // Debugger Contract slice 5: register `let v =
                     // Runtime.list_par_blocks()` / `Runtime.list_tasks()`
                     // as a Vec-shaped binding so subsequent `v.len()` /

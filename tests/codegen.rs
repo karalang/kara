@@ -23215,4 +23215,113 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
         }
         None
     }
+
+    // ── Atomic[T] codegen: load/store/new method dispatch ─────────
+    //
+    // Mirrors the interpreter's Atomic tests at `tests/interpreter.rs:3294-3318`,
+    // closing the codegen-side gap left by L215c-cons (phase-7 tracker line 229).
+    // The receiver shape covers both the Identifier form (`a.load(...)`) for
+    // top-level `let a = Atomic.new(v)` bindings and the FieldAccess form
+    // (`c.count.load(...)`) emitted by `karac migrate --atomic` against
+    // `shared struct` → `par struct` conversions.
+
+    #[test]
+    fn test_e2e_atomic_new_and_load_seqcst() {
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Atomic.new(42);\n\
+                 println(a.load(MemoryOrdering.SeqCst));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "42\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_store_then_load_relaxed() {
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a = Atomic.new(0);\n\
+                 a.store(99, MemoryOrdering.Relaxed);\n\
+                 println(a.load(MemoryOrdering.Relaxed));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "99\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_release_store_acquire_load() {
+        // The canonical pair the migration tool emits — store uses Release,
+        // load uses Acquire. Pins that LLVM accepts both on the same slot
+        // when alignment is set correctly.
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a = Atomic.new(0);\n\
+                 a.store(7, MemoryOrdering.Release);\n\
+                 println(a.load(MemoryOrdering.Acquire));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "7\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_field_load_store_struct_field() {
+        // FieldAccess receiver shape — the form `karac migrate --atomic`
+        // emits. Without the FieldAccess arm in `is_atomic_receiver` /
+        // `resolve_atomic_storage`, this falls through to the user
+        // impl-block lookup and errors with "no handler for method
+        // 'store' / 'load'".
+        let out = run_program(
+            "struct Counter { count: Atomic[i64] }\n\
+             fn main() {\n\
+                 let c = Counter { count: Atomic.new(0) };\n\
+                 c.count.store(123, MemoryOrdering.Release);\n\
+                 println(c.count.load(MemoryOrdering.Acquire));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "123\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_atomic_load_emits_load_atomic_seq_cst() {
+        // IR-shape regression: the load instruction's atomic ordering
+        // attaches via `set_atomic_ordering(SequentiallyConsistent)`,
+        // which LLVM prints as `load atomic ... seq_cst`. Without the
+        // dispatch arm, codegen would either fall through to the user
+        // impl-block lookup (failing) or emit a plain `load` (no
+        // atomic marker).
+        let ir = ir_for(
+            "fn main() {\n\
+                 let a = Atomic.new(42);\n\
+                 let _ = a.load(MemoryOrdering.SeqCst);\n\
+             }",
+        );
+        assert!(
+            ir.contains("load atomic") && ir.contains("seq_cst"),
+            "expected `load atomic ... seq_cst` in IR; got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_atomic_store_emits_store_atomic_release() {
+        let ir = ir_for(
+            "fn main() {\n\
+                 let mut a = Atomic.new(0);\n\
+                 a.store(99, MemoryOrdering.Release);\n\
+             }",
+        );
+        assert!(
+            ir.contains("store atomic") && ir.contains("release"),
+            "expected `store atomic ... release` in IR; got:\n{}",
+            ir
+        );
+    }
 }

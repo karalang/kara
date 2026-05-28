@@ -1337,6 +1337,21 @@ impl<'ctx> super::Codegen<'ctx> {
             return Ok(agg.into());
         }
 
+        // `Atomic.new(v)` — transparent constructor for the `Atomic[T]`
+        // wrapper. At the LLVM level `Atomic[T]` IS `T` (see the Atomic
+        // arm in `llvm_type_for_type_expr`); the constructor just
+        // forwards its argument's value, which the let-binding then
+        // stores into a primitive-typed alloca. Subsequent
+        // `.load(ord)` / `.store(v, ord)` on the binding lower to
+        // `load atomic` / `store atomic` against that same alloca (see
+        // the Atomic arm in `compile_method_call`).
+        if type_name == "Atomic" && method == "new" {
+            if let Some(arg) = _args.first() {
+                return self.compile_expr(&arg.value);
+            }
+            return Err("Atomic.new requires an initial value argument".to_string());
+        }
+
         if (type_name == "Vec" || type_name == "VecDeque") && method == "new" {
             // `VecDeque.new()` lowers to the same zero-initialized
             // `{ptr=null, len=0, cap=0}` aggregate as `Vec.new()` —

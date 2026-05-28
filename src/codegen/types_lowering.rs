@@ -67,6 +67,23 @@ impl<'ctx> super::Codegen<'ctx> {
                 if name == "Slice" {
                     return self.slice_struct_type().into();
                 }
+                if name == "Atomic" {
+                    // `Atomic[T]` is a transparent wrapper over `T` —
+                    // baked as `struct Atomic[T] { }` in
+                    // `runtime/stdlib/atomic.kara`, but at the LLVM
+                    // level the storage IS the inner primitive (no
+                    // header). `load atomic` / `store atomic`
+                    // instructions operate directly on integer / bool
+                    // pointers; consumers of `Atomic[i64]` see plain
+                    // `i64` slot storage so subsequent `.store(v, ord)`
+                    // / `.load(ord)` dispatch (in `compile_method_call`)
+                    // targets the same alloca with atomic memory ops.
+                    if let Some(args) = &path.generic_args {
+                        if let Some(GenericArg::Type(inner)) = args.first() {
+                            return self.llvm_type_for_type_expr(inner);
+                        }
+                    }
+                }
                 // Map[K,V] and Set[T] are opaque heap pointers managed by the
                 // karac_map_* runtime functions.
                 if name == "Map" || name == "Set" || name == "SortedSet" {
@@ -544,6 +561,26 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `set_elem_type_names` / `set_elem_type_exprs` matches the `TypeExpr`
     /// shape; primitives (and other shapes we don't track) are no-ops.
     pub(super) fn register_var_from_type_expr(&mut self, var_name: &str, te: &TypeExpr) {
+        // Atomic[T] — transparent wrapper type registered with
+        // `var_type_names = "Atomic"` so downstream `.load(ord)` /
+        // `.store(v, ord)` method-call dispatch (the Atomic arm in
+        // `compile_method_call`) recognises the receiver. Critical for
+        // the FieldAccess path: `try_compile_field_receiver_method`
+        // synthesises a binding for `c.atomic_field` and routes it
+        // back through `register_var_from_type_expr` with the field's
+        // TypeExpr (`Atomic[T]`); without this arm the synth binding
+        // would miss `var_type_names` and fall through to the user
+        // impl-block lookup, which errors. Baked stdlib's empty
+        // `struct Atomic[T] { }` shape isn't in `struct_types`, so the
+        // user-type fallback at the bottom of this fn doesn't catch
+        // it either — Atomic needs an explicit arm. Returns early.
+        if let TypeKind::Path(path) = &te.kind {
+            if path.segments.last().map(|s| s.as_str()) == Some("Atomic") {
+                self.var_type_names
+                    .insert(var_name.to_string(), "Atomic".to_string());
+                return;
+            }
+        }
         if let Some(elem_ty) = self.extract_vec_elem_type(te) {
             self.vec_elem_types.insert(var_name.to_string(), elem_ty);
             if let Some(inner) = vec_inner_type_expr(te) {
@@ -664,6 +701,22 @@ impl<'ctx> super::Codegen<'ctx> {
         if let ExprKind::Call { callee, .. } = &expr.kind {
             if let ExprKind::Path { segments, .. } = &callee.kind {
                 return segments.len() == 2 && segments[0] == "Vec" && segments[1] == "new";
+            }
+        }
+        false
+    }
+
+    /// Recognise `Atomic.new(v)` — the constructor for the transparent
+    /// `Atomic[T]` wrapper. Used by the let-binding registration in
+    /// `compile_stmt(Let)` to set `var_type_names[a] = "Atomic"` so
+    /// subsequent `a.load(ord)` / `a.store(v, ord)` dispatches route
+    /// through the Atomic arm in `compile_method_call` rather than the
+    /// user impl-block lookup (which would fail — `Atomic.load` /
+    /// `.store` aren't user-defined methods).
+    pub(super) fn is_atomic_new_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::Call { callee, .. } = &expr.kind {
+            if let ExprKind::Path { segments, .. } = &callee.kind {
+                return segments.len() == 2 && segments[0] == "Atomic" && segments[1] == "new";
             }
         }
         false
