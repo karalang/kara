@@ -887,3 +887,17 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
   **Priority.** Medium — the codegen suite was the one observed to hang, but the other four are structurally similar and one of them will eventually hang under enough load. Land before any large refactor that touches the test harness so the mirror is a one-shot, not a one-per-file scattershot.
 
   **Cross-link.** Commit `62af025`. Entry above (root-cause investigation) is the parent of this work in spirit but doesn't gate it — the watchdog mirror is defensive, root-causing is investigative.
+
+- [->] **`match`-on-literals: emit LLVM `switch` instead of an `icmp`-chain.** **Filed 2026-05-27.** `compile_pattern_condition` lowers each literal arm to `icmp eq + br` and chains them. For all-arms-literal, no-guard matches an LLVM `switch` would let the backend pick a jump-table / balanced tree by case density.
+
+  **Why deferred (impact nil today).** Measured on a 7-way byte classifier (kata 13 `value()`): LLVM's `SimplifyCFG` already reconstructs a balanced binary-search tree from the `icmp`-chain, so the `switch` form compiles to *byte-identical* machine code on sparse fan-ins. Wall-time delta if-chain vs `match`: 1.06× ± 0.12× — sub-noise. See [`docs/investigations/roman_kata_codegen.md`](../investigations/roman_kata_codegen.md) § match lowering.
+
+  **Reopen trigger.** A real workload (kata or production) where a *dense* literal dispatch — roughly ≥16-way over a contiguous-ish integer/byte domain (tokenizer keyword table, 256-way byte state machine, opcode dispatch) — shows up as a hot path AND profiling shows LLVM's chain-recognizer gave up (no jump-table in the disassembly). At that point emit `switch` for the all-literal-arms/no-guard subset and validate against that benchmark.
+
+  **Scope note.** A `switch` only applies when every arm is an integer/char/byte literal with no guard; mixed arms (bindings, ranges, guards) keep the uniform chain. So this is a special-case fast path, not a rewrite — don't add the branching complexity until the trigger fires.
+
+- [->] **Loop-invariant code motion / partial eval across pure calls.** **Filed 2026-05-27.** karac does not hoist or fold a pure function call whose arguments are loop-invariant. A fixed-input parse loop (`roman_to_int(stake)` ×10M on one input) ran 10M times (99 ms) where clang folded the whole loop to one multiply (1.9 ms).
+
+  **Why deferred.** (1) The only observed "impact" was a synthetic fixed-input microbench — real code rarely calls a pure fn with a fully loop-invariant arg 10M times and discards the variation; per [[optimize-for-production-not-kata]] this is a kata artifact, not a production signal. (2) High effort + risk: needs interprocedural purity analysis + LICM/partial-eval across call boundaries, a large surface with real miscompile exposure. Cost/benefit is poor.
+
+  **Reopen trigger.** A production-shaped workload where a provably-pure call with loop-invariant args is a measured hot path that LLVM doesn't already hoist (verify via disassembly first — LLVM's own LICM handles many cases once the callee is inlined). See [`docs/investigations/roman_kata_codegen.md`](../investigations/roman_kata_codegen.md) § parse-only diagnostic.
