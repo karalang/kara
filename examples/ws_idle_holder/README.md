@@ -1,26 +1,34 @@
-# `ws_idle_holder` — Flagship Demo 1, slice 1 (plaintext `ws://`)
+# `ws_idle_holder` — Flagship Demo 1, slice 2 (`wss://` over TLS)
 
 Smallest viable Kāra source that holds N idle WebSocket connections over
-plain TCP. Used as the **M1 / M2 / M3 verification gate** per
+TLS. Used as the **M1 / M2 / M3 verification gate** per
 `docs/implementation_checklist/phase-6-runtime.md` line 170 — the
 per-milestone bench harness (slice 3 of the same entry) opens N
-concurrent connections against this server and measures
+concurrent `wss://` connections against this server and measures
 connect-establishment latency, per-connection memory cost, and
 steady-state P99 latency under churn.
 
 M1 target: **100K stable idle connections on a single Linux box**.
 
-## What slice 1 ships
+## What slice 2 ships
 
-Plaintext `ws://` only. TLS lands in slice 2 of the line-170 entry once
-the `TLS / HTTPS server-side stdlib` entry ships (5 sub-slices: rustls
-runtime FFI, `TlsListener` / `TlsStream` stdlib types, WebSocket-over-TLS
-chain, test-cert fixtures, design.md update). The diff between slice 1
-and slice 2 is minimal — swap `TcpListener.bind` for
-`TlsListener.bind_tls(addr, cert, key)`; everything else (accept loop,
-per-connection handler) is unchanged because `WebSocket.accept(listener)`
-is parameterised on listener type (slice 9e.2 of phase-6 line 17 shipped
-2026-05-25).
+TLS-wrapped `wss://`. The diff from slice 1 (plaintext `ws://`) is two
+surface swaps:
+
+- `TcpListener.bind(addr)` → `TlsListener.bind_tls(addr, cert_pem, key_pem)`
+- `WebSocket.accept(listener)` → `WebSocket.accept_tls(listener)`
+
+Everything below those calls (accept loop, per-connection handler,
+`recv_text` / Drop) is unchanged: the `WebSocket` returned by
+`accept_tls` has the same kara-visible shape as `accept`'s, and the WS
+framing FFIs auto-dispatch encryption through the per-fd rustls session
+registered during the handshake (phase-6 line 236 slice 3). No kara-side
+TLS flag.
+
+The `TLS / HTTPS server-side stdlib` entry (phase-6 line 236, 5
+sub-slices: rustls runtime FFI, `TlsListener` / `TlsStream` types,
+`WebSocket.accept_tls`, test-cert fixtures, design.md update) shipped
+2026-05-27 and is the prereq this slice consumed.
 
 ## Architecture
 
@@ -39,14 +47,33 @@ fn handle_connection(ws: WebSocket) {
 }
 
 fn main() {
-    let listener: TcpListener = TcpListener.bind("127.0.0.1:0");
+    // cert_pem / key_pem inlined as PEM literals (see "Cert handling" below)
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", cert_pem, key_pem);
     let mut tg: TaskGroup = TaskGroup.new();
     loop {
-        let ws: WebSocket = WebSocket.accept(listener);
+        let ws: WebSocket = WebSocket.accept_tls(listener);
         tg.spawn(|| handle_connection(ws));
     }
 }
 ```
+
+## Cert handling
+
+The demo carries the v1 self-signed test cert (CN=localhost, valid
+through 2036) inlined as PEM string literals in `src/main.kara`. The
+same bytes live in `tests/fixtures/tls/cert.pem` + `key.pem` (phase-6
+line 236 slice 4) — they are committed test fixtures, so inlining
+exposes nothing not already in the repo.
+
+**Why inlined rather than read from disk?** The natural shape —
+`FileSystem.read_to_string("tests/fixtures/tls/cert.pem").unwrap()` —
+trips a codegen gap: `FileSystem.read_to_string` is a `#[compiler_builtin]`
+stub with no codegen lowering yet (only the stateful `File` handle path
+from Phase 8 slice F is wired), so the call returns an `i64 0` at the
+LLVM layer instead of a `Result`. Disk-loading lands when the
+`FileSystem.read_to_string` codegen lowering ships (tracked as a
+follow-on under phase-6 line 236); the bench harness (Demo 1 slice 3)
+will load real certs from disk once that gap closes.
 
 The recv_text loop is a pure "wait-and-wake" pattern: the parking
 primitive (`karac_park_on_fd`) suspends the per-connection task on the
@@ -97,12 +124,15 @@ cd examples/ws_idle_holder/
 The binary prints `BOUND_PORT=<n>\n` to stdout (the
 `runtime/stdlib/tcp.kara` BOUND_PORT convention for the `:0` ephemeral
 case) so smoke-test scripts can read back the assigned port. To pin a
-fixed port, edit `src/main.kara`'s `TcpListener.bind("127.0.0.1:0")` to
-the desired port literal.
+fixed port, edit `src/main.kara`'s
+`TlsListener.bind_tls("127.0.0.1:0", ...)` to the desired port literal.
 
 ## Manual smoke test
 
-The simplest verification path uses raw HTTP through `nc`:
+Because the listener is TLS-wrapped, the smoke test must speak TLS — a
+raw `nc` connection no longer works. Easiest path is a short Python
+`ssl` client that completes the TLS handshake then sends the WebSocket
+HTTP upgrade:
 
 ```sh
 # 1. Start the demo (it auto-binds to 127.0.0.1:0)
@@ -112,35 +142,55 @@ DEMO=$!
 # 2. Read the ephemeral port from BOUND_PORT
 PORT=$(awk -F= '/BOUND_PORT/ {print $2; exit}' /tmp/demo.out)
 
-# 3. Send a WebSocket Upgrade request, expect HTTP/1.1 101 Switching Protocols
-printf 'GET / HTTP/1.1\r\nHost: localhost\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n' \
-    | nc -w 2 127.0.0.1 $PORT
+# 3. TLS-connect + send a WebSocket Upgrade, expect 101 Switching Protocols
+python3 - "$PORT" <<'PY'
+import socket, ssl, sys, base64, os, hashlib
+port = int(sys.argv[1])
+ctx = ssl.create_default_context()
+ctx.check_hostname = False
+ctx.verify_mode = ssl.CERT_NONE          # self-signed test cert
+raw = socket.create_connection(("127.0.0.1", port), timeout=5)
+s = ctx.wrap_socket(raw, server_hostname="localhost")
+key = base64.b64encode(os.urandom(16)).decode()
+s.sendall((
+    "GET / HTTP/1.1\r\nHost: localhost\r\n"
+    "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+    f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+).encode())
+resp = s.recv(4096).decode(errors="replace")
+GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+expect = base64.b64encode(hashlib.sha1((key+GUID).encode()).digest()).decode()
+print(resp)
+print("MATCH" if "101 Switching Protocols" in resp and expect in resp else "FAIL")
+PY
 
 # Expected stdout:
 #   HTTP/1.1 101 Switching Protocols
 #   Upgrade: websocket
 #   Connection: Upgrade
-#   Sec-WebSocket-Accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=
+#   Sec-WebSocket-Accept: <base64 of sha1(client_key + GUID)>
+#   MATCH
 
 # 4. Clean up
 kill $DEMO
 ```
 
 The `Sec-WebSocket-Accept` value is the RFC 6455-mandated SHA-1 of the
-client's `Sec-WebSocket-Key` (`dGhlIHNhbXBsZSBub25jZQ==`) concatenated
-with the protocol GUID (`258EAFA5-E914-47DA-95CA-C5AB0DC85B11`), base64
-encoded; `s3pPLMBiTxaQ9kYGzzhZRbK+xOo=` is the canonical reference
-value from the RFC 6455 spec § 1.3.
+client's `Sec-WebSocket-Key` concatenated with the protocol GUID
+(`258EAFA5-E914-47DA-95CA-C5AB0DC85B11`), base64-encoded. Because the
+client key is randomized per run, the script computes the expected
+accept value rather than hardcoding it — `MATCH` confirms the full TLS
+handshake + WebSocket-over-TLS upgrade round-tripped correctly.
 
 Once `websocat` is installed locally, full bidirectional frame round-trip
-verification:
+verification (note the `--insecure` flag for the self-signed cert):
 
 ```sh
-websocat ws://127.0.0.1:$PORT
+websocat --insecure wss://localhost:$PORT
 # (type some text, press Ctrl-D; the demo discards but accepts the frame)
 ```
 
-## What slice 1 deliberately omits
+## What the demo deliberately omits
 
 - **No echo.** M1's target is *idle* connections; echo would introduce
   per-frame CPU and stdout traffic that confounds the memory + latency
@@ -153,11 +203,15 @@ websocat ws://127.0.0.1:$PORT
 - **No max-connection cap.** Defer to OS-level `ulimit -n`; the
   `#[concurrency(max_tasks: N)]` annotation on `TaskGroup` lands when a
   real cap-shaped requirement surfaces.
-- **No Rust-side automated e2e test.** Slice 1 ships the kara source +
-  smoke-test recipe in this README; the automated bench harness (slice
-  3 of line 170) is the natural home for the e2e test — it already
-  needs to open N concurrent connections, so a single-connection
-  acceptance test is a degenerate case of the harness it builds.
+- **No Rust-side automated e2e test.** The kara source + smoke-test
+  recipe in this README is the slice-2 verification surface; the
+  automated bench harness (slice 3 of line 170) is the natural home for
+  the e2e test — it already needs to open N concurrent connections, so
+  a single-connection acceptance test is a degenerate case of the
+  harness it builds.
+- **Cert inlined, not loaded from disk.** See "Cert handling" above —
+  blocked on the `FileSystem.read_to_string` codegen lowering, tracked
+  as a follow-on under phase-6 line 236.
 
 ## See also
 

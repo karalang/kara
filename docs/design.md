@@ -125,7 +125,7 @@ Kāra v1's lead persona is **backend-first**: the language ships at v1 with the 
 | Module / capability | Tier | Notes |
 |---|---|---|
 | `std.http` (HTTP/1.1 server + client) | P0 | Required to drive the flagship demo; idle-keep-alive routes through `std.http`+WebSocket. |
-| TLS (`std.tls`, vendored rustls + aws-lc-rs default crypto provider) | P0 | Memory-safe TLS, rustls-provider plug points private at v1, modern-TLS-only (no SSLv3 etc.). |
+| TLS (`std.tls`, vendored rustls + `ring` crypto provider) | P0 | Memory-safe TLS via rustls 0.23 with the `ring` crypto provider (shared with `ureq`'s lockfile copy — no duplicate crypto build). Server-side surface at v1: `TlsListener.bind_tls(addr, cert_pem, key_pem)` / `.accept()` / `TlsStream.{read, write, write_all}` / `WebSocket.accept_tls(TlsListener)` per [Phase 6 line 236](implementation_checklist/phase-6-runtime.md). Modern-TLS-only (no SSLv3 etc.); client-side TLS, custom verifiers, advanced rustls extension points live behind `#[unstable]` post-v1. The `aws_lc_rs` provider was an earlier v64 plan; the `ring` swap (slice 1, 2026-05-27) keeps the build dep-free of nasm and matches what `ureq` already pulls into the lockfile. |
 | WebSocket (RFC 6455) | P0 | The canonical idle-keep-alive workload that grounds the 1M+ benchmark. |
 | HTTP/2 (multiplexed streams + flow control) | P1 | Prerequisite for gRPC; ships at v1 launch, sequenced after HTTP/1.1. |
 | `std.tracing` (structured logging + span propagation, OTel-export-ready) | P1 | Operational story is a launch criterion, not v1.x. |
