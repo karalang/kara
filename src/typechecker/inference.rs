@@ -775,6 +775,43 @@ pub(super) fn unify_types(
                 .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
                 && unify_types(xr, yr, substitutions, const_substitutions)
         }
+        // `Fn → OnceFn` cross arm — propagates type-var substitutions
+        // across the upward-subtyping path that `is_subtype` accepts.
+        // Without this, a `Fn() -> i64` value passed where the slot is
+        // `OnceFn() -> T` falls through to `types_compatible`, which
+        // has no Fn↔OnceFn cross arm and returns false — but
+        // `check_assignable`'s subtyping fallback then accepts the
+        // value without ever binding `T = i64`, silently widening the
+        // type when the slot's `T` was already pinned from the LHS
+        // annotation. The symmetric pair mirrors the existing arms'
+        // direction-agnostic structure; the subtyping invariant
+        // (Fn-supplied to OnceFn-slot is OK, reverse is rejected) is
+        // enforced by `is_subtype` at the assignability layer.
+        (
+            Type::OnceFunction {
+                params: xp,
+                return_type: xr,
+            },
+            Type::Function {
+                params: yp,
+                return_type: yr,
+            },
+        )
+        | (
+            Type::Function {
+                params: xp,
+                return_type: xr,
+            },
+            Type::OnceFunction {
+                params: yp,
+                return_type: yr,
+            },
+        ) if xp.len() == yp.len() => {
+            xp.iter()
+                .zip(yp.iter())
+                .all(|(x, y)| unify_types(x, y, substitutions, const_substitutions))
+                && unify_types(xr, yr, substitutions, const_substitutions)
+        }
         // Terminal / cross-shape cases handled by the existing
         // structural compatibility check (covers integer-coercion,
         // never, slice/vec coercions, etc).

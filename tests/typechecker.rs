@@ -19340,6 +19340,69 @@ fn task_group_canonical_accept_loop_shape_compiles() {
     );
 }
 
+// ── Phase 6 line 218 slice 8: spawn slot widened to `OnceFn() -> T` ──
+//
+// Slice 8 (shipped 2026-05-27) widens `TaskGroup.spawn` / free-fn
+// `spawn` from `Fn() -> T` to `OnceFn() -> T` so closures that
+// move-capture (consume) bindings from the spawning scope — the
+// canonical accept-loop's `tg.spawn(|| handle(conn))` where `conn`
+// is freshly bound per iteration — typecheck rather than getting
+// rejected at the slot's "consumes captured binding" gate. The
+// existing `Fn → OnceFn` slot coercion in `src/typechecker/closures.rs`
+// + the slice-8 `unify_types` cross arm together let non-consuming
+// closures (`|| worker()`) continue flowing through unchanged AND
+// keep the `T`-binding guarantee from generic-arg inference so the
+// `task_handle_inner_type_mismatch_rejected` test above keeps catching
+// surface-type mismatches that the original `Fn` slot caught.
+
+#[test]
+fn spawn_with_move_capture_accepted() {
+    // The Demo 1 (line 170) shape that motivated slice 8 — a closure
+    // that move-captures a freshly bound value (here a String stand-in
+    // for the per-iteration WebSocket / TcpStream in the accept-loop)
+    // typechecks against the OnceFn-slot. Pre-slice-8 the Fn-slot
+    // rejected with "closure becomes once-callable because it
+    // consumes captured binding".
+    typecheck_ok(
+        "fn consume(s: String) -> i64 { 0 }
+         fn main() {
+             let mut tg: TaskGroup = TaskGroup.new();
+             let payload: String = \"hello\";
+             tg.spawn(|| consume(payload));
+         }",
+    );
+}
+
+#[test]
+fn free_spawn_with_move_capture_accepted() {
+    // Parallel of the above for the free-fn `spawn` entry point.
+    typecheck_ok(
+        "fn consume(s: String) -> i64 { 0 }
+         fn main() {
+             let payload: String = \"hello\";
+             let h: TaskHandle[i64] = spawn(|| consume(payload));
+             let v: i64 = h.join();
+         }",
+    );
+}
+
+#[test]
+fn taskgroup_spawn_non_consuming_closure_still_accepted() {
+    // Regression guard for the existing slice-7 shape — non-consuming
+    // closures (the canonical fan-out test cases) must continue
+    // typechecking after the slot widening. The closure infers as
+    // `Fn() -> ()` and flows through the existing slot coercion +
+    // slice-8 `unify_types` cross arm into the `OnceFn() -> T` slot.
+    typecheck_ok(
+        "fn worker(n: i64) {}
+         fn main() {
+             let mut tg: TaskGroup = TaskGroup.new();
+             tg.spawn(|| worker(1));
+             tg.spawn(|| worker(2));
+         }",
+    );
+}
+
 // ── Phase 6 line 218 slice 2: ScopeLocal marker + enforcement ────────
 //
 // design.md § ScopeLocal — `TaskHandle[T]` (and any other future

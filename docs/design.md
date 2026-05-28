@@ -9334,7 +9334,7 @@ fn process() -> Result[i32, E] {
 **`spawn()` — structured task creation.** `spawn` creates a child task within the current structured concurrency scope. The child runs concurrently with the spawner and joins before the enclosing scope exits.
 
 ```
-fn spawn[T, with E](f: Fn() -> T with E) -> TaskHandle[T] with E
+fn spawn[T, with E](f: OnceFn() -> T with E) -> TaskHandle[T] with E
 ```
 
 `spawn` is a stdlib function, not a language primitive. Its effect signature uses `with E` — the spawned closure's effects propagate to the caller, which means the compiler can reason about effect conflicts between the spawned task and subsequent code. `TaskHandle[T]` is an opaque handle that supports `.join() -> T` to explicitly await the result; if not joined explicitly, the task joins at scope exit.

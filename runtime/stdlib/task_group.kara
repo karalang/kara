@@ -19,8 +19,25 @@
 // spawned closure's effects propagate through the closure body's
 // effect inference, not through a polymorphic parameter on `spawn`.
 // When free-fn `with E` ships, the signatures here lift additively to
-// `fn spawn[T, with E](f: Fn() -> T with E) -> TaskHandle[T] with E`
+// `fn spawn[T, with E](f: OnceFn() -> T with E) -> TaskHandle[T] with E`
 // per design.md § Explicit Concurrency lines 9337 and 9357–9366.
+//
+// **Slot type — `OnceFn() -> T`, not `Fn() -> T`.** A spawned closure
+// runs exactly once on the worker pool — `karac_runtime_spawn` invokes
+// the closure body a single time and the runtime never replays it.
+// `OnceFn` is the semantically-correct slot: it permits closures that
+// move-capture (consume) bindings from the spawning scope (the
+// canonical accept-loop shape's `let conn = listener.accept(); tg.spawn(
+// || handle(conn))`, where `conn` is freshly bound per iteration and
+// the closure consumes it into the per-task handler), while non-
+// consuming closures (the slice-7 e2e tests' `|| worker(1)` shape) flow
+// through unchanged via the existing closure-typechecker `Fn → OnceFn`
+// slot coercion in `src/typechecker/closures.rs`. The original `Fn`
+// slot only worked because the slice-7 tests happened to use closures
+// that capture nothing; Demo 1 (phase-6 line 170) is the first usage
+// with a consuming move-capture, and surfaced the gap exactly per
+// `feedback_optimize_for_production_not_kata` (the demo IS the
+// production workload).
 //
 // **ScopeLocal enforcement — slice 2 (shipped 2026-05-27).** Per
 // design.md § ScopeLocal, `TaskHandle[T]` is a `ScopeLocal`
@@ -113,7 +130,7 @@ impl TaskGroup {
     // group's borrow, which composes correctly with the scope-exit
     // drop's "wait for all spawned children" contract.
     #[compiler_builtin]
-    fn spawn[T](mut ref self, f: Fn() -> T) -> TaskHandle[T] {
+    fn spawn[T](mut ref self, f: OnceFn() -> T) -> TaskHandle[T] {
         TaskHandle { task_id: 0 }
     }
 }
@@ -189,7 +206,7 @@ impl Drop for TaskGroup {
 // lands the declaration so the call resolves to a real stdlib item;
 // the boundary-detection behavior is unchanged.
 #[compiler_builtin]
-fn spawn[T](f: Fn() -> T) -> TaskHandle[T] {
+fn spawn[T](f: OnceFn() -> T) -> TaskHandle[T] {
     TaskHandle { task_id: 0 }
 }
 
