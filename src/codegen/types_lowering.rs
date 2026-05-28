@@ -787,6 +787,28 @@ impl<'ctx> super::Codegen<'ctx> {
             // wise overflowed the field. Mirrors `llvm_type_for_type_expr`
             // line 67-69's identical `TypeKind::Path("Slice")` arm.
             "Slice" => self.slice_struct_type().into(),
+            // Phase 6 line 17 — baked-stdlib single-i32-field network
+            // structs. All three (`TcpListener`, `TcpStream`, `WebSocket`)
+            // share the same `{ fd: i32 }` layout per their declarations
+            // in `runtime/stdlib/tcp.kara` + `ws.kara`. Codegen does not
+            // load baked stdlib struct definitions into `self.struct_types`
+            // (the value-site lowerings hand-roll the struct via
+            // `context.struct_type(&[i32_type], false)` — see
+            // `lower_tcp_listener_bind` / `lower_websocket_accept` /
+            // etc.). Without these name arms, a user fn taking one of
+            // these types by value (`fn handle(ws: WebSocket)`) would
+            // get an `i64` LLVM parameter signature from the fall-through
+            // default below, while the call site loads `{ i32 }` from
+            // the arg's slot — the LLVM verifier rejects with `Call
+            // parameter type does not match function signature`. Surfaced
+            // by Demo 1 (line 170) slice 1's accept-loop
+            // `tg.spawn(|| handle(ws))` pattern; same root cause for any
+            // direct by-value pass. Mirrors the `String` / `Vec` /
+            // `Slice` baked-stdlib arms above.
+            "TcpListener" | "TcpStream" | "WebSocket" => self
+                .context
+                .struct_type(&[self.context.i32_type().into()], false)
+                .into(),
             name => {
                 // Shared types are heap-allocated pointers.
                 if self.shared_types.contains_key(name) {

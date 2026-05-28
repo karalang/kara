@@ -332,6 +332,79 @@ fn main() {
         );
     }
 
+    // ── Stdlib struct-as-by-value-param LLVM ABI regression guard ──
+    //
+    // The `TcpListener` / `TcpStream` / `WebSocket` baked-stdlib structs
+    // share the `{ fd: i32 }` shape. `src/codegen/types_lowering.rs::
+    // llvm_type_for_name` carries explicit arms for each so that a user
+    // fn taking one by value gets the right LLVM signature shape rather
+    // than the i64 fall-through default that produced the LLVM verifier
+    // rejection surfaced by Demo 1 (line 170) slice 1's accept-loop.
+    // The three tests below pin the function-signature shape end-to-end
+    // through codegen.
+
+    #[test]
+    fn test_ir_websocket_by_value_param_uses_struct_type() {
+        // A user fn taking `WebSocket` by value must declare its
+        // parameter as `{ i32 }`, matching the value-site lowering of
+        // `WebSocket.from_fd(_)` / `WebSocket.accept(_)`. Pre-fix the
+        // declared param was `i64` (from the fall-through default in
+        // `llvm_type_for_name`) and any direct `handle(ws)` call hit
+        // an LLVM verifier rejection on `Call parameter type does not
+        // match function signature`.
+        let ir = ir_for(
+            r#"
+fn handle(ws: WebSocket) {}
+fn main() {
+    let ws = WebSocket.from_fd(3);
+    handle(ws);
+}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @handle({ i32 }"),
+            "expected `@handle` to declare its WebSocket param as `{{ i32 }}`; IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_tcpstream_by_value_param_uses_struct_type() {
+        let ir = ir_for(
+            r#"
+fn handle(s: TcpStream) {}
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0");
+    let s = listener.accept();
+    handle(s);
+}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @handle({ i32 }"),
+            "expected `@handle` to declare its TcpStream param as `{{ i32 }}`; IR:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_tcplistener_by_value_param_uses_struct_type() {
+        let ir = ir_for(
+            r#"
+fn handle(l: TcpListener) {}
+fn main() {
+    let listener = TcpListener.bind("127.0.0.1:0");
+    handle(listener);
+}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @handle({ i32 }"),
+            "expected `@handle` to declare its TcpListener param as `{{ i32 }}`; IR:\n{}",
+            ir
+        );
+    }
+
     #[test]
     fn test_ir_websocket_runtime_ffis_declared() {
         // Sanity check that both runtime FFI declarations land in
