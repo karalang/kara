@@ -1040,25 +1040,22 @@ impl<'ctx> super::Codegen<'ctx> {
         method: &str,
         args: &[CallArg],
     ) -> Result<BasicValueEnum<'ctx>, String> {
-        let (storage_ptr, elem_ty) = self.resolve_atomic_storage(object)?;
+        let (storage_ptr, elem_ty, inner_is_bool) = self.resolve_atomic_storage(object)?;
         // LLVM requires atomic load/store on a power-of-two-byte
         // integer (i8/i16/i32/i64/i128 plus pointer/float of those
         // widths). Reject narrower / odd-width integers explicitly so
         // the user sees a clear codegen diagnostic rather than an
-        // opaque LLVM verifier failure. `Atomic[bool]` is the most
-        // likely shape this catches today — its codegen support is
-        // deferred (would require widening to i8 at the slot, with
-        // zext/trunc wrappers around .load / .store); the L215c
-        // classifier still admits `bool` fields for the migration
-        // tool, so this diagnostic also names the deferred follow-up
-        // as the path forward.
+        // opaque LLVM verifier failure. `Atomic[bool]` is supported
+        // via i8 slot-widening (`is_bool_type_expr` arm in
+        // `llvm_type_for_type_expr` returns i8, not i1; the load/store
+        // arms below trunc/zext at the i1↔i8 boundary).
         if let BasicTypeEnum::IntType(it) = elem_ty {
             let bw = it.get_bit_width();
             if bw < 8 || !bw.is_power_of_two() {
                 return Err(format!(
                     "codegen: Atomic[T] requires T to be a power-of-two-byte integer \
-                     (i8/i16/i32/i64/i128/usize); received {}-bit integer. `Atomic[bool]` \
-                     codegen is deferred — track as a separate slice.",
+                     (i8/i16/i32/i64/i128/usize) or `bool` (widened to i8); \
+                     received {}-bit integer.",
                     bw
                 ));
             }
@@ -1099,6 +1096,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         e
                     )
                 })?;
+                // Atomic[bool]: the slot is i8 (widened); the surface
+                // type the user sees is `bool` (i1). Trunc back to i1
+                // so downstream comparison / branch ops see the
+                // expected bit width.
+                if inner_is_bool {
+                    let i8v = loaded.into_int_value();
+                    let i1 = self
+                        .builder
+                        .build_int_truncate(i8v, self.context.bool_type(), "atomic.bool.trunc")
+                        .unwrap();
+                    return Ok(i1.into());
+                }
                 Ok(loaded)
             }
             "store" => {
@@ -1120,6 +1129,26 @@ impl<'ctx> super::Codegen<'ctx> {
                         ordering
                     ));
                 }
+                // Atomic[bool]: the value coming in is i1, but the slot
+                // is i8. Zext at the boundary so the store's value
+                // width matches the slot's. The matched trunc on load
+                // restores the i1 view above.
+                let value = if inner_is_bool {
+                    if let BasicValueEnum::IntValue(iv) = value {
+                        if iv.get_type().get_bit_width() == 1 {
+                            self.builder
+                                .build_int_z_extend(iv, self.context.i8_type(), "atomic.bool.zext")
+                                .unwrap()
+                                .into()
+                        } else {
+                            value
+                        }
+                    } else {
+                        value
+                    }
+                } else {
+                    value
+                };
                 let store_inst = self.builder.build_store(storage_ptr, value).unwrap();
                 let align = atomic_alignment_for(elem_ty);
                 store_inst.set_alignment(align).map_err(|e| {
@@ -1148,14 +1177,22 @@ impl<'ctx> super::Codegen<'ctx> {
     fn resolve_atomic_storage(
         &mut self,
         object: &Expr,
-    ) -> Result<(inkwell::values::PointerValue<'ctx>, BasicTypeEnum<'ctx>), String> {
+    ) -> Result<
+        (
+            inkwell::values::PointerValue<'ctx>,
+            BasicTypeEnum<'ctx>,
+            bool,
+        ),
+        String,
+    > {
         match &object.kind {
             ExprKind::Identifier(name) => {
                 let slot =
                     self.variables.get(name.as_str()).copied().ok_or_else(|| {
                         format!("codegen: Atomic receiver '{}' has no slot", name)
                     })?;
-                Ok((slot.ptr, slot.ty))
+                let is_bool = self.atomic_var_inner_is_bool.contains(name.as_str());
+                Ok((slot.ptr, slot.ty, is_bool))
             }
             ExprKind::FieldAccess {
                 object: inner,
@@ -1209,7 +1246,18 @@ impl<'ctx> super::Codegen<'ctx> {
                         obj_ty_name, idx
                     )
                 })?;
-                Ok((field_ptr, elem_ty))
+                // Inner-is-bool detection for struct fields reads the
+                // full per-field TypeExpr registered at struct
+                // declaration time. Fields ALWAYS carry their
+                // annotation (declaration syntax requires it), so this
+                // path is exact — no missing-info fallback needed.
+                let inner_is_bool = self
+                    .struct_field_type_exprs
+                    .get(obj_ty_name.as_str())
+                    .and_then(|fields| fields.get(idx as usize))
+                    .map(super::types_lowering::is_atomic_bool_type_expr)
+                    .unwrap_or(false);
+                Ok((field_ptr, elem_ty, inner_is_bool))
             }
             _ => Err(format!(
                 "codegen: Atomic method receiver shape {:?} not supported in v1",

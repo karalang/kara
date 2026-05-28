@@ -1345,9 +1345,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // `.load(ord)` / `.store(v, ord)` on the binding lower to
         // `load atomic` / `store atomic` against that same alloca (see
         // the Atomic arm in `compile_method_call`).
+        // **`Atomic[bool]` widens to i8 here** — LLVM rejects atomic
+        // load/store on `i1`, so when the arg compiles to a bool value
+        // (i1) we zext to i8 before handing the value off. The matched
+        // trunc on `.load` / zext on `.store` is in `compile_atomic_method`.
         if type_name == "Atomic" && method == "new" {
             if let Some(arg) = _args.first() {
-                return self.compile_expr(&arg.value);
+                let val = self.compile_expr(&arg.value)?;
+                if let BasicValueEnum::IntValue(iv) = val {
+                    if iv.get_type().get_bit_width() == 1 {
+                        let widened = self
+                            .builder
+                            .build_int_z_extend(iv, self.context.i8_type(), "atomic.bool.zext")
+                            .unwrap();
+                        return Ok(widened.into());
+                    }
+                }
+                return Ok(val);
             }
             return Err("Atomic.new requires an initial value argument".to_string());
         }

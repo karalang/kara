@@ -73,13 +73,22 @@ impl<'ctx> super::Codegen<'ctx> {
                     // `runtime/stdlib/atomic.kara`, but at the LLVM
                     // level the storage IS the inner primitive (no
                     // header). `load atomic` / `store atomic`
-                    // instructions operate directly on integer / bool
+                    // instructions operate directly on integer
                     // pointers; consumers of `Atomic[i64]` see plain
                     // `i64` slot storage so subsequent `.store(v, ord)`
                     // / `.load(ord)` dispatch (in `compile_method_call`)
                     // targets the same alloca with atomic memory ops.
+                    // **`Atomic[bool]` is widened to i8** — LLVM rejects
+                    // `load atomic i1` / `store atomic i1` directly, so
+                    // the slot is i8 with zext on store and trunc on
+                    // load (the wrapping happens in
+                    // `compile_atomic_method`, gated on the per-receiver
+                    // inner-is-bool side-tables).
                     if let Some(args) = &path.generic_args {
                         if let Some(GenericArg::Type(inner)) = args.first() {
+                            if is_bool_type_expr(inner) {
+                                return self.context.i8_type().into();
+                            }
                             return self.llvm_type_for_type_expr(inner);
                         }
                     }
@@ -578,6 +587,16 @@ impl<'ctx> super::Codegen<'ctx> {
             if path.segments.last().map(|s| s.as_str()) == Some("Atomic") {
                 self.var_type_names
                     .insert(var_name.to_string(), "Atomic".to_string());
+                // Also track inner-is-bool for the synth-binding case —
+                // `try_compile_field_receiver_method` mints a synth
+                // `__field_elem_N` from `c.atomic_bool_field.method()`
+                // and routes it back through this fn with the field's
+                // `Atomic[bool]` TypeExpr. Without this, `compile_atomic_method`'s
+                // Identifier-path bool detection would miss the synth
+                // and emit the wrong-width store/load.
+                if is_atomic_bool_type_expr(te) {
+                    self.atomic_var_inner_is_bool.insert(var_name.to_string());
+                }
                 return;
             }
         }
@@ -1245,4 +1264,40 @@ impl<'ctx> super::Codegen<'ctx> {
         let info = self.shared_types.get(inner_name.as_str())?.clone();
         Some((inner_name.clone(), info))
     }
+}
+
+/// Is `te` a path whose last segment is `bool`? Used by the Atomic arm
+/// of `llvm_type_for_type_expr` to widen `Atomic[bool]`'s slot to i8
+/// (LLVM rejects `load atomic i1` / `store atomic i1` directly), and
+/// by the let-stmt + struct-field codegen paths to record per-receiver
+/// "this Atomic slot's inner type is bool" so `.load` truncs and
+/// `.store` zexts at the call site.
+pub(super) fn is_bool_type_expr(te: &TypeExpr) -> bool {
+    if let TypeKind::Path(p) = &te.kind {
+        return p.segments.last().map(|s| s.as_str()) == Some("bool");
+    }
+    false
+}
+
+/// If `te` matches `Atomic[T]` and `T` is `bool`, returns true.
+/// Threads the `Atomic[bool]` annotation through to the codegen sites
+/// that need to know about the i8/i1 mismatch (let-stmt registration,
+/// struct-field receiver dispatch).
+pub(super) fn is_atomic_bool_type_expr(te: &TypeExpr) -> bool {
+    let path = match &te.kind {
+        TypeKind::Path(p) => p,
+        _ => return false,
+    };
+    if path.segments.last().map(|s| s.as_str()) != Some("Atomic") {
+        return false;
+    }
+    let args = match &path.generic_args {
+        Some(a) => a,
+        None => return false,
+    };
+    let inner = args.iter().find_map(|a| match a {
+        GenericArg::Type(t) => Some(t),
+        _ => None,
+    });
+    matches!(inner, Some(t) if is_bool_type_expr(t))
 }

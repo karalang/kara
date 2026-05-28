@@ -23324,4 +23324,144 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
             ir
         );
     }
+
+    // ── Atomic[bool] codegen: i8 slot widening with zext/trunc ────
+    //
+    // LLVM rejects `load atomic i1` / `store atomic i1` directly. The
+    // codegen widens `Atomic[bool]` to an i8 slot; `.store` zexts the
+    // incoming i1 to i8, `.load` truncs the i8 back to i1. Closes
+    // phase-7 tracker line 231 (the blocker for the `karac migrate
+    // --atomic` default-flip).
+
+    #[test]
+    fn test_e2e_atomic_bool_new_and_load_seqcst() {
+        let out = run_program(
+            "fn main() {\n\
+                 let a = Atomic.new(true);\n\
+                 println(a.load(MemoryOrdering.SeqCst));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bool_store_then_load_relaxed() {
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a = Atomic.new(false);\n\
+                 a.store(true, MemoryOrdering.Relaxed);\n\
+                 println(a.load(MemoryOrdering.Relaxed));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bool_release_store_acquire_load() {
+        // The canonical migration-tool pair on a bool field — the most
+        // common Atomic[bool] shape in practice (shutdown sentinel,
+        // initialization flag).
+        let out = run_program(
+            "fn main() {\n\
+                 let mut a = Atomic.new(false);\n\
+                 a.store(true, MemoryOrdering.Release);\n\
+                 println(a.load(MemoryOrdering.Acquire));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bool_annotated_let() {
+        // Annotated form `let a: Atomic[bool] = Atomic.new(false)` —
+        // the explicit-annotation path of the bool-inner detection in
+        // the let-stmt handler. Without it, the FieldAccess inner-type
+        // detection still works but the let path falls back to "not
+        // bool" and the load returns i8 instead of i1.
+        let out = run_program(
+            "fn main() {\n\
+                 let a: Atomic[bool] = Atomic.new(false);\n\
+                 println(a.load(MemoryOrdering.SeqCst));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "false\n");
+        }
+    }
+
+    #[test]
+    fn test_e2e_atomic_bool_field_load_store_struct_field() {
+        // FieldAccess receiver with Atomic[bool] — exactly the shape
+        // `karac migrate --atomic` emits when a `shared struct` field
+        // of type `bool` with only bare `=` writes gets promoted.
+        let out = run_program(
+            "struct Flag { ready: Atomic[bool] }\n\
+             fn main() {\n\
+                 let f = Flag { ready: Atomic.new(false) };\n\
+                 f.ready.store(true, MemoryOrdering.Release);\n\
+                 println(f.ready.load(MemoryOrdering.Acquire));\n\
+             }",
+        );
+        if let Some(out) = out {
+            assert_eq!(out, "true\n");
+        }
+    }
+
+    #[test]
+    fn test_ir_atomic_bool_load_emits_load_atomic_i8() {
+        // IR shape: the slot is widened to `i8`, the load instruction
+        // is `load atomic i8`, and a `trunc i8 ... to i1` immediately
+        // converts back to the surface bool. Pins the widening +
+        // trunc-on-load pair against regression.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let a = Atomic.new(true);\n\
+                 let _ = a.load(MemoryOrdering.SeqCst);\n\
+             }",
+        );
+        assert!(
+            ir.contains("load atomic i8"),
+            "expected `load atomic i8` in IR (Atomic[bool] widened slot); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("trunc i8") && ir.contains("to i1"),
+            "expected `trunc i8 ... to i1` (load-side bool narrow); got:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_atomic_bool_store_emits_store_atomic_i8_with_zext() {
+        // IR shape: incoming i1 is zexted to i8 before the atomic
+        // store. Pins both halves of the widening pair — the slot
+        // width on the store instruction (i8) and the zext that
+        // converts the dynamic bool value to that width. A bool-typed
+        // local variable (not a literal `true`) is required to defeat
+        // constant folding: `store atomic i8 true_const` collapses to
+        // `store atomic i8 1` without a visible zext.
+        let ir = ir_for(
+            "fn main() {\n\
+                 let mut a = Atomic.new(false);\n\
+                 let flag = true;\n\
+                 a.store(flag, MemoryOrdering.Release);\n\
+             }",
+        );
+        assert!(
+            ir.contains("store atomic i8"),
+            "expected `store atomic i8` in IR (Atomic[bool] widened slot); got:\n{}",
+            ir
+        );
+        assert!(
+            ir.contains("zext i1") && ir.contains("to i8"),
+            "expected `zext i1 ... to i8` (store-side bool widen); got:\n{}",
+            ir
+        );
+    }
 }

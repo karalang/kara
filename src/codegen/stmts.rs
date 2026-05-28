@@ -828,6 +828,29 @@ impl<'ctx> super::Codegen<'ctx> {
                     if self.is_atomic_new_call(value) {
                         self.var_type_names
                             .insert(var_name.clone(), "Atomic".to_string());
+                        // Atomic[bool] tracking — see `atomic_var_inner_is_bool`
+                        // docstring on `Codegen` for the i1/i8 mismatch story.
+                        // Two detection paths cover the canonical shapes the
+                        // migrate tool + hand-written code produce:
+                        //   (a) explicit `let a: Atomic[bool] = ...` annotation
+                        //   (b) inferred `let a = Atomic.new(<bool literal>)`
+                        // The bare-binding case `let a = Atomic.new(x)` where
+                        // `x` is a bool variable falls through — typechecker
+                        // doesn't expose that here. Users hitting that shape
+                        // get a clear codegen error and the annotation form
+                        // resolves it.
+                        let annotation_is_bool = ty
+                            .as_ref()
+                            .map(super::types_lowering::is_atomic_bool_type_expr)
+                            .unwrap_or(false);
+                        let arg_is_bool_literal = if let ExprKind::Call { args, .. } = &value.kind {
+                            matches!(args.first().map(|a| &a.value.kind), Some(ExprKind::Bool(_)))
+                        } else {
+                            false
+                        };
+                        if annotation_is_bool || arg_is_bool_literal {
+                            self.atomic_var_inner_is_bool.insert(var_name.clone());
+                        }
                     }
                     // Debugger Contract slice 5: register `let v =
                     // Runtime.list_par_blocks()` / `Runtime.list_tasks()`

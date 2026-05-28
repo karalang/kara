@@ -210,6 +210,16 @@ pub(super) struct Codegen<'ctx> {
     pub(crate) variables: HashMap<String, VarSlot<'ctx>>,
     /// Maps variable name → Kāra type name (for struct/enum field resolution).
     pub(crate) var_type_names: HashMap<String, String>,
+    /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
+    /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
+    /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
+    /// in `compile_atomic_method`. Populated at let-stmt time when either
+    /// (a) the explicit annotation is `Atomic[bool]`, or (b) the RHS is
+    /// `Atomic.new(<bool literal>)`. The struct-field equivalent is read
+    /// from `struct_field_type_exprs` at the FieldAccess receiver site —
+    /// fields always have full annotations recorded there, so no parallel
+    /// table is needed for the struct case.
+    pub(crate) atomic_var_inner_is_bool: HashSet<String>,
     pub(crate) current_fn: Option<FunctionValue<'ctx>>,
     pub(crate) printf_fn: FunctionValue<'ctx>,
     /// `int snprintf(char* buf, size_t n, const char* fmt, ...)` — used by f-string
@@ -2100,6 +2110,7 @@ impl<'ctx> Codegen<'ctx> {
             builder,
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
+            atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
             snprintf_fn,

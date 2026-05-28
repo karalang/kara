@@ -440,6 +440,7 @@ impl<'ctx> super::Codegen<'ctx> {
         self.slice_elem_types.remove(&synth);
         self.var_elem_type_exprs.remove(&synth);
         self.var_type_names.remove(&synth);
+        self.atomic_var_inner_is_bool.remove(&synth);
         self.map_key_types.remove(&synth);
         self.map_val_types.remove(&synth);
         self.map_key_type_names.remove(&synth);
