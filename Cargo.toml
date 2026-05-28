@@ -6,7 +6,13 @@ members = ["runtime", "playground", "kernel"]
 # karac-rust workspace so its dep tree (hyper / tokio / hyper-util)
 # resolves independently of the compiler crate's deps and isn't built
 # as part of `cargo test` in this workspace.
-exclude = ["examples/parallax/bench/rust"]
+#
+# Demo 1 slice 3 (phase-6-runtime.md line 180) — `examples/ws_idle_holder/
+# bench/` is the flagship-demo bench-harness client (tokio + rustls,
+# opens N idle wss:// connections + measures connect latency / per-conn
+# memory / churn). Same rationale: its tokio-rustls dep tree resolves
+# independently and it isn't part of the workspace `cargo test`.
+exclude = ["examples/parallax/bench/rust", "examples/ws_idle_holder/bench"]
 
 [package]
 name = "karac"

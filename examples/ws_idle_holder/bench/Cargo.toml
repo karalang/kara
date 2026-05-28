@@ -1,0 +1,46 @@
+# Empty `[workspace]` table: makes this crate its own workspace root so
+# cargo's upward manifest walk stops here. Without it, the crate's
+# physical location under `.claude/worktrees/<name>/examples/...` during
+# worktree-based dev lets cargo walk past the worktree root up to the
+# primary repo's workspace, which neither lists nor excludes the
+# worktree-nested path → "believes it's in a workspace when it's not".
+# Self-rooting resolves the crate standalone wherever it lives.
+[workspace]
+
+[package]
+name = "ws-idle-holder-bench"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone — NOT part of the karac-rust workspace (see the root
+# Cargo.toml `exclude` list). Demo 1 slice 3 (phase-6-runtime.md line
+# 180): the bench-harness client for the `ws_idle_holder` flagship
+# demo. Mirrors the `examples/parallax/bench/rust/` precedent — a
+# self-contained tokio + rustls client whose dep tree (tokio /
+# tokio-rustls / serde_json) resolves independently of the compiler
+# crate's deps and isn't built as part of the workspace's `cargo test`.
+#
+# Why Rust and not Kāra: the harness must OPEN wss:// connections, but
+# the v1 Kāra WebSocket stdlib is server-side only (`accept` /
+# `accept_tls` + `recv_*` / `send_*`; no client `connect`/dial). A kara
+# client would need a whole new client-side TLS-connect + WS-handshake
+# stdlib surface — out of scope for a measurement harness, and exactly
+# the "kara client impractical at v1 scale" case the slice-3 tracker
+# entry anticipated. A Rust client with mature async/TLS libs also
+# isolates server measurement from client-side perf bugs.
+
+[dependencies]
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "net",
+    "io-util",
+    "macros",
+    "time",
+    "process",
+    "sync",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
