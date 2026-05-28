@@ -4,6 +4,7 @@
 
 use karac::ast::*;
 use karac::parse;
+use karac::token::IntSuffix;
 
 fn parse_ok(source: &str) -> Program {
     let result = parse(source);
@@ -6277,6 +6278,56 @@ fn test_range_pattern_char() {
                 {
                     assert!(matches!(start, Some(LiteralPattern::Char('a'))));
                     assert!(matches!(end, Some(LiteralPattern::Char('z'))));
+                    assert!(*inclusive);
+                } else {
+                    panic!("Expected RangePattern");
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn test_byte_literal_in_match_pattern() {
+    // `b'I'` byte-literal patterns desugar to an integer pattern with a
+    // U8 suffix (b'I' == 73). Previously the parser rejected them with
+    // "Expected pattern, found ByteLiteral".
+    let prog = parse_ok("fn main() { match b { b'I' => one, _ => other, } }");
+    if let Item::Function(f) = &prog.items[0] {
+        if let Some(expr) = &f.body.final_expr {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                assert!(matches!(
+                    &arms[0].pattern.kind,
+                    PatternKind::Literal(LiteralPattern::Integer(73, Some(IntSuffix::U8)))
+                ));
+            } else {
+                panic!("Expected Match");
+            }
+        }
+    }
+}
+
+#[test]
+fn test_range_pattern_byte() {
+    // `b'0'..=b'9'` → integer range 48..=57 with U8 suffix on both bounds.
+    let prog = parse_ok("fn main() { match b { b'0'..=b'9' => digit, _ => other, } }");
+    if let Item::Function(f) = &prog.items[0] {
+        if let Some(expr) = &f.body.final_expr {
+            if let ExprKind::Match { arms, .. } = &expr.kind {
+                if let PatternKind::RangePattern {
+                    start,
+                    end,
+                    inclusive,
+                } = &arms[0].pattern.kind
+                {
+                    assert!(matches!(
+                        start,
+                        Some(LiteralPattern::Integer(48, Some(IntSuffix::U8)))
+                    ));
+                    assert!(matches!(
+                        end,
+                        Some(LiteralPattern::Integer(57, Some(IntSuffix::U8)))
+                    ));
                     assert!(*inclusive);
                 } else {
                     panic!("Expected RangePattern");

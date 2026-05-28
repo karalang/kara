@@ -1507,6 +1507,135 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_match_range_inclusive() {
+        // Regression: range patterns had no codegen arm and fell through
+        // to the catch-all `_ => true`, so every value matched the first
+        // range arm. The interpreter was correct; codegen was not.
+        let out = run_program(
+            r#"
+fn classify(n: i64) -> i64 {
+    match n {
+        10..=20 => 111,
+        _ => 999,
+    }
+}
+fn main() {
+    println(classify(5));    // below → 999
+    println(classify(10));   // lower bound → 111
+    println(classify(15));   // inside → 111
+    println(classify(20));   // upper bound (inclusive) → 111
+    println(classify(21));   // above → 999
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["999", "111", "111", "111", "999"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_range_exclusive() {
+        // Exclusive upper bound: `10..20` excludes 20.
+        let out = run_program(
+            r#"
+fn classify(n: i64) -> i64 {
+    match n {
+        10..20 => 111,
+        _ => 999,
+    }
+}
+fn main() {
+    println(classify(10));   // lower bound → 111
+    println(classify(19));   // inside → 111
+    println(classify(20));   // upper bound (exclusive) → 999
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["111", "111", "999"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_range_char() {
+        let out = run_program(
+            r#"
+fn kind(c: char) -> i64 {
+    match c {
+        '0'..='9' => 1,
+        'a'..='z' => 2,
+        _ => 0,
+    }
+}
+fn main() {
+    println(kind('5'));   // digit → 1
+    println(kind('q'));   // lower → 2
+    println(kind('M'));   // neither → 0
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "0"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_byte_literal() {
+        // Byte-literal patterns (`b'I'`) desugar to integer patterns with
+        // a U8 suffix; previously the parser rejected them outright.
+        let out = run_program(
+            r#"
+fn value(b: u8) -> i64 {
+    match b {
+        b'I' => 1,
+        b'V' => 5,
+        b'X' => 10,
+        _ => 0,
+    }
+}
+fn main() {
+    println(value(b'I'));
+    println(value(b'X'));
+    println(value(b'?'));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "10", "0"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_match_byte_range() {
+        // Combines both fixes: byte-literal range bounds (parser) lowered
+        // to unsigned comparisons (codegen).
+        let out = run_program(
+            r#"
+fn kind(b: u8) -> i64 {
+    match b {
+        b'0'..=b'9' => 1,
+        b'a'..=b'z' => 2,
+        _ => 0,
+    }
+}
+fn main() {
+    println(kind(b'5'));   // digit → 1
+    println(kind(b'q'));   // lower → 2
+    println(kind(b'M'));   // neither → 0
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "0"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_break_continue() {
         let out = run_program(
             r#"

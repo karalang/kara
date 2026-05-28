@@ -13,7 +13,7 @@
 
 use crate::ast::*;
 use crate::lexer::IdentClass;
-use crate::token::Token;
+use crate::token::{IntSuffix, Token};
 
 use super::{starts_upper, ParseError};
 
@@ -108,6 +108,46 @@ impl super::Parser {
                 if self.eat(&Token::DotDot) {
                     // `lo..hi` (bounded exclusive) when the next token is
                     // a literal; `lo..` (half-open) otherwise.
+                    let end = if Self::starts_literal_pattern(&self.peek_token()) {
+                        Some(self.parse_literal_pattern()?)
+                    } else {
+                        None
+                    };
+                    return Some(Pattern {
+                        kind: PatternKind::RangePattern {
+                            start: Some(lit),
+                            end,
+                            inclusive: false,
+                        },
+                        span: self.span_from(&start),
+                    });
+                }
+                Some(Pattern {
+                    kind: PatternKind::Literal(lit),
+                    span: self.span_from(&start),
+                })
+            }
+            // Byte literals (`b'I'`) are u8 integers — desugar to an
+            // integer pattern with a U8 suffix so the whole Integer
+            // pattern pipeline (typecheck / codegen / exhaustiveness /
+            // ranges) handles them with no new LiteralPattern variant.
+            // `b'I'` and `73u8` are then identical in pattern position.
+            Token::ByteLiteral(b) => {
+                self.advance();
+                let lit = LiteralPattern::Integer(b as i64, Some(IntSuffix::U8));
+                // Range pattern: `b'a'..=b'z'` or `b'a'..`
+                if self.eat(&Token::DotDotEq) {
+                    let end = self.parse_literal_pattern()?;
+                    return Some(Pattern {
+                        kind: PatternKind::RangePattern {
+                            start: Some(lit),
+                            end: Some(end),
+                            inclusive: true,
+                        },
+                        span: self.span_from(&start),
+                    });
+                }
+                if self.eat(&Token::DotDot) {
                     let end = if Self::starts_literal_pattern(&self.peek_token()) {
                         Some(self.parse_literal_pattern()?)
                     } else {
@@ -370,7 +410,10 @@ impl super::Parser {
     /// form `lo..hi` from the half-open form `lo..` — only the former
     /// has a literal in end position.
     fn starts_literal_pattern(tok: &Token) -> bool {
-        matches!(tok, Token::Integer(..) | Token::CharLiteral(_))
+        matches!(
+            tok,
+            Token::Integer(..) | Token::CharLiteral(_) | Token::ByteLiteral(_)
+        )
     }
 
     /// Parse the field list of a struct pattern between `{` and `}`.
@@ -452,6 +495,10 @@ impl super::Parser {
             Token::CharLiteral(c) => {
                 self.advance();
                 Some(LiteralPattern::Char(c))
+            }
+            Token::ByteLiteral(b) => {
+                self.advance();
+                Some(LiteralPattern::Integer(b as i64, Some(IntSuffix::U8)))
             }
             _ => {
                 self.error("Expected integer or character literal in range pattern");

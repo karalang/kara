@@ -323,6 +323,63 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 self.compile_binop(&BinOp::Eq, scrut, lit_val)
             }
+            // `lo..=hi` / `lo..hi` / `..=hi` / `lo..` — lower to the
+            // bound comparisons `scrut >= lo` and `scrut <(=) hi`, AND'd
+            // together. Without this arm the pattern fell through to the
+            // catch-all `_ => true` below, so every range matched
+            // unconditionally (codegen-only bug; the interpreter was
+            // correct). The parser admits only integer / char bounds.
+            PatternKind::RangePattern {
+                start,
+                end,
+                inclusive,
+            } => {
+                // Unsigned comparison only when a bound carries an
+                // unsigned int suffix (e.g. the `b'a'..=b'z'` desugar →
+                // U8). Keeps byte ranges correct for values ≥ 128; signed
+                // for plain int / char ranges.
+                let unsigned = [start.as_ref(), end.as_ref()]
+                    .into_iter()
+                    .flatten()
+                    .any(|l| {
+                        matches!(
+                            l,
+                            LiteralPattern::Integer(
+                                _,
+                                Some(
+                                    crate::token::IntSuffix::U8
+                                        | crate::token::IntSuffix::U16
+                                        | crate::token::IntSuffix::U32
+                                        | crate::token::IntSuffix::U64
+                                        | crate::token::IntSuffix::U128
+                                )
+                            )
+                        )
+                    });
+
+                let mut cond: Option<inkwell::values::IntValue<'ctx>> = None;
+                if let Some(lo) = start {
+                    let lo_val = self.range_bound_const(lo);
+                    let ge = self
+                        .compile_binop_typed(&BinOp::GtEq, scrut, lo_val, unsigned)?
+                        .into_int_value();
+                    cond = Some(ge);
+                }
+                if let Some(hi) = end {
+                    let hi_val = self.range_bound_const(hi);
+                    let op = if *inclusive { BinOp::LtEq } else { BinOp::Lt };
+                    let cmp = self
+                        .compile_binop_typed(&op, scrut, hi_val, unsigned)?
+                        .into_int_value();
+                    cond = Some(match cond {
+                        Some(c) => self.builder.build_and(c, cmp, "range.and").unwrap(),
+                        None => cmp,
+                    });
+                }
+                // Bare `..` (both None) is rejected by the parser; if it
+                // somehow reaches here, treat as always-match.
+                Ok(cond.map(|c| c.into()).unwrap_or(tru.into()))
+            }
             PatternKind::Or(pats) => {
                 let mut result: BasicValueEnum<'ctx> =
                     self.context.bool_type().const_int(0, false).into();
@@ -371,6 +428,19 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             // Plain struct pattern or anything else — always matches
             _ => Ok(tru.into()),
+        }
+    }
+
+    /// Build an LLVM constant for a range-pattern bound. The parser admits
+    /// only integer and char literals in range position; both are built
+    /// the same way the `Literal` arm builds them so the comparison is
+    /// width-matched to the scrutinee. Float / String / Bool can't appear
+    /// here (parser rejects), so they fall back to an i64 0.
+    fn range_bound_const(&self, lit: &LiteralPattern) -> BasicValueEnum<'ctx> {
+        match lit {
+            LiteralPattern::Integer(n, sfx) => self.const_int_for_suffix(*n, *sfx).into(),
+            LiteralPattern::Char(c) => self.context.i32_type().const_int(*c as u64, false).into(),
+            _ => self.context.i64_type().const_int(0, false).into(),
         }
     }
 
