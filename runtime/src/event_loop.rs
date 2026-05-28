@@ -3165,6 +3165,112 @@ mod tests {
         drop(state);
     }
 
+    // Async-scheduler integration slice 1 (phase 6 line 170 P0 blocker):
+    // the load-bearing invariant the whole dispatcher-yield model rests
+    // on — the dispatcher must drive MULTIPLE concurrently-parked tasks
+    // to completion, routing each fd-readiness wakeup to the correct
+    // task by its `parked` pointer. The single-task test above proves
+    // the mechanism; this proves it doesn't mis-route across tasks (the
+    // exact failure the codegen's current blocking-spin model hits: two
+    // tasks blocked on one global queue steal each other's wakeups). The
+    // runtime side is already correct here — the demo wedge is purely
+    // that codegen never routes through this dispatcher.
+    #[cfg(unix)]
+    #[test]
+    fn dispatcher_drives_two_concurrent_parked_tasks_to_completion() {
+        let _guard = start_scheduler_for_test();
+        use std::os::fd::AsRawFd;
+
+        // Two independent listeners → two distinct fds → two distinct
+        // parked tasks, registered concurrently.
+        let make = || {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            l.set_nonblocking(true).unwrap();
+            let addr = l.local_addr().unwrap();
+            let fd = l.as_raw_fd();
+            (l, addr, fd)
+        };
+        let (l0, addr0, fd0) = make();
+        let (l1, addr1, fd1) = make();
+
+        let mut s0 = Box::new(SchedulerTestState {
+            tag: 0,
+            listener_fd: fd0,
+            token: 0,
+            completed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let mut s1 = Box::new(SchedulerTestState {
+            tag: 0,
+            listener_fd: fd1,
+            token: 0,
+            completed: std::sync::atomic::AtomicBool::new(false),
+        });
+        let t0 = Box::new(KaracParkedTask {
+            poll_fn: scheduler_test_poll_fn,
+            state: &mut *s0 as *mut SchedulerTestState as *mut c_void,
+        });
+        let t1 = Box::new(KaracParkedTask {
+            poll_fn: scheduler_test_poll_fn,
+            state: &mut *s1 as *mut SchedulerTestState as *mut c_void,
+        });
+        let t0_ptr = &*t0 as *const KaracParkedTask as *mut c_void;
+        let t1_ptr = &*t1 as *const KaracParkedTask as *mut c_void;
+
+        let tok0 = karac_runtime_event_loop_register_fd(fd0, 0, t0_ptr);
+        let tok1 = karac_runtime_event_loop_register_fd(fd1, 0, t1_ptr);
+        assert_ne!(tok0, 0);
+        assert_ne!(tok1, 0);
+        assert_ne!(tok0, tok1, "distinct registrations get distinct tokens");
+        s0.token = tok0;
+        s1.token = tok1;
+
+        // Park both (tag 0 → 1, Pending) before any readiness fires.
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        assert_eq!(
+            unsafe { (t0.poll_fn)(t0.state, &cancel) },
+            KaracPollResult::Pending as u8
+        );
+        assert_eq!(
+            unsafe { (t1.poll_fn)(t1.state, &cancel) },
+            KaracPollResult::Pending as u8
+        );
+
+        // Trigger both fds (order intentionally interleaved).
+        let c0 = thread::spawn(move || {
+            let _s = std::net::TcpStream::connect(addr0).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        });
+        let c1 = thread::spawn(move || {
+            let _s = std::net::TcpStream::connect(addr1).unwrap();
+            thread::sleep(Duration::from_millis(50));
+        });
+
+        // Both must complete — neither task's wakeup may be stolen by
+        // the other. Bounded so a mis-routing regression fails rather
+        // than hangs.
+        let start = Instant::now();
+        loop {
+            let done0 = s0.completed.load(Ordering::Acquire);
+            let done1 = s1.completed.load(Ordering::Acquire);
+            if done0 && done1 {
+                break;
+            }
+            if start.elapsed() > Duration::from_secs(3) {
+                panic!("dispatcher did not drive BOTH tasks to completion within 3s (done0={done0}, done1={done1})");
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+
+        c0.join().unwrap();
+        c1.join().unwrap();
+        drop(t0);
+        drop(t1);
+        drop(s0);
+        drop(s1);
+        drop(l0);
+        drop(l1);
+    }
+
     #[test]
     fn dispatcher_start_is_idempotent() {
         let _guard = start_scheduler_for_test();
