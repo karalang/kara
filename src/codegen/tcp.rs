@@ -50,12 +50,14 @@ use super::declarations::KARAC_PARK_ON_FD;
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Emit the state-machine invocation pattern for `karac_park_on_fd`
-    /// inline at the current builder position: allocate the state
-    /// struct via the constructor, store `fd` (field 1) and `direction`
-    /// (field 2), drive the poll loop with `sched_yield` on Pending,
-    /// free the state struct on Ready. Mirrors slice 8d/8e's caller-
-    /// side intercept body but specialised to the parking primitive's
-    /// two-arg owned-param shape (no ref/slice handling needed).
+    /// inline at the current builder position: allocate the state struct
+    /// via the constructor, store `fd` (field 1) and `direction` (field 2),
+    /// invoke the poll-fn once (drives `state_0`: register + Pending), and
+    /// on Pending block on the per-park completion slot until the
+    /// dispatcher signals readiness — then deregister the fd and free the
+    /// slot + state struct (async-sched slice 2/3). Specialised to the
+    /// parking primitive's two-arg owned-param shape (no ref/slice
+    /// handling needed).
     ///
     /// Used by stdlib `TcpListener.accept` (and future `TcpStream.read`
     /// / `.write` / `WebSocket.recv` / `.send`) codegen lowerings —
@@ -119,23 +121,26 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_store(dir_field_ptr, direction)
             .expect("store direction into state struct");
 
-        // Poll loop: invoke poll-fn, sched_yield on Pending, fall
-        // through on Ready.
-        let loop_bb = self
+        // Dispatcher-yield drive (async-sched slice 2/3). Invoke the
+        // poll-fn ONCE — that runs `state_0` (allocate completion slot,
+        // register fd, return Pending). On Pending we block on the slot
+        // (`park_slot_wait`); the dispatcher thread, when the fd fires,
+        // re-invokes the poll-fn at `state_1` which signals the slot. We do
+        // NOT re-invoke the poll-fn ourselves — that would race the
+        // dispatcher. After the wait returns we deregister the fd (so the
+        // next park of the same fd gets a fresh registration rather than an
+        // EEXIST error) and free the slot, then free the state struct.
+        let wait_bb = self
             .context
-            .append_basic_block(cur_fn, "kara.park.poll_loop");
-        let yield_bb = self
-            .context
-            .append_basic_block(cur_fn, "kara.park.poll_yield");
+            .append_basic_block(cur_fn, "kara.park.poll_wait");
         let done_bb = self
             .context
             .append_basic_block(cur_fn, "kara.park.poll_done");
-        self.builder
-            .build_unconditional_branch(loop_bb)
-            .expect("br to park poll loop");
 
-        self.builder.position_at_end(loop_bb);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i8_ty = self.context.i8_type();
+        let i32_ty = self.context.i32_type();
+        let i64_ty = self.context.i64_type();
         let null_cancel = ptr_ty.const_null();
         let poll_call = self
             .builder
@@ -149,7 +154,6 @@ impl<'ctx> super::Codegen<'ctx> {
             .try_as_basic_value()
             .unwrap_basic()
             .into_int_value();
-        let i8_ty = self.context.i8_type();
         let is_pending = self
             .builder
             .build_int_compare(
@@ -159,17 +163,71 @@ impl<'ctx> super::Codegen<'ctx> {
                 "kara.park.is_pending",
             )
             .expect("icmp eq i8 poll_result, 0");
+        // Pending → wait on the slot; Ready (defensive, state_0 always
+        // yields Pending) → skip straight to cleanup.
         self.builder
-            .build_conditional_branch(is_pending, yield_bb, done_bb)
+            .build_conditional_branch(is_pending, wait_bb, done_bb)
             .expect("br on park poll discriminant");
 
-        self.builder.position_at_end(yield_bb);
+        // wait_bb: block until the dispatcher signals readiness, then
+        // deregister the fd and free the completion slot.
+        self.builder.position_at_end(wait_bb);
+        let slot_field_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 6, "kara.park.slot.field")
+            .expect("GEP completion-slot field of karac_park_on_fd state struct");
+        let slot = self
+            .builder
+            .build_load(ptr_ty, slot_field_ptr, "kara.park.slot")
+            .expect("load completion slot");
+        let park_slot_wait_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_wait")
+            .expect("karac_runtime_park_slot_wait declared in Codegen::new");
         self.builder
-            .build_call(self.sched_yield_fn, &[], "kara.park.yield_result")
-            .expect("call sched_yield from park yield block");
+            .build_call(park_slot_wait_fn, &[slot.into()], "")
+            .expect("call karac_runtime_park_slot_wait");
+        // One-shot deregister: load fd (field 1) + token (field 5), then
+        // remove the registration so the fd can be re-parked later.
+        let fd_reload_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 1, "kara.park.fd.reload")
+            .expect("GEP fd field for deregister");
+        let fd_reload = self
+            .builder
+            .build_load(i32_ty, fd_reload_ptr, "kara.park.fd.val")
+            .expect("load fd for deregister")
+            .into_int_value();
+        let token_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 5, "kara.park.token.field")
+            .expect("GEP registration-token field");
+        let token = self
+            .builder
+            .build_load(i64_ty, token_ptr, "kara.park.token")
+            .expect("load registration token")
+            .into_int_value();
+        let deregister_fn = self
+            .module
+            .get_function("karac_runtime_event_loop_deregister_fd")
+            .expect("karac_runtime_event_loop_deregister_fd declared in Codegen::new");
         self.builder
-            .build_unconditional_branch(loop_bb)
-            .expect("br back to park poll loop after yield");
+            .build_call(
+                deregister_fn,
+                &[fd_reload.into(), token.into()],
+                "kara.park.deregister",
+            )
+            .expect("call karac_runtime_event_loop_deregister_fd");
+        let park_slot_free_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_free")
+            .expect("karac_runtime_park_slot_free declared in Codegen::new");
+        self.builder
+            .build_call(park_slot_free_fn, &[slot.into()], "")
+            .expect("call karac_runtime_park_slot_free");
+        self.builder
+            .build_unconditional_branch(done_bb)
+            .expect("br to park done after wait");
 
         self.builder.position_at_end(done_bb);
         self.builder

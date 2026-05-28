@@ -120,7 +120,8 @@ fn main() {
         );
         let main_body = function_body(&ir, "main").expect("main body");
         assert!(
-            main_body.contains("@karac_park_on_fd") || main_body.contains("kara.park.poll_loop"),
+            main_body.contains("@__kara_poll_karac_park_on_fd")
+                || main_body.contains("kara.park.poll_wait"),
             "accept should compose via karac_park_on_fd; body was:\n{}",
             main_body
         );
@@ -307,7 +308,8 @@ fn main() {
         );
         let main_body = function_body(&ir, "main").expect("main body");
         assert!(
-            main_body.contains("@karac_park_on_fd") || main_body.contains("kara.park.poll_loop"),
+            main_body.contains("@__kara_poll_karac_park_on_fd")
+                || main_body.contains("kara.park.poll_wait"),
             "accept_tls should park before the handshake; body was:\n{}",
             main_body
         );

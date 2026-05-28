@@ -310,6 +310,28 @@ impl<'ctx> super::Codegen<'ctx> {
                     .into_struct_value();
             }
             self.builder.build_store(heap_env, env_agg).unwrap();
+
+            // Move-suppression for the captured values. A spawn closure is
+            // `OnceFn() -> T`: it captures its free vars *by move*, taking
+            // ownership into the spawned task (the cross-task-safe check at
+            // the spawn site already verified this is sound). The values
+            // were just bitwise-copied into the heap env above; the spawned
+            // wrapper now owns them and runs their `Drop` when the task
+            // finishes. So the parent must NOT also drop them at scope exit
+            // — without this, a captured resource with a user `Drop` (e.g.
+            // a `WebSocket`, whose Drop closes the fd) is dropped twice:
+            // once by the parent and once by the task. For an fd that is a
+            // double-`close()`, which corrupts the fd table (a reused fd
+            // gets closed out from under another connection) and, on macOS,
+            // can wedge `close()` itself when the fd is concurrently
+            // registered in the kqueue by the task's recv park — the
+            // intermittent accept-loop hang the `ws_idle_holder` demo hit
+            // at scale. Suppressing is a no-op for `Copy` captures (they
+            // have no `UserDrop` cleanup entry), so it is safe to apply to
+            // every capture.
+            for var_name in &free_vars {
+                self.suppress_user_drop_for_var(var_name);
+            }
         }
 
         // Compute (result_size, result_align) for the runtime FFI. The

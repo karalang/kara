@@ -1561,6 +1561,67 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // ── Async-scheduler integration (Phase 6 line 170 slice 2/3) ──────
+        //
+        // The dispatcher-yield model: the leaf park's `state_0` registers
+        // the fd and returns Pending; the *caller* blocks on a per-park
+        // `KaracParkSlot`; the *dispatcher* thread runs `state_1` when the
+        // fd actually fires (routed by the wakeup's `parked` pointer) and
+        // signals that slot. This replaces the pre-slice-2 model where
+        // `state_1` blocked on the unfiltered global `take_wakeups` — two
+        // concurrently-parked tasks stole each other's wakeups (the
+        // accept-loop-wedges-at-1 P0 blocker).
+        //
+        // `karac_runtime_scheduler_start_dispatcher() -> i32` — idempotent
+        // bootstrap; auto-starts the background poller. Replaces the bare
+        // `start_background_thread` call at park bootstrap so wakeups are
+        // routed to the correct task rather than drained globally.
+        let start_dispatcher_ty = context.i32_type().fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_scheduler_start_dispatcher",
+            start_dispatcher_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_event_loop_deregister_fd(raw_fd: i32, token: u64)
+        // -> i32` — the caller deregisters its fd after the park completes
+        // (one-shot), so a re-registered fd in a subsequent loop iteration
+        // gets a fresh token and the event loop doesn't keep reporting a
+        // stale registration.
+        let deregister_fd_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into(), i64_type.into()], false);
+        module.add_function(
+            "karac_runtime_event_loop_deregister_fd",
+            deregister_fd_ty,
+            Some(Linkage::External),
+        );
+        // Per-park completion slot. `new` allocates; `wait` blocks the
+        // caller until the dispatcher signals readiness; `signal` is called
+        // by the leaf poll-fn's `state_1` on the dispatcher thread; `free`
+        // releases the slot after `wait` returns.
+        let park_slot_new_ty = ptr_type.fn_type(&[], false);
+        module.add_function(
+            "karac_runtime_park_slot_new",
+            park_slot_new_ty,
+            Some(Linkage::External),
+        );
+        let park_slot_unary_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_park_slot_wait",
+            park_slot_unary_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_park_slot_signal",
+            park_slot_unary_ty,
+            Some(Linkage::External),
+        );
+        module.add_function(
+            "karac_runtime_park_slot_free",
+            park_slot_unary_ty,
+            Some(Linkage::External),
+        );
+
         // ── stdlib TcpListener codegen-side wiring (Phase 6 line 17) ──────
         //
         // `karac_runtime_tcp_bind(addr_ptr: *const u8, addr_len: i64) -> i32`

@@ -17,6 +17,7 @@ use inkwell::types::BasicType;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, CallSiteValue, FunctionValue};
 use inkwell::{AddressSpace, IntPredicate};
 
+use super::declarations::KARAC_PARK_ON_FD;
 use super::helpers::{expr_as_type_expr_codegen, match_with_provider_call};
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -261,6 +262,23 @@ impl<'ctx> super::Codegen<'ctx> {
         // Check if this is an indirect call through a closure variable.
         if self.closure_fn_types.contains_key(&name) {
             return self.compile_closure_call(&name, args);
+        }
+
+        // Async-sched slice 2/3: a *direct* call to the leaf parking
+        // primitive `karac_park_on_fd(fd, direction)` — from user source or
+        // the `park_and_wake` test — routes to the same dispatcher-yield
+        // helper the stdlib TCP/TLS lowerings use, rather than the generic
+        // spin-loop intercept below. The leaf park is the one
+        // network-boundary callee that yields to the dispatcher (register +
+        // block on a per-park slot) instead of running its poll-fn
+        // synchronously to completion on the calling thread.
+        if name == KARAC_PARK_ON_FD && args.len() == 2 {
+            let fd_val = self.compile_expr(&args[0].value)?.into_int_value();
+            let dir_val = self.compile_expr(&args[1].value)?.into_int_value();
+            self.emit_state_machine_invocation_for_park_on_fd(fd_val, dir_val);
+            // `karac_park_on_fd` returns unit; mirror the generic
+            // intercept's i64-0 unit placeholder.
+            return Ok(self.context.i64_type().const_zero().into());
         }
 
         // Phase 6 line 26 slice 8d: network-boundary callee intercept.

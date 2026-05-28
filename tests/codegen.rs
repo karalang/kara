@@ -22726,18 +22726,20 @@ fn main() {
         }
     }
 
-    // ── Phase 6 line 17 slice 6: karac_park_on_fd leaf parking primitive ──
+    // ── Phase 6 line 17/170: karac_park_on_fd leaf parking primitive ──
     //
     // The leaf primitive recognised by codegen. When effectcheck classifies
     // it as a network-yield callee (via the declared
     // `sends(Network) receives(Network)` effects), the state-machine
-    // emission pass overrides its body with a hand-rolled 2-state
-    // machine: state_0 registers the fd with the event loop and returns
-    // Pending; state_1 blocks on `take_wakeups` until a wakeup arrives
-    // and returns Ready. The state struct gains a trailing
-    // `KaracParkedTask { poll_fn, state }` field; the constructor
-    // initialises both pointers so the runtime's wakeup-dispatch path
-    // can follow `parked.poll_fn(parked.state, null)` on readiness.
+    // emission pass overrides its body with a hand-rolled 2-state machine.
+    // Async-sched slice 2/3 (dispatcher-yield): state_0 allocates a
+    // per-park completion slot + registers the fd and returns Pending;
+    // state_1 — re-invoked by the dispatcher only on real readiness, routed
+    // by the wakeup's parked pointer — signals that slot and returns Ready.
+    // The caller blocks on the slot (rather than re-polling) and deregisters
+    // the fd afterwards. The state struct carries the `KaracParkedTask
+    // { poll_fn, state }` record (so the dispatcher can re-invoke the
+    // poll-fn) plus trailing `token` + `slot` fields.
 
     fn park_on_fd_source() -> &'static str {
         "effect resource Network;
@@ -22749,18 +22751,21 @@ fn main() {
     #[test]
     fn test_park_on_fd_state_struct_emitted_with_parked_task_trailing_fields() {
         // `%kara.state.karac_park_on_fd` carries the layout
-        // `{ i32 tag, i32 fd, i8 direction, ptr poll_fn, ptr state }`.
-        // The two trailing ptrs are the `KaracParkedTask` storage; the
-        // constructor inits them and the runtime's dispatcher reads them
-        // back through the address stashed at register-fd time.
+        // `{ i32 tag, i32 fd, i8 direction, ptr poll_fn, ptr state,
+        //    i64 token, ptr slot }`. The poll_fn/state ptrs are the
+        // `KaracParkedTask` storage the dispatcher reads back; the trailing
+        // `token` + `slot` (async-sched slice 2/3) carry the registration
+        // handle (for the caller's one-shot deregister) and the per-park
+        // completion slot (the caller blocks on it, state_1 signals it).
         let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
         let line = ir
             .lines()
             .find(|l| l.starts_with("%kara.state.karac_park_on_fd = type {"))
             .unwrap_or_else(|| panic!("missing karac_park_on_fd state struct in IR:\n{ir}"));
         assert!(
-            line.contains("i32") && line.matches("ptr").count() >= 2,
-            "state struct must carry tag (i32) + 2 trailing parked-task ptrs: {line}"
+            line.contains("i32") && line.contains("i64") && line.matches("ptr").count() >= 3,
+            "state struct must carry tag (i32) + token (i64) + 3 ptrs \
+             (poll_fn, state, slot): {line}"
         );
     }
 
@@ -22789,8 +22794,9 @@ fn main() {
 
     #[test]
     fn test_park_on_fd_poll_fn_emits_register_fd_call_in_state_0() {
-        // state_0 calls `karac_runtime_event_loop_register_fd(fd, dir,
-        // &parked_task)` then stores `tag = 1` and returns Pending.
+        // state_0 allocates the per-park completion slot, calls
+        // `karac_runtime_event_loop_register_fd(fd, dir, &parked_task)`,
+        // stores the token + `tag = 1`, and returns Pending.
         let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
         let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
             .expect("poll-fn body must be present");
@@ -22802,45 +22808,55 @@ fn main() {
             body.contains("kara.park.parked_ptr"),
             "state_0 must GEP &parked_task field:\n{body}"
         );
-    }
-
-    #[test]
-    fn test_park_on_fd_poll_fn_emits_take_wakeups_call_in_state_1() {
-        // state_1 calls `karac_runtime_event_loop_take_wakeups(buf, 1, -1)`
-        // — blocking wait — then returns Ready.
-        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
-        let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
-            .expect("poll-fn body must be present");
         assert!(
-            body.contains("@karac_runtime_event_loop_take_wakeups"),
-            "state_1 must call karac_runtime_event_loop_take_wakeups:\n{body}"
+            body.contains("@karac_runtime_park_slot_new"),
+            "state_0 must allocate the per-park completion slot:\n{body}"
         );
     }
 
     #[test]
-    fn test_park_on_fd_poll_fn_starts_background_thread_in_entry() {
-        // Entry block calls `karac_runtime_event_loop_start_background_thread`
+    fn test_park_on_fd_poll_fn_signals_slot_in_state_1_not_take_wakeups() {
+        // Async-sched slice 2/3: state_1 — reached only when the dispatcher
+        // re-invokes on real readiness — signals the per-park completion
+        // slot and returns Ready. It must NOT block on the global
+        // `take_wakeups` (the wakeup-stealing source of the P0 wedge).
+        let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
+        let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
+            .expect("poll-fn body must be present");
+        assert!(
+            body.contains("@karac_runtime_park_slot_signal"),
+            "state_1 must signal the completion slot:\n{body}"
+        );
+        assert!(
+            !body.contains("@karac_runtime_event_loop_take_wakeups"),
+            "state_1 must NOT block on the global take_wakeups queue:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_park_on_fd_poll_fn_starts_dispatcher_in_entry() {
+        // Entry block calls `karac_runtime_scheduler_start_dispatcher`
         // before dispatching on the tag — idempotent bootstrap so the
-        // runtime's poller + dispatcher are guaranteed to be running by
-        // the time register_fd is called.
+        // dispatcher (which re-invokes this poll-fn at state_1, routed by
+        // the wakeup's parked pointer) is running before register_fd.
         let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
         let body = function_body(&ir, "__kara_poll_karac_park_on_fd")
             .expect("poll-fn body must be present");
         assert!(
-            body.contains("@karac_runtime_event_loop_start_background_thread"),
-            "poll-fn entry must call start_background_thread (idempotent bootstrap):\n{body}"
+            body.contains("@karac_runtime_scheduler_start_dispatcher"),
+            "poll-fn entry must start the scheduler dispatcher (idempotent bootstrap):\n{body}"
         );
     }
 
     #[test]
-    fn test_park_on_fd_caller_routes_through_state_machine_intercept() {
-        // The driver that calls `karac_park_on_fd(socket_fd, 0)` should
-        // route through the slice-8d caller intercept: allocate the
-        // state struct via `__kara_state_new_karac_park_on_fd` then
-        // enter the `kara.poll_loop` shape. This verifies the leaf
-        // primitive participates in the existing state-machine
-        // composition path — its caller looks identical to a caller of
-        // any other network-boundary fn.
+    fn test_park_on_fd_caller_routes_through_dispatcher_yield_intercept() {
+        // The driver that calls `karac_park_on_fd(socket_fd, 0)` routes
+        // through the dispatcher-yield helper: allocate the state struct
+        // via `__kara_state_new_karac_park_on_fd`, invoke the poll-fn once
+        // (state_0), then on Pending block on the completion slot
+        // (`kara.park.poll_wait`) and deregister the fd afterwards. This is
+        // the leaf primitive's yield to the dispatcher — distinct from the
+        // synchronous spin-loop the generic intercept still uses.
         let ir = ir_for_with_state_struct_layouts(park_on_fd_source());
         let driver = function_body(&ir, "driver").expect("driver body must be present");
         assert!(
@@ -22852,8 +22868,16 @@ fn main() {
             "driver must invoke poll-fn for karac_park_on_fd:\n{driver}"
         );
         assert!(
-            driver.contains("kara.poll_loop"),
-            "driver must enter the state-machine poll loop:\n{driver}"
+            driver.contains("kara.park.poll_wait"),
+            "driver must block on the per-park completion slot (dispatcher-yield):\n{driver}"
+        );
+        assert!(
+            driver.contains("@karac_runtime_park_slot_wait"),
+            "driver must wait on the completion slot:\n{driver}"
+        );
+        assert!(
+            driver.contains("@karac_runtime_event_loop_deregister_fd"),
+            "driver must deregister the fd after the park completes:\n{driver}"
         );
     }
 

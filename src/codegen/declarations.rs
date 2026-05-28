@@ -573,8 +573,20 @@ impl<'ctx> super::Codegen<'ctx> {
         // passes it to `register_fd`.
         if emit_key == KARAC_PARK_ON_FD {
             let ptr_ty: BasicTypeEnum<'ctx> = self.context.ptr_type(AddressSpace::default()).into();
-            fields.push(ptr_ty); // poll_fn ptr
-            fields.push(ptr_ty); // state ptr
+            let i64_ty: BasicTypeEnum<'ctx> = self.context.i64_type().into();
+            // Parked-task record (dispatcher reads it as a `KaracParkedTask
+            // { poll_fn, state }` = two consecutive ptrs): field 3 poll_fn,
+            // field 4 state.
+            fields.push(ptr_ty);
+            fields.push(ptr_ty);
+            // Async-sched slice 2/3 dispatcher-yield hand-off fields:
+            // field 5 `token` (the registration handle, for the caller's
+            // one-shot deregister) and field 6 `slot` (the per-park
+            // `KaracParkSlot*` the caller blocks on / `state_1` signals).
+            // `state_0` fills both; the constructor leaves them
+            // uninitialised.
+            fields.push(i64_ty);
+            fields.push(ptr_ty);
         }
         let st = self
             .context
@@ -1473,47 +1485,71 @@ impl<'ctx> super::Codegen<'ctx> {
             .insert(emit_key.to_string(), poll_fn);
     }
 
-    /// Phase 6 line 17 slice 6: hand-rolled poll-function body for the
-    /// leaf parking primitive `karac_park_on_fd(fd: i32, direction: u8)`.
+    /// Hand-rolled poll-function body for the leaf parking primitive
+    /// `karac_park_on_fd(fd: i32, direction: u8)`.
     ///
-    /// State-struct layout (synthesized by
-    /// `synthesize_park_on_fd_layout` + the
-    /// `emit_state_struct_type_for_key` trailing-field push):
+    /// **Dispatcher-yield model (Phase 6 line 170 async-sched slice 2/3).**
+    /// The park is split across two threads. The *caller* thread runs
+    /// `state_0` (allocate the completion slot, register the fd, return
+    /// Pending) then — at the caller-side intercept — blocks on the slot.
+    /// The *dispatcher* thread runs `state_1` only when the fd actually
+    /// fires: the background poller delivers a wakeup carrying this task's
+    /// `parked` pointer, and the dispatcher routes it to exactly this
+    /// poll-fn; `state_1` signals the slot, unblocking the caller. This
+    /// replaces the pre-slice-2 model where `state_1` blocked on the
+    /// *unfiltered* global `take_wakeups`, so two concurrently-parked tasks
+    /// stole each other's wakeups (the accept-loop-wedges-at-1 P0 blocker).
+    ///
+    /// State-struct layout (synthesized by `synthesize_park_on_fd_layout`
+    /// + the `emit_state_struct_type_for_key` trailing-field push):
     ///   - field 0: `i32` tag
     ///   - field 1: `i32` fd (captured param)
     ///   - field 2: `i8`  direction (captured param)
     ///   - field 3: `ptr` parked_task.poll_fn
     ///   - field 4: `ptr` parked_task.state
+    ///   - field 5: `i64` registration token (filled by state_0)
+    ///   - field 6: `ptr` KaracParkSlot* completion slot (filled by state_0)
     ///
     /// Emitted body:
     ///   entry:
-    ///     call karac_runtime_event_loop_start_background_thread()  ; idempotent
+    ///     call karac_runtime_scheduler_start_dispatcher()    ; idempotent
     ///     %tag = load i32, %state[0]
     ///     switch %tag, [0 → state_0, 1 → state_1], default → unreachable
-    ///   state_0:
-    ///     %fd  = load i32, %state[1]
-    ///     %dir = load i8,  %state[2]
+    ///   state_0:                                             ; caller thread
+    ///     %fd   = load i32, %state[1]
+    ///     %dir  = load i8,  %state[2]
+    ///     %slot = call karac_runtime_park_slot_new()
+    ///     store %slot, %state[6]                   ; published before arming
+    ///     store i32 1, %state[0]                   ; tag=1 BEFORE arming
     ///     %parked = gep %state[3]                  ; &state.parked_task
-    ///     call karac_runtime_event_loop_register_fd(%fd, %dir, %parked)
-    ///     store i32 1, %state[0]                   ; advance tag
-    ///     ret i8 0                                 ; Pending
-    ///   state_1:
-    ///     %wakeup_buf = alloca { i64, ptr, i8 }, align 8
-    ///     call karac_runtime_event_loop_take_wakeups(%wakeup_buf, 1, -1)
+    ///     %tok = call karac_runtime_event_loop_register_fd(%fd, %dir, %parked)
+    ///     store %tok, %state[5]                     ; caller-private; after OK
+    ///     ret i8 0                                  ; Pending
+    ///   state_1:                                             ; dispatcher thread
+    ///     %slot = load ptr, %state[6]
+    ///     call karac_runtime_park_slot_signal(%slot)
     ///     ret i8 1                                 ; Ready
     ///
-    /// `start_background_thread` is idempotent at the runtime layer
-    /// (the runtime tracks a global `OnceLock`-style flag), so calling
-    /// it at every state_0 invocation is correct and cheap. The
-    /// alternative — a one-shot ctor — adds a module-init dependency
-    /// surface that v1 doesn't otherwise need.
+    /// **Memory ordering / race-freedom.** `register_fd` is the arming
+    /// point — after it, the dispatcher can re-invoke this poll-fn on
+    /// another thread. So everything the dispatcher reads (the `tag`, which
+    /// routes the switch, and the `slot` at `%state[6]`, which `state_1`
+    /// signals) is stored *before* `register_fd`. `register_fd`'s
+    /// `fds`-mutex release plus the poller→queue→dispatcher mutex chain make
+    /// those stores visible before the dispatcher reads them. Crucially the
+    /// `tag = 1` store is before `register_fd`: otherwise the dispatcher
+    /// could read `tag = 0` and run `state_0` concurrently with the caller's
+    /// `state_0` (double register / leaked slot / corrupt hand-off — an
+    /// intermittent re-wedge under load). The token (`%state[5]`) is read
+    /// only by the caller thread (its one-shot deregister after `wait`), so
+    /// it needs no cross-thread publication and is stored after register_fd.
+    /// The slot is freed by the caller only after `wait` returns, which
+    /// cannot happen before `signal` releases the slot mutex — so the free
+    /// never races a live `signal`.
     ///
-    /// The `take_wakeups` buffer's contents are intentionally
-    /// discarded: at the v1 single-task model, the only fd
-    /// registration in flight is ours, so any wakeup is ours. Multi-
-    /// task v2+ extensions will route the buffer through a
-    /// dispatcher that matches the wakeup's `parked` pointer back to
-    /// the right state machine.
+    /// `start_dispatcher` is idempotent (the runtime tracks a global slot
+    /// and auto-starts the background poller it depends on), so calling it
+    /// at every invocation is correct and cheap.
     pub(super) fn emit_park_on_fd_poll_body(
         &mut self,
         poll_fn: FunctionValue<'ctx>,
@@ -1521,7 +1557,6 @@ impl<'ctx> super::Codegen<'ctx> {
     ) {
         let i8_ty = self.context.i8_type();
         let i32_ty = self.context.i32_type();
-        let i64_ty = self.context.i64_type();
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
 
         let saved_bb = self.builder.get_insert_block();
@@ -1531,17 +1566,20 @@ impl<'ctx> super::Codegen<'ctx> {
         let default_bb = self.context.append_basic_block(poll_fn, "tag_unreachable");
 
         self.builder.position_at_end(entry);
-        // Idempotent bootstrap of the runtime's background poller +
-        // dispatcher. Runs every poll-fn invocation (cheap second-call
-        // path inside the runtime); avoids a separate module-init
-        // ctor.
-        if let Some(start_bg) = self
+        // Idempotent bootstrap of the runtime's scheduler dispatcher (which
+        // auto-starts the background poller it drains). Runs every poll-fn
+        // invocation (cheap second-call path inside the runtime); avoids a
+        // separate module-init ctor. The dispatcher — not the caller's
+        // poll loop — is what re-invokes this poll-fn at `state_1`, routed
+        // by the wakeup's `parked` pointer, so it MUST be running before
+        // any fd is registered.
+        if let Some(start_dispatcher) = self
             .module
-            .get_function("karac_runtime_event_loop_start_background_thread")
+            .get_function("karac_runtime_scheduler_start_dispatcher")
         {
             self.builder
-                .build_call(start_bg, &[], "kara.park.bg_start")
-                .expect("call karac_runtime_event_loop_start_background_thread");
+                .build_call(start_dispatcher, &[], "kara.park.dispatcher_start")
+                .expect("call karac_runtime_scheduler_start_dispatcher");
         }
         let state_ptr = poll_fn.get_nth_param(0).unwrap().into_pointer_value();
         let tag_ptr = self
@@ -1564,9 +1602,11 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .expect("switch on park-on-fd tag");
 
-        // state_0: register the fd with the event loop, advance the
-        // tag, return Pending. After the caller's spin loop observes
-        // Pending and re-invokes the poll fn, control routes to state_1.
+        // state_0 (caller thread): allocate the completion slot, register
+        // the fd with the event loop (so the poller→dispatcher path can
+        // re-invoke this poll-fn at state_1 when the fd fires), advance the
+        // tag, and return Pending. The caller-side intercept then blocks on
+        // the slot rather than re-invoking the poll-fn itself.
         self.builder.position_at_end(state_0_bb);
         let fd_ptr = self
             .builder
@@ -1584,6 +1624,42 @@ impl<'ctx> super::Codegen<'ctx> {
             .builder
             .build_load(i8_ty, dir_ptr, "kara.park.dir")
             .expect("load direction from state struct");
+        // Allocate the per-park completion slot and store it at field 6
+        // BEFORE `register_fd`. The dispatcher's state_1 reads this field;
+        // storing it ahead of `register_fd`'s `fds`-mutex release means the
+        // poller→queue→dispatcher mutex chain publishes it before state_1
+        // can run (no fd wakeup can precede registration).
+        let park_slot_new_fn = self
+            .module
+            .get_function("karac_runtime_park_slot_new")
+            .expect("karac_runtime_park_slot_new declared in Codegen::new");
+        let slot = self
+            .builder
+            .build_call(park_slot_new_fn, &[], "kara.park.slot")
+            .expect("call karac_runtime_park_slot_new")
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let slot_field_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 6, "kara.park.slot_ptr")
+            .expect("GEP completion-slot field");
+        self.builder
+            .build_store(slot_field_ptr, slot)
+            .expect("store completion slot into state struct");
+        // Advance the tag to 1 *before* `register_fd`. `register_fd` is the
+        // arming point: once the fd is registered, the poller can observe
+        // readiness and the dispatcher can re-invoke this poll-fn on
+        // another thread. If the tag were still 0 at that point, the
+        // dispatcher would route to state_0 and run it concurrently with
+        // this caller-thread state_0 (double register, leaked slot,
+        // corrupt hand-off — the intermittent re-wedge). Publishing tag=1
+        // (and the slot above) before the arming store closes that race:
+        // register_fd's `fds`-mutex release + the poller→queue→dispatcher
+        // mutex chain make both visible before the dispatcher reads the tag.
+        self.builder
+            .build_store(tag_ptr, i32_ty.const_int(1, false))
+            .expect("store tag = 1 (before arming register_fd)");
         // GEP to field 3 (first of the two parked_task ptrs). Under
         // opaque pointers with no padding between same-aligned ptr
         // fields, this address is byte-identical to `&parked_task`
@@ -1597,56 +1673,63 @@ impl<'ctx> super::Codegen<'ctx> {
             .module
             .get_function("karac_runtime_event_loop_register_fd")
             .expect("karac_runtime_event_loop_register_fd declared in Codegen::new");
-        self.builder
+        let token = self
+            .builder
             .build_call(
                 register_fd_fn,
                 &[fd.into(), dir.into(), parked_ptr.into()],
                 "kara.park.register_token",
             )
-            .expect("call karac_runtime_event_loop_register_fd");
-        // Advance tag → state_1 for the next poll-fn invocation.
+            .expect("call karac_runtime_event_loop_register_fd")
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        // Store the registration token at field 5 for the caller's
+        // one-shot deregister after `wait` (same-thread read, no
+        // cross-thread publication needed).
+        let token_field_ptr = self
+            .builder
+            .build_struct_gep(state_struct, state_ptr, 5, "kara.park.token_ptr")
+            .expect("GEP registration-token field");
         self.builder
-            .build_store(tag_ptr, i32_ty.const_int(1, false))
-            .expect("store tag = 1");
+            .build_store(token_field_ptr, token)
+            .expect("store registration token into state struct");
+        // The token (field 5) is read only by the caller thread (for its
+        // one-shot deregister after `wait`), so storing it *after*
+        // register_fd is safe — no cross-thread publication needed. The
+        // tag was already advanced before register_fd (see above).
         self.builder
             .build_return(Some(&i8_ty.const_int(0, false)))
             .expect("return Pending from state_0");
 
-        // state_1: block on take_wakeups (with -1 = block indefinitely)
-        // until any wakeup arrives, then return Ready. The caller's
-        // poll loop sees Ready and breaks. At v1 single-task model,
-        // the only fd registered is ours so any wakeup is ours.
+        // state_1 (dispatcher thread): the dispatcher only re-invokes this
+        // poll-fn when *this* task's fd actually fired (routed by the
+        // wakeup's `parked` pointer), so reaching state_1 means readiness.
+        // Signal the caller's completion slot — that's the entire job; the
+        // caller, blocked in `park_slot_wait`, resumes and performs the IO
+        // syscall. No `take_wakeups` block here: the global-queue blocking
+        // that let concurrently-parked tasks steal each other's wakeups is
+        // gone.
         self.builder.position_at_end(state_1_bb);
-        // KaracWakeup is `#[repr(C)] { token: u64, parked: *mut c_void,
-        // direction: u8 }`. Inline struct type — no need for a named
-        // module-level type since this is the only use site.
-        let wakeup_ty = self
-            .context
-            .struct_type(&[i64_ty.into(), ptr_ty.into(), i8_ty.into()], false);
-        let wakeup_buf = self
+        let slot_field_ptr_s1 = self
             .builder
-            .build_alloca(wakeup_ty, "kara.park.wakeup_buf")
-            .expect("alloca KaracWakeup buffer");
-        let take_wakeups_fn = self
+            .build_struct_gep(state_struct, state_ptr, 6, "kara.park.slot_ptr.s1")
+            .expect("GEP completion-slot field (state_1)");
+        let slot_s1 = self
+            .builder
+            .build_load(ptr_ty, slot_field_ptr_s1, "kara.park.slot.s1")
+            .expect("load completion slot from state struct");
+        let park_slot_signal_fn = self
             .module
-            .get_function("karac_runtime_event_loop_take_wakeups")
-            .expect("karac_runtime_event_loop_take_wakeups declared in Codegen::new");
-        let blocking_timeout = i64_ty.const_int(u64::MAX, false); // -1 as i64
-        let max_wakeups = i64_ty.const_int(1, false);
+            .get_function("karac_runtime_park_slot_signal")
+            .expect("karac_runtime_park_slot_signal declared in Codegen::new");
         self.builder
             .build_call(
-                take_wakeups_fn,
-                &[
-                    wakeup_buf.into(),
-                    max_wakeups.into(),
-                    blocking_timeout.into(),
-                ],
-                "kara.park.wakeup_count",
+                park_slot_signal_fn,
+                &[slot_s1.into()],
+                "kara.park.slot_signal",
             )
-            .expect("call karac_runtime_event_loop_take_wakeups");
-        // Discard wakeup contents — v1 single-task model means the
-        // wakeup is unambiguously ours. Just return Ready so the
-        // caller's poll loop terminates.
+            .expect("call karac_runtime_park_slot_signal");
         self.builder
             .build_return(Some(&i8_ty.const_int(1, false)))
             .expect("return Ready from state_1");
@@ -1774,15 +1857,16 @@ impl<'ctx> super::Codegen<'ctx> {
                 f.set_linkage(Linkage::Internal);
                 f
             });
-            // The two parked-task fields are appended immediately after
-            // the captured-local fields. `karac_park_on_fd` returns
-            // unit, so no terminal return field intervenes.
-            let n_captured = state_struct
-                .count_fields()
-                .checked_sub(3)
-                .expect("park_on_fd state struct = tag + N captured + 2 parked");
-            let poll_field_idx = 1 + n_captured;
-            let state_field_idx = poll_field_idx + 1;
+            // The parked-task record sits at fixed fields 3,4 — the
+            // synthesized layout is always `[tag, fd, dir]` (1 + 2
+            // captured) followed by `[poll_fn, state]`, then the
+            // async-sched slice-2/3 trailing `[token, slot]` fields (5,6)
+            // which the constructor leaves uninitialised (`state_0`
+            // fills them). So the parked record is no longer the *last*
+            // two fields; address it by its fixed index rather than
+            // `count_fields - 2`.
+            let poll_field_idx = 3u32;
+            let state_field_idx = 4u32;
             let poll_field_ptr = self
                 .builder
                 .build_struct_gep(

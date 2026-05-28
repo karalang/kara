@@ -308,4 +308,141 @@ mod park_and_wake_tests {
              parking primitive returned Ready but main() failed somewhere downstream"
         );
     }
+
+    /// Async-sched slice 2/3 regression: parking the **same fd twice**
+    /// must work. The dispatcher-yield model deregisters the fd after each
+    /// park completes (one-shot), so the second `karac_park_on_fd` on the
+    /// same fd re-registers cleanly. Without that deregister, the second
+    /// `register_fd` would hit `epoll_ctl(ADD)` on an already-registered
+    /// fd → `EEXIST` → token 0 → the park would never receive a wakeup and
+    /// the binary would hang. This is the exact shape the demo's accept
+    /// loop needs (re-park the listener every iteration).
+    ///
+    /// One client connection satisfies both parks: the program never
+    /// `accept`s, so the listener stays readable in the backlog. Park 1
+    /// fires on the pending connection, deregisters; park 2 re-registers
+    /// and fires on the still-pending connection.
+    #[test]
+    fn test_park_twice_same_fd_reregisters() {
+        let _guard = PARK_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built with --features test-helpers \
+                 (run `cargo build -p karac-runtime --release --features test-helpers`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let src = r#"
+            effect resource Network;
+
+            unsafe extern "C" {
+                fn karac_runtime_test_bind_and_print_port() -> i32;
+            }
+
+            pub fn karac_park_on_fd(fd: i32, direction: u8) with sends(Network) receives(Network) {}
+
+            fn main() {
+                let fd = karac_runtime_test_bind_and_print_port();
+                let dir: u8 = 0;
+                karac_park_on_fd(fd, dir);
+                println("WOKEN1");
+                karac_park_on_fd(fd, dir);
+                println("WOKEN2");
+            }
+        "#;
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_park_twice_e2e_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn park-twice binary");
+
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, join) = await_bound_port(stdout, Duration::from_secs(15));
+
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("binary did not emit BOUND_PORT line within 15s");
+            }
+        };
+
+        // A single connection, left un-accepted, makes the listener
+        // readable for both parks.
+        let connect_started = Instant::now();
+        let mut connected = false;
+        let mut _hold = None;
+        for _ in 0..10 {
+            match std::net::TcpStream::connect(format!("127.0.0.1:{port}")) {
+                Ok(s) => {
+                    // Hold the stream open so the connection stays in the
+                    // listener's backlog (readable) across both parks.
+                    _hold = Some(s);
+                    connected = true;
+                    break;
+                }
+                Err(_) => {
+                    if connect_started.elapsed() > Duration::from_secs(2) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+        }
+        if !connected {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = std::fs::remove_file(&exe_path);
+            panic!("could not connect to 127.0.0.1:{port} to trigger readability");
+        }
+
+        let wait_started = Instant::now();
+        let exit_status = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break status,
+                Ok(None) => {
+                    if wait_started.elapsed() > Duration::from_secs(10) {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        let _ = std::fs::remove_file(&exe_path);
+                        panic!(
+                            "binary did not exit within 10s — the second park on the same fd \
+                             did not receive a wakeup. Likely the fd was not deregistered after \
+                             the first park, so re-registration hit EEXIST."
+                        );
+                    }
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+                Err(e) => {
+                    let _ = std::fs::remove_file(&exe_path);
+                    panic!("try_wait failed: {e}");
+                }
+            }
+        };
+
+        let _ = join.join();
+        let _ = std::fs::remove_file(&exe_path);
+
+        assert!(
+            exit_status.success(),
+            "park-twice binary exited with non-success status {exit_status:?}"
+        );
+    }
 }

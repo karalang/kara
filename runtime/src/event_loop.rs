@@ -246,6 +246,31 @@ impl EventLoop {
         Ok(())
     }
 
+    /// Atomically remove a registration by token and return its `parked`
+    /// pointer, or `None` if the token is no longer registered.
+    ///
+    /// This is the one-shot dispatch primitive: the scheduler dispatcher
+    /// calls it to claim a wakeup's task. Removing the token from
+    /// `by_token` under the `fds` lock guarantees that (a) a duplicate or
+    /// stale wakeup for the same token resolves to `None` and is skipped
+    /// (so the task's `poll_fn` runs at most once per registration), and
+    /// (b) the returned `parked` pointer reflects the *current* live
+    /// registration, never a value captured into a since-superseded
+    /// wakeup. Combined with the caller-frees-after-signal lifetime
+    /// contract, this is what prevents the dispatcher from dereferencing a
+    /// parked record that another thread has freed.
+    ///
+    /// Does NOT touch the OS-level epoll/kqueue registration — the caller
+    /// path issues `deregister` (with the fd) after its park completes;
+    /// since `run_once` skips events whose token isn't in `by_token`, the
+    /// removal here already stops further wakeups in the interim.
+    pub fn take_registration(&self, token: RegistrationToken) -> Option<*mut c_void> {
+        let mut fds = self.fds.lock().unwrap_or_else(|p| p.into_inner());
+        fds.by_token
+            .remove(&Token(token.0))
+            .map(|state| state.parked)
+    }
+
     /// Drive the loop once.
     ///
     /// Blocks until at least one fd is ready, the cross-thread waker
@@ -430,7 +455,21 @@ pub extern "C" fn karac_runtime_event_loop_register_fd(
     let mut source = mio::unix::SourceFd(&raw_fd);
     let ev = global_event_loop();
     match ev.register(&mut source, dir, None, parked) {
-        Ok(token) => token.0 as u64,
+        Ok(token) => {
+            // Wake the background poller so it re-evaluates its interest
+            // list. Without this, a poller blocked in `run_once(None)`
+            // (epoll_wait / kevent) would not observe a freshly-registered
+            // fd until some *other* fd fires — and an fd that is already
+            // readable at registration time (e.g. a listener re-armed in an
+            // accept loop while connections sit in the backlog) would be
+            // silently missed, wedging the task parked on it. The waker is
+            // coalescing, so a wake that races ahead of the next poll is
+            // not lost. Harmless when no poller is running.
+            if let Some(h) = EVENT_LOOP_HANDLE.get() {
+                let _ = h.wake();
+            }
+            token.0 as u64
+        }
         Err(_) => 0,
     }
 }
@@ -2358,17 +2397,28 @@ fn dispatcher_thread_main(disp: Arc<SchedulerDispatcher>) {
         for i in 0..n {
             // SAFETY: indices 0..n were written by take_wakeups.
             let w = unsafe { std::ptr::read(buf.as_ptr().add(i)) };
-            if w.parked.is_null() {
-                // Wakeup with no associated parked task — e.g., a
-                // pre-dispatcher-era test that registered with a raw
-                // marker. Skip rather than crash.
-                continue;
-            }
-            // SAFETY: the codegen convention is that `parked` carries
-            // a `*const KaracParkedTask` whose state struct lives
-            // until `poll_fn` returns Ready / Err. The dispatcher
-            // invokes `poll_fn` but never derefs `state` itself.
-            let task = unsafe { &*(w.parked as *const KaracParkedTask) };
+            // One-shot claim: resolve the parked record from the *live*
+            // registration map (removing the token) rather than trusting
+            // the pointer captured into the wakeup. This is what makes the
+            // dispatcher safe against (a) duplicate / stale wakeups for the
+            // same fd (the second `take` returns `None` → skip, so a task's
+            // `poll_fn` runs at most once per registration) and (b)
+            // concurrent frees: the caller frees its parked record only
+            // after `poll_fn` signals it, which is strictly after this
+            // `take`+invoke, so the pointer is live for the duration of the
+            // call. A `None` here means the registration was already
+            // claimed (or deregistered) — the wakeup is spent, skip it.
+            let parked =
+                match global_event_loop().take_registration(RegistrationToken(w.token as usize)) {
+                    Some(p) if !p.is_null() => p,
+                    _ => continue,
+                };
+            // SAFETY: `take_registration` returned the parked pointer from
+            // the live map; the codegen / caller convention keeps the
+            // `KaracParkedTask` (and its state) alive until `poll_fn`
+            // signals completion, which happens inside this call. The
+            // dispatcher invokes `poll_fn` but never derefs `state` itself.
+            let task = unsafe { &*(parked as *const KaracParkedTask) };
             let result = unsafe { (task.poll_fn)(task.state, &disp.cancel) };
             disp.polls.fetch_add(1, Ordering::Relaxed);
             match result {
@@ -2512,6 +2562,105 @@ pub unsafe extern "C" fn karac_runtime_scheduler_stats_snapshot(
         out.write(snapshot);
     }
     0
+}
+
+// ── Per-park completion slot (Phase 6 line 170 async-sched slice 2/3) ──
+//
+// The dispatcher-yield model splits a single park across two threads: the
+// *caller* thread runs the leaf poll-fn's `state_0` (register fd, return
+// Pending) then blocks waiting for readiness; the *dispatcher* thread runs
+// `state_1` when the fd actually fires (routed by the wakeup's `parked`
+// pointer) and signals the caller to resume. `KaracParkSlot` is the
+// hand-off primitive between them — a one-shot condvar.
+//
+// **Why a per-park slot instead of the global wakeup queue.** The
+// pre-slice-2 codegen blocked `state_1` on the *unfiltered* global
+// `take_wakeups`, so two concurrently-parked tasks stole each other's
+// wakeups (the accept-loop-wedges-at-1 P0 blocker). Routing each fd
+// wakeup through the dispatcher to the correct `parked` pointer — which
+// then signals *that park's own slot* — eliminates the stealing: a
+// wakeup for fd A can only ever signal A's slot.
+//
+// **One-shot / no lost wakeup.** `done` is set under the mutex before
+// `notify_one`, and `wait` re-checks `done` under the mutex, so a signal
+// that races ahead of the wait is not lost (the wait observes `done ==
+// true` and returns immediately). The caller frees the slot only after
+// `wait` returns, by which point `signal` has released the mutex — so the
+// free never races a live `signal`.
+#[repr(C)]
+pub struct KaracParkSlot {
+    done: Mutex<bool>,
+    cv: Condvar,
+}
+
+/// Allocate a fresh park slot. Returns an owning raw pointer the caller
+/// must release exactly once via [`karac_runtime_park_slot_free`].
+#[no_mangle]
+pub extern "C" fn karac_runtime_park_slot_new() -> *mut KaracParkSlot {
+    Box::into_raw(Box::new(KaracParkSlot {
+        done: Mutex::new(false),
+        cv: Condvar::new(),
+    }))
+}
+
+/// Block until the slot is signaled. Returns immediately if it was
+/// already signaled before this call (no lost wakeup).
+///
+/// # Safety
+///
+/// `slot` must be a live pointer returned by
+/// [`karac_runtime_park_slot_new`] and not yet freed.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_wait(slot: *mut KaracParkSlot) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` is live.
+    let s = unsafe { &*slot };
+    let mut done = s.done.lock().unwrap_or_else(|p| p.into_inner());
+    while !*done {
+        done = s.cv.wait(done).unwrap_or_else(|p| p.into_inner());
+    }
+}
+
+/// Signal the slot, unblocking a (current or future) waiter. Idempotent:
+/// signaling twice is harmless (the second is a no-op `done = true`).
+///
+/// # Safety
+///
+/// `slot` must be a live pointer returned by
+/// [`karac_runtime_park_slot_new`] and not yet freed. Called from the
+/// dispatcher thread via the leaf poll-fn's `state_1`.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_signal(slot: *mut KaracParkSlot) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` is live until the matching
+    // `wait` returns, which cannot happen before this `signal` releases
+    // the mutex below.
+    let s = unsafe { &*slot };
+    let mut done = s.done.lock().unwrap_or_else(|p| p.into_inner());
+    *done = true;
+    s.cv.notify_one();
+}
+
+/// Free a park slot. Idempotent on null; must be called exactly once per
+/// [`karac_runtime_park_slot_new`], after the matching `wait` returns.
+///
+/// # Safety
+///
+/// `slot` must be a pointer returned by [`karac_runtime_park_slot_new`]
+/// that has not already been freed. No outstanding `signal` may still be
+/// executing against it (guaranteed by the wait/signal mutex hand-off).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_park_slot_free(slot: *mut KaracParkSlot) {
+    if slot.is_null() {
+        return;
+    }
+    // SAFETY: caller's contract — `slot` came from `park_slot_new` and is
+    // freed exactly once.
+    drop(unsafe { Box::from_raw(slot) });
 }
 
 #[cfg(test)]
@@ -3269,6 +3418,139 @@ mod tests {
         drop(s1);
         drop(l0);
         drop(l1);
+    }
+
+    /// Parked-record poll-fn that mirrors the codegen leaf park's
+    /// `state_1`: the dispatcher invokes it on readiness; it signals the
+    /// per-park completion slot (passed as the `state` pointer) and
+    /// returns Ready. Used by the accept-loop re-park repro below.
+    #[cfg(unix)]
+    unsafe extern "C" fn accept_loop_signal_poll(
+        state_ptr: *mut c_void,
+        _cancel: *const std::sync::atomic::AtomicBool,
+    ) -> u8 {
+        unsafe {
+            karac_runtime_park_slot_signal(state_ptr as *mut KaracParkSlot);
+        }
+        KaracPollResult::Ready as u8
+    }
+
+    /// Async-sched slice 2/3 regression: the accept-loop shape must drain
+    /// MANY connections without wedging. This mirrors the demo's `loop {
+    /// park(listener); accept(); }` purely at the runtime layer (no TLS,
+    /// no codegen): each iteration allocates a completion slot, registers
+    /// the listener fd with a parked record whose poll-fn signals that
+    /// slot, blocks on the slot, then deregisters + re-registers next
+    /// iteration. The connector bursts all K connections up front, so by
+    /// the time the loop re-registers the listener it is already readable
+    /// (a connection sits in the backlog) — the exact case where a poller
+    /// blocked in `run_once(None)` would miss the registration unless
+    /// `register_fd` wakes it. A regression here (lost wakeup on re-park)
+    /// reproduces the intermittent multi-connection wedge the bench
+    /// harness surfaced; the bounded timeout fails loudly instead of
+    /// hanging.
+    #[cfg(unix)]
+    #[test]
+    fn accept_loop_re_park_drains_burst_connections_without_wedging() {
+        let _guard = start_scheduler_for_test();
+        use std::os::fd::AsRawFd;
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let local = listener.local_addr().unwrap();
+        let lfd = listener.as_raw_fd();
+
+        const K: usize = 40;
+        // Burst all K connections up front (no pacing) so the listener
+        // backlog is full while the accept loop drains — every re-park
+        // finds the listener already readable.
+        let connector = thread::spawn(move || {
+            let mut held = Vec::with_capacity(K);
+            for _ in 0..K {
+                if let Ok(s) = std::net::TcpStream::connect(local) {
+                    held.push(s);
+                }
+            }
+            // Hold the client ends open while the loop drains/registers
+            // them (idle conns). The loop completes well under this.
+            thread::sleep(Duration::from_secs(1));
+            held
+        });
+
+        // Hard self-timeout watchdog: a wedge blocks the loop *inside*
+        // `park_slot_wait` (an FFI call that never returns), so the loop
+        // body can't re-check elapsed time — a regression would hang
+        // forever. A cancellable watchdog thread aborts the process if the
+        // loop hasn't finished by the deadline, reporting how far it got.
+        // Bounds the test (never hangs) and pinpoints the wedge iteration.
+        let progress = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let done = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let watchdog_progress = std::sync::Arc::clone(&progress);
+        let watchdog_done = std::sync::Arc::clone(&done);
+        let watchdog = thread::spawn(move || {
+            let start = Instant::now();
+            while start.elapsed() < Duration::from_secs(8) {
+                if watchdog_done.load(Ordering::Acquire) {
+                    return; // loop finished cleanly — stand down.
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            eprintln!(
+                "WATCHDOG: accept loop wedged — only {}/{K} connections accepted in 8s",
+                watchdog_progress.load(Ordering::Relaxed)
+            );
+            std::process::abort();
+        });
+
+        let mut accepted: Vec<std::net::TcpStream> = Vec::with_capacity(K);
+        while accepted.len() < K {
+            // Mirror the codegen leaf park, including the heap state the
+            // demo frees each iteration: a boxed parked record (freed at
+            // end of the iteration) + slot + register (wakes poller) +
+            // wait + deregister + free. The per-iteration heap alloc/free
+            // of the parked record (so its address can be reused) is the
+            // key stressor distinguishing this from a stack-record loop —
+            // it's what makes a stale / duplicate wakeup deref a freed
+            // record, which one-shot dispatch must prevent.
+            let slot = karac_runtime_park_slot_new();
+            let mut task = Box::new(KaracParkedTask {
+                poll_fn: accept_loop_signal_poll,
+                state: slot as *mut c_void,
+            });
+            let parked = &mut *task as *mut KaracParkedTask as *mut c_void;
+            let token = karac_runtime_event_loop_register_fd(lfd, 0, parked);
+            assert_ne!(
+                token,
+                0,
+                "register should succeed at iter {}",
+                accepted.len()
+            );
+            unsafe {
+                karac_runtime_park_slot_wait(slot);
+            }
+            let _ = karac_runtime_event_loop_deregister_fd(lfd, token);
+            unsafe {
+                karac_runtime_park_slot_free(slot);
+            }
+            drop(task); // free the per-iteration parked record (demo frees state)
+                        // The park returned, so the listener should be readable now.
+            match listener.accept() {
+                Ok((s, _)) => {
+                    accepted.push(s);
+                    progress.store(accepted.len(), Ordering::Relaxed);
+                }
+                Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    // Spurious / already-drained — loop re-parks.
+                }
+                Err(e) => panic!("accept failed: {e}"),
+            }
+        }
+
+        // Loop finished — stand the watchdog down before it aborts.
+        done.store(true, Ordering::Release);
+        let _ = watchdog.join();
+        let _ = connector.join();
+        assert_eq!(accepted.len(), K, "all connections must be accepted");
     }
 
     #[test]
@@ -4317,5 +4599,73 @@ mod tests {
              not random; got {:?}",
             first
         );
+    }
+
+    // ── Per-park completion slot (async-sched slice 2/3) ───────────────
+
+    #[test]
+    fn park_slot_signal_then_wait_does_not_block() {
+        // Signal-before-wait must not be lost: `done` is set under the
+        // mutex, so the subsequent wait observes it and returns at once.
+        let slot = karac_runtime_park_slot_new();
+        unsafe {
+            karac_runtime_park_slot_signal(slot);
+        }
+        let start = Instant::now();
+        unsafe {
+            karac_runtime_park_slot_wait(slot);
+        }
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "wait after a prior signal should return promptly, took {elapsed:?}"
+        );
+        unsafe {
+            karac_runtime_park_slot_free(slot);
+        }
+    }
+
+    #[test]
+    fn park_slot_wait_unblocks_on_cross_thread_signal() {
+        // The real hand-off shape: the caller blocks in `wait`; another
+        // thread (standing in for the dispatcher) signals; the caller
+        // resumes. Frees only after `wait` returns, mirroring the codegen
+        // lifetime contract.
+        let slot = karac_runtime_park_slot_new();
+        // Move the raw pointer across the thread boundary via usize so it
+        // is `Send` — the runtime owns the lifetime per the FFI contract.
+        let slot_addr = slot as usize;
+        let signaler = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            unsafe {
+                karac_runtime_park_slot_signal(slot_addr as *mut KaracParkSlot);
+            }
+        });
+        let start = Instant::now();
+        unsafe {
+            karac_runtime_park_slot_wait(slot);
+        }
+        let elapsed = start.elapsed();
+        signaler.join().unwrap();
+        assert!(
+            elapsed >= Duration::from_millis(20),
+            "wait should block until the signal (~30ms), only blocked {elapsed:?}"
+        );
+        assert!(
+            elapsed < Duration::from_secs(2),
+            "wait should unblock shortly after the signal, took {elapsed:?}"
+        );
+        unsafe {
+            karac_runtime_park_slot_free(slot);
+        }
+    }
+
+    #[test]
+    fn park_slot_free_is_null_safe() {
+        unsafe {
+            karac_runtime_park_slot_free(std::ptr::null_mut());
+            karac_runtime_park_slot_wait(std::ptr::null_mut());
+            karac_runtime_park_slot_signal(std::ptr::null_mut());
+        }
     }
 }
