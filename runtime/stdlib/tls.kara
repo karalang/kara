@@ -1,0 +1,216 @@
+// runtime/stdlib/tls.kara
+//
+// Phase 6 line 236 slice 2 — TLS / HTTPS server-side stdlib types.
+// Composes through slice 1's `runtime/src/tls.rs` FFI surface to give
+// kara source `TlsListener.bind_tls(...)` / `.accept()` / `TlsStream.read`
+// / `.write` / `.write_all` — same shape as `TcpListener` / `TcpStream`
+// from `runtime/stdlib/tcp.kara` so swapping a server from `ws://` to
+// `wss://` is a single bind-line edit.
+//
+// **v1 surface:**
+//   - `TlsListener.bind_tls(addr: String, cert_pem: String, key_pem: String) -> TlsListener`
+//     binds a TCP listener via `karac_runtime_tls_listener_bind` and
+//     attaches a freshly-built `*mut TlsConfig` (from
+//     `karac_runtime_tls_config_new(cert.bytes, key.bytes)`) for use at
+//     each accept. Prints `BOUND_PORT=<n>\n` on `:0` (same convention
+//     as `TcpListener.bind`).
+//   - `TlsListener.accept(ref self) -> TlsStream` — parks via
+//     `karac_park_on_fd(self.fd, 0u8)`, runs raw `accept(2)`, then
+//     synchronously drives the TLS handshake against the new
+//     connection. Returns a `TlsStream` wrapping the post-handshake
+//     fd. On failure (raw-accept or handshake) returns
+//     `TlsStream { fd: -1 }`.
+//   - `TlsStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]`
+//     parks on read-readiness, then pumps `karac_runtime_tls_read`
+//     until at least one decrypted plaintext byte is available.
+//     `Ok(n)` (n=0 is clean EOF); `Err(TcpError)` on syscall or
+//     protocol error.
+//   - `TlsStream.write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//     parks on write-readiness; rustls's writer never short-writes so
+//     the byte count returned always equals `buf.len()` on success.
+//   - `TlsStream.write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//     symmetric with the TCP variant — same retry-on-EINTR loop.
+//
+// **Error type — reusing `TcpError`.** Cert/handshake-validation
+// errors fold into `TcpError.Other(errno)` with errno = `-1` (the FFI
+// negative-1 sentinel for non-syscall errors). A distinct `TlsError`
+// variant family lands when a real consumer needs to distinguish
+// "handshake failed because cert validation rejected the peer" from
+// "socket write failed with EPIPE" — the tracker entry leaves this as
+// a follow-on. For v1, callers can treat any `Err(_)` as "connection
+// unrecoverable" without losing structured-error correctness.
+//
+// **TlsConfig opacity.** `TlsConfig` is an empty kara struct standing
+// in for the rustls `ServerConfig` allocation owned by the runtime.
+// Users never construct or inspect it — `TlsListener.bind_tls` is the
+// only call that materialises one (via the FFI) and `Drop for
+// TlsListener` is the only call that frees it (via
+// `karac_runtime_tls_config_free`). The kara-side struct has no
+// fields; the type is needed only so `*mut TlsConfig` is a nameable
+// type for the `TlsListener` field.
+//
+// **Drop semantics.** Both `TlsListener` and `TlsStream` `impl Drop`
+// at the bottom of this file. `TlsListener.drop` frees the config
+// pointer (`karac_runtime_tls_config_free(self.config)`) and closes
+// the listener fd (`karac_runtime_tls_close(self.fd)`). `TlsStream.drop`
+// closes the connection fd (`karac_runtime_tls_close(self.fd)` —
+// also removes the session entry from the runtime-side registry).
+// Both bodies are hand-rolled in codegen (mirrors `TcpListener.drop`
+// from slice 9d of phase-6 line 17).
+
+// Opaque marker type — see file-header `TlsConfig opacity` block.
+// Field-list intentionally empty: the runtime owns the underlying
+// `rustls::ServerConfig` allocation and the `*mut TlsConfig` pointer
+// here is just a heap address kara source can carry but never
+// dereference.
+struct TlsConfig {}
+
+// `TlsListener` carries the bound listener's fd plus the
+// `*mut TlsConfig` returned by `karac_runtime_tls_config_new` at
+// bind-time. Codegen reads field 0 (`fd`) at every `accept` to feed
+// `karac_park_on_fd` + `karac_runtime_tls_accept`; field 1 (`config`)
+// is forwarded to the accept FFI so each connection's
+// `ServerConnection` clones the right config. Both fields are
+// freed/closed at scope exit via `impl Drop`.
+struct TlsListener {
+    fd: i32,
+    config: *mut TlsConfig,
+}
+
+// `TlsStream` wraps a post-handshake connection fd. The TLS session
+// state itself lives in the runtime-side `SESSIONS` registry keyed by
+// this fd (see `runtime/src/tls.rs` `## Session storage`); the kara
+// struct only carries the fd lookup key. Same single-i32-field
+// shape as `TcpStream` so the LLVM struct ABI arm in
+// `types_lowering.rs::llvm_type_for_name` can group the two under
+// the same `{ i32 }` pattern.
+struct TlsStream {
+    fd: i32,
+}
+
+impl TlsListener {
+    // Bind on `addr` (e.g. `"127.0.0.1:0"` for ephemeral, `"0.0.0.0:8443"`
+    // for fixed) using `cert_pem` + `key_pem` as the server identity.
+    // Both PEM strings are the raw textual PEM bytes — typically
+    // loaded from disk via `std.file.read_to_string`. Returns a
+    // `TlsListener` with the bound fd and the runtime-side config
+    // handle on success, or `TlsListener { fd: -1, config: 0 as *mut TlsConfig }`
+    // on parse / bind failure.
+    //
+    // **BOUND_PORT convention.** When the requested address ends in
+    // `:0`, the runtime prints `BOUND_PORT=<port>\n` to stdout before
+    // returning so smoke tests can read back the assigned ephemeral
+    // port.
+    //
+    // Stub body never executes — codegen replaces via
+    // `lower_tls_listener_bind_tls` (see `src/codegen/tls.rs`).
+    #[compiler_builtin]
+    fn bind_tls(addr: String, cert_pem: String, key_pem: String) -> TlsListener {
+        TlsListener { fd: -1, config: 0 as *mut TlsConfig }
+    }
+
+    // Wait for the listener to become readable, then accept the next
+    // pending connection, run the TLS handshake against it
+    // synchronously, and return a `TlsStream` wrapping the
+    // post-handshake fd. Returns `TlsStream { fd: -1 }` on raw-accept
+    // failure or handshake failure (peer sent invalid TLS, cert
+    // validation failed on the wire, etc.).
+    //
+    // **Parking convention.** Codegen emits a `karac_park_on_fd(self.fd, 0u8)`
+    // invocation BEFORE the raw `karac_runtime_tls_accept` so the
+    // yield happens at the kara state-machine level — same shape as
+    // `TcpListener.accept` (see `runtime/stdlib/tcp.kara` line 142).
+    //
+    // **Synchronous handshake (v1).** Once the parking primitive
+    // returns Ready, the FFI runs `rustls::ServerConnection::complete_io`
+    // against the new connection's blocking socket surface. This
+    // occupies the worker thread until the client completes the TLS
+    // round-trip — fine for Demo 1's correctness check; the M1
+    // 100K-conn target will need a re-park-between-rounds variant if
+    // measurement shows handshake throughput dominates.
+    #[compiler_builtin]
+    fn accept(ref self) -> TlsStream with sends(Network) receives(Network) {
+        TlsStream { fd: -1 }
+    }
+}
+
+impl TlsStream {
+    // Park on read-readiness of `self.fd`, then pump rustls's inbound
+    // packet processor until at least one decrypted plaintext byte is
+    // available. The FFI returns the byte count (>= 0; 0 = clean EOF
+    // including close_notify), `-errno` for socket errors, or `-1`
+    // for TLS protocol errors and session-lookup misses. Codegen
+    // wraps via `wrap_tcp_io_result` into `Ok(n)` / `Err(TcpError)`
+    // (same wrapper used by `TcpStream.read`).
+    //
+    // The park step uses `direction = 0u8` (Read). Stub body never
+    // executes — codegen replaces via `lower_tls_stream_read`.
+    #[compiler_builtin]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
+    // Park on write-readiness of `self.fd`, then push plaintext into
+    // rustls's writer and flush the resulting ciphertext to the
+    // socket. rustls's writer never short-writes so the byte count
+    // returned always equals `buf.len()` on success. Same
+    // `wrap_tcp_io_result` wrapping as `read` — `Ok(n)` / `Err(TcpError)`.
+    //
+    // The park step uses `direction = 1u8` (Write). Stub body never
+    // executes — codegen replaces via `lower_tls_stream_write`.
+    #[compiler_builtin]
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+
+    // Loop `write` until all `buf.len()` bytes have been pushed (or
+    // an unrecoverable error fires). Absorbs partial writes — though
+    // rustls's writer doesn't currently short-write, the wrapper is
+    // structurally identical to `TcpStream.write_all` so future
+    // partial-write behaviour at the rustls layer composes through
+    // unchanged. Retries on `TcpError.Interrupted` (EINTR).
+    //
+    // Stub body never executes — codegen replaces via
+    // `lower_tls_stream_write_all`.
+    #[compiler_builtin]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+        with sends(Network) receives(Network)
+    {
+        Result.Err(TcpError.Other(-1))
+    }
+}
+
+// Phase 6 line 236 slice 2 — close-on-drop. Both `TlsListener` and
+// `TlsStream` register here so `TypeCheckResult.drop_method_keys`
+// recognises them; the codegen wrapper-synth pass emits
+// `karac_drop_TlsListener` / `karac_drop_TlsStream`. The scope-exit
+// drain (`CleanupAction::UserDrop`) fires the wrappers.
+//
+// `TlsListener.drop` body (hand-rolled in codegen): frees the config
+// via `karac_runtime_tls_config_free(self.config)` then closes the
+// listener fd via `karac_runtime_tls_close(self.fd)`. The config
+// free is idempotent for null per the FFI contract.
+//
+// `TlsStream.drop` body (hand-rolled in codegen): closes the
+// connection fd via `karac_runtime_tls_close(self.fd)` — same FFI
+// call also removes the per-fd entry from the runtime-side
+// `SESSIONS` registry (so the `ServerConnection` allocation is
+// released).
+//
+// Both stub bodies below never execute. When the codegen-compiles-
+// stdlib gap closes they become real pure-kara bodies of the shape
+// `unsafe { karac_runtime_tls_config_free(self.config); karac_runtime_tls_close(self.fd); }`.
+
+impl Drop for TlsListener {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}
+
+impl Drop for TlsStream {
+    #[compiler_builtin]
+    fn drop(mut ref self) {}
+}

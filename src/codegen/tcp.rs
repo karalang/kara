@@ -597,7 +597,7 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `TcpError.Other(errno)`. The classification is a `select` pair
     /// (no extra basic blocks) since the constructed TcpError value
     /// is only used in the Err arm anyway.
-    fn wrap_tcp_io_result(
+    pub(super) fn wrap_tcp_io_result(
         &mut self,
         n: inkwell::values::IntValue<'ctx>,
         is_write: bool,

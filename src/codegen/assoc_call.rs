@@ -389,6 +389,16 @@ impl<'ctx> super::Codegen<'ctx> {
             let addr_val = self.compile_expr(&_args[0].value)?;
             return self.lower_tcp_listener_bind(addr_val);
         }
+        // Phase 6 line 236 slice 2 — `TlsListener.bind_tls(addr, cert,
+        // key) -> TlsListener`. Lowering in `src/codegen/tls.rs` calls
+        // `karac_runtime_tls_config_new` + `_tls_listener_bind` then
+        // packs `{fd, config}` into the TlsListener struct value.
+        if type_name == "TlsListener" && method == "bind_tls" && _args.len() == 3 {
+            let addr_val = self.compile_expr(&_args[0].value)?;
+            let cert_val = self.compile_expr(&_args[1].value)?;
+            let key_val = self.compile_expr(&_args[2].value)?;
+            return self.lower_tls_listener_bind_tls(addr_val, cert_val, key_val);
+        }
         // Phase 6 line 17 slice 9e.1 — `WebSocket.from_fd(fd) -> WebSocket`.
         // Pure value construction: pack the i32 fd into a fresh
         // `WebSocket { fd }` struct value (same single-i32-field

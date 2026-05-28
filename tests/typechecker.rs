@@ -17825,10 +17825,19 @@ fn drop_method_keys_empty_when_no_drop_impl() {
     //   - `TaskGroup` (phase 6 line 186 slice 1 — wait-for-children
     //     on drop; the v1 impl body is a stub, the hand-rolled LLVM
     //     body lands with slice 5 of the same tracker entry)
+    //   - `TlsListener` / `TlsStream` (phase 6 line 236 slice 2 —
+    //     close-on-drop fd + config free for TlsListener)
     // Those entries are always present regardless of user code, so
     // the test asserts no USER-defined impl was added (Point's
     // entry is absent) and the only entries are the stdlib ones.
-    const STDLIB_DROP_TYPES: &[&str] = &["TcpListener", "TcpStream", "WebSocket", "TaskGroup"];
+    const STDLIB_DROP_TYPES: &[&str] = &[
+        "TcpListener",
+        "TcpStream",
+        "WebSocket",
+        "TaskGroup",
+        "TlsListener",
+        "TlsStream",
+    ];
     let user_keys: Vec<&String> = result
         .drop_method_keys
         .keys()

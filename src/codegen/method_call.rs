@@ -126,6 +126,40 @@ impl<'ctx> super::Codegen<'ctx> {
                 };
                 return self.lower_tcp_stream_write_all(self_val, buf_val);
             }
+            // Phase 6 line 236 slice 2 — TLS-side method dispatch. Same
+            // shape as the TCP dispatch above; lowerings in
+            // `src/codegen/tls.rs` route through `karac_runtime_tls_*`.
+            if key == "TlsListener.accept" {
+                let self_val = self.compile_expr(object)?;
+                return self.lower_tls_listener_accept(self_val);
+            }
+            if key == "TlsStream.read" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_tls_stream_read(self_val, buf_val);
+            }
+            if key == "TlsStream.write" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_tls_stream_write(self_val, buf_val);
+            }
+            if key == "TlsStream.write_all" && args.len() == 1 {
+                let self_val = self.compile_expr(object)?;
+                let elem_ty: BasicTypeEnum = self.context.i8_type().into();
+                let buf_val = match self.coerce_to_slice(&args[0].value, elem_ty)? {
+                    Some(v) => v,
+                    None => self.compile_expr(&args[0].value)?,
+                };
+                return self.lower_tls_stream_write_all(self_val, buf_val);
+            }
             // Phase 6 line 17 slice 9e.1 — stdlib `WebSocket` dispatch.
             // Same compose-at-leaf shape as TcpStream above:
             // `karac_park_on_fd(self.fd, direction)` then the encode +

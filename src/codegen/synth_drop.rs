@@ -1151,6 +1151,19 @@ impl<'ctx> super::Codegen<'ctx> {
             self.emit_tcp_drop_body_for(type_name);
         }
 
+        // Phase 6 line 236 slice 2: TLS drop bodies. `TlsStream` shares
+        // `TcpStream`'s `{i32 fd}` layout so the TCP body emitter
+        // applies verbatim; `TlsListener` needs a dedicated emitter
+        // because its struct is `{i32 fd, ptr config}` and the drop
+        // body has to call `_tls_config_free(self.config)` before
+        // `_tls_close(self.fd)`.
+        if program.drop_method_keys.contains_key("TlsStream") {
+            self.emit_tls_stream_drop_body();
+        }
+        if program.drop_method_keys.contains_key("TlsListener") {
+            self.emit_tls_listener_drop_body();
+        }
+
         // Phase 6 line 218 slice 5: `TaskGroup.drop` hand-rolled body.
         // Loads `self.id` (i64), casts to `*KaracTaskGroupHandle`, calls
         // `karac_runtime_taskgroup_join_and_free(group_ptr)`. The
@@ -1267,6 +1280,146 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(i32_ty, fd_ptr, "fd")
             .unwrap()
             .into_int_value();
+        self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Hand-roll `@TlsStream.drop(ptr) -> void`. Body:
+    ///
+    /// ```text
+    /// %fd_ptr = getelementptr {i32}, ptr %self, i32 0, i32 0
+    /// %fd     = load i32, ptr %fd_ptr
+    /// call i32 @karac_runtime_tls_close(i32 %fd)
+    /// ret void
+    /// ```
+    ///
+    /// Routes through `_tls_close` (not `_tcp_close`) so the runtime
+    /// removes the per-fd `TlsSession` entry from `SESSIONS` before
+    /// closing the underlying TCP fd — without this the rustls
+    /// `ServerConnection` allocation leaks until process exit.
+    fn emit_tls_stream_drop_body(&mut self) {
+        let fn_name = "TlsStream.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let close_fn = match self.module.get_function("karac_runtime_tls_close") {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self.context.struct_type(&[i32_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let fd_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "fd_ptr")
+            .unwrap();
+        let fd = self
+            .builder
+            .build_load(i32_ty, fd_ptr, "fd")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
+        self.builder.build_return(None).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+    }
+
+    /// Hand-roll `@TlsListener.drop(ptr) -> void`. Body:
+    ///
+    /// ```text
+    /// %fd_ptr     = getelementptr {i32, ptr}, ptr %self, i32 0, i32 0
+    /// %fd         = load i32, ptr %fd_ptr
+    /// %config_ptr = getelementptr {i32, ptr}, ptr %self, i32 0, i32 1
+    /// %config     = load ptr,  ptr %config_ptr
+    /// call void @karac_runtime_tls_config_free(ptr %config)
+    /// call i32  @karac_runtime_tls_close(i32 %fd)
+    /// ret void
+    /// ```
+    ///
+    /// Free-then-close order matters: closing the listener fd while
+    /// the config is still live is fine (sessions opened from this
+    /// listener carry independent `Arc<ServerConfig>` clones), but
+    /// freeing the config before closing the listener means the
+    /// final close-on-drop can't race a leftover accept attempt. v1
+    /// listeners drop without outstanding accepts because the kara
+    /// accept-loop owns the listener exclusively, so this ordering
+    /// is correctness-by-construction rather than load-bearing —
+    /// documenting it for the inevitable future where the listener
+    /// is shared across tasks via a mutex.
+    fn emit_tls_listener_drop_body(&mut self) {
+        let fn_name = "TlsListener.drop";
+        if self.module.get_function(fn_name).is_some() {
+            return;
+        }
+        let free_fn = match self.module.get_function("karac_runtime_tls_config_free") {
+            Some(f) => f,
+            None => return,
+        };
+        let close_fn = match self.module.get_function("karac_runtime_tls_close") {
+            Some(f) => f,
+            None => return,
+        };
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i32_ty = self.context.i32_type();
+        let void_ty = self.context.void_type();
+        let struct_ty = self
+            .context
+            .struct_type(&[i32_ty.into(), ptr_ty.into()], false);
+
+        let saved_bb = self.builder.get_insert_block();
+
+        let drop_fn_ty = void_ty.fn_type(&[ptr_ty.into()], false);
+        let drop_fn = self
+            .module
+            .add_function(fn_name, drop_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(drop_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let self_ptr = drop_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        let fd_field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 0, "fd_ptr")
+            .unwrap();
+        let fd = self
+            .builder
+            .build_load(i32_ty, fd_field_ptr, "fd")
+            .unwrap()
+            .into_int_value();
+
+        let config_field_ptr = self
+            .builder
+            .build_struct_gep(struct_ty, self_ptr, 1, "config_ptr")
+            .unwrap();
+        let config = self
+            .builder
+            .build_load(ptr_ty, config_field_ptr, "config")
+            .unwrap()
+            .into_pointer_value();
+
+        self.builder
+            .build_call(free_fn, &[config.into()], "")
+            .unwrap();
         self.builder.build_call(close_fn, &[fd.into()], "").unwrap();
         self.builder.build_return(None).unwrap();
 

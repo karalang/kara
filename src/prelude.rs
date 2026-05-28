@@ -111,6 +111,18 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "TcpListener",
     "TcpStream",
     "WebSocket",
+    // Phase 6 line 236 slice 2 — TLS / HTTPS server-side surface.
+    // `TlsListener` mirrors `TcpListener` (struct value carrying the
+    // bound listener fd + an opaque `*mut TlsConfig` pointer);
+    // `TlsStream` mirrors `TcpStream` (single i32 fd for the
+    // post-handshake connection — TLS session state lives in the
+    // runtime-side registry). `TlsConfig` is an empty marker type
+    // — users never construct one directly; it exists so
+    // `*mut TlsConfig` is a nameable type for the `TlsListener.config`
+    // field. See `runtime/stdlib/tls.kara`.
+    "TlsConfig",
+    "TlsListener",
+    "TlsStream",
     "Base64",
     "Hex",
     "Url",
@@ -462,6 +474,11 @@ pub const STDLIB_SOURCES: &[(&str, &str)] = &[
     // RFC 6455 text-frame send/recv. Depends on `tcp.kara` for the
     // `TcpError` enum reused as the structured-error type.
     ("ws.kara", include_str!("../runtime/stdlib/ws.kara")),
+    // Phase 6 line 236 slice 2 — `TlsListener` / `TlsStream` /
+    // `TlsConfig` stdlib surface for server-side TLS. Composes
+    // through `runtime/src/tls.rs` (slice 1's rustls FFI). Reuses
+    // `TcpError` from `tcp.kara` for read / write error variants.
+    ("tls.kara", include_str!("../runtime/stdlib/tls.kara")),
     // Phase 6 line 186 slice 1 — `TaskGroup` / `TaskHandle[T]` /
     // free-fn `spawn`. Typechecker-only landing at v1 (codegen
     // ships with slice 4 of the same tracker entry).

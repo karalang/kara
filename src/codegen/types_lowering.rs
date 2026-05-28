@@ -881,6 +881,30 @@ impl<'ctx> super::Codegen<'ctx> {
                 .context
                 .struct_type(&[self.context.i32_type().into()], false)
                 .into(),
+            // Phase 6 line 236 slice 2 — TLS baked-stdlib structs.
+            // `TlsListener` carries `{ fd: i32, config: *mut TlsConfig }`
+            // (the slice-1 FFI's `karac_runtime_tls_config_new` returns
+            // an opaque pointer that the listener struct keeps for
+            // forwarding to each `karac_runtime_tls_accept` call).
+            // `TlsStream` is `{ fd: i32 }` — identical to `TcpStream`,
+            // since the TLS session state lives in the runtime-side
+            // `SESSIONS` registry keyed by fd. Same rationale as the
+            // TCP arm above: by-value param sites would otherwise hit
+            // the i64 fall-through default.
+            "TlsListener" => self
+                .context
+                .struct_type(
+                    &[
+                        self.context.i32_type().into(),
+                        self.context.ptr_type(AddressSpace::default()).into(),
+                    ],
+                    false,
+                )
+                .into(),
+            "TlsStream" => self
+                .context
+                .struct_type(&[self.context.i32_type().into()], false)
+                .into(),
             name => {
                 // Shared types are heap-allocated pointers.
                 if self.shared_types.contains_key(name) {

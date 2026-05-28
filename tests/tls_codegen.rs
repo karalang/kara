@@ -1,0 +1,296 @@
+//! Phase 6 line 236 slice 2 — stdlib `TlsListener` / `TlsStream`
+//! codegen IR-grep tests.
+//!
+//! Mirrors `tests/ws_framing.rs`'s approach: codegen-side wire-up tests
+//! (kara source → IR contains the right FFI calls / struct shapes) for
+//! the methods slice 2 lowers. The wire-format correctness of
+//! `karac_runtime_tls_*` is pinned by the runtime crate's unit tests
+//! in `runtime/src/tls.rs`'s `tests` module; this file pins the
+//! codegen routing.
+
+#![cfg(feature = "llvm")]
+
+mod tls_codegen_tests {
+    use karac::codegen::compile_to_ir;
+
+    fn ir_for(src: &str) -> String {
+        let mut parsed = karac::parse(src);
+        assert!(parsed.errors.is_empty(), "parse: {:?}", parsed.errors);
+        let resolved = karac::resolve(&parsed.program);
+        assert!(resolved.errors.is_empty(), "resolve: {:?}", resolved.errors);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        assert!(typed.errors.is_empty(), "typecheck: {:?}", typed.errors);
+        karac::lower(&mut parsed.program, &typed);
+        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+    }
+
+    /// Locate a function body in IR by name (shared with other test
+    /// files in the same pattern). Returns the body text including the
+    /// brace pairs, or `None` if the symbol isn't found.
+    fn function_body(ir: &str, name: &str) -> Option<String> {
+        let needle = format!("@{name}(");
+        let mut found_define = false;
+        let mut depth = 0i32;
+        let mut body = String::new();
+        for line in ir.lines() {
+            if !found_define {
+                if line.starts_with("define ") && line.contains(&needle) {
+                    found_define = true;
+                    depth = line.matches('{').count() as i32 - line.matches('}').count() as i32;
+                    continue;
+                }
+            } else {
+                body.push_str(line);
+                body.push('\n');
+                depth += line.matches('{').count() as i32;
+                depth -= line.matches('}').count() as i32;
+                if depth <= 0 {
+                    return Some(body);
+                }
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn test_ir_tls_runtime_ffis_declared() {
+        // Smoke check that the six TLS FFI symbols are declared in the
+        // IR module — slice 2's lowerings dispatch by name, so missing
+        // declarations would surface as `get_function(...).expect(...)`
+        // panics inside the lowering. A trivial program that doesn't
+        // call the FFIs still includes the declarations because they
+        // sit in `Codegen::new`'s unconditional declaration pass.
+        let ir = ir_for("fn main() {}");
+        for name in [
+            "karac_runtime_tls_config_new",
+            "karac_runtime_tls_config_free",
+            "karac_runtime_tls_listener_bind",
+            "karac_runtime_tls_accept",
+            "karac_runtime_tls_read",
+            "karac_runtime_tls_write",
+            "karac_runtime_tls_close",
+        ] {
+            assert!(
+                ir.contains("declare ") && ir.contains(name),
+                "expected declaration of `{name}` in IR"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ir_tls_bind_tls_dispatches_to_runtime_ffis() {
+        // `TlsListener.bind_tls(addr, cert, key)` should lower to
+        // `karac_runtime_tls_config_new(...)` followed by
+        // `karac_runtime_tls_listener_bind(addr_ptr, addr_len, config)`.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let addr: String = "127.0.0.1:0";
+    let cert: String = "fake-cert";
+    let key: String = "fake-key";
+    let listener: TlsListener = TlsListener.bind_tls(addr, cert, key);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call ptr @karac_runtime_tls_config_new("),
+            "main should call _tls_config_new; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call i32 @karac_runtime_tls_listener_bind("),
+            "main should call _tls_listener_bind; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_listener_accept_parks_then_calls_runtime_ffi() {
+        // `listener.accept()` parks via the canonical
+        // `karac_park_on_fd` state-machine then calls
+        // `karac_runtime_tls_accept(fd, config)`.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let stream: TlsStream = listener.accept();
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("@karac_park_on_fd") || main_body.contains("kara.park.poll_loop"),
+            "accept should compose via karac_park_on_fd; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call i32 @karac_runtime_tls_accept("),
+            "accept should call _tls_accept; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_stream_read_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn handle(s: TlsStream) {
+    let mut buf: Array[u8, 16] = [0u8; 16];
+    let _ = s.read(mut buf);
+}
+fn main() {}
+"#,
+        );
+        let body = function_body(&ir, "handle").expect("handle body");
+        assert!(
+            body.contains("call i64 @karac_runtime_tls_read("),
+            "read should dispatch to _tls_read; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_stream_write_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn handle(s: TlsStream) {
+    let msg: String = "hello";
+    let _ = s.write(msg.bytes());
+}
+fn main() {}
+"#,
+        );
+        let body = function_body(&ir, "handle").expect("handle body");
+        assert!(
+            body.contains("call i64 @karac_runtime_tls_write("),
+            "write should dispatch to _tls_write; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_stream_write_all_loops_via_runtime_ffi() {
+        // write_all is a loop calling _tls_write — the IR should have
+        // a `tls.wa.loop.head` BB and a call to _tls_write inside it.
+        let ir = ir_for(
+            r#"
+fn handle(s: TlsStream) {
+    let msg: String = "hello";
+    let _ = s.write_all(msg.bytes());
+}
+fn main() {}
+"#,
+        );
+        let body = function_body(&ir, "handle").expect("handle body");
+        assert!(
+            body.contains("tls.wa.loop.head"),
+            "write_all should emit the labelled loop head; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("call i64 @karac_runtime_tls_write("),
+            "write_all loop should call _tls_write; body was:\n{}",
+            body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_listener_drop_frees_config_then_closes_fd() {
+        // A program that constructs a TlsListener and lets it drop at
+        // scope exit should emit the `karac_drop_TlsListener` wrapper
+        // calling into `@TlsListener.drop`, whose body frees the
+        // config and closes the fd via the runtime FFIs.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_drop_TlsListener"),
+            "expected `@karac_drop_TlsListener` wrapper in IR"
+        );
+        assert!(
+            ir.contains("@TlsListener.drop"),
+            "expected `@TlsListener.drop` body in IR"
+        );
+        let drop_body = function_body(&ir, "TlsListener.drop")
+            .unwrap_or_else(|| panic!("TlsListener.drop body not found"));
+        assert!(
+            drop_body.contains("call void @karac_runtime_tls_config_free("),
+            "drop body should free the config; body was:\n{}",
+            drop_body
+        );
+        assert!(
+            drop_body.contains("call i32 @karac_runtime_tls_close("),
+            "drop body should close the fd; body was:\n{}",
+            drop_body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_stream_drop_closes_fd() {
+        // `TlsStream` shares the `{i32 fd}` layout with `TcpStream`
+        // but routes through `_tls_close` (not `_tcp_close`) so the
+        // runtime can remove the per-fd session entry from the
+        // `SESSIONS` registry before closing the underlying fd. The
+        // drop test triggers via an explicit accept (`TlsStream`
+        // values are otherwise only produced by `listener.accept()`).
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let stream: TlsStream = listener.accept();
+}
+"#,
+        );
+        assert!(
+            ir.contains("@karac_drop_TlsStream"),
+            "expected `@karac_drop_TlsStream` wrapper in IR"
+        );
+        let drop_body = function_body(&ir, "TlsStream.drop")
+            .unwrap_or_else(|| panic!("TlsStream.drop body not found"));
+        assert!(
+            drop_body.contains("call i32 @karac_runtime_tls_close("),
+            "TlsStream.drop should close fd via _tls_close; body was:\n{}",
+            drop_body
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_listener_by_value_param_uses_struct_type() {
+        // Mirror of the slice-9 test for TcpListener: a user fn taking
+        // `TlsListener` by value should get a `{ i32, ptr }` parameter
+        // shape (matching the runtime-side struct shape) rather than
+        // the i64 fall-through default. Surfaced by Demo 1 slice 2's
+        // accept-loop pattern.
+        let ir = ir_for(
+            r#"
+fn handle(l: TlsListener) {}
+fn main() {}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @handle({ i32, ptr }"),
+            "handle should take TlsListener as `{{ i32, ptr }}`; IR was:\n{}",
+            ir
+        );
+    }
+
+    #[test]
+    fn test_ir_tls_stream_by_value_param_uses_struct_type() {
+        let ir = ir_for(
+            r#"
+fn handle(s: TlsStream) {}
+fn main() {}
+"#,
+        );
+        assert!(
+            ir.contains("define internal void @handle({ i32 }"),
+            "handle should take TlsStream as `{{ i32 }}`; IR was:\n{}",
+            ir
+        );
+    }
+}

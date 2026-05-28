@@ -59,6 +59,7 @@ mod synth_display;
 mod synth_drop;
 mod task_group;
 mod tcp;
+mod tls;
 mod types_lowering;
 mod vec_method;
 
@@ -1628,6 +1629,98 @@ impl<'ctx> Codegen<'ctx> {
         module.add_function(
             "karac_runtime_tcp_close",
             tcp_close_ty,
+            Some(Linkage::External),
+        );
+
+        // ── Phase 6 line 236 slice 2 — TLS / HTTPS server-side stdlib FFI.
+        //
+        // Six external symbols mirroring slice 1's `runtime/src/tls.rs`
+        // surface. Codegen-side lowerings live in `src/codegen/tls.rs`.
+        //
+        // `karac_runtime_tls_config_new(cert_pem, cert_len, key_pem,
+        // key_len) -> *mut TlsConfig` — parse PEM bytes via rustls-pemfile,
+        // build a `rustls::ServerConfig`, return an opaque heap pointer.
+        // Null on parse / build failure. Freed via _tls_config_free.
+        let tls_config_new_ty = ptr_type.fn_type(
+            &[
+                ptr_type.into(),
+                i64_type.into(),
+                ptr_type.into(),
+                i64_type.into(),
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tls_config_new",
+            tls_config_new_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tls_config_free(*mut TlsConfig)` — drop a
+        // previously-allocated config. Idempotent for null.
+        let tls_config_free_ty = context.void_type().fn_type(&[ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_tls_config_free",
+            tls_config_free_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tls_listener_bind(addr_ptr, addr_len, config)
+        // -> i32` — TCP bind that also keeps the config available for
+        // accept time. v1 delegates to `karac_runtime_tcp_bind`; the
+        // config pointer is forwarded by the kara struct rather than
+        // stored runtime-side. Same `:0` BOUND_PORT convention as TCP.
+        let tls_listener_bind_ty = context
+            .i32_type()
+            .fn_type(&[ptr_type.into(), i64_type.into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_tls_listener_bind",
+            tls_listener_bind_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tls_accept(listener_fd, config) -> i32` —
+        // raw accept(2) + synchronous rustls handshake; registers a
+        // `TlsSession` in the per-fd registry on success. Returns the
+        // connection fd or -1.
+        let tls_accept_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_tls_accept",
+            tls_accept_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tls_read(fd, buf_ptr, buf_len) -> i64` /
+        // `karac_runtime_tls_write(fd, buf_ptr, buf_len) -> i64` — pump
+        // rustls's inbound / outbound packet processors. Caller parks
+        // via `karac_park_on_fd(fd, dir)` BEFORE invoking. Same
+        // negative-errno return convention as the TCP siblings; -1 for
+        // non-syscall errors (protocol failure, session-lookup miss).
+        let tls_read_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tls_read",
+            tls_read_ty,
+            Some(Linkage::External),
+        );
+        let tls_write_ty = context.i64_type().fn_type(
+            &[context.i32_type().into(), ptr_type.into(), i64_type.into()],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tls_write",
+            tls_write_ty,
+            Some(Linkage::External),
+        );
+        // `karac_runtime_tls_close(fd) -> i32` — remove the session
+        // entry from the per-fd registry and close the underlying TCP
+        // fd. Same `-1` no-op shape as `karac_runtime_tcp_close`.
+        let tls_close_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into()], false);
+        module.add_function(
+            "karac_runtime_tls_close",
+            tls_close_ty,
             Some(Linkage::External),
         );
 
