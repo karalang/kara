@@ -1391,7 +1391,18 @@ pub(crate) fn build_consumer_rewrite_edits_in_program(
     type_ctx: Option<ConsumerRewriteTypeCtx<'_>>,
 ) -> Vec<TextEdit> {
     let mut_fields = collect_mut_field_names(type_name, program_items);
-    build_consumer_rewrite_edits_with_mut_fields(type_name, program_items, type_ctx, &mut_fields)
+    // Single-file/no-classifier callers get the L215b1-b4 default
+    // (every field is Mutex-shaped); the Atomic dispatch (L215c-cons)
+    // is project-mode-only and only fires when the caller threads a
+    // populated atomic_fields set.
+    let empty_atomic: HashSet<String> = HashSet::new();
+    build_consumer_rewrite_edits_with_mut_fields(
+        type_name,
+        program_items,
+        type_ctx,
+        &mut_fields,
+        &empty_atomic,
+    )
 }
 
 /// Project-mode entry (L215b4). The cross-file walk computes mut-field
@@ -1407,6 +1418,7 @@ pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
     program_items: &[Item],
     type_ctx: Option<ConsumerRewriteTypeCtx<'_>>,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
 ) -> Vec<TextEdit> {
     if mut_fields.is_empty() {
         return Vec::new();
@@ -1465,11 +1477,18 @@ pub(crate) fn build_consumer_rewrite_edits_with_mut_fields(
                 body,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 &classifier,
                 WrapShape::SelfPrefix,
                 &mut edits,
             );
-            collect_lock_block_reads_in_block(body, binding_name, mut_fields, &mut edits);
+            collect_lock_block_reads_in_block(
+                body,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                &mut edits,
+            );
         }
     });
     // Drop edits inside par bodies — those are the par-conflict
@@ -1911,11 +1930,16 @@ fn build_lock_block_edits_for_binding(
     // `karac fix` always emits the field-shorthand wrap because the
     // diagnostic fires inside an impl method body's par block where
     // `self` is already in scope. The L215b2 SelfPrefix shape is
-    // reserved for the migrate path.
+    // reserved for the migrate path. The Atomic dispatch (L215c-cons)
+    // is migrate-only — `karac fix` has no Atomic classifier feeding
+    // it, so an empty atomic_fields set is passed and every wrap stays
+    // Mutex-shaped.
+    let empty_atomic: HashSet<String> = HashSet::new();
     collect_lock_block_writes_in_block(
         par_body,
         binding_name,
         &mut_fields,
+        &empty_atomic,
         classifier,
         WrapShape::Shorthand,
         &mut edits,
@@ -1938,60 +1962,107 @@ fn collect_mut_field_names(type_name: &str, program_items: &[Item]) -> HashSet<S
         .collect()
 }
 
+#[allow(clippy::too_many_arguments)] // L215c-cons threads atomic_fields alongside the existing walker args
 fn collect_lock_block_writes_in_block(
     block: &Block,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     classifier: &MethodMutClassifier,
     shape: WrapShape,
     out: &mut Vec<TextEdit>,
 ) {
     for stmt in &block.stmts {
-        collect_lock_block_writes_in_stmt(stmt, binding_name, mut_fields, classifier, shape, out);
+        collect_lock_block_writes_in_stmt(
+            stmt,
+            binding_name,
+            mut_fields,
+            atomic_fields,
+            classifier,
+            shape,
+            out,
+        );
     }
     if let Some(e) = &block.final_expr {
-        collect_lock_block_writes_in_expr(e, binding_name, mut_fields, classifier, shape, out);
+        collect_lock_block_writes_in_expr(
+            e,
+            binding_name,
+            mut_fields,
+            atomic_fields,
+            classifier,
+            shape,
+            out,
+        );
     }
 }
 
-#[allow(clippy::too_many_arguments)] // L215b2 threads WrapShape alongside the existing walker args
+#[allow(clippy::too_many_arguments)] // L215c-cons threads atomic_fields alongside the existing walker args
 fn collect_lock_block_writes_in_stmt(
     stmt: &Stmt,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     classifier: &MethodMutClassifier,
     shape: WrapShape,
     out: &mut Vec<TextEdit>,
 ) {
     match &stmt.kind {
-        StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
+        StmtKind::Assign { target, value } => {
             if let Some(field) = matched_self_field_access(target, binding_name, mut_fields) {
-                // The parser sets `stmt.span` to the target's span only
-                // (see src/parser/stmts.rs's Assign / CompoundAssign
-                // arms), so `stmt.span.offset + stmt.span.length`
-                // points one past the target's first token, not past
-                // the value. Anchor the wrap from the target's start
-                // (== stmt span start) to the value's end so the
-                // wrapped statement covers `target = value` in full;
-                // the trailing `;` falls outside the wrap, becoming
-                // the lock-statement's own terminator (`lock f { ... };`
-                // is a valid lock-expression-statement form).
-                let wrap_start = target.span.offset;
-                let wrap_end = value.span.offset + value.span.length;
-                // L215b2 SelfPrefix mode — emit binding-root rewrite
-                // edits BEFORE the wrap-prefix insertion so the stable
-                // sort by `Reverse(offset)` preserves their relative
-                // order at the same offset. When the iteration applies
-                // edits descending by offset, length>0 replacements at
-                // the same offset must come BEFORE length==0 insertions
-                // (otherwise the insertion would land before the
-                // wrap-prefix text and the replacement would consume
-                // the inserted bytes instead of the original).
-                if shape == WrapShape::SelfPrefix {
-                    collect_binding_root_rewrites_in_expr(target, binding_name, out);
-                    collect_binding_root_rewrites_in_expr(value, binding_name, out);
+                if atomic_fields.contains(field) {
+                    // L215c-cons — bare `<binding>.<field> = <value>`
+                    // on an Atomic[T]-classified field. Rewrite to
+                    // `<binding>.<field>.store(<value>, MemoryOrdering.Release)`.
+                    // Don't emit the binding-root SelfPrefix rewrite —
+                    // the source binding name stays in place (no
+                    // enclosing lock body to retarget at `self`), and
+                    // the load/store-shape rewrite leaves the
+                    // `<binding>.<field>` prefix intact. Restrict to
+                    // the single-step case `Identifier(<binding>).<field>` —
+                    // multi-step chains (`c.field.subfield = ...`) can't
+                    // legally apply to an Atomic-classified field since
+                    // `Atomic[T]` has no user fields, and the parser
+                    // gives `target.span` as only the *object* span
+                    // (object alone, not the full FieldAccess — see
+                    // `src/parser/exprs.rs:149`), so the field text
+                    // length has to be reconstructed from the field
+                    // name. The same whitespace-around-dot caveat from
+                    // the read walker applies here.
+                    if let ExprKind::FieldAccess {
+                        object,
+                        field: outer_field,
+                    } = &target.kind
+                    {
+                        if matches!(&object.kind, ExprKind::Identifier(n) if n == binding_name) {
+                            let target_full_end =
+                                object.span.offset + object.span.length + 1 + outer_field.len();
+                            let value_start = value.span.offset;
+                            let value_end = value.span.offset + value.span.length;
+                            emit_atomic_store_around(target_full_end, value_start, value_end, out);
+                        }
+                    }
+                } else {
+                    // The parser sets `stmt.span` to the target's span
+                    // only (see src/parser/stmts.rs's Assign arm), so
+                    // `stmt.span.offset + stmt.span.length` points one
+                    // past the target's first token, not past the
+                    // value. Anchor the wrap from the target's start
+                    // (== stmt span start) to the value's end so the
+                    // wrapped statement covers `target = value` in
+                    // full; the trailing `;` falls outside the wrap,
+                    // becoming the lock-statement's own terminator.
+                    let wrap_start = target.span.offset;
+                    let wrap_end = value.span.offset + value.span.length;
+                    // L215b2 SelfPrefix mode — emit binding-root rewrite
+                    // edits BEFORE the wrap-prefix insertion so the
+                    // stable sort by `Reverse(offset)` preserves their
+                    // relative order at the same offset.
+                    if shape == WrapShape::SelfPrefix {
+                        collect_binding_root_rewrites_in_expr(target, binding_name, out);
+                        collect_binding_root_rewrites_in_expr(value, binding_name, out);
+                    }
+                    emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
                 }
-                emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
             }
             // Recurse into target / value to catch writes nested inside
             // RHS expressions (e.g. a block-expr value containing
@@ -2000,6 +2071,7 @@ fn collect_lock_block_writes_in_stmt(
                 target,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2008,6 +2080,46 @@ fn collect_lock_block_writes_in_stmt(
                 value,
                 binding_name,
                 mut_fields,
+                atomic_fields,
+                classifier,
+                shape,
+                out,
+            );
+        }
+        StmtKind::CompoundAssign { target, value, .. } => {
+            if let Some(field) = matched_self_field_access(target, binding_name, mut_fields) {
+                // L215c-cons defensive guard: CompoundAssign on an
+                // Atomic-classified field should never reach here —
+                // `collect_atomic_disqualifying_writes_in_*` removes
+                // those fields from the Atomic set before this walker
+                // runs. If somehow we do, emit no edit so the
+                // reviewer notices (rather than mis-rewriting to
+                // `.store(+= value)` or a lock-wrap that semantically
+                // contradicts the field's Atomic classification).
+                if !atomic_fields.contains(field) {
+                    let wrap_start = target.span.offset;
+                    let wrap_end = value.span.offset + value.span.length;
+                    if shape == WrapShape::SelfPrefix {
+                        collect_binding_root_rewrites_in_expr(target, binding_name, out);
+                        collect_binding_root_rewrites_in_expr(value, binding_name, out);
+                    }
+                    emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
+                }
+            }
+            collect_lock_block_writes_in_expr(
+                target,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                classifier,
+                shape,
+                out,
+            );
+            collect_lock_block_writes_in_expr(
+                value,
+                binding_name,
+                mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2020,11 +2132,11 @@ fn collect_lock_block_writes_in_stmt(
             // args, args_close_span })`. Wrap iff (a) the receiver
             // matches `Identifier(binding_name).<mut_field>`, and (b)
             // the classifier says the method takes a `mut ref self`
-            // receiver. Wrap end-anchor uses `args_close_span` (the
-            // `)` token captured at parse) so the wrap encloses the
-            // full call. Trailing `;` falls outside the wrap, becoming
-            // the lock-statement's own terminator (same shape as the
-            // assign cases above).
+            // receiver. Atomic-classified fields are skipped — the
+            // classifier disqualifies fields with any mutating-method
+            // call before this walker runs, so an Atomic field hitting
+            // this branch indicates a classifier/walker mismatch; the
+            // defensive guard emits no wrap so the reviewer notices.
             if let ExprKind::MethodCall {
                 object,
                 args_close_span,
@@ -2034,22 +2146,33 @@ fn collect_lock_block_writes_in_stmt(
                 if classifier.is_mutating(&e.span) {
                     if let Some(field) = matched_self_field_access(object, binding_name, mut_fields)
                     {
-                        let wrap_start = e.span.offset;
-                        let wrap_end = args_close_span.offset + args_close_span.length;
-                        if shape == WrapShape::SelfPrefix {
-                            collect_binding_root_rewrites_in_expr(e, binding_name, out);
+                        if !atomic_fields.contains(field) {
+                            let wrap_start = e.span.offset;
+                            let wrap_end = args_close_span.offset + args_close_span.length;
+                            if shape == WrapShape::SelfPrefix {
+                                collect_binding_root_rewrites_in_expr(e, binding_name, out);
+                            }
+                            emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
                         }
-                        emit_lock_wrap_around(wrap_start, wrap_end, field, shape, out);
                     }
                 }
             }
-            collect_lock_block_writes_in_expr(e, binding_name, mut_fields, classifier, shape, out);
+            collect_lock_block_writes_in_expr(
+                e,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                classifier,
+                shape,
+                out,
+            );
         }
         StmtKind::Let { value, .. } => {
             collect_lock_block_writes_in_expr(
                 value,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2062,6 +2185,7 @@ fn collect_lock_block_writes_in_stmt(
                 value,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2070,6 +2194,7 @@ fn collect_lock_block_writes_in_stmt(
                 else_block,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2081,6 +2206,7 @@ fn collect_lock_block_writes_in_stmt(
                 body,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2089,11 +2215,12 @@ fn collect_lock_block_writes_in_stmt(
     }
 }
 
-#[allow(clippy::too_many_arguments)] // L215b2 threads WrapShape alongside the existing walker args
+#[allow(clippy::too_many_arguments)] // L215c-cons threads atomic_fields alongside the existing walker args
 fn collect_lock_block_writes_in_expr(
     expr: &Expr,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     classifier: &MethodMutClassifier,
     shape: WrapShape,
     out: &mut Vec<TextEdit>,
@@ -2107,7 +2234,15 @@ fn collect_lock_block_writes_in_expr(
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
-            collect_lock_block_writes_in_block(b, binding_name, mut_fields, classifier, shape, out);
+            collect_lock_block_writes_in_block(
+                b,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                classifier,
+                shape,
+                out,
+            );
         }
         ExprKind::If {
             condition,
@@ -2118,6 +2253,7 @@ fn collect_lock_block_writes_in_expr(
                 condition,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2126,6 +2262,7 @@ fn collect_lock_block_writes_in_expr(
                 then_block,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2135,6 +2272,7 @@ fn collect_lock_block_writes_in_expr(
                     eb,
                     binding_name,
                     mut_fields,
+                    atomic_fields,
                     classifier,
                     shape,
                     out,
@@ -2148,6 +2286,7 @@ fn collect_lock_block_writes_in_expr(
                 condition,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2156,6 +2295,7 @@ fn collect_lock_block_writes_in_expr(
                 body,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2166,6 +2306,7 @@ fn collect_lock_block_writes_in_expr(
                 iterable,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2174,6 +2315,7 @@ fn collect_lock_block_writes_in_expr(
                 body,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2184,6 +2326,7 @@ fn collect_lock_block_writes_in_expr(
                 scrutinee,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2194,6 +2337,7 @@ fn collect_lock_block_writes_in_expr(
                         g,
                         binding_name,
                         mut_fields,
+                        atomic_fields,
                         classifier,
                         shape,
                         out,
@@ -2203,6 +2347,7 @@ fn collect_lock_block_writes_in_expr(
                     &arm.body,
                     binding_name,
                     mut_fields,
+                    atomic_fields,
                     classifier,
                     shape,
                     out,
@@ -2214,6 +2359,7 @@ fn collect_lock_block_writes_in_expr(
                 callee,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2223,6 +2369,7 @@ fn collect_lock_block_writes_in_expr(
                     &a.value,
                     binding_name,
                     mut_fields,
+                    atomic_fields,
                     classifier,
                     shape,
                     out,
@@ -2234,6 +2381,7 @@ fn collect_lock_block_writes_in_expr(
                 object,
                 binding_name,
                 mut_fields,
+                atomic_fields,
                 classifier,
                 shape,
                 out,
@@ -2243,6 +2391,7 @@ fn collect_lock_block_writes_in_expr(
                     &a.value,
                     binding_name,
                     mut_fields,
+                    atomic_fields,
                     classifier,
                     shape,
                     out,
@@ -2805,6 +2954,51 @@ fn emit_lock_wrap_around(
     });
 }
 
+/// L215c-cons — Emit the two-edit rewrite that turns a bare assign
+/// `<binding>.<field> = <value>` into the Atomic store form
+/// `<binding>.<field>.store(<value>, MemoryOrdering.Release)`. Edits:
+/// (1) overwrite the byte range between the target's last byte and the
+/// value's first byte (the ` = ` separator) with `.store(`; (2) insert
+/// `, MemoryOrdering.Release)` immediately after the value's last byte.
+/// The trailing `;` (statement terminator) falls outside both edits and
+/// stays in place — `<binding>.<field>.store(v, MemoryOrdering.Release);`
+/// is a valid expression-statement form. `MemoryOrdering.Release` is
+/// chosen as the v1 default ordering for store; it pairs with the
+/// `MemoryOrdering.Acquire` chosen for [`emit_atomic_load_after`] to
+/// give canonical acquire/release semantics for ISR-style signaling.
+fn emit_atomic_store_around(
+    target_end: usize,
+    value_start: usize,
+    value_end: usize,
+    out: &mut Vec<TextEdit>,
+) {
+    out.push(TextEdit {
+        offset: target_end,
+        length: value_start - target_end,
+        replacement: ".store(".to_string(),
+    });
+    out.push(TextEdit {
+        offset: value_end,
+        length: 0,
+        replacement: ", MemoryOrdering.Release)".to_string(),
+    });
+}
+
+/// L215c-cons — Emit the one-edit rewrite that turns an rvalue read
+/// `<binding>.<field>` into the Atomic load form
+/// `<binding>.<field>.load(MemoryOrdering.Acquire)`. Inserts the
+/// `.load(...)` suffix immediately after the field-access span; the
+/// original prefix bytes (`<binding>.<field>`) stay intact so chained
+/// projections / method calls on the resulting load value remain
+/// syntactically rooted at the same place as the original read.
+fn emit_atomic_load_after(end: usize, out: &mut Vec<TextEdit>) {
+    out.push(TextEdit {
+        offset: end,
+        length: 0,
+        replacement: ".load(MemoryOrdering.Acquire)".to_string(),
+    });
+}
+
 /// L215b2 — Walk `expr` and emit a binding-root rewrite `TextEdit`
 /// (`<binding>` → `self`) for every place-rooted occurrence of
 /// `Identifier(<binding>)` at the object position of a `FieldAccess`.
@@ -2915,13 +3109,14 @@ fn collect_lock_block_reads_in_block(
     block: &Block,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     out: &mut Vec<TextEdit>,
 ) {
     for stmt in &block.stmts {
-        collect_lock_block_reads_in_stmt(stmt, binding_name, mut_fields, out);
+        collect_lock_block_reads_in_stmt(stmt, binding_name, mut_fields, atomic_fields, out);
     }
     if let Some(e) = &block.final_expr {
-        collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+        collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
     }
 }
 
@@ -2929,32 +3124,40 @@ fn collect_lock_block_reads_in_stmt(
     stmt: &Stmt,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     out: &mut Vec<TextEdit>,
 ) {
     match &stmt.kind {
         StmtKind::Assign { target, value } | StmtKind::CompoundAssign { target, value, .. } => {
             // Skip both target+value when target's binding root is the
-            // migrating binding — the write-wrap covers the statement.
+            // migrating binding — the write-wrap (or Atomic store
+            // rewrite, for atomic_fields) covers the full statement.
             if let Some(place) = resolve_place_chain(target) {
                 if place.root == binding_name {
                     return;
                 }
             }
-            collect_lock_block_reads_in_expr(target, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(target, binding_name, mut_fields, atomic_fields, out);
+            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, atomic_fields, out);
         }
         StmtKind::Let { value, .. } => {
-            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, atomic_fields, out);
         }
         StmtKind::LetElse {
             value, else_block, ..
         } => {
-            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_block(else_block, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(value, binding_name, mut_fields, atomic_fields, out);
+            collect_lock_block_reads_in_block(
+                else_block,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
         }
         StmtKind::LetUninit { .. } => {}
         StmtKind::Defer { body } | StmtKind::ErrDefer { body, .. } => {
-            collect_lock_block_reads_in_block(body, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_block(body, binding_name, mut_fields, atomic_fields, out);
         }
         StmtKind::Expr(e) => {
             // Skip statement-position method calls whose receiver root
@@ -2967,7 +3170,7 @@ fn collect_lock_block_reads_in_stmt(
                     }
                 }
             }
-            collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
         }
     }
 }
@@ -2976,6 +3179,7 @@ fn collect_lock_block_reads_in_expr(
     expr: &Expr,
     binding_name: &str,
     mut_fields: &HashSet<String>,
+    atomic_fields: &HashSet<String>,
     out: &mut Vec<TextEdit>,
 ) {
     // Read-site pattern: `<binding>.<mut_field>` as a rvalue.
@@ -2992,13 +3196,33 @@ fn collect_lock_block_reads_in_expr(
             if name == binding_name && mut_fields.contains(field) {
                 let start = object.span.offset;
                 let len = object.span.length + 1 + field.len();
-                out.push(TextEdit {
-                    offset: start,
-                    length: len,
-                    replacement: format!("lock self.{field} {{ self.{field} }}"),
-                });
+                if atomic_fields.contains(field) {
+                    // L215c-cons — Atomic[T]-classified field read.
+                    // Append `.load(MemoryOrdering.Acquire)` to the
+                    // FieldAccess; leave the original `<binding>.<field>`
+                    // text intact so chained projections on the result
+                    // (`c.field.subfield`, `c.field[0]`) still resolve
+                    // against the loaded value. Defensive note: the
+                    // classifier disqualifies fields with any mutating
+                    // method call, so `c.field.push()` shapes don't
+                    // reach here — but for a `.method()` shape that
+                    // somehow does, this append would produce
+                    // `c.field.load(MemoryOrdering.Acquire).method()`
+                    // which is semantically a load-then-call (safe vs
+                    // wrong-receiver). Reviewer would catch the shape.
+                    emit_atomic_load_after(start + len, out);
+                } else {
+                    out.push(TextEdit {
+                        offset: start,
+                        length: len,
+                        replacement: format!("lock self.{field} {{ self.{field} }}"),
+                    });
+                }
                 // Don't descend — the FieldAccess.object (`Identifier(c)`)
-                // and `.field` are subsumed by the wrap-replacement.
+                // and `.field` are subsumed by the wrap-replacement (or
+                // the load-rewrite has produced its single edit and the
+                // children are pure binding+field-name with no further
+                // reads to visit).
                 return;
             }
         }
@@ -3012,92 +3236,146 @@ fn collect_lock_block_reads_in_expr(
         | ExprKind::LabeledBlock { body: b, .. }
         | ExprKind::Loop { body: b, .. }
         | ExprKind::Lock { body: b, .. } => {
-            collect_lock_block_reads_in_block(b, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_block(b, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::If {
             condition,
             then_block,
             else_branch,
         } => {
-            collect_lock_block_reads_in_expr(condition, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_block(then_block, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(
+                condition,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
+            collect_lock_block_reads_in_block(
+                then_block,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
             if let Some(eb) = else_branch {
-                collect_lock_block_reads_in_expr(eb, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(eb, binding_name, mut_fields, atomic_fields, out);
             }
         }
         ExprKind::While {
             condition, body, ..
         } => {
-            collect_lock_block_reads_in_expr(condition, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_block(body, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(
+                condition,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
+            collect_lock_block_reads_in_block(body, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::For { iterable, body, .. } => {
-            collect_lock_block_reads_in_expr(iterable, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_block(body, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(
+                iterable,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
+            collect_lock_block_reads_in_block(body, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Match { scrutinee, arms } => {
-            collect_lock_block_reads_in_expr(scrutinee, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(
+                scrutinee,
+                binding_name,
+                mut_fields,
+                atomic_fields,
+                out,
+            );
             for arm in arms {
                 if let Some(g) = &arm.guard {
-                    collect_lock_block_reads_in_expr(g, binding_name, mut_fields, out);
+                    collect_lock_block_reads_in_expr(
+                        g,
+                        binding_name,
+                        mut_fields,
+                        atomic_fields,
+                        out,
+                    );
                 }
-                collect_lock_block_reads_in_expr(&arm.body, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(
+                    &arm.body,
+                    binding_name,
+                    mut_fields,
+                    atomic_fields,
+                    out,
+                );
             }
         }
         ExprKind::Call { callee, args } => {
-            collect_lock_block_reads_in_expr(callee, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(callee, binding_name, mut_fields, atomic_fields, out);
             for a in args {
-                collect_lock_block_reads_in_expr(&a.value, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(
+                    &a.value,
+                    binding_name,
+                    mut_fields,
+                    atomic_fields,
+                    out,
+                );
             }
         }
         ExprKind::MethodCall { object, args, .. } => {
-            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, atomic_fields, out);
             for a in args {
-                collect_lock_block_reads_in_expr(&a.value, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(
+                    &a.value,
+                    binding_name,
+                    mut_fields,
+                    atomic_fields,
+                    out,
+                );
             }
         }
         ExprKind::FieldAccess { object, .. } => {
             // Non-matching FieldAccess (other.field, c.non_mut_field).
-            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Index { object, index } => {
-            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_expr(index, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, atomic_fields, out);
+            collect_lock_block_reads_in_expr(index, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::TupleIndex { object, .. } => {
-            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(object, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Binary { left, right, .. } => {
-            collect_lock_block_reads_in_expr(left, binding_name, mut_fields, out);
-            collect_lock_block_reads_in_expr(right, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(left, binding_name, mut_fields, atomic_fields, out);
+            collect_lock_block_reads_in_expr(right, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Unary { operand, .. } => {
-            collect_lock_block_reads_in_expr(operand, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(operand, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Cast { expr, .. } => {
-            collect_lock_block_reads_in_expr(expr, binding_name, mut_fields, out);
+            collect_lock_block_reads_in_expr(expr, binding_name, mut_fields, atomic_fields, out);
         }
         ExprKind::Range { start, end, .. } => {
             if let Some(s) = start.as_deref() {
-                collect_lock_block_reads_in_expr(s, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(s, binding_name, mut_fields, atomic_fields, out);
             }
             if let Some(e) = end.as_deref() {
-                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
             }
         }
         ExprKind::Tuple(items) => {
             for e in items {
-                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
             }
         }
         ExprKind::Return(inner) => {
             if let Some(e) = inner.as_deref() {
-                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
             }
         }
         ExprKind::Break { value, .. } => {
             if let Some(e) = value.as_deref() {
-                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, out);
+                collect_lock_block_reads_in_expr(e, binding_name, mut_fields, atomic_fields, out);
             }
         }
         _ => {}

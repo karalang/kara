@@ -8207,12 +8207,22 @@ fn test_migrate_l215c_atomic_when_only_bare_assigns() {
         stdout.contains("classified as `Atomic[T]`"),
         "expected note about Atomic-classified fields; stdout={stdout}",
     );
-    // Critically: Atomic-classified fields are dropped from the
-    // consumer-rewrite path — `c.count = 1` should remain unwrapped
-    // (no `lock self.count {` insert anywhere in the diff).
+    // L215c-cons — Atomic-classified consumer writes get rewritten to
+    // `.store(v, MemoryOrdering.Release)`. Pin the rewrite shape on
+    // dry-run output: both the ` = ` → `.store(` replacement and the
+    // trailing `, MemoryOrdering.Release)` insertion must appear.
+    // No lock-wrap should appear for Atomic-classified sites.
     assert!(
         !stdout.contains("lock self.count {"),
         "Atomic-classified consumer sites should NOT be lock-wrapped; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("` = ` → `.store(`"),
+        "expected ` = ` → `.store(` rewrite for Atomic consumer; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("(insert) → `, MemoryOrdering.Release)`"),
+        "expected Release-ordering suffix insert; stdout={stdout}",
     );
 }
 
@@ -8347,14 +8357,230 @@ fn test_migrate_l215c_mixed_fields_atomic_and_mutex() {
         mutex_wraps, 1,
         "expected exactly 1 Mutex[ wrap (for total); stdout={stdout}",
     );
-    // count is Atomic — should NOT be lock-wrapped at consumer site.
+    // count is Atomic — should NOT be lock-wrapped at consumer site;
+    // its bare = should be rewritten to `.store(v, MemoryOrdering.Release)`.
     assert!(
         !stdout.contains("lock self.count {"),
         "Atomic count should not get a consumer wrap; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("` = ` → `.store(`"),
+        "Atomic count's bare = should be rewritten to .store(; stdout={stdout}",
     );
     // total is Mutex — its compound-assign SHOULD be lock-wrapped.
     assert!(
         stdout.contains("lock self.total {"),
         "Mutex total should get a consumer wrap; stdout={stdout}",
+    );
+}
+
+// ── L215c-cons: Atomic[T] consumer-rewrite (.store / .load) ─────
+
+#[test]
+fn test_migrate_l215c_cons_atomic_read_rewrites_to_load() {
+    // Counter with a single bare-= Atomic-eligible field. A consumer
+    // function `read` does `c.count` (rvalue read in return position).
+    // L215c-cons rewrites that read to `c.count.load(MemoryOrdering.Acquire)`.
+    let tmp = scratch_project("migrate-l215c-cons-read");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn read(c: ref Counter) -> i64 {\n    c.count\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("(insert) → `.load(MemoryOrdering.Acquire)`"),
+        "Atomic read should be rewritten to .load(MemoryOrdering.Acquire); stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains("lock self.count {"),
+        "Atomic read should NOT be lock-wrapped; stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_cons_atomic_apply_produces_compilable_shape() {
+    // End-to-end --apply verification: the on-disk rewrite of an
+    // Atomic-classified write produces the canonical Kāra source
+    // shape `c.count.store(1, MemoryOrdering.Release);` (semicolon
+    // preserved, field name preserved, ordering literal preserved).
+    // Pinning the actual rewritten text — not just the edit preview
+    // — guards against an offset-math regression that would silently
+    // drop or duplicate bytes around the edit boundary.
+    let tmp = scratch_project("migrate-l215c-cons-apply");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    let consumer = "fn bump(c: ref Counter) {\n    c.count = 42;\n}\n\nfn read(c: ref Counter) -> i64 {\n    c.count\n}\n\nfn main() {}\n";
+    write(&tmp.join("src/main.kara"), consumer);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            "--atomic",
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let main_rewritten = std::fs::read_to_string(tmp.join("src/main.kara")).unwrap();
+    let counter_rewritten = std::fs::read_to_string(tmp.join("src/counter.kara")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        counter_rewritten.contains("count: Atomic[i64]"),
+        "type def should wrap as Atomic[i64]; got: {counter_rewritten}",
+    );
+    assert!(
+        main_rewritten.contains("c.count.store(42, MemoryOrdering.Release);"),
+        "write should be rewritten to .store call; got: {main_rewritten}",
+    );
+    assert!(
+        main_rewritten.contains("c.count.load(MemoryOrdering.Acquire)"),
+        "read should be rewritten to .load call; got: {main_rewritten}",
+    );
+    assert!(
+        !main_rewritten.contains("c.count = "),
+        "bare `c.count = ` should NOT survive the rewrite; got: {main_rewritten}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_cons_atomic_read_in_complex_expression() {
+    // Atomic read embedded inside a binary expression (`c.count + 1`
+    // and `c.count > 0`) — the load rewrite must fire on each read
+    // site independently, not just on standalone reads.
+    let tmp = scratch_project("migrate-l215c-cons-complex");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    let consumer = "fn add_one(c: ref Counter) -> i64 {\n    c.count + 1\n}\n\nfn is_positive(c: ref Counter) -> bool {\n    c.count > 0\n}\n\nfn bump(c: ref Counter) {\n    c.count = 7;\n}\n\nfn main() {}\n";
+    write(&tmp.join("src/main.kara"), consumer);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    // Two distinct read sites — expect two load-insert edits.
+    let load_inserts = stdout
+        .matches("(insert) → `.load(MemoryOrdering.Acquire)`")
+        .count();
+    assert_eq!(
+        load_inserts, 2,
+        "expected 2 .load inserts (one per read site); stdout={stdout}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_cons_mixed_atomic_and_mutex_rewrites_apply() {
+    // Mixed-classification fixture under --apply: count is Atomic
+    // (bare = only), total is Mutex (compound +=). Verify the
+    // on-disk shape: count writes/reads become .store/.load, total
+    // writes become `lock self.total { ... }`. The two field shapes
+    // must coexist in one file without offset drift between them.
+    let tmp = scratch_project("migrate-l215c-cons-mixed-apply");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n    mut total: i64,\n}\n",
+    );
+    let consumer = "fn bump(c: ref Counter) {\n    c.count = 1;\n    c.total += 1;\n}\n\nfn snapshot(c: ref Counter) -> i64 {\n    c.count\n}\n\nfn main() {}\n";
+    write(&tmp.join("src/main.kara"), consumer);
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            "--atomic",
+            "--apply",
+            "--force",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "--apply should succeed; stderr={}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let rewritten = std::fs::read_to_string(tmp.join("src/main.kara")).unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(
+        rewritten.contains("c.count.store(1, MemoryOrdering.Release);"),
+        "Atomic count write should be .store-rewritten; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("c.count.load(MemoryOrdering.Acquire)"),
+        "Atomic count read should be .load-rewritten; got: {rewritten}",
+    );
+    assert!(
+        rewritten.contains("lock self.total {"),
+        "Mutex total compound assign should be lock-wrapped; got: {rewritten}",
+    );
+    assert!(
+        !rewritten.contains("lock self.count {"),
+        "Atomic count should NEVER be lock-wrapped; got: {rewritten}",
+    );
+}
+
+#[test]
+fn test_migrate_l215c_cons_atomic_without_flag_keeps_mutex_path() {
+    // Without --atomic, the L215a–b4 default (all-Mutex) applies — no
+    // Atomic classifier runs, so even an obviously-Atomic-eligible
+    // field stays Mutex-wrapped. Pinning that --atomic is the gate
+    // for the consumer-rewrite path too, not just the type-def half.
+    let tmp = scratch_project("migrate-l215c-cons-noflag");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("lock self.count {"),
+        "without --atomic, default Mutex lock-wrap should apply; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains(".store("),
+        "without --atomic, no .store rewrite should fire; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains(".load("),
+        "without --atomic, no .load rewrite should fire; stdout={stdout}",
     );
 }

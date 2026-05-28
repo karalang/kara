@@ -6924,25 +6924,21 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, atomic: bool) 
     } else {
         std::collections::HashMap::new()
     };
-    // Atomic-classified fields are dropped from the consumer-rewrite
-    // path — their bare assigns and reads stay as-is so the reviewer
-    // hand-converts to `.store()` / `.load()` per design.md
-    // § Compiler-assisted migration "manual at the review step" clause.
-    // The consumer walker still wraps Mutex-classified fields normally.
-    let mutex_only_fields: std::collections::HashSet<String> = mut_fields
+    // L215c-cons — Atomic-classified fields' consumer sites are now
+    // auto-rewritten by `build_consumer_rewrite_edits_with_mut_fields`:
+    // bare `c.f = v` writes become `c.f.store(v, MemoryOrdering.Release)`
+    // and bare `c.f` reads become `c.f.load(MemoryOrdering.Acquire)`.
+    // The Mutex-classified fields continue to receive the lock-wrap
+    // shape from the same walker. Pass the full mut-fields set as the
+    // rewrite target and the Atomic subset as the dispatch discriminator.
+    let atomic_fields: std::collections::HashSet<String> = field_kinds
         .iter()
-        .filter(|f| {
-            !matches!(
-                field_kinds.get(*f),
-                Some(crate::ownership::FieldWrapKind::Atomic)
-            )
+        .filter_map(|(name, k)| match k {
+            crate::ownership::FieldWrapKind::Atomic => Some(name.clone()),
+            crate::ownership::FieldWrapKind::Mutex => None,
         })
-        .cloned()
         .collect();
-    let atomic_field_count = field_kinds
-        .values()
-        .filter(|k| matches!(k, crate::ownership::FieldWrapKind::Atomic))
-        .count();
+    let atomic_field_count = atomic_fields.len();
 
     // Stage 2: run the type-def + consumer rewrite per file with the
     // classifier-aware emitter for the type def, and the Mutex-only
@@ -6971,7 +6967,8 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, atomic: bool) 
             type_name,
             &file.pipeline.parsed.program.items,
             type_ctx,
-            &mutex_only_fields,
+            &mut_fields,
+            &atomic_fields,
         );
         let mut edits: Vec<crate::resolver::TextEdit> = typedef_edits;
         edits.extend(consumer_edits);
@@ -7024,12 +7021,12 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, atomic: bool) 
         );
         if atomic_field_count > 0 {
             println!(
-                "(note: {atomic_field_count} field(s) on `{type_name}` were classified as `Atomic[T]` — their consumer sites stay as bare `=` / read forms; hand-convert to `.store(v, Ordering)` / `.load(Ordering)` per design.md § Compiler-assisted migration)"
+                "(note: {atomic_field_count} field(s) on `{type_name}` were classified as `Atomic[T]` — their consumer assigns rewritten to `.store(v, MemoryOrdering.Release)` and reads rewritten to `.load(MemoryOrdering.Acquire)`)"
             );
         }
     } else if atomic_field_count > 0 {
         println!(
-            "(note: {atomic_field_count} field(s) on `{type_name}` were rewritten as `Atomic[T]` — their consumer sites stayed as bare `=` / read forms; hand-convert to `.store(v, Ordering)` / `.load(Ordering)` per design.md § Compiler-assisted migration)"
+            "(note: {atomic_field_count} field(s) on `{type_name}` were rewritten as `Atomic[T]` — their consumer assigns auto-rewritten to `.store(v, MemoryOrdering.Release)` and reads to `.load(MemoryOrdering.Acquire)`)"
         );
     }
 }
