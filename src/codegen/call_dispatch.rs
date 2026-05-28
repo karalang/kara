@@ -379,6 +379,10 @@ impl<'ctx> super::Codegen<'ctx> {
                             let val = self.compile_expr(&arg.value)?;
                             self.materialize_rvalue_for_ref_arg(val, i)
                         }
+                    } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&arg.value)? {
+                        // `vec[idx]` borrow — pass the element pointer in
+                        // place (no shallow-copy + drop double-free).
+                        elem_ptr.into()
                     } else {
                         let val = self.compile_expr(&arg.value)?;
                         self.materialize_rvalue_for_ref_arg(val, i)
@@ -518,6 +522,14 @@ impl<'ctx> super::Codegen<'ctx> {
                         compiled_args.push(ptr.into());
                         continue;
                     }
+                }
+                // `vec[idx]` borrow: pass a pointer to the element in
+                // place rather than a shallow-copied-then-dropped temp
+                // (the latter double-frees an aggregate element's buffer
+                // the outer Vec still owns).
+                if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&a.value)? {
+                    compiled_args.push(elem_ptr.into());
+                    continue;
                 }
             }
             // Slice-parameter coercion: if this parameter slot expects

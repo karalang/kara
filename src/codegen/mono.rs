@@ -281,6 +281,11 @@ impl<'ctx> super::Codegen<'ctx> {
                         } else {
                             self.materialize_rvalue_for_ref_arg(*val, i)
                         }
+                    } else if let Some(elem_ptr) = self.ref_arg_index_borrow_ptr(&args[i].value)? {
+                        // `vec[idx]` borrow — element pointer in place
+                        // (no shallow-copy + drop double-free). The
+                        // pre-compiled `*val` load is left dead (DCE'd).
+                        elem_ptr.into()
                     } else {
                         self.materialize_rvalue_for_ref_arg(*val, i)
                     }

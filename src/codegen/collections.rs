@@ -867,6 +867,29 @@ impl<'ctx> super::Codegen<'ctx> {
         name: &str,
         index: &Expr,
     ) -> Result<BasicValueEnum<'ctx>, String> {
+        let elem_ty = self.vec_elem_type_for_var(name);
+        let elem_ptr = self.vec_index_elem_ptr(name, index)?;
+        let val = self
+            .builder
+            .build_load(elem_ty, elem_ptr, "v.elem")
+            .unwrap();
+        Ok(val)
+    }
+
+    /// Compute the pointer to `vec_var[index]`'s element slot (the GEP
+    /// into the Vec's heap buffer), with the same bounds-check elision as
+    /// `compile_vec_index` — but WITHOUT the trailing load. Callers that
+    /// want the element value use `compile_vec_index`; callers that need a
+    /// borrow of the element (passing `vec[i]` to a `ref T` parameter)
+    /// use this so the element is aliased in place rather than shallow-
+    /// copied. Shallow-copying an aggregate element (Vec / String /
+    /// heap struct) and then dropping the copy as a call-temp would
+    /// double-free the buffer the outer Vec still owns.
+    pub(super) fn vec_index_elem_ptr(
+        &mut self,
+        name: &str,
+        index: &Expr,
+    ) -> Result<inkwell::values::PointerValue<'ctx>, String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let vec_ty = self.vec_struct_type();
         let elem_ty = self.vec_elem_type_for_var(name);
@@ -905,11 +928,39 @@ impl<'ctx> super::Codegen<'ctx> {
                 .build_gep(elem_ty, data, &[idx_val], "v.elem.ptr")
                 .unwrap()
         };
-        let val = self
-            .builder
-            .build_load(elem_ty, elem_ptr, "v.elem")
-            .unwrap();
-        Ok(val)
+        Ok(elem_ptr)
+    }
+
+    /// If `arg` is `vec_var[idx]` where `vec_var` is a plain Vec variable,
+    /// return a pointer to the element slot in place — the borrow a `ref T`
+    /// parameter wants. Returns `None` for any other shape (the caller then
+    /// falls through to its rvalue-materialization path). Routing aggregate
+    /// element borrows (`stake[i]` of `Vec[Vec[T]]`) through here instead of
+    /// the load-then-track-for-drop path is what prevents the double-free:
+    /// the element stays owned by the outer Vec, and no call-temp drop frees
+    /// its still-shared buffer.
+    pub(super) fn ref_arg_index_borrow_ptr(
+        &mut self,
+        arg: &Expr,
+    ) -> Result<Option<inkwell::values::PointerValue<'ctx>>, String> {
+        if let ExprKind::Index { object, index } = &arg.kind {
+            if let ExprKind::Identifier(vec_var) = &object.kind {
+                // Plain Vec variables only — slices / maps / array-slot
+                // bindings have their own representations (mirror the
+                // detection + array-slot bypass in `compile_index`).
+                if self.vec_elem_types.contains_key(vec_var.as_str()) {
+                    let slot_is_array = self
+                        .variables
+                        .get(vec_var.as_str())
+                        .is_some_and(|s| matches!(s.ty, BasicTypeEnum::ArrayType(_)));
+                    if !slot_is_array {
+                        let ptr = self.vec_index_elem_ptr(vec_var, index)?;
+                        return Ok(Some(ptr));
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 
     /// Decide whether the dominating loop guard already proves either half

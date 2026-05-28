@@ -4453,6 +4453,46 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_of_vec_index_ref_arg() {
+        // Regression: passing `stake[idx]` (an aggregate element of a
+        // Vec[Vec[T]]) to a `ref Vec[T]` parameter shallow-copied the
+        // element struct and dropped the copy as a call-temp, double-
+        // freeing the buffer the outer Vec still owned. Symptom was a
+        // hang/SIGTRAP once the loop count grew (heap corruption). The
+        // fix passes a pointer to the element in place (borrow, no drop).
+        // Loop to 200 so any double-free corrupts the allocator.
+        let out = run_program(
+            r#"
+fn make() -> Vec[char] {
+    let mut v: Vec[char] = Vec.with_capacity(4);
+    v.push('a');
+    v.push('b');
+    v
+}
+fn sumlen(r: ref Vec[char]) -> i64 {
+    r.len()
+}
+fn main() {
+    let mut stake: Vec[Vec[char]] = Vec.with_capacity(2);
+    stake.push(make());
+    stake.push(make());
+    let mut sum: i64 = 0;
+    let mut k: i64 = 0;
+    while k < 200 {
+        let idx: i64 = k % 2;
+        sum = sum + sumlen(stake[idx]);
+        k = k + 1;
+    }
+    println(sum);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "400");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_pop_returns_option() {
         // `Vec.pop` now returns `Option[T]` per design.md (was raw
         // element pre-2026-05-10). Match destructure unwraps Some,
