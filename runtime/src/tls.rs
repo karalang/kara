@@ -73,8 +73,13 @@ pub struct KaracTlsConfig {
 /// Per-fd session state. The outer `Mutex` ensures one read or write
 /// at a time per session (concurrent operations against the same TLS
 /// state would corrupt rustls's internal buffers).
-struct TlsSession {
-    conn: ServerConnection,
+///
+/// **`pub(crate)`** because slice 3 (`event_loop.rs`'s WebSocket
+/// framing FFIs) consults the session via [`lookup_session`] and
+/// drives `conn` through rustls's `reader()` / `writer()` /
+/// `read_tls` / `write_tls` surface.
+pub(crate) struct TlsSession {
+    pub(crate) conn: ServerConnection,
 }
 
 type SessionRegistry = RwLock<HashMap<i32, Arc<Mutex<TlsSession>>>>;
@@ -83,6 +88,49 @@ type SessionRegistry = RwLock<HashMap<i32, Arc<Mutex<TlsSession>>>>;
 fn sessions() -> &'static SessionRegistry {
     static REG: OnceLock<SessionRegistry> = OnceLock::new();
     REG.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+/// Phase 6 line 236 slice 3 — exposed for the WebSocket framing FFIs
+/// (`event_loop.rs::ws_send_data_frame` / `_recv_data_frame`) so they
+/// can detect a TLS-wrapped connection and route encryption through
+/// rustls instead of writing plaintext over the TLS-encrypted socket.
+///
+/// Returns the `Arc<Mutex<TlsSession>>` for `fd` if it was previously
+/// registered via [`karac_runtime_tls_accept`] (or
+/// [`register_session_for_fd`] during the WS-over-TLS handshake) and
+/// hasn't yet been removed by [`karac_runtime_tls_close`]. Returns
+/// `None` for plain-TCP fds. Cloning the Arc is fast and lets callers
+/// release the outer `RwLock` before locking the per-session `Mutex`.
+pub(crate) fn lookup_session(fd: i32) -> Option<Arc<Mutex<TlsSession>>> {
+    let reg = sessions().read().unwrap_or_else(|p| p.into_inner());
+    reg.get(&fd).cloned()
+}
+
+/// Slice 3 — register a fresh `ServerConnection` against `fd`. Used by
+/// [`karac_runtime_ws_accept_tls`] (in `event_loop.rs`) after the TLS
+/// handshake completes but before the HTTP upgrade exchange: the WS
+/// framing FFIs need the session to be in `SESSIONS` so subsequent
+/// recv/send routes through TLS.
+///
+/// Parallel surface to the inline-insert at the end of
+/// [`karac_runtime_tls_accept`]; this version is callable from
+/// outside the FFI for cases where the handshake driver lives in a
+/// different module.
+pub(crate) fn register_session_for_fd(fd: i32, conn: ServerConnection) {
+    let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
+    reg.insert(fd, Arc::new(Mutex::new(TlsSession { conn })));
+}
+
+/// Slice 3 — borrow the `Arc<ServerConfig>` out of a `*mut KaracTlsConfig`
+/// pointer. Exposed for [`karac_runtime_ws_accept_tls`] which needs to
+/// build a fresh `ServerConnection` per accepted connection.
+///
+/// # Safety
+///
+/// `config` must be a non-null pointer obtained from
+/// [`karac_runtime_tls_config_new`] and still valid.
+pub(crate) unsafe fn clone_config_arc(config: *const KaracTlsConfig) -> Arc<ServerConfig> {
+    Arc::clone(&(*config).inner)
 }
 
 /// Failure mode for `build_server_config`. Surfaced internally only —

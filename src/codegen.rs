@@ -1874,6 +1874,24 @@ impl<'ctx> Codegen<'ctx> {
             Some(Linkage::External),
         );
 
+        // Phase 6 line 236 slice 3 — `karac_runtime_ws_accept_tls(
+        // listener_fd: i32, config: *mut TlsConfig) -> i32`. Same
+        // shape as `ws_accept` but the conn is TLS-wrapped: TCP
+        // accept → rustls handshake → register session in TLS
+        // SESSIONS registry → HTTP upgrade exchange over TLS →
+        // return the connection fd. Subsequent `ws_recv_text` /
+        // `ws_send_text` calls auto-dispatch through TLS once the
+        // session is registered (their FFI bodies check `tls::
+        // lookup_session(fd)`).
+        let ws_accept_tls_ty = context
+            .i32_type()
+            .fn_type(&[context.i32_type().into(), ptr_type.into()], false);
+        module.add_function(
+            "karac_runtime_ws_accept_tls",
+            ws_accept_tls_ty,
+            Some(Linkage::External),
+        );
+
         // Phase 6 line 17 slice 9e.3 — binary frame FFIs. Same ABI
         // as the text framing FFIs from slice 9e.1 (3-arg `(fd,
         // ptr, len)` returning i64); the runtime helper switches

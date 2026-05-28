@@ -102,6 +102,44 @@ impl WebSocket {
         WebSocket { fd: -1 }
     }
 
+    // Phase 6 line 236 slice 3 — WebSocket-over-TLS entry point.
+    // Same shape as `accept(listener: TcpListener)` but the
+    // underlying connection is TLS-wrapped per `TlsListener`'s
+    // configured cert/key. Composes:
+    //   1. Park on listener-readability
+    //      (`karac_park_on_fd(listener.fd, 0u8)`).
+    //   2. Raw `accept(2)` + synchronous rustls handshake
+    //      (`karac_runtime_ws_accept_tls`).
+    //   3. Register the TLS session against the connection fd so
+    //      subsequent `recv_text` / `send_text` calls route
+    //      encryption through rustls automatically (the runtime
+    //      FFI side handles registration).
+    //   4. Read the HTTP/1.1 Upgrade request over TLS, validate the
+    //      `Sec-WebSocket-Key` header, write the 101 Switching
+    //      Protocols response over TLS, return the connection fd
+    //      wrapped in a `WebSocket` struct value.
+    //
+    // **`wss://` flagship demo path.** The Demo 1 slice 2
+    // (`examples/ws_idle_holder`) accept-loop swaps
+    // `TcpListener.bind(...)` for `TlsListener.bind_tls(addr, cert,
+    // key)` and `WebSocket.accept(listener)` for
+    // `WebSocket.accept_tls(listener)`; everything below this
+    // method (`recv_text` / `send_text` / Drop) is unchanged
+    // because the runtime FFIs check the TLS session registry to
+    // dispatch encryption.
+    //
+    // Returns `WebSocket { fd: -1 }` on any failure (accept,
+    // handshake, HTTP upgrade). For v1 the failure modes collapse
+    // into the -1 sentinel — a richer `Result[WebSocket, TlsError]`
+    // shape lands additively when a real consumer needs the
+    // structured-error path.
+    #[compiler_builtin]
+    fn accept_tls(listener: TlsListener) -> WebSocket
+        with sends(Network) receives(Network)
+    {
+        WebSocket { fd: -1 }
+    }
+
     // Park on read-readiness of `self.fd`, then read one RFC 6455
     // TEXT frame from the socket (FIN=1, opcode=0x1, MASK=1 per the
     // client→server convention), unmask the payload, and write up

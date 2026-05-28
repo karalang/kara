@@ -417,6 +417,21 @@ impl<'ctx> super::Codegen<'ctx> {
             let listener_val = self.compile_expr(&_args[0].value)?;
             return self.lower_websocket_accept(listener_val);
         }
+        // Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener:
+        // TlsListener) -> WebSocket`. Same shape as `accept` but the
+        // connection is TLS-wrapped. Lowering in `src/codegen/tls.rs`
+        // extracts both fd and config from the TlsListener, parks on
+        // listener fd, calls `karac_runtime_ws_accept_tls(fd, config)`
+        // which performs TCP accept + rustls handshake + HTTP
+        // upgrade-over-TLS + per-fd TLS session registration. The
+        // returned `WebSocket { fd }` is the same shape as plain-TCP
+        // accept's return; subsequent `recv_text` / `send_text` calls
+        // auto-route through TLS because the runtime FFIs check the
+        // TLS session registry by fd.
+        if type_name == "WebSocket" && method == "accept_tls" && _args.len() == 1 {
+            let listener_val = self.compile_expr(&_args[0].value)?;
+            return self.lower_websocket_accept_tls(listener_val);
+        }
         // Phase 8 `File` handle slice F4: constructor dispatch.
         // `File.open` / `.create` / `.append` lower to the matching
         // `karac_runtime_file_*` extern; the KaracIoResult return

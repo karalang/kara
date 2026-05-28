@@ -113,6 +113,57 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(listener_val.into_struct_value().into())
     }
 
+    /// Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener:
+    /// TlsListener) -> WebSocket`. Composes a TLS-wrapped accept +
+    /// WS HTTP upgrade in one shot through
+    /// `karac_runtime_ws_accept_tls(listener_fd, config)`. The
+    /// kara-level state machine yields on listener-readability via
+    /// `karac_park_on_fd(listener.fd, 0u8)` before the handshake.
+    ///
+    /// Identical shape to `lower_websocket_accept` (plain TCP path)
+    /// except (a) the listener is `TlsListener` so we extract both
+    /// fd and config_ptr, (b) the runtime FFI is the TLS-aware
+    /// variant which additionally registers the connection in the
+    /// per-fd TLS session registry so subsequent `recv_text` /
+    /// `send_text` calls auto-route through TLS.
+    pub(super) fn lower_websocket_accept_tls(
+        &mut self,
+        listener_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (listener_fd, config_ptr) =
+            self.extract_fd_and_config_from_tls_listener(listener_val, "ws.accept_tls.listener");
+
+        let direction = self.context.i8_type().const_int(0, false);
+        self.emit_state_machine_invocation_for_park_on_fd(listener_fd, direction);
+
+        let accept_fn = self
+            .module
+            .get_function("karac_runtime_ws_accept_tls")
+            .expect("karac_runtime_ws_accept_tls declared in Codegen::new");
+        let conn_fd_call = self
+            .builder
+            .build_call(
+                accept_fn,
+                &[listener_fd.into(), config_ptr.into()],
+                "ws.accept_tls.conn_fd",
+            )
+            .expect("call karac_runtime_ws_accept_tls");
+        let conn_fd = conn_fd_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        let ws_ty = self
+            .context
+            .struct_type(&[self.context.i32_type().into()], false);
+        let undef = ws_ty.get_undef();
+        let ws_val = self
+            .builder
+            .build_insert_value(undef, conn_fd, 0, "ws.accept_tls.val")
+            .expect("insert conn_fd into WebSocket struct value");
+        Ok(ws_val.into_struct_value().into())
+    }
+
     /// Lower `TlsListener.accept(ref self) -> TlsStream`: park on
     /// `self.fd` for read-readiness (direction = 0), then call
     /// `karac_runtime_tls_accept(self.fd, self.config)` for the raw

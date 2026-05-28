@@ -1171,8 +1171,7 @@ pub extern "C" fn karac_runtime_tcp_close(fd: i32) -> i32 {
 /// before all bytes arrived), `Err` on syscall failure. Loops past
 /// `EINTR` per the standard convention.
 #[cfg(unix)]
-fn ws_read_exact_or_eof(stream: &mut std::net::TcpStream, buf: &mut [u8]) -> std::io::Result<bool> {
-    use std::io::Read;
+fn ws_read_exact_or_eof<R: std::io::Read>(stream: &mut R, buf: &mut [u8]) -> std::io::Result<bool> {
     let mut got = 0;
     while got < buf.len() {
         match stream.read(&mut buf[got..]) {
@@ -1192,8 +1191,7 @@ fn ws_read_exact_or_eof(stream: &mut std::net::TcpStream, buf: &mut [u8]) -> std
 /// (auto-pong on inbound ping, close response on inbound close).
 /// Returns `true` on success, `false` on any write failure.
 #[cfg(unix)]
-fn ws_write_unmasked_frame(stream: &mut std::net::TcpStream, opcode: u8, payload: &[u8]) -> bool {
-    use std::io::Write;
+fn ws_write_unmasked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload: &[u8]) -> bool {
     debug_assert!(opcode <= 0x0F);
     // Worst-case header: 1 fin/opcode + 1 mask/len-marker + 8
     // extended-len = 10 bytes.
@@ -1343,8 +1341,7 @@ fn ws_generate_mask_key() -> [u8; 4] {
 /// generated per-call via `ws_generate_mask_key`. Returns
 /// `payload.len()` on success, -1 on write failure.
 #[cfg(unix)]
-fn ws_write_masked_frame(stream: &mut std::net::TcpStream, opcode: u8, payload: &[u8]) -> bool {
-    use std::io::Write;
+fn ws_write_masked_frame<W: std::io::Write>(stream: &mut W, opcode: u8, payload: &[u8]) -> bool {
     debug_assert!(opcode <= 0x0F);
     // Header: 1 fin/opcode + 1 mask/len-marker + up to 8 extended-len + 4 mask key.
     let mut header: [u8; 14] = [0; 14];
@@ -1425,12 +1422,33 @@ unsafe fn ws_send_data_frame(fd: i32, msg_ptr: *const u8, msg_len: i64, opcode: 
     if msg_ptr.is_null() && msg_len > 0 {
         return -1;
     }
-    let mut stream = std::net::TcpStream::from_raw_fd(fd);
     let payload: &[u8] = if msg_len > 0 {
         std::slice::from_raw_parts(msg_ptr, msg_len as usize)
     } else {
         &[]
     };
+
+    // Phase 6 line 236 slice 3 — TLS-aware dispatch. If the fd was
+    // registered via `karac_runtime_ws_accept_tls` (or any other
+    // path that called `tls::register_session_for_fd`), the WS
+    // framing must encrypt through rustls. Otherwise plain TCP.
+    if let Some(session) = crate::tls::lookup_session(fd) {
+        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+        let mut sock = std::net::TcpStream::from_raw_fd(fd);
+        let mut transport = TlsConnIo {
+            conn: &mut sess.conn,
+            sock: &mut sock,
+        };
+        let result = if ws_write_unmasked_frame(&mut transport, opcode, payload) {
+            msg_len
+        } else {
+            -1
+        };
+        let _ = sock.into_raw_fd();
+        return result;
+    }
+
+    let mut stream = std::net::TcpStream::from_raw_fd(fd);
     let result = if ws_write_unmasked_frame(&mut stream, opcode, payload) {
         msg_len
     } else {
@@ -1491,21 +1509,59 @@ unsafe fn ws_recv_data_frame(
         return -1;
     }
 
+    // Phase 6 line 236 slice 3 — TLS-aware dispatch. Same shape as
+    // `ws_send_data_frame`: route through rustls when the fd has a
+    // session in the TLS registry. The frame-parser closure is
+    // generic over Read+Write so the same body services both
+    // transports.
+    if let Some(session) = crate::tls::lookup_session(fd) {
+        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+        let mut sock = std::net::TcpStream::from_raw_fd(fd);
+        let mut transport = TlsConnIo {
+            conn: &mut sess.conn,
+            sock: &mut sock,
+        };
+        let result = ws_recv_data_frame_inner(&mut transport, out_ptr, out_max_len, accept_opcode);
+        let _ = sock.into_raw_fd();
+        return result;
+    }
+
     let mut stream = std::net::TcpStream::from_raw_fd(fd);
-    let result = (|| -> i64 {
-        // Reassembly state. `accumulated` is the running byte
-        // count written into `out_ptr`. `in_fragment` flips to
-        // true once we've consumed a FIN=0 data frame; while set,
-        // we expect continuation frames (opcode 0x0) until a
-        // FIN=1 continuation closes the message. Before
-        // `in_fragment` is set, a FIN=1 data frame with
-        // `opcode == accept_opcode` returns immediately
-        // (single-frame message — the slice 9e.3 fast path).
+    let result = ws_recv_data_frame_inner(&mut stream, out_ptr, out_max_len, accept_opcode);
+    let _ = stream.into_raw_fd();
+    result
+}
+
+/// Frame-parser body extracted from `ws_recv_data_frame` so the same
+/// reassembly logic services both plain-TCP and TLS-wrapped
+/// transports. Generic over `Read + Write` so the closure path
+/// remains a thin dispatch wrapper that picks the transport and
+/// forwards.
+///
+/// # Safety
+///
+/// `out_ptr` must point to `out_max_len` writable bytes when
+/// `out_max_len > 0`. Same contract as the public `ws_recv_data_frame`.
+#[cfg(unix)]
+unsafe fn ws_recv_data_frame_inner<S: std::io::Read + std::io::Write>(
+    stream: &mut S,
+    out_ptr: *mut u8,
+    out_max_len: i64,
+    accept_opcode: u8,
+) -> i64 {
+    // Reassembly state. `accumulated` is the running byte count
+    // written into `out_ptr`. `in_fragment` flips to true once we've
+    // consumed a FIN=0 data frame; while set, we expect continuation
+    // frames (opcode 0x0) until a FIN=1 continuation closes the
+    // message. Before `in_fragment` is set, a FIN=1 data frame with
+    // `opcode == accept_opcode` returns immediately (single-frame
+    // message — the slice 9e.3 fast path).
+    {
         let mut accumulated: u64 = 0;
         let mut in_fragment = false;
         loop {
             let mut header2 = [0u8; 2];
-            match ws_read_exact_or_eof(&mut stream, &mut header2) {
+            match ws_read_exact_or_eof(&mut *stream, &mut header2) {
                 Ok(true) => {}
                 Ok(false) => return 0,
                 Err(_) => return -1,
@@ -1524,14 +1580,14 @@ unsafe fn ws_recv_data_frame(
                 0..=125 => len7,
                 126 => {
                     let mut buf = [0u8; 2];
-                    match ws_read_exact_or_eof(&mut stream, &mut buf) {
+                    match ws_read_exact_or_eof(&mut *stream, &mut buf) {
                         Ok(true) => u16::from_be_bytes(buf) as u64,
                         _ => return -1,
                     }
                 }
                 127 => {
                     let mut buf = [0u8; 8];
-                    match ws_read_exact_or_eof(&mut stream, &mut buf) {
+                    match ws_read_exact_or_eof(&mut *stream, &mut buf) {
                         Ok(true) => u64::from_be_bytes(buf),
                         _ => return -1,
                     }
@@ -1540,7 +1596,7 @@ unsafe fn ws_recv_data_frame(
             };
 
             let mut mask_key = [0u8; 4];
-            if !ws_read_exact_or_eof(&mut stream, &mut mask_key).unwrap_or(false) {
+            if !ws_read_exact_or_eof(&mut *stream, &mut mask_key).unwrap_or(false) {
                 return -1;
             }
 
@@ -1555,7 +1611,7 @@ unsafe fn ws_recv_data_frame(
                 }
                 let mut ctrl_payload = [0u8; 125];
                 let slice = &mut ctrl_payload[..payload_len as usize];
-                if payload_len > 0 && !ws_read_exact_or_eof(&mut stream, slice).unwrap_or(false) {
+                if payload_len > 0 && !ws_read_exact_or_eof(&mut *stream, slice).unwrap_or(false) {
                     return -1;
                 }
                 for (i, byte) in slice.iter_mut().enumerate() {
@@ -1563,11 +1619,11 @@ unsafe fn ws_recv_data_frame(
                 }
                 match opcode {
                     0x8 => {
-                        let _ = ws_write_unmasked_frame(&mut stream, 0x8, &[]);
+                        let _ = ws_write_unmasked_frame(&mut *stream, 0x8, &[]);
                         return 0;
                     }
                     0x9 => {
-                        if !ws_write_unmasked_frame(&mut stream, 0xA, slice) {
+                        if !ws_write_unmasked_frame(&mut *stream, 0xA, slice) {
                             return -1;
                         }
                         continue;
@@ -1609,7 +1665,7 @@ unsafe fn ws_recv_data_frame(
                 let off = accumulated as usize;
                 let payload_usize = payload_len as usize;
                 let frag_slice = std::slice::from_raw_parts_mut(out_ptr.add(off), payload_usize);
-                if !ws_read_exact_or_eof(&mut stream, frag_slice).unwrap_or(false) {
+                if !ws_read_exact_or_eof(&mut *stream, frag_slice).unwrap_or(false) {
                     return -1;
                 }
                 for (i, byte) in frag_slice.iter_mut().enumerate() {
@@ -1623,9 +1679,7 @@ unsafe fn ws_recv_data_frame(
             }
             in_fragment = true;
         }
-    })();
-    let _ = stream.into_raw_fd();
-    result
+    }
 }
 
 /// Read one TEXT frame from `fd`, transparently handling any
@@ -1834,8 +1888,7 @@ fn base64_encode(input: &[u8]) -> String {
 /// trailing `\r\n\r\n` on success; `None` on IO error, EOF
 /// before complete request, or oversize request.
 #[cfg(unix)]
-fn ws_read_http_request(stream: &mut std::net::TcpStream) -> Option<Vec<u8>> {
-    use std::io::Read;
+fn ws_read_http_request<R: std::io::Read>(stream: &mut R) -> Option<Vec<u8>> {
     const MAX_REQUEST_SIZE: usize = 8 * 1024;
     let mut buf: Vec<u8> = Vec::with_capacity(1024);
     let mut chunk = [0u8; 1024];
@@ -1979,6 +2032,256 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
     // belongs to the kara `WebSocket` value the caller
     // constructs from this fd (slice-9e.1 + slice-9d Drop chain).
     conn.into_raw_fd()
+}
+
+// ── Phase 6 line 236 slice 3 — WebSocket-over-TLS support ────────────────
+//
+// `TlsConnIo` adapter wraps a borrowed `(ServerConnection, TcpStream)` pair
+// in a `Read + Write` surface so the existing generic helpers
+// (`ws_write_unmasked_frame<W: Write>`, `ws_read_exact_or_eof<R: Read>`,
+// `ws_read_http_request<R: Read>`, `ws_recv_data_frame_inner<S: Read+Write>`)
+// can drive both plain-TCP and TLS-wrapped transports without
+// duplicating the WS framing logic.
+//
+// **Read path** pumps rustls's incoming-packet processor until the
+// reader yields plaintext or hits EOF:
+//
+//   - `conn.reader().read(buf)` → if `Ok(n)` with n>0, return.
+//   - `Ok(0)` means no plaintext buffered; loop pulls ciphertext via
+//     `conn.read_tls(sock)` then `conn.process_new_packets()`.
+//   - `Err(WouldBlock)` from the reader treated same as Ok(0).
+//
+// **Write path** symmetric: write plaintext via `conn.writer()`, then
+// drain `conn.wants_write()` ciphertext via `conn.write_tls(sock)`.
+// `flush` ensures the ciphertext buffer is fully drained.
+
+#[cfg(unix)]
+struct TlsConnIo<'a> {
+    conn: &'a mut rustls::ServerConnection,
+    sock: &'a mut std::net::TcpStream,
+}
+
+#[cfg(unix)]
+impl<'a> std::io::Read for TlsConnIo<'a> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.conn.reader().read(buf) {
+                Ok(0) => {
+                    if !self.conn.wants_read() {
+                        return Ok(0); // clean EOF (close_notify)
+                    }
+                    match self.conn.read_tls(self.sock) {
+                        Ok(0) => return Ok(0), // socket EOF
+                        Ok(_) => {
+                            if self.conn.process_new_packets().is_err() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "tls process_new_packets failed",
+                                ));
+                            }
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                Ok(n) => return Ok(n),
+                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+                    if !self.conn.wants_read() {
+                        return Ok(0);
+                    }
+                    match self.conn.read_tls(self.sock) {
+                        Ok(0) => return Ok(0),
+                        Ok(_) => {
+                            if self.conn.process_new_packets().is_err() {
+                                return Err(std::io::Error::new(
+                                    std::io::ErrorKind::InvalidData,
+                                    "tls process_new_packets failed",
+                                ));
+                            }
+                            continue;
+                        }
+                        Err(e) => return Err(e),
+                    }
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
+}
+
+#[cfg(unix)]
+impl<'a> std::io::Write for TlsConnIo<'a> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let n = self.conn.writer().write(buf)?;
+        self.flush()?;
+        Ok(n)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        while self.conn.wants_write() {
+            self.conn.write_tls(self.sock)?;
+        }
+        Ok(())
+    }
+}
+
+/// Phase 6 line 236 slice 3 — server-side WebSocket-over-TLS handshake.
+///
+/// Mirror of [`karac_runtime_ws_accept`] but the underlying connection
+/// is TLS-wrapped: TCP accept → rustls handshake → HTTP upgrade
+/// exchange (over the encrypted transport) → register the session in
+/// `tls::SESSIONS` so subsequent `ws_recv_text` / `ws_send_text` calls
+/// route encryption through rustls automatically.
+///
+/// Returns the upgraded connection fd on success or `-1` on any
+/// failure (accept failure, handshake failure, HTTP upgrade error,
+/// `ServerConnection::new` error). On failure, every allocated
+/// resource (raw fd, ServerConnection) drops here so the caller is
+/// not responsible for cleanup.
+///
+/// **Synchronous handshake (v1).** Same trade-off as
+/// [`karac_runtime_tls_accept`] — handshake blocks the worker thread.
+/// A non-blocking re-park variant lands in a follow-on slice if M1
+/// throughput surfaces it as the bottleneck.
+///
+/// **Session registration order.** The session is inserted into
+/// `SESSIONS` AFTER the rustls handshake completes but BEFORE the
+/// HTTP upgrade exchange. Tha way the HTTP exchange runs over TLS
+/// (via the `TlsConnIo` wrapper looking up the just-registered
+/// session) and the WS framing FFIs that read/write the connection
+/// later find the session already in place. If the HTTP upgrade
+/// fails, the session is removed and the fd closes.
+///
+/// # Safety
+///
+/// `listener_fd` must be a valid TCP listener socket; `config` must
+/// be a non-null pointer obtained from `karac_runtime_tls_config_new`.
+/// Same constraints as `karac_runtime_tls_accept`.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
+    listener_fd: i32,
+    config: *mut crate::tls::KaracTlsConfig,
+) -> i32 {
+    use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
+
+    if listener_fd < 0 || config.is_null() {
+        return -1;
+    }
+
+    // Raw accept(2) on the TCP listener (caller has already parked).
+    let listener = std::net::TcpListener::from_raw_fd(listener_fd);
+    let accept_result = listener.accept();
+    let _ = listener.into_raw_fd();
+    let (mut sock, _addr) = match accept_result {
+        Ok(p) => p,
+        Err(_) => return -1,
+    };
+
+    // Build a fresh ServerConnection using the borrowed config.
+    let config_arc = crate::tls::clone_config_arc(config);
+    let mut conn = match rustls::ServerConnection::new(config_arc) {
+        Ok(c) => c,
+        Err(_) => return -1, // sock drops here, closing the fd.
+    };
+
+    // Drive the TLS handshake to completion against the blocking
+    // socket. complete_io loops until handshaking is done.
+    if conn.complete_io(&mut sock).is_err() {
+        return -1; // sock drops here.
+    }
+
+    // Register the session keyed by the fd BEFORE the HTTP upgrade
+    // so the TlsConnIo wrapper used by the upgrade machinery finds
+    // it. The fd ownership stays with `sock` for now; we'll
+    // `into_raw_fd` it at the end.
+    let fd = sock.as_raw_fd();
+    crate::tls::register_session_for_fd(fd, conn);
+
+    // HTTP upgrade exchange over TLS. The `TlsConnIo` wrapper drives
+    // the rustls session against the existing socket. Look up the
+    // session we just inserted so the wrapper holds a borrowed
+    // ServerConnection.
+    let upgrade_ok = {
+        let session = match crate::tls::lookup_session(fd) {
+            Some(s) => s,
+            None => {
+                // Couldn't find what we just inserted — shouldn't
+                // happen, but failure-mode the connection clean.
+                let _ = sock.into_raw_fd();
+                let _ = crate::tls::karac_runtime_tls_close(fd);
+                return -1;
+            }
+        };
+        let mut sess = session.lock().unwrap_or_else(|p| p.into_inner());
+        let mut transport = TlsConnIo {
+            conn: &mut sess.conn,
+            sock: &mut sock,
+        };
+        ws_drive_upgrade_handshake(&mut transport)
+    };
+
+    if !upgrade_ok {
+        // HTTP upgrade failed (malformed request, missing key
+        // header, etc.). Pull the session out of the registry and
+        // close the fd.
+        let _ = sock.into_raw_fd();
+        let _ = crate::tls::karac_runtime_tls_close(fd);
+        return -1;
+    }
+
+    // Success — relinquish the TcpStream's destructor so the fd
+    // stays open. The kara `WebSocket` value the caller constructs
+    // owns close-on-drop now.
+    sock.into_raw_fd()
+}
+
+/// Drive the RFC 6455 server-side HTTP upgrade exchange over the
+/// supplied `Read + Write` transport. Returns `true` on a complete
+/// 101 handshake, `false` on any failure (IO error, malformed
+/// request, missing Sec-WebSocket-Key).
+///
+/// Shared with [`karac_runtime_ws_accept_tls`]; the plain-TCP
+/// equivalent lives inline in [`karac_runtime_ws_accept`] above
+/// and predates the generic-transport refactor.
+#[cfg(unix)]
+fn ws_drive_upgrade_handshake<S: std::io::Read + std::io::Write>(stream: &mut S) -> bool {
+    let request = match ws_read_http_request(stream) {
+        Some(b) => b,
+        None => return false,
+    };
+    let key = match extract_sec_websocket_key(&request) {
+        Some(k) => k,
+        None => {
+            let resp =
+                b"HTTP/1.1 400 Bad Request\r\nConnection: close\r\nContent-Length: 0\r\n\r\n";
+            let _ = stream.write_all(resp);
+            return false;
+        }
+    };
+    let mut digest_input: Vec<u8> = Vec::with_capacity(key.len() + WS_HANDSHAKE_GUID.len());
+    digest_input.extend_from_slice(key);
+    digest_input.extend_from_slice(WS_HANDSHAKE_GUID);
+    let digest = sha1(&digest_input);
+    let accept = base64_encode(&digest);
+
+    let response = format!(
+        "HTTP/1.1 101 Switching Protocols\r\n\
+         Upgrade: websocket\r\n\
+         Connection: Upgrade\r\n\
+         Sec-WebSocket-Accept: {}\r\n\
+         \r\n",
+        accept
+    );
+    if stream.write_all(response.as_bytes()).is_err() {
+        return false;
+    }
+    // Flush for TLS — the rustls writer buffers ciphertext until
+    // explicit flush drains it through write_tls. For plain TCP
+    // this is a no-op.
+    if stream.flush().is_err() {
+        return false;
+    }
+    true
 }
 
 // ── Scheduler dispatcher (Phase 6 line 17 slice 4) ────────────────────────

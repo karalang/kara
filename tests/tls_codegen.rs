@@ -280,6 +280,98 @@ fn main() {}
     }
 
     #[test]
+    fn test_ir_ws_accept_tls_runtime_ffi_declared() {
+        // Phase 6 line 236 slice 3 — the WS-over-TLS accept FFI
+        // declaration is emitted by `Codegen::new` unconditionally,
+        // so any program (incl. trivial main) carries it.
+        let ir = ir_for("fn main() {}");
+        assert!(
+            ir.contains("karac_runtime_ws_accept_tls"),
+            "expected declaration of `karac_runtime_ws_accept_tls` in IR"
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_accept_tls_parks_then_calls_runtime_ffi() {
+        // Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener)`
+        // parks on listener-readability then calls into
+        // `karac_runtime_ws_accept_tls(fd, config)`. The result is
+        // a `WebSocket { fd }` struct value.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let ws: WebSocket = WebSocket.accept_tls(listener);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("@karac_park_on_fd") || main_body.contains("kara.park.poll_loop"),
+            "accept_tls should park before the handshake; body was:\n{}",
+            main_body
+        );
+        assert!(
+            main_body.contains("call i32 @karac_runtime_ws_accept_tls("),
+            "accept_tls should call _ws_accept_tls; body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_websocket_accept_tls_returns_websocket_struct_shape() {
+        // The lowering packs the conn fd into a `WebSocket { i32 }`
+        // struct value via insert_value — same shape as the plain-
+        // TCP `WebSocket.accept(listener)` lowering — so subsequent
+        // `recv_text` / `send_text` / Drop dispatch lands on the
+        // same WebSocket value-model branch.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let ws: WebSocket = WebSocket.accept_tls(listener);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        // `insertvalue` packing the i32 fd into the WebSocket struct.
+        assert!(
+            main_body.contains("insertvalue") && main_body.contains("ws.accept_tls.val"),
+            "accept_tls should insertvalue the conn_fd into the WebSocket struct; \
+             body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
+    fn test_ir_ws_recv_text_routes_through_runtime_ffi_for_tls_accept_result() {
+        // The WS framing FFIs (`karac_runtime_ws_recv_text` /
+        // `_send_text`) auto-dispatch through TLS at runtime by
+        // looking up the fd in the TLS session registry. From a
+        // codegen perspective the recv_text dispatch is unchanged
+        // (same FFI symbol regardless of underlying transport) —
+        // this test guards that the lowering still routes there
+        // when the WebSocket came from `accept_tls`.
+        let ir = ir_for(
+            r#"
+fn main() {
+    let listener: TlsListener = TlsListener.bind_tls("127.0.0.1:0", "c", "k");
+    let ws: WebSocket = WebSocket.accept_tls(listener);
+    let mut buf: Array[u8, 64] = [0u8; 64];
+    let _ = ws.recv_text(mut buf);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call i64 @karac_runtime_ws_recv_text("),
+            "recv_text should still dispatch to _ws_recv_text after accept_tls; \
+             body was:\n{}",
+            main_body
+        );
+    }
+
+    #[test]
     fn test_ir_tls_stream_by_value_param_uses_struct_type() {
         let ir = ir_for(
             r#"
