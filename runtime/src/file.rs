@@ -39,7 +39,12 @@
 //! `std::alloc::alloc`'d byte buffer of length `error_msg_len`; the
 //! Kāra-side codegen takes ownership and frees through the standard
 //! `String` drop path (`{ptr, len, cap}` triple where `cap == len`).
-//! For all other tags `error_msg_ptr` is null and `_len` is zero.
+//! For all other *error* tags `error_msg_ptr` is null and `_len` is
+//! zero. One success path also uses these fields: `read_to_string`
+//! returns `kind == 0` with the file's UTF-8 bytes in
+//! `error_msg_ptr` / `error_msg_len` (its Ok payload is a `String`,
+//! which doesn't fit the single-i64 `value` field) — codegen's
+//! `FileOkKind::StringPayload` arm rebuilds the `String` from them.
 //!
 //! ## Lifetime model
 //!
@@ -127,6 +132,45 @@ fn ok(value: i64) -> KaracIoResult {
         _pad: 0,
         error_msg_ptr: ptr::null_mut(),
         error_msg_len: 0,
+    }
+}
+
+/// Build a successful result carrying an owned UTF-8 byte buffer in the
+/// `error_msg_ptr` / `error_msg_len` fields. Those fields normally hold
+/// the `IoError.Other` message and are null on success — but for
+/// `read_to_string` (whose Ok payload is a `String`, not a single i64
+/// `value`) they are reused to carry the success content. Codegen's
+/// `FileOkKind::StringPayload` arm rebuilds the Kāra `String` aggregate
+/// `{ptr, len, cap}` (cap == len) from these two fields; the same drop
+/// path that frees an `Other` message frees this buffer. The empty
+/// string returns a null pointer + zero length — the `{null, 0, 0}`
+/// String shape with `cap == 0`, which the drop path skips.
+fn ok_string(s: &str) -> KaracIoResult {
+    let bytes = s.as_bytes();
+    if bytes.is_empty() {
+        return KaracIoResult {
+            value: 0,
+            error_kind: 0,
+            _pad: 0,
+            error_msg_ptr: ptr::null_mut(),
+            error_msg_len: 0,
+        };
+    }
+    // SAFETY: layout is valid (non-zero length, byte alignment).
+    let layout = Layout::array::<u8>(bytes.len()).expect("file contents layout");
+    let buf = unsafe { alloc(layout) };
+    if buf.is_null() {
+        std::alloc::handle_alloc_error(layout);
+    }
+    unsafe {
+        ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+    }
+    KaracIoResult {
+        value: 0,
+        error_kind: 0,
+        _pad: 0,
+        error_msg_ptr: buf,
+        error_msg_len: bytes.len() as i64,
     }
 }
 
@@ -315,6 +359,42 @@ pub unsafe extern "C" fn karac_runtime_file_append(
             }));
             ok(handle as i64)
         }
+        Err(e) => err(&e),
+    };
+}
+
+/// Read the entire contents of `path` into a UTF-8 `String`. Codegen
+/// emits this for `FileSystem.read_to_string(path)` — a one-shot
+/// slurp that needs no live `File` handle (unlike the `_open` + `_read`
+/// loop). On success the string bytes are returned through
+/// `out.error_msg_ptr` / `out.error_msg_len` (the success-payload reuse
+/// of the buffer fields described in the module header) with
+/// `out.error_kind == 0`; codegen's `FileOkKind::StringPayload` arm
+/// rebuilds the `String` aggregate from them. Non-UTF-8 file contents
+/// map to `IoError.InvalidUtf8` (tag 5) via `std::fs::read_to_string`'s
+/// own `ErrorKind::InvalidData`.
+///
+/// # Safety
+///
+/// `out` must point to a writable, suitably-aligned `KaracIoResult`
+/// slot. `path_ptr` must point to `path_len` valid bytes of UTF-8 text.
+/// On success the buffer in `out.error_msg_ptr` is owned by the caller
+/// and freed through the Kāra `String` drop path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_file_read_to_string(
+    out: *mut KaracIoResult,
+    path_ptr: *const u8,
+    path_len: i64,
+) {
+    let Some(path) = read_path(path_ptr, path_len) else {
+        *out = err(&std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "path is not valid UTF-8",
+        ));
+        return;
+    };
+    *out = match std::fs::read_to_string(&path) {
+        Ok(s) => ok_string(&s),
         Err(e) => err(&e),
     };
 }
@@ -620,5 +700,65 @@ mod tests {
         let contents = std::fs::read(&tmp).expect("read temp");
         assert_eq!(contents, b"first second");
         let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_read_to_string_returns_contents_in_msg_buffer() {
+        let tmp = std::env::temp_dir().join("karac_runtime_read_to_string.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"hello\nworld\n").expect("seed temp");
+        let path_str = tmp.to_str().unwrap();
+        let path_bytes = path_str.as_bytes();
+
+        unsafe {
+            let mut res = fresh_result();
+            karac_runtime_file_read_to_string(
+                &mut res,
+                path_bytes.as_ptr(),
+                path_bytes.len() as i64,
+            );
+            assert_eq!(res.error_kind, 0, "expected Ok");
+            assert!(!res.error_msg_ptr.is_null());
+            assert_eq!(res.error_msg_len, 12);
+            let slice = std::slice::from_raw_parts(res.error_msg_ptr, res.error_msg_len as usize);
+            assert_eq!(slice, b"hello\nworld\n");
+            // Free the buffer the way the Kāra String drop path would.
+            let layout = Layout::array::<u8>(res.error_msg_len as usize).unwrap();
+            std::alloc::dealloc(res.error_msg_ptr, layout);
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_read_to_string_empty_file_is_null_zero() {
+        let tmp = std::env::temp_dir().join("karac_runtime_read_to_string_empty.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"").expect("seed temp");
+        let path_str = tmp.to_str().unwrap();
+        let path_bytes = path_str.as_bytes();
+
+        unsafe {
+            let mut res = fresh_result();
+            karac_runtime_file_read_to_string(
+                &mut res,
+                path_bytes.as_ptr(),
+                path_bytes.len() as i64,
+            );
+            assert_eq!(res.error_kind, 0);
+            assert!(res.error_msg_ptr.is_null());
+            assert_eq!(res.error_msg_len, 0);
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_read_to_string_nonexistent_returns_not_found() {
+        let path = b"/nonexistent_karac_read_to_string_test.txt";
+        unsafe {
+            let mut res = fresh_result();
+            karac_runtime_file_read_to_string(&mut res, path.as_ptr(), path.len() as i64);
+            assert_eq!(res.error_kind, 1, "expected NotFound tag");
+            assert!(res.error_msg_ptr.is_null());
+        }
     }
 }

@@ -22939,6 +22939,159 @@ fn main() with reads(FileSystem) writes(FileSystem) {{
         let _ = std::fs::remove_file(&tmp);
     }
 
+    // ── Phase 6 line 236 follow-on (a): FileSystem.read_to_string ──
+    //
+    // `FileSystem.read_to_string(path) -> Result[String, IoError]`
+    // had no codegen lowering — the call fell through to `i64 0`, so a
+    // `match FileSystem.read_to_string(p) { Ok(s) => ..., Err(_) => ...}`
+    // matched an IntValue scrutinee against a variant pattern and the
+    // binding never registered, surfacing as "Undefined variable 's'".
+    // That symptom was originally mis-filed as a separate match-arm
+    // codegen bug (follow-on (b)); it was always this missing lowering.
+    // The lowering returns the file's bytes through the KaracIoResult
+    // buffer fields (the `StringPayload` Ok arm) and rebuilds the
+    // `String` aggregate.
+
+    #[test]
+    fn test_ir_read_to_string_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn load(path: String) -> String {
+    match FileSystem.read_to_string(path) {
+        Ok(s) => s,
+        Err(_) => "",
+    }
+}
+"#,
+        );
+        assert!(
+            ir.contains("declare void @karac_runtime_file_read_to_string"),
+            "expected read_to_string FFI declaration; ir:\n{ir}"
+        );
+        let body = function_body(&ir, "load").expect("load fn must lower");
+        assert!(
+            body.contains("call void @karac_runtime_file_read_to_string"),
+            "load body should call the FFI; body:\n{body}"
+        );
+    }
+
+    #[test]
+    fn test_ir_read_to_string_builds_string_result_aggregate() {
+        // The StringPayload Ok arm packs {ptr, len, cap=len} into the
+        // Result.Ok payload words — pinned by the named GEPs.
+        let ir = ir_for(
+            r#"
+fn load(path: String) -> Result[String, IoError] {
+    FileSystem.read_to_string(path)
+}
+"#,
+        );
+        let body = function_body(&ir, "load").expect("load fn must lower");
+        for needle in ["ok.str.ptr", "ok.str.len", "ok.str.cap"] {
+            assert!(
+                body.contains(needle),
+                "expected String-payload GEP '{needle}'; body:\n{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_ir_read_to_string_match_binding_compiles() {
+        // The exact shape that produced "Undefined variable" before the
+        // lowering existed. Codegen must succeed (ir_for `.expect`s it).
+        let ir = ir_for(
+            r#"
+fn read_cert(path: String) -> String {
+    match FileSystem.read_to_string(path) {
+        Ok(cert_bytes) => cert_bytes,
+        Err(_) => "",
+    }
+}
+"#,
+        );
+        assert!(function_body(&ir, "read_cert").is_some());
+    }
+
+    // Regression guards documenting that the match-arm tail-binding path
+    // (originally suspected as follow-on (b)) was never broken: a real
+    // `Result` scrutinee binds correctly both as a bare tail expression
+    // and inside a block body. The earlier failure was solely the
+    // missing read_to_string lowering above (an i64 scrutinee).
+    #[test]
+    fn test_ir_match_tail_binding_real_result_ok() {
+        let ir = ir_for(
+            r#"
+fn unwrap_or_zero(r: Result[i64, i64]) -> i64 {
+    match r {
+        Ok(b) => b,
+        Err(_) => 0,
+    }
+}
+"#,
+        );
+        assert!(function_body(&ir, "unwrap_or_zero").is_some());
+    }
+
+    #[test]
+    fn test_ir_match_block_binding_real_result_ok() {
+        let ir = ir_for(
+            r#"
+fn unwrap_or_zero(r: Result[i64, i64]) -> i64 {
+    match r {
+        Ok(b) => { b }
+        Err(_) => 0,
+    }
+}
+"#,
+        );
+        assert!(function_body(&ir, "unwrap_or_zero").is_some());
+    }
+
+    #[test]
+    fn test_e2e_read_to_string_roundtrip() {
+        // Write a file outside Kāra, read it back through
+        // FileSystem.read_to_string, print the contents.
+        let tmp = std::env::temp_dir().join("karac_e2e_read_to_string.txt");
+        let _ = std::fs::remove_file(&tmp);
+        std::fs::write(&tmp, b"alpha\nbeta\n").expect("seed temp");
+        let path = tmp.to_str().unwrap().replace('\\', "\\\\");
+        let src = format!(
+            r#"
+fn main() with reads(FileSystem) {{
+    match FileSystem.read_to_string("{path}") {{
+        Ok(s) => print(s),
+        Err(_) => println("read-err"),
+    }}
+}}
+"#
+        );
+        let out = run_program(&src);
+        if let Some(out) = out {
+            assert_eq!(out, "alpha\nbeta\n");
+        }
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn test_e2e_read_to_string_nonexistent_is_not_found() {
+        let out = run_program(
+            r#"
+fn main() with reads(FileSystem) {
+    match FileSystem.read_to_string("/nonexistent_karac_rts_test.txt") {
+        Ok(_) => println("unexpected-ok"),
+        Err(e) => match e {
+            IoError.NotFound => println("not-found"),
+            _ => println("other"),
+        },
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "not-found");
+        }
+    }
+
     // ── Phase 6 line 218 slice 4: spawn() / TaskGroup.spawn() / TaskHandle.join() codegen ──
 
     /// Free `spawn(|| make_zero())` emits a synthesized SpawnFn wrapper

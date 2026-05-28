@@ -450,6 +450,15 @@ impl<'ctx> super::Codegen<'ctx> {
             return self.compile_file_constructor(sym, &_args[0].value);
         }
 
+        // `FileSystem.read_to_string(path) -> Result[String, IoError]`.
+        // One-shot whole-file slurp; lowers to
+        // `karac_runtime_file_read_to_string` and unpacks the
+        // String-payload KaracIoResult. (Distinct from the no-arg
+        // `Stdin.read_to_string`, which stays a placeholder.)
+        if type_name == "FileSystem" && method == "read_to_string" && _args.len() == 1 {
+            return self.compile_file_read_to_string(&_args[0].value);
+        }
+
         if type_name == "Server" && method == "serve_static" && _args.len() == 2 {
             {
                 let addr_val = self.compile_expr(&_args[0].value)?;

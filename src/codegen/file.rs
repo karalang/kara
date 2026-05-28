@@ -52,11 +52,19 @@ use inkwell::IntPredicate;
 ///   - `ByteCount` — `value` is a non-negative byte count; stored as
 ///     i64.
 ///   - `Unit` — Ok-arm ignores `value`; the payload word is zero.
+///   - `StringPayload` — the Ok value is a `String`, not a single
+///     i64. The runtime returns its UTF-8 bytes through the
+///     `error_msg_ptr` / `error_msg_len` buffer fields (the
+///     success-payload reuse documented in `runtime/src/file.rs`);
+///     the Ok arm rebuilds the `{ptr, len, cap}` aggregate (cap =
+///     len) into Result payload words 0/1/2. Backs
+///     `FileSystem.read_to_string`.
 #[derive(Clone, Copy)]
 pub(super) enum FileOkKind {
     FileHandle,
     ByteCount,
     Unit,
+    StringPayload,
 }
 
 impl<'ctx> super::Codegen<'ctx> {
@@ -159,25 +167,70 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         self.builder.build_store(tag_ptr_ok, ok_tag).unwrap();
 
-        // Ok payload word 0 (Result field 1) — shape depends on `ok_kind`.
-        let ok_payload_w0 = match ok_kind {
-            FileOkKind::FileHandle | FileOkKind::ByteCount => value_i64,
-            FileOkKind::Unit => zero_i64,
-        };
-        if total_fields > 1 {
-            let p1 = self
-                .builder
-                .build_struct_gep(result_ty, result_slot, 1, "ok.w0")
-                .unwrap();
-            self.builder.build_store(p1, ok_payload_w0).unwrap();
-        }
-        // Zero the remaining payload words.
-        for w in 2..total_fields {
-            let elem_ptr = self
-                .builder
-                .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
-                .unwrap();
-            self.builder.build_store(elem_ptr, zero_i64).unwrap();
+        match ok_kind {
+            // String Ok payload: rebuild the `{ptr, len, cap}` aggregate
+            // into Result payload words 0/1/2 (Result fields 1/2/3) from
+            // the buffer fields the runtime reused for the success path.
+            // `cap == len` (the runtime allocated exactly `len` bytes);
+            // the pattern-bound String's drop frees it through the
+            // standard 3-word path. Remaining words (field 4) are zeroed.
+            FileOkKind::StringPayload => {
+                let str_ptr_int = self
+                    .builder
+                    .build_ptr_to_int(msg_ptr, i64_ty, "ok.str.ptr.i64")
+                    .unwrap();
+                if total_fields > 1 {
+                    let p1 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 1, "ok.str.ptr")
+                        .unwrap();
+                    self.builder.build_store(p1, str_ptr_int).unwrap();
+                }
+                if total_fields > 2 {
+                    let p2 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 2, "ok.str.len")
+                        .unwrap();
+                    self.builder.build_store(p2, msg_len).unwrap();
+                }
+                if total_fields > 3 {
+                    let p3 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 3, "ok.str.cap")
+                        .unwrap();
+                    self.builder.build_store(p3, msg_len).unwrap();
+                }
+                for w in 4..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_i64).unwrap();
+                }
+            }
+            // Single-word Ok payload (handle / byte count / unit).
+            _ => {
+                let ok_payload_w0 = match ok_kind {
+                    FileOkKind::FileHandle | FileOkKind::ByteCount => value_i64,
+                    FileOkKind::Unit => zero_i64,
+                    FileOkKind::StringPayload => unreachable!("handled above"),
+                };
+                if total_fields > 1 {
+                    let p1 = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, 1, "ok.w0")
+                        .unwrap();
+                    self.builder.build_store(p1, ok_payload_w0).unwrap();
+                }
+                // Zero the remaining payload words.
+                for w in 2..total_fields {
+                    let elem_ptr = self
+                        .builder
+                        .build_struct_gep(result_ty, result_slot, w as u32, &format!("ok.w{w}"))
+                        .unwrap();
+                    self.builder.build_store(elem_ptr, zero_i64).unwrap();
+                }
+            }
         }
         self.builder.build_unconditional_branch(cont_bb).unwrap();
 
@@ -304,6 +357,47 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
         self.lower_kara_io_result(slot, FileOkKind::FileHandle)
+    }
+
+    /// Compile `FileSystem.read_to_string(path)` — slurp the whole file
+    /// at `path` into a `String`. Returns `Result[String, IoError]`.
+    /// Unlike the `File` handle family this needs no live handle: the
+    /// runtime opens, reads, and closes in one call, returning the
+    /// UTF-8 bytes through the KaracIoResult buffer fields that the
+    /// `StringPayload` Ok arm rebuilds into the `String` aggregate.
+    pub(super) fn compile_file_read_to_string(
+        &mut self,
+        path_arg: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let path_val = self.compile_expr(path_arg)?;
+        let path_sv = path_val.into_struct_value();
+        let path_ptr = self
+            .builder
+            .build_extract_value(path_sv, 0, "path.ptr")
+            .unwrap()
+            .into_pointer_value();
+        let path_len = self
+            .builder
+            .build_extract_value(path_sv, 1, "path.len")
+            .unwrap()
+            .into_int_value();
+        let slot = self.alloca_io_result_slot()?;
+        let f = self
+            .module
+            .get_function("karac_runtime_file_read_to_string")
+            .expect("karac_runtime_file_read_to_string declared in Codegen::new");
+        self.builder
+            .build_call(
+                f,
+                &[
+                    BasicMetadataValueEnum::PointerValue(slot),
+                    BasicMetadataValueEnum::PointerValue(path_ptr),
+                    BasicMetadataValueEnum::IntValue(path_len),
+                ],
+                "file.rts.call",
+            )
+            .unwrap();
+        self.lower_kara_io_result(slot, FileOkKind::StringPayload)
     }
 
     /// Compile `file.read(buf)` — reads up to `buf.len()` bytes into

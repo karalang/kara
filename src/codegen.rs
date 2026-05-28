@@ -1440,6 +1440,10 @@ impl<'ctx> Codegen<'ctx> {
             "karac_runtime_file_open",
             "karac_runtime_file_create",
             "karac_runtime_file_append",
+            // `FileSystem.read_to_string(path)` — same (out, path_ptr,
+            // path_len) shape as the open-family; returns its String
+            // payload through the KaracIoResult buffer fields.
+            "karac_runtime_file_read_to_string",
         ] {
             module.add_function(sym, file_open_type, Some(Linkage::External));
         }
