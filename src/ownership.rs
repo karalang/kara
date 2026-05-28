@@ -19,6 +19,7 @@ mod capture_body;
 mod closure_escape;
 mod concurrent_shared;
 mod expr_check;
+mod par_capture_classify;
 mod par_helpers;
 mod rc_promote;
 
@@ -55,6 +56,34 @@ impl std::fmt::Display for OwnershipMode {
             OwnershipMode::MutRef => write!(f, "mut ref"),
         }
     }
+}
+
+/// Per-binding capture mode for `par {}` block captures — phase-7
+/// codegen tracker line 227 (L227). Drives codegen's per-capture
+/// lowering in `emit_par_branch_fn`: `Copy` keeps the existing
+/// by-value-through-env behavior (primitives, pointers without
+/// refcount concerns); `SharedRc` adds an atomic rc_inc in the branch
+/// prologue and `track_rc_var` registration so the branch-exit
+/// cleanup balances the refcount with an atomic rc_dec. Captures not
+/// classified here fall through to `Copy` semantics — the latent
+/// miscompile risk for owned heap types (Vec / String / owned struct)
+/// is documented as a v1 limitation; the diagnostic for that case
+/// piggybacks on the existing `E_CONCURRENT_SHARED_STRUCT` /
+/// `E_CONCURRENT_PLAIN_STRUCT` family.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParCaptureMode {
+    /// Primitive or pointer value with no refcount semantics. Pass
+    /// by value through the env struct; no inc/dec, no cleanup
+    /// registration. Default for i*, u*, f*, bool, char, and any
+    /// type the classifier does not promote.
+    Copy,
+    /// `shared struct` / `shared enum` capture. Pointer copied
+    /// through the env struct, but each branch's prologue emits one
+    /// `atomic rc_inc` so the branch holds its own reference, paired
+    /// with a `track_rc_var` so the branch-exit scope cleanup dec's
+    /// it back. The parent's owning reference stays live across the
+    /// par run (parent doesn't dec until `karac_par_run` returns).
+    SharedRc,
 }
 
 /// A capture path recorded by the disjoint-closure-capture analyser
@@ -554,6 +583,23 @@ pub struct OwnershipCheckResult {
     /// environment layout (slice 4) consume this map without changing
     /// existing per-name semantics.
     pub closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    /// Per-`par {}` block capture modes — phase-7 codegen tracker
+    /// line 227 (L227). Keyed by the par expression's `SpanKey`. Each
+    /// entry lists the captures the codegen path-collector sees
+    /// (free identifiers referenced inside the par body that resolve
+    /// to outer-scope bindings) paired with the inferred
+    /// [`ParCaptureMode`] — currently `SharedRc` for `shared struct`
+    /// / `shared enum` captures (codegen emits one atomic rc_inc per
+    /// branch plus `track_rc_var` registration to keep refcounts
+    /// balanced through the branch's scope-exit cleanup), `Copy` for
+    /// everything else (current by-value-through-env behavior).
+    /// Captures not present in this map fall through to `Copy`
+    /// behavior. Missing entries (par block not analysed because the
+    /// pre-walk didn't reach it under error recovery) are also
+    /// treated as `Copy` — never `SharedRc` by default, so the
+    /// classifier failing to fire degrades to today's behavior
+    /// rather than emitting an inc against a non-RC payload.
+    pub par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-closure whole-root capture *reasons* — line 353 phase-5
     /// checklist disjoint-capture slice 6. Keyed by the closure
     /// expression's `SpanKey`. The inner map is per captured root
@@ -714,6 +760,12 @@ pub struct OwnershipChecker<'a> {
     /// overlap detection (see `classify_capture_path_mutations`).
     /// Surfaced via `OwnershipCheckResult::closure_capture_path_modes`.
     pub(crate) closure_capture_path_modes: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    /// Per-par-block capture modes — phase-7 L227. Populated by
+    /// `classify_par_capture_modes` in a final pass over the program
+    /// (after typecheck data is available via `typecheck_result`),
+    /// keyed by the par expression's `SpanKey`. Surfaced via
+    /// `OwnershipCheckResult::par_capture_modes`.
+    pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-closure whole-root capture reasons — line 353 phase-5
     /// checklist disjoint-capture slice 6. Populated alongside
     /// `closure_capture_paths` in `check_expr_consuming`'s Closure arm
@@ -870,6 +922,7 @@ impl<'a> OwnershipChecker<'a> {
             closure_captures: HashMap::new(),
             closure_capture_paths: HashMap::new(),
             closure_capture_path_modes: HashMap::new(),
+            par_capture_modes: HashMap::new(),
             whole_root_capture_reasons: HashMap::new(),
             closure_function: HashMap::new(),
             closure_spans: HashMap::new(),
@@ -914,6 +967,7 @@ impl<'a> OwnershipChecker<'a> {
         self.enforce_no_rc_attrs();
         self.enforce_rc_budget();
         self.check_concurrent_shared_struct();
+        self.classify_par_capture_modes();
 
         // Build representations: parameter modes first, then overlay RC/Arc
         // for any binding (parameter or local) flagged by Phase 1/2.
@@ -959,6 +1013,7 @@ impl<'a> OwnershipChecker<'a> {
             closure_captures: self.closure_captures,
             closure_capture_paths: self.closure_capture_paths,
             closure_capture_path_modes: self.closure_capture_path_modes,
+            par_capture_modes: self.par_capture_modes,
             whole_root_capture_reasons: self.whole_root_capture_reasons,
             closure_function: self.closure_function,
             closure_spans: self.closure_spans,

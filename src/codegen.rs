@@ -18,7 +18,7 @@ use inkwell::AddressSpace;
 
 use crate::ast::*;
 use crate::concurrency::{ConcurrencyAnalysis, FunctionConcurrency};
-use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode};
+use crate::ownership::{CapturePath, OwnershipCheckResult, OwnershipMode, ParCaptureMode};
 use crate::resolver::SpanKey;
 use crate::token::Span;
 
@@ -775,6 +775,17 @@ pub(super) struct Codegen<'ctx> {
     /// path and any codegen-only tests that don't run the ownership
     /// pass).
     pub(crate) closure_capture_paths: HashMap<SpanKey, Vec<(CapturePath, OwnershipMode)>>,
+    /// Per-`par {}` block capture modes — phase-7 L227. Threaded from
+    /// `OwnershipCheckResult::par_capture_modes`. Keyed by the par
+    /// expression's `SpanKey`. Consumed in `emit_par_branch_fn`'s
+    /// capture-unpack loop: a `(name, ParCaptureMode::SharedRc)`
+    /// entry triggers atomic rc_inc + `track_rc_var` registration so
+    /// the branch's scope-exit cleanup decs the heap pointer. Names
+    /// absent from this map (or par blocks absent from the outer
+    /// map) fall through to today's by-value-through-env copy
+    /// behavior. Empty when codegen runs without an ownership pass
+    /// (e.g. `compile_to_ir` invoked without an `OwnershipCheckResult`).
+    pub(crate) par_capture_modes: HashMap<SpanKey, Vec<(String, ParCaptureMode)>>,
     /// Per-function parallelization decisions populated from `ConcurrencyAnalysis`.
     /// Function name → `FunctionConcurrency` (parallel groups + total stmt count).
     /// Threaded in by `load_concurrency_analysis`; consumed in slice 2 by the
@@ -2164,6 +2175,7 @@ impl<'ctx> Codegen<'ctx> {
             arc_fallback_fns: HashMap::new(),
             rc_fallback_heap_types: HashMap::new(),
             closure_capture_paths: HashMap::new(),
+            par_capture_modes: HashMap::new(),
             concurrency_decisions: HashMap::new(),
             current_fn_name: String::new(),
             par_counter: 0,
@@ -2265,6 +2277,14 @@ impl<'ctx> Codegen<'ctx> {
         // present in this map; absent → per-name fallback.
         for (k, v) in &ow.closure_capture_path_modes {
             self.closure_capture_paths.insert(*k, v.clone());
+        }
+        // L227: per-par-block capture modes. Drives the `SharedRc` arm
+        // in `emit_par_branch_fn`'s capture-unpack loop (atomic rc_inc
+        // in the branch prologue + `track_rc_var` registration). Names
+        // absent from the inner Vec fall through to `Copy` semantics
+        // (today's behavior).
+        for (k, v) in &ow.par_capture_modes {
+            self.par_capture_modes.insert(*k, v.clone());
         }
     }
 

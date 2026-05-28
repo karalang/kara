@@ -98,7 +98,8 @@ mod par_codegen_tests {
                 .or_insert(eff);
         }
         parsed.program.callee_effectful = table;
-        compile_to_ir(&parsed.program, None, None).expect("codegen failed")
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
+        compile_to_ir(&parsed.program, Some(&ownership), None).expect("codegen failed")
     }
 
     /// Compile, link with the runtime, and run the program. Returns stdout
@@ -134,13 +135,19 @@ mod par_codegen_tests {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let effects = karac::effectcheck(&parsed.program);
+        let ownership = karac::ownershipcheck(&parsed.program, &typed);
         let analysis = karac::concurrency_analyze(&parsed.program, &effects);
 
         let id = COUNTER.fetch_add(1, Ordering::Relaxed);
         let obj_path = format!("/tmp/karac_par_e2e_{}_{}.o", std::process::id(), id);
         let exe_path = format!("/tmp/karac_par_e2e_{}_{}", std::process::id(), id);
 
-        if let Err(e) = compile_to_object(&parsed.program, &obj_path, None, Some(&analysis)) {
+        if let Err(e) = compile_to_object(
+            &parsed.program,
+            &obj_path,
+            Some(&ownership),
+            Some(&analysis),
+        ) {
             panic!("codegen failed for test program: {}", e);
         }
         link_executable(&obj_path, &exe_path).ok()?;
@@ -4415,6 +4422,137 @@ fn main() {
                 "errdefer body should fire on cancel-exit (slice-4 switch to \
                  emit_scope_cleanup_for_error_path); got first 500 chars:\n{}",
                 &out[..out.len().min(500)],
+            );
+        }
+    }
+
+    // ── L227: non-trivial captures (rc_inc for shared, ref/move handling) ──
+
+    /// L227 IR: a par-block capturing a `shared struct` emits an
+    /// atomic rc_inc in the branch prologue. This is the load-bearing
+    /// signal that the ownership-pass classification fed through to
+    /// codegen — without it, the branch's heap-pointer copy aliases
+    /// the parent's reference with no inc, and a consume in the
+    /// branch would race with the parent's scope-exit dec. The
+    /// `atomicrmw add` op appearing inside `__par_branch_*` is the
+    /// minimum proof that the SharedRc lowering path fired.
+    #[test]
+    fn test_ir_l227_shared_capture_emits_atomic_rc_inc_in_branch() {
+        let ir = ir_for_with_pipeline(
+            r#"
+shared struct Counter { val: i64 }
+
+fn main() {
+    let c = Counter { val: 42 };
+    par {
+        println(c.val);
+        println(99);
+    }
+}
+"#,
+        );
+        // Locate the branch fn that references `c`. The branch
+        // capturing `c` is the one whose body reads `c.val`; the
+        // sibling branch (println(99)) takes no captures and won't
+        // contain an atomic op. Slice the IR around the first
+        // `__par_branch_` opening brace to bound the search.
+        let branch_start = ir
+            .find("define void @__par_branch_")
+            .expect("expected par branch fn in IR");
+        let branch_window = &ir[branch_start..];
+        let branch_end = branch_window
+            .find("\ndefine ")
+            .map(|i| branch_start + i)
+            .unwrap_or(ir.len());
+        let branch_ir = &ir[branch_start..branch_end];
+        assert!(
+            branch_ir.contains("atomicrmw add"),
+            "L227 SharedRc lowering must emit `atomicrmw add` in the branch \
+             prologue for the captured shared struct; got branch IR:\n{}",
+            &branch_ir[..branch_ir.len().min(2000)],
+        );
+    }
+
+    /// L227 IR negative: a par-block capturing only a primitive
+    /// (i64) keeps the existing Copy-by-value-through-env path and
+    /// does NOT emit a rc_inc in the branch prologue. Guards against
+    /// over-eager classification — the SharedRc path should fire
+    /// only when the binding's surface type is a shared struct/enum.
+    #[test]
+    fn test_ir_l227_primitive_capture_no_atomic_rc_inc() {
+        let ir = ir_for_with_pipeline(
+            r#"
+fn main() {
+    let n: i64 = 42_i64;
+    par {
+        println(n);
+        println(99);
+    }
+}
+"#,
+        );
+        let branch_start = ir
+            .find("define void @__par_branch_")
+            .expect("expected par branch fn in IR");
+        let branch_window = &ir[branch_start..];
+        let branch_end = branch_window
+            .find("\ndefine ")
+            .map(|i| branch_start + i)
+            .unwrap_or(ir.len());
+        let branch_ir = &ir[branch_start..branch_end];
+        assert!(
+            !branch_ir.contains("atomicrmw"),
+            "primitive captures should not trigger atomic rc ops in the par \
+             branch (Copy-path only); got branch IR:\n{}",
+            &branch_ir[..branch_ir.len().min(2000)],
+        );
+    }
+
+    /// L227 E2E: a shared struct captured into a single par branch
+    /// runs to completion without crashing or printing garbage, even
+    /// when the branch reads the heap value while the parent's owning
+    /// reference stays live. Pre-L227 this case "worked" by accident
+    /// (the branch never bumped the refcount, so the parent's
+    /// scope-exit dec hit the right count); with L227 the
+    /// branch holds its own atomic +1 and dec's it on exit, so the
+    /// refcount lifecycle is now correct-by-construction instead of
+    /// correct-by-luck. The smoke test pinpoints the round trip:
+    /// parent reads the field after par_run returns, which would
+    /// touch freed memory if the refcount fell out of balance.
+    #[test]
+    fn test_e2e_l227_shared_capture_single_branch_lifecycle_ok() {
+        let out = run_program(
+            r#"
+shared struct Counter { val: i64 }
+
+fn main() {
+    let c = Counter { val: 42 };
+    par {
+        println(c.val);
+        println(99);
+    }
+    println(c.val);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert!(
+                out.contains("42"),
+                "expected branch to print captured shared-struct field 42; got: {out:?}"
+            );
+            assert!(
+                out.contains("99"),
+                "expected sibling branch to print 99; got: {out:?}"
+            );
+            // The trailing parent read must succeed — pre-L227 this
+            // could read freed memory if the branch's dec dropped
+            // the count below the parent's owning reference. With
+            // L227's inc/dec pairing, the parent's reference is
+            // preserved across the par-run.
+            assert_eq!(
+                out.matches("42").count(),
+                2,
+                "expected `42` printed twice (branch + post-par parent read); got: {out:?}"
             );
         }
     }

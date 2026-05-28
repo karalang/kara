@@ -675,6 +675,17 @@ impl<'ctx> super::Codegen<'ctx> {
         //    (Debugger Contract slice 4: the runtime uses it to
         //    populate `KaracFrame::spawn_site_id` for slice 5's
         //    enumeration surface).
+        //
+        // L227: resolve per-capture modes for this par block from the
+        // ownership-pass classification. `None` (ownership pass not
+        // run, or this par block not classified) → every capture
+        // defaults to `Copy` semantics (today's behavior). Cloned
+        // into a local Vec so the borrow doesn't conflict with
+        // mutable codegen state during the branch-fn loop.
+        let par_modes: Option<Vec<(String, crate::ownership::ParCaptureMode)>> = self
+            .par_capture_modes
+            .get(&crate::resolver::SpanKey::from_span(span))
+            .cloned();
         let mut branch_fn_ptrs: Vec<PointerValue<'ctx>> = Vec::with_capacity(stmts.len());
         for (i, stmt) in stmts.iter().enumerate() {
             // Per-branch slot list: only the slots whose `branch_index`
@@ -705,6 +716,7 @@ impl<'ctx> super::Codegen<'ctx> {
                 result_slot_struct_ty,
                 branch_result_slot,
                 par_earliest_err_idx,
+                par_modes.as_deref(),
             )?;
             branch_fn_ptrs.push(fn_ptr);
         }
@@ -836,6 +848,7 @@ impl<'ctx> super::Codegen<'ctx> {
         result_slot_struct_ty: Option<StructType<'ctx>>,
         branch_result_slot: Option<ResultSlot>,
         par_earliest_err_idx: usize,
+        par_capture_modes: Option<&[(String, crate::ownership::ParCaptureMode)]>,
     ) -> Result<PointerValue<'ctx>, String> {
         let fn_name = format!("__par_branch_{}_{}", par_id, index);
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
@@ -937,6 +950,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
 
         // Unpack captures from the env struct into fresh allocas.
+        //
+        // L227 (non-trivial captures): after the alloca/store, for any
+        // capture whose ownership-pass mode is `SharedRc`, emit an
+        // atomic rc_inc on the heap pointer and register the binding
+        // with `track_rc_var` so the branch-exit scope cleanup
+        // balances it with an atomic rc_dec. Without the inc, a
+        // single-branch capture that flows into a function consuming
+        // the reference (the spec's "sole-ownership move" case) would
+        // race the parent's owning reference: the consume's
+        // scope-exit dec would drop refcount to zero mid-par, and
+        // the parent's subsequent dec would touch freed memory. The
+        // inc + track pair is atomic on both sides so sibling
+        // branches and the parent's stash dec are race-free; the
+        // ownership pass also promotes the parent's binding into
+        // `arc_values`, which routes the parent's scope-exit dec
+        // through `emit_arc_dec` for symmetry. Captures not in the
+        // modes list (or the list itself absent) fall through to
+        // today's by-value-through-env behavior — Copy semantics.
         if !captures.is_empty() {
             let env_val = self
                 .builder
@@ -963,6 +994,22 @@ impl<'ctx> super::Codegen<'ctx> {
                 if let Some(type_name) = saved_var_types.get(var_name) {
                     self.var_type_names
                         .insert(var_name.clone(), type_name.clone());
+                }
+                // L227 SharedRc path: atomic rc_inc + cleanup registration.
+                let is_shared_rc = par_capture_modes.is_some_and(|modes| {
+                    modes.iter().any(|(n, m)| {
+                        n == var_name && matches!(m, crate::ownership::ParCaptureMode::SharedRc)
+                    })
+                });
+                if is_shared_rc {
+                    if let Some(type_name) = saved_var_types.get(var_name) {
+                        if let Some(heap_type) =
+                            self.shared_types.get(type_name).map(|i| i.heap_type)
+                        {
+                            self.emit_arc_inc(heap_type, field_val.into_pointer_value());
+                            self.track_rc_var(var_name, alloca, heap_type);
+                        }
+                    }
                 }
             }
         }
