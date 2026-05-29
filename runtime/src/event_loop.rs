@@ -2163,58 +2163,23 @@ impl<'a> std::io::Write for TlsConnIo<'a> {
     }
 }
 
-/// Phase 6 line 236 slice 3 — server-side WebSocket-over-TLS handshake.
-///
-/// Mirror of [`karac_runtime_ws_accept`] but the underlying connection
-/// is TLS-wrapped: TCP accept → rustls handshake → HTTP upgrade
-/// exchange (over the encrypted transport) → register the session in
-/// `tls::SESSIONS` so subsequent `ws_recv_text` / `ws_send_text` calls
-/// route encryption through rustls automatically.
-///
-/// Returns the upgraded connection fd on success or `-1` on any
-/// failure (accept failure, handshake failure, HTTP upgrade error,
-/// `ServerConnection::new` error). On failure, every allocated
-/// resource (raw fd, ServerConnection) drops here so the caller is
-/// not responsible for cleanup.
-///
-/// **Synchronous handshake (v1).** Same trade-off as
-/// [`karac_runtime_tls_accept`] — handshake blocks the worker thread.
-/// A non-blocking re-park variant lands in a follow-on slice if M1
-/// throughput surfaces it as the bottleneck.
-///
-/// **Session registration order.** The session is inserted into
-/// `SESSIONS` AFTER the rustls handshake completes but BEFORE the
-/// HTTP upgrade exchange. Tha way the HTTP exchange runs over TLS
-/// (via the `TlsConnIo` wrapper looking up the just-registered
-/// session) and the WS framing FFIs that read/write the connection
-/// later find the session already in place. If the HTTP upgrade
-/// fails, the session is removed and the fd closes.
+/// Run the rustls handshake + RFC 6455 HTTP upgrade on an
+/// already-accepted connection fd, registering the TLS session keyed by
+/// fd. Returns the ready connection fd on success, or -1 (closing the fd)
+/// on any failure. This is the former inline body of
+/// `karac_runtime_ws_accept_tls` minus the `accept(2)` — now run by the
+/// handshake worker pool so handshakes overlap instead of serializing on
+/// the accept thread.
 ///
 /// # Safety
-///
-/// `listener_fd` must be a valid TCP listener socket; `config` must
-/// be a non-null pointer obtained from `karac_runtime_tls_config_new`.
-/// Same constraints as `karac_runtime_tls_accept`.
+/// `conn_fd` must be a freshly-accepted, owned TCP connection fd; `config`
+/// must be a valid `*mut KaracTlsConfig` for the call's duration.
 #[cfg(unix)]
-#[no_mangle]
-pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
-    listener_fd: i32,
-    config: *mut crate::tls::KaracTlsConfig,
-) -> i32 {
+unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsConfig) -> i32 {
     use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd};
 
-    if listener_fd < 0 || config.is_null() {
-        return -1;
-    }
-
-    // Raw accept(2) on the TCP listener (caller has already parked).
-    let listener = std::net::TcpListener::from_raw_fd(listener_fd);
-    let accept_result = listener.accept();
-    let _ = listener.into_raw_fd();
-    let (mut sock, _addr) = match accept_result {
-        Ok(p) => p,
-        Err(_) => return -1,
-    };
+    // Take ownership of the accepted connection fd.
+    let mut sock = std::net::TcpStream::from_raw_fd(conn_fd);
 
     // Build a fresh ServerConnection using the borrowed config.
     let config_arc = crate::tls::clone_config_arc(config);
@@ -2272,6 +2237,197 @@ pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
     // stays open. The kara `WebSocket` value the caller constructs
     // owns close-on-drop now.
     sock.into_raw_fd()
+}
+
+/// Per-listener pool that offloads the (slow, I/O-bound) TLS handshake +
+/// WS upgrade off the accept-loop thread. `work` holds freshly-accepted
+/// raw connection fds awaiting handshake; `done` holds fully-upgraded
+/// connection fds awaiting pickup by `karac_runtime_ws_accept_tls`.
+struct WsHandshakePool {
+    work: Mutex<VecDeque<i32>>,
+    cv_work: Condvar,
+    done: Mutex<VecDeque<i32>>,
+    cv_done: Condvar,
+}
+
+/// Per-listener-fd handshake pools, created lazily on first
+/// `karac_runtime_ws_accept_tls` call for that listener.
+static WS_HANDSHAKE_POOLS: OnceLock<Mutex<HashMap<i32, Arc<WsHandshakePool>>>> = OnceLock::new();
+
+/// Handshake worker count per listener. Handshakes block in socket reads
+/// waiting on the peer, so this is oversubscribed relative to core count
+/// to overlap many in-flight handshakes. Override with
+/// `KARAC_WS_ACCEPT_THREADS`; default 32, floored at 1.
+fn ws_handshake_thread_count() -> usize {
+    std::env::var("KARAC_WS_ACCEPT_THREADS")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n >= 1)
+        .unwrap_or(32)
+}
+
+/// Worker loop: pop a raw accepted fd, run the handshake + upgrade, push
+/// the ready fd onto the done queue (or drop it on failure).
+fn ws_handshake_worker(config_addr: usize, pool: Arc<WsHandshakePool>) {
+    loop {
+        let conn_fd = {
+            let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
+            loop {
+                if let Some(fd) = q.pop_front() {
+                    break fd;
+                }
+                q = pool.cv_work.wait(q).unwrap_or_else(|p| p.into_inner());
+            }
+        };
+        // SAFETY: `config_addr` is the KaracTlsConfig pointer captured at
+        // pool start; in the v1 accept-loop shape the TlsListener (and its
+        // config) outlive the process, so the pointer stays valid.
+        let ready = unsafe {
+            ws_handshake_conn_tls(conn_fd, config_addr as *mut crate::tls::KaracTlsConfig)
+        };
+        if ready < 0 {
+            // Handshake/upgrade failed; `ws_handshake_conn_tls` already
+            // closed the fd. Nothing to hand back.
+            continue;
+        }
+        let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
+        d.push_back(ready);
+        drop(d);
+        pool.cv_done.notify_one();
+    }
+}
+
+/// Get (or lazily start) the handshake pool for `listener_fd`.
+#[cfg(unix)]
+fn ws_handshake_pool_for(
+    listener_fd: i32,
+    config: *mut crate::tls::KaracTlsConfig,
+) -> Arc<WsHandshakePool> {
+    let map_mutex = WS_HANDSHAKE_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = map_mutex.lock().unwrap_or_else(|p| p.into_inner());
+    if let Some(pool) = map.get(&listener_fd) {
+        return Arc::clone(pool);
+    }
+
+    // Set the listener non-blocking so the accept-drain loop in the FFI
+    // returns `WouldBlock` once the backlog is empty instead of blocking
+    // the accept thread there. epoll readiness (the codegen park) is
+    // unaffected by the fd's blocking mode.
+    {
+        use std::os::unix::io::{FromRawFd, IntoRawFd};
+        // SAFETY: `listener_fd` is a live TCP listener owned by the kara
+        // TlsListener; we borrow it transiently (into_raw_fd before drop)
+        // only to flip O_NONBLOCK.
+        let l = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+        let _ = l.set_nonblocking(true);
+        let _ = l.into_raw_fd();
+    }
+
+    let pool = Arc::new(WsHandshakePool {
+        work: Mutex::new(VecDeque::new()),
+        cv_work: Condvar::new(),
+        done: Mutex::new(VecDeque::new()),
+        cv_done: Condvar::new(),
+    });
+    let config_addr = config as usize;
+    for _ in 0..ws_handshake_thread_count() {
+        let pool_for_thread = Arc::clone(&pool);
+        thread::Builder::new()
+            .name("karac-ws-handshake".to_string())
+            .stack_size(512 * 1024)
+            .spawn(move || ws_handshake_worker(config_addr, pool_for_thread))
+            .expect("karac_runtime: failed to spawn ws handshake worker thread");
+    }
+    map.insert(listener_fd, Arc::clone(&pool));
+    pool
+}
+
+/// Phase 6 line 236 slice 3 — server-side WebSocket-over-TLS accept.
+///
+/// Mirror of [`karac_runtime_ws_accept`] but the connection is
+/// TLS-wrapped: TCP accept → rustls handshake → HTTP upgrade exchange
+/// (over the encrypted transport) → register the session in
+/// `tls::SESSIONS` so subsequent `ws_recv_text` / `ws_send_text` route
+/// encryption through rustls automatically. Returns the upgraded
+/// connection fd, or `-1` for invalid args.
+///
+/// **Concurrent handshake pool (Demo 1 M1 fix, 2026-05-29).** The
+/// `accept(2)` stays on the calling (accept-loop) thread — it is cheap and
+/// the codegen has already parked the caller on listener-readability — but
+/// the *slow* part (rustls handshake + RFC 6455 upgrade, which blocks in
+/// socket reads waiting for the peer to drive its half) runs on a
+/// per-listener pool of worker threads so K handshakes proceed
+/// concurrently. Pre-fix this was inline and serialized on the single
+/// accept thread, so one slow peer's handshake reads stalled the whole
+/// accept loop and throughput collapsed under load (diagnosed in
+/// `docs/investigations/demo1_m1_verification.md`: at ~77K held the accept
+/// thread sat blocked in `wait_woken` socket reads at ~7 conn/s with the
+/// CPU idle). The ABI is unchanged — still returns a ready fd or -1 — so
+/// codegen and the `accept_tls` stdlib builtin are untouched. Pool size:
+/// `KARAC_WS_ACCEPT_THREADS` (default 32; handshakes are I/O-bound so this
+/// is oversubscribed vs. core count). Session registration happens after
+/// the rustls handshake but before the HTTP upgrade (in
+/// `ws_handshake_conn_tls`), so the upgrade runs over TLS.
+///
+/// # Safety
+///
+/// `listener_fd` must be a valid TCP listener socket; `config` must be a
+/// non-null pointer obtained from `karac_runtime_tls_config_new`.
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_ws_accept_tls(
+    listener_fd: i32,
+    config: *mut crate::tls::KaracTlsConfig,
+) -> i32 {
+    use std::os::unix::io::{FromRawFd, IntoRawFd};
+
+    if listener_fd < 0 || config.is_null() {
+        return -1;
+    }
+
+    let pool = ws_handshake_pool_for(listener_fd, config);
+
+    // Each call: (1) drain the accept backlog (non-blocking) and submit
+    // every pending connection to the handshake workers so K handshakes
+    // overlap, then (2) return the next completed handshake. The caller
+    // (codegen) has already parked on listener-readability, so there is
+    // normally ≥1 pending on entry; draining the rest fills the pipeline.
+    // The done-wait uses a short timeout and re-drains on each tick so a
+    // spurious park wakeup (0 accepted) or a lull while every worker is
+    // mid-handshake can never wedge acceptance — new connections are
+    // picked up within the timeout regardless.
+    loop {
+        {
+            let listener = std::net::TcpListener::from_raw_fd(listener_fd);
+            let mut submitted = 0usize;
+            // Drain the backlog: accept until WouldBlock (or a real error).
+            while let Ok((sock, _addr)) = listener.accept() {
+                let raw = sock.into_raw_fd();
+                let mut q = pool.work.lock().unwrap_or_else(|p| p.into_inner());
+                q.push_back(raw);
+                drop(q);
+                submitted += 1;
+            }
+            let _ = listener.into_raw_fd();
+            if submitted > 0 {
+                pool.cv_work.notify_all();
+            }
+        }
+
+        let mut d = pool.done.lock().unwrap_or_else(|p| p.into_inner());
+        if let Some(fd) = d.pop_front() {
+            return fd;
+        }
+        // No completed handshake yet — wait briefly, then loop back to
+        // re-drain the backlog and re-check.
+        let (mut g, _timeout) = pool
+            .cv_done
+            .wait_timeout(d, Duration::from_millis(5))
+            .unwrap_or_else(|p| p.into_inner());
+        if let Some(fd) = g.pop_front() {
+            return fd;
+        }
+    }
 }
 
 /// Drive the RFC 6455 server-side HTTP upgrade exchange over the
