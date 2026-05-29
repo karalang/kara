@@ -611,24 +611,7 @@ mod runtime_confirmation {
         );
     }
 
-    // TODO(karac): the ASAN-instrumented binary for this corpus program
-    // (a closure capturing `ref String` and calling `.len()`) hangs
-    // deterministically in compiled code — the spin sits at ~57% CPU and
-    // produces zero stdout, so the loop is *before* the call to `println`,
-    // not at ASAN's atexit handler. Verified 2026-05-29 by running the
-    // preserved binary at /tmp/karac_safety_design_<pid>_1 under sample-
-    // and-kill. The bug is in codegen for closure-captured `ref T` (the
-    // un-instrumented build is presumed-fine — the static accept test for
-    // the same shape passes, and the loop variant's mutated equivalents
-    // also hang). This was the source of the 2026-05-29 6h `cargo test
-    // --features llvm` wedge: the closure case was the test that hung,
-    // and there was no timeout to catch it. The timeout (above) now
-    // catches future hangs in 60s; this `#[ignore]` keeps CI green until
-    // the underlying karac bug is fixed, at which point flip it back to
-    // `#[test]` and the existing assertion stands.
     #[test]
-    #[ignore = "karac codegen bug: closure-capturing `ref String` infinite-loops in the \
-                ASAN-instrumented build; see TODO comment above for the 2026-05-29 diagnostic"]
     fn asan_closure_borrow_capture_no_escape() {
         assert_accepted_program_is_asan_clean(
             "fn main() {\n\

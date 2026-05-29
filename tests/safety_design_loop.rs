@@ -407,22 +407,6 @@ mod runtime_invariant {
             return;
         }
         for (prog_label, src) in CORPUS {
-            // Skip the closure-capturing-ref-String corpus entry under
-            // ASAN: the compiled binary hangs deterministically in
-            // generated code (see TODO + #[ignore] on
-            // `asan_closure_borrow_capture_no_escape` in
-            // `tests/safety_design.rs` for the diagnostic). The static
-            // accept test above still exercises this corpus entry through
-            // every mutation — only the ASAN-routed runtime path is
-            // parked here. Restore by deleting this guard once the
-            // underlying karac codegen bug is fixed.
-            if *prog_label == "closure_borrow_capture_no_escape" {
-                eprintln!(
-                    "[runtime:{prog_label}] skipped: known karac codegen hang under \
-                     ASAN — see TODO in tests/safety_design.rs"
-                );
-                continue;
-            }
             // Run baseline first so a failure tied to the un-mutated
             // program reports cleanly rather than getting attributed to a
             // mutation.

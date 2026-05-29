@@ -2214,6 +2214,32 @@ fn main() {
         }
     }
 
+    // Regression test for the 2026-05-29 closure-capturing-String hang
+    // surfaced by `tests/safety_design.rs::asan_closure_borrow_capture_no_escape`.
+    // Root cause was a missing `String.from(literal)` codegen branch — the
+    // call returned the `i64 0` placeholder, `s` was alloca'd as i64, the
+    // closure body GEP'd Vec layout from the i64 slot, and LLVM DCE'd
+    // main down to `printf(undef) + brk #0x1` (macOS parked the process
+    // at the brk, looking like an infinite loop). Fixed in
+    // `src/codegen/assoc_call.rs` by the explicit String.from passthrough
+    // branch next to String.new. The test pins the closure-with-String-
+    // capture shape so the gap doesn't reopen.
+    #[test]
+    fn test_e2e_closure_captures_string_calls_len() {
+        let out = run_program(
+            r#"
+fn main() {
+    let s = String.from("hello");
+    let len_plus = |extra: i64| s.len() + extra;
+    println(len_plus(5));
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
     // ── Disjoint closure capture: per-path env layout (slice 4) ─
 
     // The tests below exercise line 353 phase-5 checklist

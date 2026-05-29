@@ -1123,6 +1123,25 @@ impl<'ctx> super::Codegen<'ctx> {
                 .into_struct_value();
             return Ok(agg.into());
         }
+        // `String.from(x)`: compile the argument as-is. For the dominant
+        // call shape `String.from("literal")`, `compile_expr` on a
+        // `StringLit` already produces the `{global_ptr, len, cap=0}`
+        // static-String aggregate that the rest of the pipeline expects.
+        // Without this arm the call falls through every dispatch path
+        // below and returns the `i64 0` placeholder — which then poisons
+        // every downstream use of the binding (alloca'd as i64, then
+        // GEP'd as the 24-byte Vec/String layout for cleanup and method
+        // dispatch). The cascading UB lets LLVM DCE strip a program like
+        // `let s = String.from("hello"); println(len_plus(5));` down to
+        // `printf(undef) + brk #0x1`, which macOS parks at the brk with
+        // no debugger — visible as a process spinning at ~57% CPU with
+        // zero stdout, which is the 2026-05-29 closure-String "flake"
+        // diagnostic that led here.
+        if type_name == "String" && method == "from" {
+            if let Some(arg) = _args.first() {
+                return self.compile_expr(&arg.value);
+            }
+        }
         // Qualified enum-variant constructor: `Enum.Variant(args)`.
         // The bare-name path (`Variant(args)`) is handled by
         // `try_compile_enum_variant` from `compile_call`; the qualified
