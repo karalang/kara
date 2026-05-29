@@ -6,7 +6,7 @@
 use crate::ast::*;
 use crate::token::Span;
 
-use super::helpers::eval_http_post;
+use super::helpers::{eval_http_get, eval_http_post};
 use super::value::{EnumData, Value};
 
 impl<'a> super::Interpreter<'a> {
@@ -19,6 +19,26 @@ impl<'a> super::Interpreter<'a> {
     ) -> Option<Value> {
         match method {
             // ── Client method dispatch ────────────────────────────────────────
+            // Phase-8 line 17 — wire `Client.get(url)` to the existing
+            // `eval_http_get` helper. The helper has been present in
+            // `interpreter/helpers.rs` since the post path landed, but
+            // was never dispatched (so user calls to `Client.get(url)`
+            // ran the stdlib stub returning `Err`). Symmetric to the
+            // `post` arm below.
+            "get" => {
+                if let Value::Struct { ref name, .. } = obj {
+                    if name == "Client" {
+                        let url = args
+                            .first()
+                            .map(|a| match self.eval_expr_inner(&a.value) {
+                                Value::String(s) => s,
+                                _ => String::new(),
+                            })
+                            .unwrap_or_default();
+                        return Some(eval_http_get(&url));
+                    }
+                }
+            }
             "post" => {
                 if let Value::Struct { ref name, .. } = obj {
                     if name == "Client" {
