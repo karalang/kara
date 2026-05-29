@@ -3547,6 +3547,47 @@ pub unsafe extern "C" fn karac_vec_reverse(data: *mut u8, len: i64, elem_size: i
     }
 }
 
+/// Lexicographic byte compare of two strings, with length as the tie-break.
+/// Returns `-1` if `a < b`, `0` if equal, `+1` if `a > b`. Backs the
+/// String-key arm of `Vec.sort_by_key` codegen (see
+/// `emit_sort_by_key_inline_thunk` in `src/codegen/vec_method.rs`).
+/// Byte-wise compare matches Rust's `Ord` on `String` for valid UTF-8
+/// (Unicode code-point order coincides with byte order for UTF-8).
+///
+/// # Safety
+///
+/// `a_ptr` must point to `a_len` initialized, contiguous bytes the caller
+/// exclusively owns for the duration of the call; same for `b_ptr` /
+/// `b_len`. A null pointer paired with `len == 0` is accepted (empty
+/// string); a null pointer with `len > 0` is undefined. Negative lengths
+/// are accepted and treated as zero.
+#[no_mangle]
+pub unsafe extern "C" fn karac_string_cmp(
+    a_ptr: *const u8,
+    a_len: i64,
+    b_ptr: *const u8,
+    b_len: i64,
+) -> i64 {
+    let an = if a_len < 0 { 0 } else { a_len as usize };
+    let bn = if b_len < 0 { 0 } else { b_len as usize };
+    let prefix = an.min(bn);
+    if prefix > 0 {
+        let a_slice = std::slice::from_raw_parts(a_ptr, prefix);
+        let b_slice = std::slice::from_raw_parts(b_ptr, prefix);
+        match a_slice.cmp(b_slice) {
+            std::cmp::Ordering::Less => return -1,
+            std::cmp::Ordering::Greater => return 1,
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+    // Prefix equal — shorter string sorts first.
+    match an.cmp(&bn) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
 //
 // The runtime crate's `cargo test -p karac-runtime` binary has its own

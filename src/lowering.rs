@@ -75,6 +75,25 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
         .iter()
         .map(|(k, v)| ((k.0, k.1), v.clone()))
         .collect();
+    // Forward the spans of every `Type::Str`-typed expression so codegen
+    // can distinguish String values from Vec[T] / other 3-word types that
+    // share the LLVM `{ptr, i64, i64}` shape. First consumer:
+    // `emit_sort_by_key_inline_thunk`'s String-key dispatch arm. The set
+    // is the cheaper sibling of plumbing the full `expr_types` map onto
+    // Program — codegen only needs the discriminator bit, not the full
+    // type representation. Add other small focused side-tables here if
+    // future codegen paths need to identify other shape-sharing types.
+    program.string_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            if matches!(ty, Type::Str) {
+                Some((k.0, k.1))
+            } else {
+                None
+            }
+        })
+        .collect();
     // Forward per-leaf-binding borrow modes so codegen's
     // `bind_pattern_values` can wrap each ref/mut-ref leaf in a ref-shim
     // alloca (alloca-of-pointer-to-value-alloca, registered in

@@ -666,6 +666,15 @@ pub(super) struct Codegen<'ctx> {
     /// Codegen's `unwrap` arm uses this to lower the inner type to its
     /// LLVM shape and reconstitute the payload words back to a value.
     pub(crate) method_unwrap_inner_types: HashMap<(usize, usize), TypeExpr>,
+    /// Set of `(span.offset, span.length)` keys for every expression whose
+    /// Kāra type is `String`. Populated from `Program.string_typed_exprs`
+    /// (which the lowering pass derives from `TypeCheckResult.expr_types`).
+    /// Lets codegen distinguish `String` from `Vec[T]` and other 3-word
+    /// `{ptr, i64, i64}` types whose LLVM struct shape is identical.
+    /// First consumer: `emit_sort_by_key_inline_thunk`'s String-key
+    /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
+    /// the LLVM value alone, so the span-set is what tells them apart.
+    pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -2418,6 +2427,7 @@ impl<'ctx> Codegen<'ctx> {
             method_callee_types: HashMap::new(),
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
+            string_typed_exprs: HashSet::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -2734,6 +2744,14 @@ impl<'ctx> Codegen<'ctx> {
         // narrowing applies to instance methods, not just free-function
         // and `Type.assoc` calls.
         self.method_callee_types = program.method_callee_types.clone();
+
+        // Side-table set by `lowering::lower_program` from
+        // `TypeCheckResult.expr_types`: the spans of every `Type::Str`
+        // expression. `emit_sort_by_key_inline_thunk` consults this set
+        // to dispatch String keys to the `karac_string_cmp` arm — the
+        // LLVM struct shape is identical to `Vec[u8]` and a few other
+        // 3-word types, so the value alone can't distinguish them.
+        self.string_typed_exprs = program.string_typed_exprs.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads

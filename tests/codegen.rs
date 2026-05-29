@@ -24332,6 +24332,57 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_string_identity() {
+        // String keys go through `karac_string_cmp` (lex byte compare).
+        // String and Vec[T] share the LLVM `{ptr, i64, i64}` shape, so the
+        // dispatch arm consults `string_typed_exprs` (populated by the
+        // lowering pass from `TypeCheckResult.expr_types`) to tell them
+        // apart. `|s| s` is the canonical identity key on `Vec[String]`.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("banana");
+    v.push("apple");
+    v.push("cherry");
+    v.push("apricot");
+    v.sort_by_key(|s| s);
+    for s in v.iter() { println(s); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["apple", "apricot", "banana", "cherry"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_string_length_tiebreak() {
+        // When the common prefix of two strings is equal, the shorter
+        // string sorts first (length is the tie-break in karac_string_cmp).
+        // Duplicates are preserved in stable order.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[String] = Vec.new();
+    v.push("ab");
+    v.push("a");
+    v.push("abc");
+    v.push("abcd");
+    v.push("ab");
+    v.sort_by_key(|s| s);
+    for s in v.iter() { println(s); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["a", "ab", "ab", "abc", "abcd"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

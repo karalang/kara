@@ -275,6 +275,17 @@ pub type PatternBindingTypesTable = std::collections::HashMap<(usize, usize), St
 /// (2026-05-09).
 pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize), TypeExpr>;
 
+/// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: the set of `(span.offset, span.length)` keys for every
+/// expression whose Kāra type is `String`. Codegen consults this to
+/// distinguish `String` from `Vec[T]` and other 3-word `{ptr, len, cap}`
+/// types — they share the LLVM struct shape, so the value alone isn't
+/// enough. First consumer: `emit_sort_by_key_inline_thunk` dispatches to a
+/// `karac_string_cmp` arm when the key body's span lives in this set.
+/// Reusable for any other codegen path that needs the same disambiguation
+/// without taking a full `TypeCheckResult` dependency.
+pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
+
 /// Borrow form for a pattern binding under a `ref` / `mut ref` scrutinee.
 /// `Ref` corresponds to a `ref T` scrutinee mode; `MutRef` to `mut ref T`.
 /// Owned bindings have no entry in `PatternBindingBorrowModesTable` —
@@ -360,6 +371,12 @@ pub struct Program {
     /// Set by the lowering pass from `TypeCheckResult.pattern_binding_inner_types`.
     /// PB sibling slice (2026-05-09).
     pub pattern_binding_inner_types: PatternBindingInnerTypesTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: spans of
+    /// every expression whose Kāra type is `String`. Lets codegen
+    /// distinguish `String` from `Vec[T]` and other 3-word types that share
+    /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
+    /// `TypeCheckResult` dependency.
+    pub string_typed_exprs: StringTypedExprsTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a
