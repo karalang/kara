@@ -90,19 +90,19 @@ effect resource Network;
 struct Server { }
 
 // `Request` is the translated form of an inbound hyper request. v1's
-// surface ships `path()` + `method()` + `body()` + `header(name)` —
-// all round-trip through FFI helpers on the runtime's
-// `KaracHttpRequest` C struct and return a fresh owned `String` per
-// call (F2: re-allocates per call rather than borrowing into the
+// surface ships `path()` + `method()` + `body()` + `header(name)` +
+// `headers()` + `query()` — all round-trip through FFI helpers on the
+// runtime's `KaracHttpRequest` C struct and return freshly owned values
+// per call (F2: re-allocates per call rather than borrowing into the
 // runtime-owned struct, which is dropped after the handler returns).
-// `query()` and `headers()` (full-map iteration) are deferred to
-// follow-ups.
+// `headers()` and `query()` do full-map iteration, returning
+// `Vec[(String, String)]` (a Vec, not a Map, so repeated header names /
+// duplicate query keys survive).
 //
 // At codegen, `Request` lowers to an opaque pointer wrapping the
 // runtime's `*const KaracHttpRequest` (mirrors `Map[K, V]`'s opaque-
 // ptr precedent). User code never sees the raw pointer — it interacts
-// only through the `path()` / `method()` / `body()` / `header()`
-// methods below.
+// only through the methods below.
 struct Request { }
 
 impl Request {
@@ -138,6 +138,23 @@ impl Request {
     // when no header with the requested name exists).
     #[compiler_builtin]
     fn header(ref self, name: String) -> Option[String] { None }
+
+    // Return every request header as `(name, value)` pairs in
+    // request order. A Vec (not a Map) so repeated header names (e.g.
+    // multiple `Set-Cookie` / `X-Forwarded-For`) are all preserved.
+    // Names are normalized to lowercase by the HTTP layer. Each String
+    // is freshly allocated per call — same lifetime contract as
+    // `header(name)` — so the Vec outlives the request struct.
+    #[compiler_builtin]
+    fn headers(ref self) -> Vec[(String, String)] { Vec.new() }
+
+    // Return the parsed query parameters as `(key, value)` pairs in
+    // request order. Keys and values are percent-decoded (and `+` →
+    // space) per `application/x-www-form-urlencoded`. A Vec (not a Map)
+    // so duplicate keys (`?a=1&a=2`) survive; a key with no `=` (`?flag`)
+    // yields `("flag", "")`. Each String is freshly allocated per call.
+    #[compiler_builtin]
+    fn query(ref self) -> Vec[(String, String)] { Vec.new() }
 }
 
 impl Server {

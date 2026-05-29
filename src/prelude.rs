@@ -1420,10 +1420,12 @@ mod tests {
         // `Request.header(name)` round-trip through the runtime externs
         // and copy bytes into a fresh owned String per call (F2 owned-
         // String contract; `header` wraps the result in `Option[String]`).
+        // Phase-8 line 13: `headers()` + `query()` add full-map iteration,
+        // each returning `Vec[(String, String)]`.
         assert_inherent_impl_compiler_builtin(
             "http.kara",
             "Request",
-            &["path", "method", "body", "header"],
+            &["path", "method", "body", "header", "headers", "query"],
         );
     }
 

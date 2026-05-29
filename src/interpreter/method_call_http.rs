@@ -52,6 +52,19 @@ impl<'a> super::Interpreter<'a> {
             {
                 return Some(Value::String(String::new()));
             }
+            // `Request.headers()` / `.query()` — full-map iteration. The
+            // interpreter doesn't run a real HTTP server, so the stub
+            // Request carries no data; both return an empty
+            // `Vec[(String, String)]`. What this pins is the shape (an
+            // array value, method dispatches at all) and interpreter
+            // parity with the codegen path; real iteration happens in
+            // codegen via the `karac_runtime_http_request_*` accessors.
+            "headers" | "query" if matches!(&obj, Value::Struct { name, .. } if name == "Request") =>
+            {
+                return Some(Value::Array(std::sync::Arc::new(std::sync::RwLock::new(
+                    Vec::new(),
+                ))));
+            }
             // ── Response / HttpError method dispatch ──────────────────────────
             "status" => {
                 if let Value::Struct {

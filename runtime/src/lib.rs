@@ -2467,6 +2467,17 @@ pub struct KaracHttpRequest {
     pub headers_keys: *const *const std::os::raw::c_char,
     pub headers_vals: *const *const std::os::raw::c_char,
     pub headers_len: usize,
+    // Parsed `application/x-www-form-urlencoded` query parameters, conveyed
+    // as parallel arrays of `query_len` CString-allocated entries (same
+    // shape as `headers_keys` / `headers_vals`). Both key and value are
+    // percent-decoded (and `+` → space) at request-translation time, so
+    // `Request.query()` iterates them directly without re-parsing the raw
+    // `query` string above. Duplicate keys (`?a=1&a=2`) are preserved in
+    // order — the Kāra-side return shape is `Vec[(String, String)]`, not a
+    // Map, precisely so repeated keys survive.
+    pub query_keys: *const *const std::os::raw::c_char,
+    pub query_vals: *const *const std::os::raw::c_char,
+    pub query_len: usize,
     pub body_ptr: *const u8,
     pub body_len: usize,
 }
@@ -2691,6 +2702,140 @@ pub unsafe extern "C" fn karac_runtime_http_request_header(
     std::ptr::null()
 }
 
+/// Number of request headers — the bound for the index passed to
+/// `karac_runtime_http_request_header_key_at` /
+/// `karac_runtime_http_request_header_val_at`. Backs the full-map
+/// iteration surface of `Request.headers()` (each call to
+/// `header(name)` walks the same array; `headers()` returns the whole
+/// thing as `Vec[(String, String)]`).
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_headers_count(
+    request: *const KaracHttpRequest,
+) -> usize {
+    if request.is_null() {
+        return 0;
+    }
+    (*request).headers_len
+}
+
+/// Header name at `idx` (`0 <= idx < headers_count`) as a borrowed
+/// null-terminated UTF-8 pointer. Returns null when `idx` is out of
+/// range or the slot pointer is null. Caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_header_key_at(
+    request: *const KaracHttpRequest,
+    idx: usize,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    let req = &*request;
+    if req.headers_keys.is_null() || idx >= req.headers_len {
+        return std::ptr::null();
+    }
+    *req.headers_keys.add(idx)
+}
+
+/// Header value at `idx` (`0 <= idx < headers_count`) as a borrowed
+/// null-terminated UTF-8 pointer. Pairs index-for-index with
+/// `karac_runtime_http_request_header_key_at`. Caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_header_val_at(
+    request: *const KaracHttpRequest,
+    idx: usize,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    let req = &*request;
+    if req.headers_vals.is_null() || idx >= req.headers_len {
+        return std::ptr::null();
+    }
+    *req.headers_vals.add(idx)
+}
+
+/// Number of parsed query parameters — the bound for the index passed
+/// to `karac_runtime_http_request_query_key_at` /
+/// `karac_runtime_http_request_query_val_at`. Backs `Request.query()`.
+/// Parameters are percent-decoded at request-translation time; see
+/// `parse_query_pairs`.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_query_count(
+    request: *const KaracHttpRequest,
+) -> usize {
+    if request.is_null() {
+        return 0;
+    }
+    (*request).query_len
+}
+
+/// Query-parameter key at `idx` (`0 <= idx < query_count`) as a
+/// borrowed null-terminated UTF-8 pointer (already percent-decoded).
+/// Returns null when `idx` is out of range. Caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_query_key_at(
+    request: *const KaracHttpRequest,
+    idx: usize,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    let req = &*request;
+    if req.query_keys.is_null() || idx >= req.query_len {
+        return std::ptr::null();
+    }
+    *req.query_keys.add(idx)
+}
+
+/// Query-parameter value at `idx` (`0 <= idx < query_count`) as a
+/// borrowed null-terminated UTF-8 pointer (already percent-decoded).
+/// Pairs index-for-index with
+/// `karac_runtime_http_request_query_key_at`. Caller must not free.
+///
+/// # Safety
+///
+/// `request` must point at a `KaracHttpRequest` populated by the
+/// runtime's per-request translation path.
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_request_query_val_at(
+    request: *const KaracHttpRequest,
+    idx: usize,
+) -> *const std::os::raw::c_char {
+    if request.is_null() {
+        return std::ptr::null();
+    }
+    let req = &*request;
+    if req.query_vals.is_null() || idx >= req.query_len {
+        return std::ptr::null();
+    }
+    *req.query_vals.add(idx)
+}
+
 /// Parse a UTF-8 byte slice as a base-10 signed 64-bit integer.
 /// Returns `1` on success (with the parsed value written through
 /// `out`) or `0` on failure. Trims leading/trailing whitespace
@@ -2912,6 +3057,74 @@ pub unsafe extern "C" fn karac_runtime_serve_http_static(
     })
 }
 
+/// Decode a single `application/x-www-form-urlencoded` component:
+/// `+` → space, `%XX` → the byte the two hex digits encode, everything
+/// else verbatim. Percent-encoded multi-byte UTF-8 sequences decode to
+/// their constituent bytes and are reassembled by `from_utf8_lossy`.
+/// Malformed escapes (`%` not followed by two hex digits, or a trailing
+/// `%`) are kept literally rather than erroring — query strings reach
+/// the server from arbitrary clients, so lenient decode beats rejecting
+/// the whole request.
+fn decode_form_component(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => {
+                out.push(b' ');
+                i += 1;
+            }
+            b'%' if i + 2 < bytes.len() => {
+                let hi = (bytes[i + 1] as char).to_digit(16);
+                let lo = (bytes[i + 2] as char).to_digit(16);
+                match (hi, lo) {
+                    (Some(h), Some(l)) => {
+                        out.push((h * 16 + l) as u8);
+                        i += 3;
+                    }
+                    _ => {
+                        out.push(b'%');
+                        i += 1;
+                    }
+                }
+            }
+            b => {
+                out.push(b);
+                i += 1;
+            }
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Parse a raw URL query string (the part after `?`, without the `?`)
+/// into percent-decoded `(key, value)` pairs. Splits on `&`; each
+/// segment splits on its first `=` (`foo` with no `=` yields
+/// `("foo", "")`). Empty segments (e.g. a trailing `&`) are skipped.
+/// Order is preserved and duplicate keys are kept — backing the
+/// `Vec[(String, String)]` (not Map) return shape of `Request.query()`.
+fn parse_query_pairs(query: &str) -> Vec<(String, String)> {
+    let mut pairs = Vec::new();
+    if query.is_empty() {
+        return pairs;
+    }
+    for segment in query.split('&') {
+        if segment.is_empty() {
+            continue;
+        }
+        let (raw_key, raw_val) = match segment.split_once('=') {
+            Some((k, v)) => (k, v),
+            None => (segment, ""),
+        };
+        pairs.push((
+            decode_form_component(raw_key),
+            decode_form_component(raw_val),
+        ));
+    }
+    pairs
+}
+
 /// Translate a single hyper `Request<Incoming>` into our `KaracHttpRequest`
 /// FFI struct, invoke the Kāra handler synchronously through
 /// `block_in_place`, then translate the populated `KaracHttpResponse`
@@ -2981,6 +3194,23 @@ async fn serve_request(
         let hdr_vals_ptrs: Vec<*const std::os::raw::c_char> =
             hdr_vals.iter().map(|c| c.as_ptr()).collect();
 
+        // Parse the raw query string into percent-decoded (key, value)
+        // pairs once, here, so `Request.query()` is a flat array walk on
+        // the codegen side (parallel to headers). CStrings own the
+        // decoded bytes; the ptr vecs stay live until the closure
+        // returns (same lifetime contract as the header arrays).
+        let query_pairs = parse_query_pairs(query_str);
+        let mut qry_keys: Vec<std::ffi::CString> = Vec::with_capacity(query_pairs.len());
+        let mut qry_vals: Vec<std::ffi::CString> = Vec::with_capacity(query_pairs.len());
+        for (k, v) in &query_pairs {
+            qry_keys.push(std::ffi::CString::new(k.as_str()).unwrap_or_default());
+            qry_vals.push(std::ffi::CString::new(v.as_str()).unwrap_or_default());
+        }
+        let qry_keys_ptrs: Vec<*const std::os::raw::c_char> =
+            qry_keys.iter().map(|c| c.as_ptr()).collect();
+        let qry_vals_ptrs: Vec<*const std::os::raw::c_char> =
+            qry_vals.iter().map(|c| c.as_ptr()).collect();
+
         let req_struct = KaracHttpRequest {
             method: method_cstr.as_ptr(),
             path: path_cstr.as_ptr(),
@@ -2988,6 +3218,9 @@ async fn serve_request(
             headers_keys: hdr_keys_ptrs.as_ptr(),
             headers_vals: hdr_vals_ptrs.as_ptr(),
             headers_len: hdr_keys_ptrs.len(),
+            query_keys: qry_keys_ptrs.as_ptr(),
+            query_vals: qry_vals_ptrs.as_ptr(),
+            query_len: qry_keys_ptrs.len(),
             body_ptr: if body_bytes.is_empty() {
                 std::ptr::null()
             } else {
@@ -3269,6 +3502,67 @@ mod tests {
     #[test]
     fn test_wait_target_size_pinned() {
         assert_eq!(std::mem::size_of::<KaracWaitTarget>(), 1);
+    }
+
+    #[test]
+    fn test_parse_query_pairs_basic() {
+        assert_eq!(
+            parse_query_pairs("q=hello&lang=en"),
+            vec![
+                ("q".to_string(), "hello".to_string()),
+                ("lang".to_string(), "en".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_query_pairs_empty_is_empty() {
+        assert!(parse_query_pairs("").is_empty());
+    }
+
+    #[test]
+    fn test_parse_query_pairs_percent_and_plus_decode() {
+        // `+` → space and `%XX` both decode; UTF-8 (`%E2%9C%93` = ✓)
+        // round-trips through the byte buffer.
+        assert_eq!(
+            parse_query_pairs("greeting=hello+world&mark=%E2%9C%93"),
+            vec![
+                ("greeting".to_string(), "hello world".to_string()),
+                ("mark".to_string(), "✓".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_query_pairs_preserves_duplicate_keys_and_order() {
+        assert_eq!(
+            parse_query_pairs("a=1&a=2&b=3"),
+            vec![
+                ("a".to_string(), "1".to_string()),
+                ("a".to_string(), "2".to_string()),
+                ("b".to_string(), "3".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_parse_query_pairs_keyless_and_empty_segments() {
+        // `flag` with no `=` → empty value; the trailing `&` segment is
+        // skipped rather than producing an empty pair.
+        assert_eq!(
+            parse_query_pairs("flag&x=1&"),
+            vec![
+                ("flag".to_string(), "".to_string()),
+                ("x".to_string(), "1".to_string()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_decode_form_component_malformed_percent_kept_literal() {
+        // A `%` not followed by two hex digits stays literal.
+        assert_eq!(decode_form_component("100%done"), "100%done");
+        assert_eq!(decode_form_component("trailing%"), "trailing%");
     }
 
     /// Outside any `par {}` block, `karac_runtime_get_current_frame()`

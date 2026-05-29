@@ -7468,6 +7468,26 @@ fn main() {
     assert_eq!(output, "none\n");
 }
 
+/// `Request.headers()` / `.query()` interpreter shape: both return a
+/// `Vec[(String, String)]`. With no real HTTP server the stub Request
+/// carries no data, so each is empty. Pins that the methods dispatch
+/// and produce a Vec (whose `.len()` is 0) rather than a scalar. Real
+/// iteration is exercised by the codegen E2E tests in
+/// `tests/http_server.rs`.
+#[test]
+fn test_server_serve_handler_request_headers_and_query_return_empty() {
+    let output = run(r#"
+fn main() {
+    let req = Request { };
+    let h = req.headers();
+    let q = req.query();
+    println(h.len());
+    println(q.len());
+}
+"#);
+    assert_eq!(output, "0\n0\n");
+}
+
 #[test]
 fn test_for_in_vec_string_calls_len_interp() {
     // Interpreter parity for List 2 / item 3 (codegen for-loop element-type

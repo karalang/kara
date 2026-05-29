@@ -1417,6 +1417,32 @@ impl<'ctx> Codegen<'ctx> {
             request_header_type,
             Some(Linkage::External),
         );
+        // Full-map iteration surface for `Request.headers()` /
+        // `Request.query()` (Phase 8 line 13). Both return
+        // `Vec[(String, String)]`; codegen's `compile_request_pairs`
+        // drives a counted loop over these indexed accessors, copying
+        // each borrowed `*const c_char` into a fresh owned Kāra String
+        // (same per-call ownership contract as `header(name)`):
+        //   `*_count(*const KaracHttpRequest) -> usize` (loop bound)
+        //   `*_key_at` / `*_val_at(*const KaracHttpRequest, usize idx)
+        //    -> *const c_char` (null on out-of-range; runtime-owned on
+        //    hit). Query keys/vals are percent-decoded runtime-side.
+        let request_count_type = i64_type.fn_type(&[ptr_type.into()], false);
+        let request_at_type = ptr_type.fn_type(&[ptr_type.into(), i64_type.into()], false);
+        for name in [
+            "karac_runtime_http_request_headers_count",
+            "karac_runtime_http_request_query_count",
+        ] {
+            module.add_function(name, request_count_type, Some(Linkage::External));
+        }
+        for name in [
+            "karac_runtime_http_request_header_key_at",
+            "karac_runtime_http_request_header_val_at",
+            "karac_runtime_http_request_query_key_at",
+            "karac_runtime_http_request_query_val_at",
+        ] {
+            module.add_function(name, request_at_type, Some(Linkage::External));
+        }
         // Phase 8 `File` handle slice F3/F4: extern declarations for
         // the `runtime/src/file.rs` ABI surface. Each open/read/write/
         // flush entry point writes its `KaracIoResult` (32 bytes; see

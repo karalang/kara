@@ -16,8 +16,17 @@
 use crate::ast::*;
 
 use inkwell::module::Linkage;
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
+
+/// Which `Request` full-map accessor `compile_request_pairs` should
+/// drive — the two share an identical loop shape (count + indexed
+/// key/val accessors) and differ only in the extern names.
+#[derive(Clone, Copy)]
+pub(super) enum RequestPairsKind {
+    Headers,
+    Query,
+}
 
 impl<'ctx> super::Codegen<'ctx> {
     // ── Helpers ─────────────────────────────────────────────────
@@ -728,5 +737,363 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value()
             .into();
         Ok(str_val)
+    }
+
+    /// Copy a borrowed runtime `*const c_char` into a fresh owned Kāra
+    /// `String` aggregate `{ data, len, cap }` via strlen + malloc +
+    /// memcpy. An empty C string yields `{ null, 0, 0 }` (matching how
+    /// other empty Kāra Strings are represented elsewhere in codegen).
+    /// Emits a `len == 0` empty / non-empty branch and leaves the
+    /// builder positioned at the assembled-aggregate (`cont`) block,
+    /// returning the String value. Shared by `compile_request_pairs`'s
+    /// per-element key/val copies — same per-call ownership contract as
+    /// `compile_request_string_method` / `compile_request_header` (the
+    /// borrowed pointer is only valid for the duration of the handler).
+    fn build_owned_string_from_cstr(
+        &mut self,
+        cstr_ptr: PointerValue<'ctx>,
+        prefix: &str,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "string-build called outside fn".to_string())?;
+
+        let strlen_fn = self
+            .module
+            .get_function("strlen")
+            .expect("strlen declared in Codegen::new");
+        let len_raw = self
+            .builder
+            .build_call(strlen_fn, &[cstr_ptr.into()], &format!("{prefix}.len"))
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+        let len_i64 = self
+            .builder
+            .build_int_z_extend_or_bit_cast(len_raw, i64_ty, &format!("{prefix}.len.i64"))
+            .unwrap();
+
+        let zero = i64_ty.const_zero();
+        let is_empty = self
+            .builder
+            .build_int_compare(
+                inkwell::IntPredicate::EQ,
+                len_i64,
+                zero,
+                &format!("{prefix}.is_empty"),
+            )
+            .unwrap();
+        let alloc_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.alloc"));
+        let empty_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.empty"));
+        let cont_bb = self
+            .context
+            .append_basic_block(fn_val, &format!("{prefix}.cont"));
+        let buf_slot = self.create_entry_alloca(fn_val, &format!("{prefix}.buf"), ptr_ty.into());
+
+        self.builder
+            .build_conditional_branch(is_empty, empty_bb, alloc_bb)
+            .unwrap();
+
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(buf_slot, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(alloc_bb);
+        let buf = self
+            .builder
+            .build_call(
+                self.malloc_fn,
+                &[len_i64.into()],
+                &format!("{prefix}.buf.alloc"),
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder
+            .build_memcpy(buf, 1, cstr_ptr, 1, len_i64)
+            .unwrap();
+        self.builder.build_store(buf_slot, buf).unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        self.builder.position_at_end(cont_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, buf_slot, &format!("{prefix}.data"))
+            .unwrap()
+            .into_pointer_value();
+        let str_ty = self.vec_struct_type();
+        let mut str_val: BasicValueEnum<'ctx> = str_ty.get_undef().into();
+        str_val = self
+            .builder
+            .build_insert_value(
+                str_val.into_struct_value(),
+                data,
+                0,
+                &format!("{prefix}.data.ins"),
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(
+                str_val.into_struct_value(),
+                len_i64,
+                1,
+                &format!("{prefix}.len.ins"),
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        str_val = self
+            .builder
+            .build_insert_value(
+                str_val.into_struct_value(),
+                len_i64,
+                2,
+                &format!("{prefix}.cap.ins"),
+            )
+            .unwrap()
+            .into_struct_value()
+            .into();
+        Ok(str_val)
+    }
+
+    /// Compile `req.headers()` / `req.query()` for a `Request`-typed
+    /// local into a `Vec[(String, String)]`. Both round-trip through a
+    /// `count` extern (the loop bound) plus index-for-index `key_at` /
+    /// `val_at` externs; the only difference is which runtime function
+    /// triplet `kind` selects. Allocates a `n * sizeof((String,String))`
+    /// buffer, then a counted loop copies each borrowed key/val cstring
+    /// into a fresh owned String (via `build_owned_string_from_cstr`),
+    /// assembles the `(String, String)` tuple, and stores it at its
+    /// slot. `n == 0` short-circuits to the empty-Vec `{ null, 0, 0 }`
+    /// invariant. The resulting Vec owns its element Strings, so it
+    /// outlives the request struct (dropped after the handler returns).
+    pub(super) fn compile_request_pairs(
+        &mut self,
+        var_name: &str,
+        kind: RequestPairsKind,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (count_name, key_name, val_name) = match kind {
+            RequestPairsKind::Headers => (
+                "karac_runtime_http_request_headers_count",
+                "karac_runtime_http_request_header_key_at",
+                "karac_runtime_http_request_header_val_at",
+            ),
+            RequestPairsKind::Query => (
+                "karac_runtime_http_request_query_count",
+                "karac_runtime_http_request_query_key_at",
+                "karac_runtime_http_request_query_val_at",
+            ),
+        };
+        let slot = self
+            .variables
+            .get(var_name)
+            .copied()
+            .ok_or_else(|| format!("Request var '{var_name}' not bound"))?;
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_ty = self.context.i64_type();
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "Request.headers/query called outside fn".to_string())?;
+
+        let req_ptr = self
+            .builder
+            .build_load(slot.ty, slot.ptr, &format!("{var_name}.req.pairs.load"))
+            .unwrap()
+            .into_pointer_value();
+
+        let count_fn = self
+            .module
+            .get_function(count_name)
+            .unwrap_or_else(|| panic!("{count_name} declared in Codegen::new"));
+        let key_fn = self
+            .module
+            .get_function(key_name)
+            .unwrap_or_else(|| panic!("{key_name} declared in Codegen::new"));
+        let val_fn = self
+            .module
+            .get_function(val_name)
+            .unwrap_or_else(|| panic!("{val_name} declared in Codegen::new"));
+
+        let n = self
+            .builder
+            .build_call(count_fn, &[req_ptr.into()], "req.pairs.n")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Element type is the `(String, String)` tuple: two `{ ptr, i64,
+        // i64 }` String aggregates back to back (mirrors `compile_tuple`'s
+        // lowering and `Vec[(String, String)]`'s element type).
+        let str_ty = self.vec_struct_type();
+        let elem_ty = self
+            .context
+            .struct_type(&[str_ty.into(), str_ty.into()], false);
+        let vec_ty = self.vec_struct_type();
+
+        let zero = i64_ty.const_zero();
+        let is_zero = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::EQ, n, zero, "req.pairs.is_empty")
+            .unwrap();
+        let empty_bb = self.context.append_basic_block(fn_val, "req.pairs.empty");
+        let build_bb = self.context.append_basic_block(fn_val, "req.pairs.build");
+        let done_bb = self.context.append_basic_block(fn_val, "req.pairs.done");
+        let buf_slot = self.create_entry_alloca(fn_val, "req.pairs.buf", ptr_ty.into());
+
+        self.builder
+            .build_conditional_branch(is_zero, empty_bb, build_bb)
+            .unwrap();
+
+        // Empty: null buffer, len/cap 0 (the canonical empty-Vec shape).
+        self.builder.position_at_end(empty_bb);
+        self.builder
+            .build_store(buf_slot, ptr_ty.const_null())
+            .unwrap();
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+        // Non-empty: malloc(n * elem_size), then fill via a counted loop.
+        self.builder.position_at_end(build_bb);
+        let elem_size = elem_ty.size_of().unwrap();
+        let alloc_bytes = self
+            .builder
+            .build_int_mul(n, elem_size, "req.pairs.alloc_bytes")
+            .unwrap();
+        let buf = self
+            .builder
+            .build_call(self.malloc_fn, &[alloc_bytes.into()], "req.pairs.buf.alloc")
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        self.builder.build_store(buf_slot, buf).unwrap();
+
+        let i_alloca = self.create_entry_alloca(fn_val, "req.pairs.i", i64_ty.into());
+        self.builder
+            .build_store(i_alloca, i64_ty.const_zero())
+            .unwrap();
+        let cond_bb = self.context.append_basic_block(fn_val, "req.pairs.cond");
+        let body_bb = self.context.append_basic_block(fn_val, "req.pairs.body");
+        let exit_bb = self.context.append_basic_block(fn_val, "req.pairs.exit");
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(cond_bb);
+        let i_cur = self
+            .builder
+            .build_load(i64_ty, i_alloca, "req.pairs.i.cur")
+            .unwrap()
+            .into_int_value();
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::ULT, i_cur, n, "req.pairs.lt")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(lt, body_bb, exit_bb)
+            .unwrap();
+
+        self.builder.position_at_end(body_bb);
+        let key_cstr = self
+            .builder
+            .build_call(
+                key_fn,
+                &[req_ptr.into(), i_cur.into()],
+                "req.pairs.key.cstr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let key_str = self.build_owned_string_from_cstr(key_cstr, "req.pairs.key")?;
+        let val_cstr = self
+            .builder
+            .build_call(
+                val_fn,
+                &[req_ptr.into(), i_cur.into()],
+                "req.pairs.val.cstr",
+            )
+            .unwrap()
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_pointer_value();
+        let val_str = self.build_owned_string_from_cstr(val_cstr, "req.pairs.val")?;
+
+        let mut tuple_val: BasicValueEnum<'ctx> = elem_ty.get_undef().into();
+        tuple_val = self
+            .builder
+            .build_insert_value(tuple_val.into_struct_value(), key_str, 0, "req.pairs.tup.k")
+            .unwrap()
+            .into_struct_value()
+            .into();
+        tuple_val = self
+            .builder
+            .build_insert_value(tuple_val.into_struct_value(), val_str, 1, "req.pairs.tup.v")
+            .unwrap()
+            .into_struct_value()
+            .into();
+
+        // Reload the buffer base (the SSA `buf` from `build_bb` dominates
+        // here, but reloading keeps the GEP base local to the loop body).
+        let buf_cur = self
+            .builder
+            .build_load(ptr_ty, buf_slot, "req.pairs.buf.cur")
+            .unwrap()
+            .into_pointer_value();
+        let elem_ptr = unsafe {
+            self.builder
+                .build_gep(elem_ty, buf_cur, &[i_cur], "req.pairs.elem.ptr")
+                .unwrap()
+        };
+        self.builder.build_store(elem_ptr, tuple_val).unwrap();
+
+        let one = i64_ty.const_int(1, false);
+        let i_next = self
+            .builder
+            .build_int_add(i_cur, one, "req.pairs.i.next")
+            .unwrap();
+        self.builder.build_store(i_alloca, i_next).unwrap();
+        self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+        self.builder.position_at_end(exit_bb);
+        self.builder.build_unconditional_branch(done_bb).unwrap();
+
+        // Assemble the `{ data, len, cap }` Vec aggregate. `n` dominates
+        // `done_bb` (computed before the empty/build split), so it serves
+        // as both len and cap for the non-empty path and is 0 for empty.
+        self.builder.position_at_end(done_bb);
+        let data = self
+            .builder
+            .build_load(ptr_ty, buf_slot, "req.pairs.data")
+            .unwrap()
+            .into_pointer_value();
+        let mut agg = vec_ty.get_undef();
+        agg = self
+            .builder
+            .build_insert_value(agg, data, 0, "req.pairs.vec.data")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 1, "req.pairs.vec.len")
+            .unwrap()
+            .into_struct_value();
+        agg = self
+            .builder
+            .build_insert_value(agg, n, 2, "req.pairs.vec.cap")
+            .unwrap()
+            .into_struct_value();
+        Ok(agg.into())
     }
 }

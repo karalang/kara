@@ -869,6 +869,25 @@ impl<'ctx> super::Codegen<'ctx> {
                     let name = name.clone();
                     return self.compile_request_header(&name, &args[0].value);
                 }
+                // `Request.headers()` / `Request.query()` — full-map
+                // iteration returning `Vec[(String, String)]`. Both walk
+                // the runtime's count + indexed key/val accessors, copying
+                // each borrowed cstring into a fresh owned String (phase-8
+                // line 13). `query()` parameters are percent-decoded
+                // runtime-side; `headers()` keys are hyper-normalized
+                // lowercase.
+                if matches!(self.var_type_names.get(name.as_str()), Some(n) if n == "Request")
+                    && (method == "headers" || method == "query")
+                    && args.is_empty()
+                {
+                    let name = name.clone();
+                    let kind = if method == "headers" {
+                        super::http::RequestPairsKind::Headers
+                    } else {
+                        super::http::RequestPairsKind::Query
+                    };
+                    return self.compile_request_pairs(&name, kind);
+                }
                 // `std.json` codegen-side wiring (phase-8 line 435):
                 // `j.stringify()` on a Kāra-side `Json` enum value.
                 // Loads the receiver's four enum words, dispatches

@@ -960,4 +960,123 @@ mod http_server_tests {
             "expected response body to indicate header absent; got: {body:?}"
         );
     }
+
+    /// `Request.headers()` full-map iteration round-trips end-to-end:
+    /// the handler walks every `(name, value)` pair, concatenating them
+    /// into the response body, and the test asserts the custom header
+    /// shows up. Pins the codegen `compile_request_pairs` loop + the
+    /// `karac_runtime_http_request_headers_count` / `_header_*_at`
+    /// indexed accessors + the `Vec[(String, String)]` return shape.
+    /// hyper normalizes header names to lowercase, so the custom
+    /// `X-Test-Echo` arrives as `x-test-echo`. Concatenation (not direct
+    /// capture of the loop value) keeps the body bytes owned independent
+    /// of the iterated Vec.
+    #[test]
+    fn test_server_serve_handler_iterates_headers() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // The handler iterates every `(name, value)` pair and reports a
+        // marker proving it saw BOTH the custom header (with the right
+        // value) AND the always-present Host header — i.e. full-map
+        // iteration, not just the first entry. The body is a fixed
+        // literal (no String concat — concat is codegen-only, not
+        // typechecker-supported — and no capture of a Vec-owned String).
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let hdrs: Vec[(String, String)] = req.headers();
+                let mut found_echo = 0;
+                let mut found_host = 0;
+                for (k, v) in hdrs {
+                    if k == "x-test-echo" {
+                        if v == "greetings" {
+                            found_echo = 1;
+                        }
+                    }
+                    if k == "host" {
+                        found_host = 1;
+                    }
+                }
+                let body = if found_echo == 1 {
+                    if found_host == 1 { "both" } else { "echo-only" }
+                } else {
+                    "no-echo"
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) =
+            run_handler_smoke_with_header(src, "/hdrs", "X-Test-Echo", "greetings")
+        else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "both",
+            "expected headers() iteration to surface BOTH the lowercased custom \
+             header (x-test-echo=greetings) and the Host header; got: {body:?}"
+        );
+    }
+
+    /// `Request.query()` round-trips end-to-end: the handler scans the
+    /// parsed query parameters for `q` and echoes its value. Pins the
+    /// `karac_runtime_http_request_query_*` accessors, runtime-side
+    /// percent / `+` decoding (`hello+world` → `hello world`), and the
+    /// shared `compile_request_pairs` loop. `out = "" + v` allocates a
+    /// fresh String so the body outlives the iterated Vec.
+    #[test]
+    fn test_server_serve_handler_reads_query_param() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        // The handler scans the parsed params for `q` and confirms its
+        // value decoded to `hello world` (proving runtime-side `+` →
+        // space decode), and that a second param `lang=en` is also
+        // present (proving more than one pair iterates). Body is a fixed
+        // marker literal so nothing aliases the Vec's element Strings.
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                let params: Vec[(String, String)] = req.query();
+                let mut found_q = 0;
+                let mut found_lang = 0;
+                for (k, v) in params {
+                    if k == "q" {
+                        if v == "hello world" {
+                            found_q = 1;
+                        }
+                    }
+                    if k == "lang" {
+                        if v == "en" {
+                            found_lang = 1;
+                        }
+                    }
+                }
+                let body = if found_q == 1 {
+                    if found_lang == 1 { "both" } else { "q-only" }
+                } else {
+                    "miss"
+                };
+                Response { status: 200, body: body }
+            }
+
+            fn main() {
+                let _result = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some((status, body)) = run_handler_smoke(src, "/search?q=hello+world&lang=en") else {
+            return;
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert_eq!(
+            body, "both",
+            "expected query() to surface the percent/plus-decoded `q` value \
+             (`hello world`) and the `lang=en` param; got: {body:?}"
+        );
+    }
 }
