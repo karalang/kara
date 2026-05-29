@@ -318,16 +318,16 @@ pub enum Command {
         /// when omitted, walks up from CWD for `kara.toml` and uses
         /// the project's `src/` tree as the scope (L215b4 project mode).
         file: Option<String>,
-        /// `--atomic` opts into the L215c Atomic[T] heuristic. When
-        /// set, project-mode classifies each mut field as Atomic[T]
+        /// The L215c Atomic[T] heuristic, on by default in project-mode.
+        /// When set, project-mode classifies each mut field as Atomic[T]
         /// (every observed write across the workspace is a bare `=`
         /// assignment AND T is in the lock-free Copy set: `i32`,
         /// `i64`, `u32`, `u64`, `usize`, `isize`, `bool`) or Mutex[T]
-        /// (anything else). Atomic-classified fields' consumer sites
-        /// are NOT lock-wrapped — the reviewer hand-converts to
-        /// `.store(v, Ordering)` / `.load(Ordering)`. Without the
-        /// flag the L215a–b4 default (all-Mutex with consumer wraps)
-        /// applies. Ignored in single-file mode (no workspace
+        /// (anything else). Atomic-classified fields' consumer sites are
+        /// auto-rewritten to `.store(v, Ordering)` / `.load(Ordering)`
+        /// (L215c-cons) rather than lock-wrapped. `--no-atomic` clears
+        /// this, restoring the L215a–b4 default (all-Mutex with consumer
+        /// wraps). Always false in single-file mode (no workspace
         /// visibility for the classifier).
         atomic: bool,
     },
@@ -6892,11 +6892,11 @@ fn cmd_migrate_project(type_name: &str, apply: bool, force: bool, atomic: bool) 
     }
 
     // Stage 1b: compute per-field Atomic/Mutex classification (L215c).
-    // Opt-in via `--atomic` flag — without the flag, the L215a–b4
-    // default behavior applies (every mut field is Mutex[T] and the
-    // consumer-rewrite wraps every site). Project-mode only — single-
-    // file mode lacks workspace visibility for the "every write is a
-    // bare `=` assign" judgment.
+    // On by default; `--no-atomic` clears `atomic` and restores the
+    // L215a–b4 behavior (every mut field is Mutex[T] and the consumer-
+    // rewrite wraps every site). Project-mode only — single-file mode
+    // lacks workspace visibility for the "every write is a bare `=`
+    // assign" judgment, so its `atomic` is always false.
     let mut_fields = crate::ownership::collect_struct_mut_field_names(
         type_name,
         &def_files[0].pipeline.parsed.program.items,

@@ -7423,6 +7423,10 @@ fn test_migrate_help_lists_kind_and_flags() {
         stdout.contains("--force"),
         "help should list --force flag; got: {stdout}",
     );
+    assert!(
+        stdout.contains("--no-atomic"),
+        "help should document the --no-atomic opt-out; got: {stdout}",
+    );
 }
 
 // ── L215b1: consumer-site write-rewrite (single-file, type-annotated bindings) ──
@@ -7974,6 +7978,8 @@ fn test_migrate_project_mode_walks_modules() {
     // declares an annotated binding of that type and assigns its mut field.
     // Project-mode (no <file> arg) should pick up both: the type-def
     // rewrite in counter.kara AND the consumer write-wrap in main.kara.
+    // `--no-atomic` pins the Mutex shape (the Atomic heuristic is on by
+    // default and would classify this bare-`=` i64 field as Atomic).
     let tmp = scratch_project("migrate-project-walk");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
@@ -7986,7 +7992,7 @@ fn test_migrate_project_mode_walks_modules() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["migrate", "shared-to-par", "Counter"])
+        .args(["migrate", "shared-to-par", "Counter", "--no-atomic"])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -8027,6 +8033,9 @@ fn test_migrate_project_mode_walks_modules() {
 
 #[test]
 fn test_migrate_project_mode_apply_rewrites_all_files() {
+    // `--no-atomic` pins the Mutex apply shape; the default Atomic
+    // heuristic would otherwise rewrite this bare-`=` i64 field to
+    // `Atomic[i64]` + `.store`/`.load` consumer sites.
     let tmp = scratch_project("migrate-project-apply");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     let counter_path = tmp.join("src/counter.kara");
@@ -8041,7 +8050,14 @@ fn test_migrate_project_mode_apply_rewrites_all_files() {
     );
     let out = karac_bin()
         .current_dir(&tmp)
-        .args(["migrate", "shared-to-par", "Counter", "--apply", "--force"])
+        .args([
+            "migrate",
+            "shared-to-par",
+            "Counter",
+            "--no-atomic",
+            "--apply",
+            "--force",
+        ])
         .output()
         .unwrap();
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -8548,12 +8564,52 @@ fn test_migrate_l215c_cons_mixed_atomic_and_mutex_rewrites_apply() {
 }
 
 #[test]
-fn test_migrate_l215c_cons_atomic_without_flag_keeps_mutex_path() {
-    // Without --atomic, the L215a–b4 default (all-Mutex) applies — no
+fn test_migrate_l215c_cons_no_atomic_flag_keeps_mutex_path() {
+    // With --no-atomic, the L215a–b4 default (all-Mutex) applies — no
     // Atomic classifier runs, so even an obviously-Atomic-eligible
-    // field stays Mutex-wrapped. Pinning that --atomic is the gate
+    // field stays Mutex-wrapped. Pinning that --no-atomic is the gate
     // for the consumer-rewrite path too, not just the type-def half.
     let tmp = scratch_project("migrate-l215c-cons-noflag");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(
+        &tmp.join("src/counter.kara"),
+        "pub shared struct Counter {\n    mut count: i64,\n}\n",
+    );
+    write(
+        &tmp.join("src/main.kara"),
+        "fn bump(c: ref Counter) {\n    c.count = 1;\n}\n\nfn main() {}\n",
+    );
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .args(["migrate", "shared-to-par", "Counter", "--no-atomic"])
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success(), "dry-run should succeed");
+    assert!(
+        stdout.contains("lock self.count {"),
+        "with --no-atomic, default Mutex lock-wrap should apply; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains(".store("),
+        "with --no-atomic, no .store rewrite should fire; stdout={stdout}",
+    );
+    assert!(
+        !stdout.contains(".load("),
+        "with --no-atomic, no .load rewrite should fire; stdout={stdout}",
+    );
+}
+
+// ── L215c default-flip: --atomic is on by default in project-mode ──
+
+#[test]
+fn test_migrate_default_atomic_when_only_bare_assigns() {
+    // Default-flip: with NO flag at all, project-mode runs the Atomic[T]
+    // heuristic. A bare-`=`-only i64 field is wrapped as `Atomic[i64]`
+    // and its consumer write is rewritten to `.store(v, ...)` rather than
+    // lock-wrapped. Equivalent to passing --atomic explicitly.
+    let tmp = scratch_project("migrate-default-atomic");
     write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
     write(
         &tmp.join("src/counter.kara"),
@@ -8572,15 +8628,19 @@ fn test_migrate_l215c_cons_atomic_without_flag_keeps_mutex_path() {
     let _ = std::fs::remove_dir_all(&tmp);
     assert!(out.status.success(), "dry-run should succeed");
     assert!(
-        stdout.contains("lock self.count {"),
-        "without --atomic, default Mutex lock-wrap should apply; stdout={stdout}",
+        stdout.contains("→ `Atomic[`"),
+        "default (no flag) should emit Atomic[ wrap; stdout={stdout}",
     );
     assert!(
-        !stdout.contains(".store("),
-        "without --atomic, no .store rewrite should fire; stdout={stdout}",
+        !stdout.contains("→ `Mutex[`"),
+        "default (no flag) should NOT emit Mutex[ for an Atomic-eligible field; stdout={stdout}",
     );
     assert!(
-        !stdout.contains(".load("),
-        "without --atomic, no .load rewrite should fire; stdout={stdout}",
+        !stdout.contains("lock self.count {"),
+        "default Atomic classification should NOT lock-wrap; stdout={stdout}",
+    );
+    assert!(
+        stdout.contains("` = ` → `.store(`"),
+        "default Atomic should rewrite bare = to .store(; stdout={stdout}",
     );
 }

@@ -354,24 +354,34 @@ OPTIONS:
 karac migrate - Preemptive type migration tool
 
 USAGE:
-    karac migrate shared-to-par <Type> [<file.kara>] [--apply] [--force]
+    karac migrate shared-to-par <Type> [<file.kara>] [--apply] [--force] [--no-atomic]
 
 DETAILS:
-    Rewrites a `shared struct <Type>` definition to `par struct <Type>`
-    with every bare `mut` field converted to `Mutex[T]`:
+    Rewrites a `shared struct <Type>` definition to `par struct <Type>`,
+    wrapping each bare `mut` field in an atomic wrapper:
       - Keyword rename:    `shared struct Foo` → `par struct Foo`
       - Mut keyword strip: `mut field: T`     → `field: T`
-      - Field type wrap:   `field: T`         → `field: Mutex[T]`
+      - Field type wrap:   `field: T`         → `field: Atomic[T]` / `Mutex[T]`
     Same edit emitter the `E_CONCURRENT_SHARED_STRUCT` fix-diff path
     uses (`karac fix` against a fired diagnostic), but invoked
     preemptively against the type definition rather than at first
     concurrent access.
 
-    Consumer-site `lock self.field { ... }` blocks wrap every read,
-    assign, compound-assign, and mutating method call against bindings
-    of the migrated type. Annotated bindings (`let c: Counter = ...`)
-    fire from parse-only data; inferred bindings (`let c = make_counter()`)
-    require the file to typecheck.
+    In project-mode the L215c Atomic[T] heuristic runs by default: a mut
+    field whose type is in the lock-free Copy set (`i32`, `i64`, `u32`,
+    `u64`, `usize`, `isize`, `bool`) and whose every observed workspace
+    write is a bare `=` assignment is wrapped as `Atomic[T]`; everything
+    else stays `Mutex[T]`. Pass `--no-atomic` to wrap every mut field as
+    `Mutex[T]` instead. Single-file mode is always all-Mutex (no
+    workspace visibility for the classifier).
+
+    Consumer sites are rewritten to match the wrapper. `Mutex[T]` fields
+    get `lock self.field { ... }` blocks around every read, assign,
+    compound-assign, and mutating method call. `Atomic[T]` fields get
+    `.store(v, MemoryOrdering.Release)` for writes and
+    `.load(MemoryOrdering.Acquire)` for reads. Annotated bindings
+    (`let c: Counter = ...`) fire from parse-only data; inferred bindings
+    (`let c = make_counter()`) require the file to typecheck.
 
     Pass `<file.kara>` to migrate a single file. Omit it to run in
     project-mode: the tool discovers the project root via `kara.toml`
@@ -388,25 +398,24 @@ OPTIONS:
     --apply        Write the rewrite back to disk (default: dry-run).
     --force        Bypass the workspace dirty-check guard. Only honored
                    in `--apply` mode (dry-run never writes).
-    --atomic       Opt into the L215c Atomic[T] heuristic (project-mode
-                   only). Mut fields whose type is in the lock-free
-                   Copy set (`i32`, `i64`, `u32`, `u64`, `usize`,
-                   `isize`, `bool`) and whose observed workspace writes
-                   are all bare `=` assignments classify as `Atomic[T]`;
-                   everything else stays `Mutex[T]`. Atomic-classified
-                   fields' consumer sites stay as bare reads/writes —
-                   hand-convert to `.store(v, Ordering)` / `.load(Ordering)`.
+    --no-atomic    Opt out of the L215c Atomic[T] heuristic (on by
+                   default in project-mode) and wrap every mut field as
+                   `Mutex[T]` with lock-block consumer wraps. `--atomic`
+                   is still accepted as an explicit (now redundant)
+                   opt-in. No effect in single-file mode, which is
+                   always all-Mutex.
     -h, --help     Print this message
 
 EXAMPLES:
     karac migrate shared-to-par Counter
         # project-mode dry-run — walk every module under ./src/
+        # (Atomic[T] heuristic on by default)
     karac migrate shared-to-par Counter src/main.kara
-        # single-file dry-run
+        # single-file dry-run (always all-Mutex)
     karac migrate shared-to-par Counter --apply --force
         # project-mode write, even with uncommitted changes
-    karac migrate shared-to-par Counter --atomic --apply
-        # project-mode write with the Atomic[T] heuristic enabled"
+    karac migrate shared-to-par Counter --no-atomic --apply
+        # project-mode write, all fields wrapped as Mutex[T]"
         }
         "init" => {
             "\
