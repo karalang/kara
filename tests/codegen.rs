@@ -24451,6 +24451,76 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_nested_struct_field() {
+        // Two-level nesting: Outer { p: Inner, n: i64 } where Inner has its
+        // own integer fields. The struct-aware cascade in
+        // `emit_struct_cmp_cascade` recurses on the `p` field because its
+        // type name resolves to another entry in `struct_field_type_names`.
+        // Verifies that the first field that differs at any depth decides
+        // the order, exactly like derived `Ord` on nested structs would.
+        let out = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Inner { a: i64, b: i64 }
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Outer { p: Inner, n: i64 }
+
+fn main() {
+    let mut v: Vec[Outer] = Vec.new();
+    v.push(Outer { p: Inner { a: 2, b: 0 }, n: 7 });
+    v.push(Outer { p: Inner { a: 1, b: 9 }, n: 3 });
+    v.push(Outer { p: Inner { a: 1, b: 5 }, n: 1 });
+    v.sort_by_key(|o| o);
+    for o in v.iter() {
+        println(o.p.a);
+        println(o.p.b);
+        println(o.n);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Sorted ascending by ((a, b), n):
+            //   ((1, 5), 1), ((1, 9), 3), ((2, 0), 7).
+            assert_eq!(lines, vec!["1", "5", "1", "1", "9", "3", "2", "0", "7"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_nested_struct_with_string_field() {
+        // Mixing nested struct fields with a String field. The cascade
+        // recurses on the inner struct AND dispatches the String field at
+        // the outer level — exercises both extensions in one cascade.
+        let out = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Pos { x: i64, y: i64 }
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Tagged { p: Pos, tag: String }
+
+fn main() {
+    let mut v: Vec[Tagged] = Vec.new();
+    v.push(Tagged { p: Pos { x: 1, y: 0 }, tag: "z" });
+    v.push(Tagged { p: Pos { x: 1, y: 0 }, tag: "a" });
+    v.push(Tagged { p: Pos { x: 0, y: 9 }, tag: "m" });
+    v.sort_by_key(|t| t);
+    for t in v.iter() {
+        println(t.p.x);
+        println(t.p.y);
+        println(t.tag);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // First by Pos lex (0,9 < 1,0), then within Pos (1,0) by tag.
+            assert_eq!(lines, vec!["0", "9", "m", "1", "0", "a", "1", "0", "z"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in
