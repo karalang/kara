@@ -788,6 +788,24 @@ impl<'ctx> super::Codegen<'ctx> {
                                     self.var_elem_type_exprs.insert(var_name.clone(), elem_te);
                                     detected = true;
                                 }
+                            } else if surface == "String" {
+                                // Inferred-String bindings (`let r = lcp(strs);`,
+                                // `let r = strs[0];` where the element is String)
+                                // must register the same i8-elem Vec surface +
+                                // `string_vars` membership that the explicit-
+                                // annotation path (`let r: String = …`) and the
+                                // RHS-shape heuristics (`let r = "lit"`) set —
+                                // otherwise `r.len()` / `r.push(…)` dispatch
+                                // falls through in `compile_method_call`. The
+                                // typechecker records "String" in
+                                // `pattern_binding_types` for `Type::Str`
+                                // bindings via `bind_pattern_types`; without
+                                // wiring it here, only annotated String bindings
+                                // got the dispatch maps.
+                                self.vec_elem_types
+                                    .insert(var_name.clone(), self.context.i8_type().into());
+                                self.string_vars.insert(var_name.clone());
+                                detected = true;
                             }
                             // Mirror bind_pattern_values's `var_type_names`
                             // write so let-bound shared-struct handles

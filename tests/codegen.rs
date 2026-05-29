@@ -23810,4 +23810,87 @@ fn main() with reads(FileSystem) {
             ir
         );
     }
+
+    // A `let` binding with no type annotation bound to a String-returning
+    // call must still route `.len()` (and other String methods) through
+    // the String/Vec dispatch. The typechecker records "String" in
+    // `pattern_binding_types` for the inferred `Type::Str`; codegen's
+    // let-statement handler must wire that surface type into
+    // `string_vars` / `vec_elem_types` the same way the explicit-
+    // annotation path (`let r: String = …`) does. Pre-fix this fell
+    // through to the "no handler for method 'len' on variable 'r'"
+    // codegen error.
+    #[test]
+    fn test_e2e_inferred_string_binding_len_dispatch() {
+        let out = run_program(
+            r#"
+fn make() -> String { "fl" }
+fn main() {
+    let r = make();
+    println(r.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
+
+    // Cross-function variable-name collision must not corrupt scope
+    // cleanup. The name-keyed collection side-tables (`vec_elem_types`,
+    // `string_vars`, …) are reset per function in `compile_function`;
+    // without that reset, `prefix_string(s: ref String, …)` registers
+    // `vec_elem_types["s"]`, which leaks into `lcp`'s `let mut s = 1i64`
+    // counter. The let-site then queues a `FreeVecBuffer` cleanup against
+    // the i64 alloca; at the inner loop's exit the cleanup reads a bogus
+    // `cap` past the 8-byte slot and frees a garbage pointer — SIGABRT at
+    // -O0, a miscompiled infinite loop at -O3. Asserting on the output
+    // confirms the program both terminates and computes correctly.
+    #[test]
+    fn test_e2e_cross_function_name_collision_no_stale_vec_cleanup() {
+        let out = run_program(
+            r#"
+fn prefix_string(s: ref String, k: i64) -> String {
+    let mut out: String = "";
+    let mut i = 0i64;
+    for c in s.chars() {
+        if i >= k { break; }
+        out.push(c);
+        i = i + 1i64;
+    }
+    out
+}
+fn lcp(strs: ref Vec[String]) -> String {
+    let n = strs.len();
+    let first = strs[0i64].bytes();
+    let first_len = first.len();
+    let mut col = 0i64;
+    while col < first_len {
+        let c = first[col];
+        let mut s = 1i64;
+        while s < n {
+            let other = strs[s].bytes();
+            if col >= other.len() or other[col] != c {
+                return prefix_string(strs[0i64], col);
+            }
+            s = s + 1i64;
+        }
+        col = col + 1i64;
+    }
+    prefix_string(strs[0i64], first_len)
+}
+fn main() {
+    let mut a: Vec[String] = Vec.new();
+    a.push("flower");
+    a.push("flow");
+    a.push("flight");
+    let r = lcp(a);
+    println(r.len());
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "2");
+        }
+    }
 }

@@ -170,6 +170,32 @@ impl<'ctx> super::Codegen<'ctx> {
         self.var_option_shared_heap.clear();
         self.ref_params.clear();
         self.rc_fallback_heap_types.clear();
+        // Per-function reset of the name-keyed local-variable type side-
+        // tables. These mirror exactly what `register_var_from_type_expr`
+        // (the reseed path below) repopulates; leaving them un-cleared
+        // lets a binding in one function pollute a same-named binding in
+        // the next, because every entry is keyed by bare variable name
+        // with no scope/function qualifier. The corruption case: a
+        // `fn f(s: ref String)` registers `vec_elem_types["s"]`, which
+        // then persists into `fn g() { let mut s = 1i64; … }` — at g's
+        // let site the stale "s is a Vec" entry queues a `FreeVecBuffer`
+        // cleanup against g's i64 counter, so scope exit reads a bogus
+        // `cap` past the 8-byte alloca and frees a garbage pointer
+        // (SIGABRT at -O0, miscompiled infinite loop at -O3). `var_type_names`
+        // was already cleared above for the same reason; the collection
+        // side-tables were simply missing from the list.
+        self.vec_elem_types.clear();
+        self.var_elem_type_exprs.clear();
+        self.string_vars.clear();
+        self.slice_elem_types.clear();
+        self.map_key_types.clear();
+        self.map_val_types.clear();
+        self.map_key_type_names.clear();
+        self.map_key_type_exprs.clear();
+        self.set_elem_types.clear();
+        self.set_elem_type_names.clear();
+        self.set_elem_type_exprs.clear();
+        self.atomic_var_inner_is_bool.clear();
         self.scope_cleanup_actions.clear();
         self.scope_cleanup_actions.push(Vec::new());
         // Slice 10: reseed module-binding side-tables after the per-fn
