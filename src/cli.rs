@@ -7953,9 +7953,35 @@ fn cmd_test(filter: Option<String>, all: bool) {
             .map(|fx| fx.resource_path.clone())
             .collect();
 
+        // Per-test timeout (line 847 sub-step 1). 30 s default — generous
+        // enough for slow integration tests, tight enough that a runaway
+        // loop surfaces in seconds rather than hours. `KARAC_TEST_TIMEOUT_SECS`
+        // env var overrides the default suite-wide (useful for CI and
+        // for the runner's own test fixtures that exercise the timeout
+        // path with a short value like `1`). Sub-step 2
+        // (kara.toml `[test] timeout_seconds = N`) and sub-step 3
+        // (`#[test(timeout_seconds = N)]` per-test attribute) layer on
+        // top in follow-on slices; precedence will be per-test attr >
+        // kara.toml > env var > default. Interpreter polls the deadline
+        // at every statement boundary and raises `ControlFlow::TimedOut`
+        // on the first observation past it, unified with the existing
+        // par-cancel check point.
+        let timeout = std::env::var("KARAC_TEST_TIMEOUT_SECS")
+            .ok()
+            .and_then(|s| s.parse::<u64>().ok())
+            .map(std::time::Duration::from_secs)
+            .unwrap_or_else(|| std::time::Duration::from_secs(30));
+        let deadline = std::time::Instant::now() + timeout;
+        interp.set_test_deadline(Some(deadline));
+
         let started = std::time::Instant::now();
         let outcome = interp.run_test_function(&t.fn_name);
         let duration_ms = started.elapsed().as_millis();
+        let timed_out = interp.timed_out;
+
+        // Clear the deadline so any post-test interpreter use (e.g.
+        // provider frame teardown) doesn't accidentally re-trigger.
+        interp.set_test_deadline(None);
 
         // Pop every fixture frame before emitting the event so any error
         // handling below sees a clean stack for the next test.
@@ -7963,7 +7989,18 @@ fn cmd_test(filter: Option<String>, all: bool) {
             interp.test_pop_provider_frame();
         }
 
-        if outcome.passed {
+        if timed_out {
+            failed += 1;
+            emit_test_event(
+                "test_timeout",
+                &format!(
+                    "\"test\":{},\"timeout_s\":{},\"elapsed_ms\":{}",
+                    json_string(&t.qualified),
+                    timeout.as_secs(),
+                    duration_ms
+                ),
+            );
+        } else if outcome.passed {
             passed += 1;
             emit_test_event(
                 "test_pass",

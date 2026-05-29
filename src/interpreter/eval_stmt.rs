@@ -77,6 +77,22 @@ impl<'a> super::Interpreter<'a> {
                 self.env.pop_scope();
                 return Err(cf);
             }
+            // `karac test` per-test deadline check. Polled here so a
+            // runaway loop or deadlocked test surfaces at the next
+            // statement boundary; cleanup still drains via the unified
+            // stack but errdefer is bypassed (TimedOut classifies as
+            // Normal, since the deadline is a runner-side guardrail,
+            // not a user-visible error path). The `timed_out` flag
+            // signals to the runner that the outcome is a timeout
+            // rather than a normal completion.
+            if self.observed_test_deadline_exceeded() {
+                self.timed_out = true;
+                let cf = ControlFlow::TimedOut;
+                let path = ExitPath::classify(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
+                self.env.pop_scope();
+                return Err(cf);
+            }
             // Sub-slice (3) of move-suppression — pre-statement
             // suppression for `return expr;` where expr is an
             // Identifier whose binding has a user `impl Drop`. The
@@ -129,6 +145,14 @@ impl<'a> super::Interpreter<'a> {
         let result = if let Some(ref expr) = block.final_expr {
             if self.observed_cancellation() {
                 let cf = ControlFlow::Cancelled;
+                let path = ExitPath::classify(&cf);
+                self.run_cleanup(&cleanup, &errdefers, &path);
+                self.env.pop_scope();
+                return Err(cf);
+            }
+            if self.observed_test_deadline_exceeded() {
+                self.timed_out = true;
+                let cf = ControlFlow::TimedOut;
                 let path = ExitPath::classify(&cf);
                 self.run_cleanup(&cleanup, &errdefers, &path);
                 self.env.pop_scope();
@@ -360,6 +384,20 @@ impl<'a> super::Interpreter<'a> {
             .as_ref()
             .map(|f| f.load(Ordering::Relaxed))
             .unwrap_or(false)
+    }
+
+    /// True iff `karac test` set a per-test deadline and the current
+    /// wall-clock time has reached or passed it. Polled at the same
+    /// between-statement boundaries as `observed_cancellation()` so a
+    /// timeout from a runaway loop / deadlock surfaces within one
+    /// statement of when it crosses the deadline. `None` deadline
+    /// (no test runner, or runner explicitly disabled timeouts) → no
+    /// check, zero overhead per statement.
+    fn observed_test_deadline_exceeded(&self) -> bool {
+        match self.test_deadline {
+            Some(deadline) => std::time::Instant::now() >= deadline,
+            None => false,
+        }
     }
 
     /// Set the shared `par {}` cancel flag (if any) when the active

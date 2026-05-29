@@ -189,6 +189,24 @@ pub struct Interpreter<'a> {
     /// `let_snapshot_watch`. The REPL reads this after `run()` returns;
     /// non-REPL callers ignore it.
     pub captured_let_values: HashMap<String, Value>,
+    /// `karac test` per-test deadline. `None` outside the test runner
+    /// (so a normal `karac run` of a user program never times out at
+    /// this layer — see the separate `karac run --timeout` flag for
+    /// the runtime side of that). When `Some(deadline)`,
+    /// `eval_block_inner` polls `Instant::now() >= deadline` at every
+    /// statement boundary (alongside the existing
+    /// `observed_cancellation()` check) and raises
+    /// `ControlFlow::TimedOut` on the first observation. Cleanup
+    /// (Drop / Defer) still drains, but errdefer does not fire — the
+    /// timeout is a runner guardrail, not a user-observable error.
+    pub(crate) test_deadline: Option<std::time::Instant>,
+    /// Set to `true` when the interpreter observed its
+    /// `test_deadline` and raised `ControlFlow::TimedOut`. The test
+    /// runner reads this after `run_test_function` returns so the
+    /// JSONL event can be a structured `test_timeout` (with the
+    /// configured timeout seconds + observed elapsed wall-clock)
+    /// rather than a generic `test_fail`.
+    pub timed_out: bool,
 }
 
 /// Per-pool state for the `Pool[T]` intrinsic. Lives in
@@ -303,7 +321,26 @@ impl<'a> Interpreter<'a> {
             let_value_overrides: HashMap::new(),
             let_snapshot_watch: HashSet::new(),
             captured_let_values: HashMap::new(),
+            test_deadline: None,
+            timed_out: false,
         }
+    }
+
+    /// Set the per-test wall-clock deadline for the next
+    /// `run_test_function` invocation. `karac test` calls this with
+    /// `Some(Instant::now() + timeout)` immediately before each test
+    /// fires; `eval_block_inner` polls the deadline at every statement
+    /// boundary and raises `ControlFlow::TimedOut` on the first
+    /// observation past the deadline. The companion `timed_out` flag
+    /// is reset to `false` here so a runner reusing the same
+    /// Interpreter across multiple tests (today's pattern in `cmd_test`)
+    /// doesn't carry a previous test's timeout state into the next
+    /// run. Pass `None` to clear the deadline outside the test
+    /// runner (e.g. when the same Interpreter is reused for non-test
+    /// evaluation).
+    pub fn set_test_deadline(&mut self, deadline: Option<std::time::Instant>) {
+        self.test_deadline = deadline;
+        self.timed_out = false;
     }
 
     /// Record a user-triggered runtime error and begin unwinding. Returns
@@ -517,6 +554,22 @@ impl<'a> Interpreter<'a> {
         // body called `process::exit`, which we treat as a failure.
         let unwind = self.pending_cf.take();
 
+        // The `timed_out` flag is the runner's discriminator between a
+        // normal-completed test and a timeout. Check first, ahead of
+        // runtime_errors / ExitUnwind so a deadline observed during
+        // recovery from a user error still surfaces as a timeout
+        // (rather than a misleading "test failed" with the cleanup-
+        // time runtime_error). The runner inspects `self.timed_out`
+        // after this returns to emit `test_timeout` JSONL.
+        if self.timed_out {
+            return TestOutcome {
+                passed: false,
+                message: Some("test exceeded its per-test timeout".to_string()),
+                span: None,
+                left: None,
+                right: None,
+            };
+        }
         if let Some(err) = self.runtime_errors.first().cloned() {
             return TestOutcome {
                 passed: false,
@@ -807,7 +860,8 @@ impl<'a> Interpreter<'a> {
                     Err(
                         cf @ (ControlFlow::ExitUnwind { .. }
                         | ControlFlow::RuntimeError
-                        | ControlFlow::Cancelled),
+                        | ControlFlow::Cancelled
+                        | ControlFlow::TimedOut),
                     ) => {
                         // Propagate unwind up the stack (defers already ran in eval_block_inner)
                         self.pending_cf = Some(cf);

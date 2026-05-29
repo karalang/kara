@@ -45,6 +45,17 @@ pub(crate) enum ControlFlow {
     /// silences this on the result side — the originating branch's
     /// real `Err` is the scope's return value under fail-fast.
     Cancelled,
+    /// The active `karac test` invocation observed its per-test
+    /// deadline at a between-statement boundary check. Distinct from
+    /// `Cancelled` so the test runner can distinguish "timed out"
+    /// from `par {}` cancellation, and so user `errdefer` blocks
+    /// don't fire (the timeout is a runner-side guardrail, not a
+    /// user-visible error path). Classifies as `ExitPath::Normal` —
+    /// cleanup actions still fire so any heap state is released, but
+    /// no errdefer / Err propagation. The runner reads the
+    /// `Interpreter.timed_out` flag after `run_test_function` returns
+    /// to surface the timeout outcome as a JSONL event.
+    TimedOut,
 }
 
 pub(crate) type EvalResult = Result<Value, ControlFlow>;
@@ -101,6 +112,12 @@ impl ExitPath {
             }
             ControlFlow::Cancelled => ExitPath::Cancelled(cancelled_sentinel()),
             ControlFlow::RuntimeError | ControlFlow::ExitUnwind { .. } => ExitPath::Panic,
+            // `TimedOut` is a runner-side guardrail, not a user-visible
+            // error path — classify as Normal so user `errdefer` blocks
+            // do not fire on test timeout. Cleanup actions (Drop /
+            // Defer) still drain via the unified stack, so heap state
+            // is released even on the timeout path.
+            ControlFlow::TimedOut => ExitPath::Normal,
             _ => ExitPath::Normal,
         }
     }

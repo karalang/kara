@@ -1561,7 +1561,14 @@ fn jsonl_lines(s: &str) -> Vec<&str> {
         .filter(|l| {
             matches!(
                 event_kind(l),
-                Some("run_start" | "test_pass" | "test_fail" | "test_skip" | "summary")
+                Some(
+                    "run_start"
+                        | "test_pass"
+                        | "test_fail"
+                        | "test_skip"
+                        | "test_timeout"
+                        | "summary"
+                )
             )
         })
         .collect()
@@ -1860,6 +1867,112 @@ fn test_test_two_positional_args_rejected() {
     assert!(!out.status.success());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("at most one"));
+}
+
+// ── Per-test timeout (line 847 sub-step 1) ──
+// A runaway loop in a test must be killed within `KARAC_TEST_TIMEOUT_SECS`
+// (default 30 s, overridable via env var for fast CI / fixture
+// runs). The runner emits a `test_timeout` JSONL event carrying the
+// test name, the configured timeout (in seconds), and the elapsed
+// wall-clock; the suite continues to the next test, summary reports
+// the timeout as a failure. Interpreter polls a per-test deadline
+// at every statement boundary (`eval_block_inner`), so a `while true {}`
+// surfaces within milliseconds of the deadline.
+
+#[test]
+fn test_test_per_test_timeout_kills_runaway_loop() {
+    let tmp = scratch_project("test-timeout-runaway");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"hangs\" {\n  \
+             let mut i: i64 = 0;\n  \
+             while true { i = i + 1; }\n  \
+             assert(i > 0);\n\
+         }\n",
+    );
+
+    let started = std::time::Instant::now();
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_TIMEOUT_SECS", "1")
+        .arg("test")
+        .output()
+        .unwrap();
+    let wall = started.elapsed();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // Wall-clock should be ~1 s (the timeout) plus a small slack for
+    // the per-statement poll cadence — well under our 15s harness
+    // timeout. If the watchdog were broken, the binary would either
+    // hang past the test harness's own timeout or run the full 30 s
+    // default. Generous 12 s ceiling here so a slow CI box doesn't
+    // flake on a perfectly-working timeout.
+    assert!(
+        wall < std::time::Duration::from_secs(12),
+        "expected per-test timeout to kill runaway in ~1s; took {:?}",
+        wall
+    );
+
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit when a test times out; stdout:\n{stdout}"
+    );
+
+    let lines = jsonl_lines(&stdout);
+    let timeout_line = lines
+        .iter()
+        .find(|l| event_kind(l) == Some("test_timeout"))
+        .unwrap_or_else(|| panic!("expected a test_timeout event in:\n{lines:?}"));
+    assert!(
+        timeout_line.contains("\"test\":\"hangs\""),
+        "test name missing from timeout event: {timeout_line}"
+    );
+    assert!(
+        timeout_line.contains("\"timeout_s\":1"),
+        "configured timeout missing from event: {timeout_line}"
+    );
+
+    let summary = lines.last().unwrap();
+    assert_eq!(event_kind(summary), Some("summary"));
+    assert!(
+        summary.contains("\"failed\":1"),
+        "summary should count the timeout as a failure: {summary}"
+    );
+}
+
+#[test]
+fn test_test_normal_completion_under_timeout_passes() {
+    // Cheap baseline: a normal-completing test under a generous
+    // 5 s timeout reports `test_pass`, not `test_timeout`.
+    let tmp = scratch_project("test-timeout-no-trigger");
+    write(&tmp.join("kara.toml"), "[package]\nname = \"demo\"\n");
+    write(&tmp.join("src/main.kara"), "fn main() {}\n");
+    write(
+        &tmp.join("src/main_test.kara"),
+        "test \"quick\" { assert(1 + 1 == 2); }\n",
+    );
+
+    let out = karac_bin()
+        .current_dir(&tmp)
+        .env("KARAC_TEST_TIMEOUT_SECS", "5")
+        .arg("test")
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    let lines = jsonl_lines(&stdout);
+    assert!(
+        lines.iter().any(|l| event_kind(l) == Some("test_pass")),
+        "expected test_pass event; got: {lines:?}"
+    );
+    assert!(
+        !lines.iter().any(|l| event_kind(l) == Some("test_timeout")),
+        "fast test should not emit test_timeout; got: {lines:?}"
+    );
 }
 
 #[test]
