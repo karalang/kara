@@ -24748,6 +24748,39 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_struct_field_access_body() {
+        // Regression: `Vec[Struct].sort_by_key(|s| s.field)` (closure body
+        // is a field access on a struct element) used to silently return
+        // the input order. Root cause: the inline thunk emitter bound the
+        // closure param only via `self.variables` but never registered
+        // `self.var_type_names[param]`, so `compile_field_access` couldn't
+        // recover the struct shape and the field-extract step elided —
+        // the body compiled to a bare struct load with no extractvalue,
+        // and the cascade returned an unsorted permutation. Fixed by
+        // plumbing the Vec element's Kāra type name through the thunk
+        // emitter (`emit_sort_by_key_inline_thunk`) so the param gets
+        // registered alongside its variable slot. Pinned with the
+        // canonical primitive-field key the original bug reproducer used.
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    v.push(Score { v: 30 });
+    v.push(Score { v: 10 });
+    v.push(Score { v: 20 });
+    v.sort_by_key(|s| s.v);
+    for s in v.iter() { println(s.v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["10", "20", "30"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

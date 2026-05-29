@@ -1920,8 +1920,29 @@ impl<'ctx> super::Codegen<'ctx> {
                         );
                     }
                 };
-                let (thunk, ctx_alloca) =
-                    self.emit_sort_by_key_inline_thunk(params, body, elem_ty)?;
+                // Look up the Vec element's Kāra type name so the thunk can
+                // register `var_type_names` for the closure param. Without
+                // that, `compile_field_access` on a body like `|s| s.field`
+                // can't recover the struct shape and the field load is
+                // silently elided. Pulls from `var_elem_type_exprs` (the
+                // canonical record of a Vec binding's element type expr) —
+                // the canonical first segment is the struct name when the
+                // element is a path-typed struct; for tuple / generic / etc.
+                // shapes we just pass `None` and the thunk falls back to
+                // the existing param-only binding.
+                let elem_type_name: Option<String> = self
+                    .var_elem_type_exprs
+                    .get(var_name)
+                    .and_then(|te| match &te.kind {
+                        TypeKind::Path(p) => p.segments.last().cloned(),
+                        _ => None,
+                    });
+                let (thunk, ctx_alloca) = self.emit_sort_by_key_inline_thunk(
+                    params,
+                    body,
+                    elem_ty,
+                    elem_type_name.as_deref(),
+                )?;
 
                 let data_ptr_ptr = self
                     .builder
@@ -2080,6 +2101,7 @@ impl<'ctx> super::Codegen<'ctx> {
         params: &[ClosureParam],
         body: &Expr,
         elem_ty: BasicTypeEnum<'ctx>,
+        elem_type_name: Option<&str>,
     ) -> Result<(FunctionValue<'ctx>, PointerValue<'ctx>), String> {
         let ptr_ty = self.context.ptr_type(AddressSpace::default());
         let i64_t = self.context.i64_type();
@@ -2187,6 +2209,19 @@ impl<'ctx> super::Codegen<'ctx> {
             _ => "_kp".to_string(),
         };
         let param_ty = a_val.get_type();
+
+        // Register the closure param's Kāra type name (the Vec's element
+        // type) under `var_type_names` so `compile_field_access` can
+        // resolve struct field reads inside the closure body. Without
+        // this, a body like `|s| s.v` compiles to just the struct load —
+        // the field-extract step silently elides because
+        // `type_name_of_expr(s)` returns `None`. The registration applies
+        // to both compiles below (first and second body recompile);
+        // saved_var_types is restored when the thunk emitter returns.
+        if let Some(name) = elem_type_name {
+            self.var_type_names
+                .insert(param_name.clone(), name.to_string());
+        }
 
         // 8. First compile (key_a): bind param to element a, compile body.
         let alloca_a = self.create_entry_alloca(thunk_fn, &format!("{}.a", param_name), param_ty);
