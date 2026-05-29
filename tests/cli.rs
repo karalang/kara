@@ -1116,6 +1116,11 @@ fn test_build_bare_file_hot_swap_accepted() {
         .args(["build", "tests/snapshots/clean.kara", "--enable-hot-swap"])
         .output()
         .unwrap();
+    // `karac build` derives the output executable name from the source
+    // file_stem and writes it to CWD on the llvm-feature path; remove the
+    // `clean` (or `clean.exe`) artifact so a `--features llvm` run doesn't
+    // litter the working tree. Mirrors test_lint_cli_allow_via_build_subcommand.
+    let _ = std::fs::remove_file(if cfg!(windows) { "clean.exe" } else { "clean" });
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         !stderr.contains("unknown flag"),
