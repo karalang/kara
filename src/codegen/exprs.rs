@@ -1135,11 +1135,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 ty: soa_ty.into(),
             },
         );
-        // Track for scope cleanup (need to free each group buffer). SoA's
-        // multi-group cleanup is its own shape; the recursive-element drop
-        // path doesn't apply here, so pass `None` to use the legacy
-        // outer-buffer-only free.
-        self.track_vec_var(alloca, None);
+        // Track for scope cleanup. SoA storage is multi-allocation (one
+        // buffer per hot group + optional cold), so the cleanup routes
+        // through `FreeSoaGroups` rather than `FreeVecBuffer` — the
+        // latter would interpret the SoA alloca as `{ptr,len,cap}` and
+        // both mis-read the cap slot and free only `g0`.
+        self.track_soa_groups(alloca, soa_ty, soa.num_groups as u32, has_cold);
         Ok(())
     }
 

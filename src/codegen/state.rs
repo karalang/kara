@@ -197,6 +197,36 @@ pub(crate) enum CleanupAction<'ctx> {
         /// *Recursive Drop for Heap-Owned Collection Elements*.
         elem_ty: Option<BasicTypeEnum<'ctx>>,
     },
+    /// Free the per-group heap buffers of a SoA-laid-out `Vec[T]` at scope
+    /// exit. SoA storage is multi-allocation — one buffer per hot group
+    /// plus an optional cold-group buffer — and the outer struct's field
+    /// layout is `{ ptr_g0, ..., ptr_g(N-1), [ptr_cold,] i64 len, i64 cap }`
+    /// rather than `FreeVecBuffer`'s `{ ptr, len, cap }`. Routing SoA
+    /// through `FreeVecBuffer` (the pre-2026-05-29 state) GEP'd the
+    /// generic Vec struct type against the SoA alloca, which (a) read
+    /// `len` from the cap slot for any N≥2 hot groups (struct field 2
+    /// of `{ ptr, len, cap }` lands at offset 16, which is the SoA
+    /// `len` field whenever there are ≥2 leading pointer fields) and
+    /// (b) freed only `ptr_g0`, leaking every other group buffer. This
+    /// variant fixes both: GEPs against the SoA struct type with the
+    /// correct `cap` index, and frees every group pointer (hot + cold)
+    /// in declaration order.
+    FreeSoaGroups {
+        /// Alloca pointer of the SoA Vec struct
+        /// (`{ ptr_g0, ..., [ptr_cold,] len, cap }`).
+        soa_alloca: PointerValue<'ctx>,
+        /// LLVM struct type for the SoA Vec — needed for `struct_gep`
+        /// at cleanup so the `cap` and per-group-pointer slots are
+        /// addressed by their actual indices in this layout, not by
+        /// the plain Vec `{ptr,len,cap}` shape's indices.
+        soa_struct_ty: StructType<'ctx>,
+        /// Number of hot groups (matches `SoaLayout.num_groups`). Cleanup
+        /// iterates `0..num_hot_groups` to free each hot group buffer.
+        num_hot_groups: u32,
+        /// `true` when the layout has a cold group — its pointer lives
+        /// at struct field index `num_hot_groups` (just before `len`).
+        has_cold: bool,
+    },
     /// Free an owned `Map[K,V]` / `Set[T]` handle. Routes to
     /// `karac_map_free_with_drop_vec(handle, key_is_vec, val_is_vec)` when
     /// either flag is set (i.e. the key or value type follows the

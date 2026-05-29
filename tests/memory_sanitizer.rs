@@ -2571,4 +2571,93 @@ fn main() {
             "kata_8_atoi_bytes_one_pass",
         );
     }
+
+    // ── SoA-laid-out Vec drop ────────────────────────────────────
+    // `layout entities: Vec[Entity]` lowers to multi-allocation storage —
+    // one buffer per hot group plus an optional cold-group buffer — and
+    // the outer struct shape is `{ ptr_g0, ..., ptr_g(N-1), [ptr_cold,]
+    // i64 len, i64 cap }` rather than the plain Vec `{ptr, len, cap}`.
+    // Before the `FreeSoaGroups` cleanup variant landed, the scope-exit
+    // walker routed SoA through `FreeVecBuffer`, which both (a) read the
+    // `cap > 0` guard from the wrong slot (offset 16 in a 2-hot-group
+    // SoA is the `len` field, not cap) and (b) freed only the first
+    // group pointer, leaking every other hot group and the cold buffer.
+    // These tests are the load-bearing ASAN coverage for that fix.
+
+    #[test]
+    fn asan_soa_drop_two_hot_groups_primitive() {
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1.0, y: 2.0, hp: 100 });
+    entities.push(Entity { x: 3.0, y: 4.0, hp: 200 });
+    entities.push(Entity { x: 5.0, y: 6.0, hp: 300 });
+    entities.push(Entity { x: 7.0, y: 8.0, hp: 400 });
+    entities.push(Entity { x: 9.0, y: 10.0, hp: 500 });
+    println(entities.len());
+}
+"#,
+            &["5"],
+            "soa_drop_two_hot_groups_primitive",
+        );
+    }
+
+    #[test]
+    fn asan_soa_drop_with_cold_group_primitive() {
+        // Cold group adds an extra buffer that pre-fix codegen never
+        // freed (the cold pointer sits between the hot pointers and the
+        // len/cap pair; the legacy free path read field 0 only). Five
+        // pushes cross the cap 0 → 4 → 8 realloc boundary so the prior
+        // cold-buffer free path is also exercised.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1.0, y: 2.0, hp: 100, label: 11 });
+    entities.push(Entity { x: 3.0, y: 4.0, hp: 200, label: 22 });
+    entities.push(Entity { x: 5.0, y: 6.0, hp: 300, label: 33 });
+    entities.push(Entity { x: 7.0, y: 8.0, hp: 400, label: 44 });
+    entities.push(Entity { x: 9.0, y: 10.0, hp: 500, label: 55 });
+    println(entities.len());
+}
+"#,
+            &["5"],
+            "soa_drop_with_cold_group_primitive",
+        );
+    }
+
+    #[test]
+    fn asan_soa_drop_empty_collection() {
+        // Empty SoA — never pushed, so cap stays 0 and the cleanup
+        // should short-circuit at the `is_heap` guard without freeing
+        // anything. Catches a regression where the cap check reads the
+        // wrong slot and accidentally calls free on undef group ptrs.
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: f64, y: f64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let entities: Vec[Entity] = Vec.new();
+    println(entities.len());
+}
+"#,
+            &["0"],
+            "soa_drop_empty_collection",
+        );
+    }
 }

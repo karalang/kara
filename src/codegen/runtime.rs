@@ -447,6 +447,30 @@ impl<'ctx> super::Codegen<'ctx> {
         }
     }
 
+    /// Register a SoA-laid-out Vec for scope-exit cleanup. Mirrors
+    /// `track_vec_var` but emits a `FreeSoaGroups` action whose cleanup
+    /// loops over every hot group pointer and (if present) the cold
+    /// pointer, GEP'ing against the SoA struct type so the cap-check
+    /// reads the actual cap slot (not whichever slot collides with
+    /// `vec_struct_type`'s field 2). Without this, an SoA Vec routed
+    /// through `track_vec_var(_, None)` leaks every group except `g0`.
+    pub(super) fn track_soa_groups(
+        &mut self,
+        soa_alloca: PointerValue<'ctx>,
+        soa_struct_ty: StructType<'ctx>,
+        num_hot_groups: u32,
+        has_cold: bool,
+    ) {
+        if let Some(frame) = self.scope_cleanup_actions.last_mut() {
+            frame.push(CleanupAction::FreeSoaGroups {
+                soa_alloca,
+                soa_struct_ty,
+                num_hot_groups,
+                has_cold,
+            });
+        }
+    }
+
     /// Emit a runtime zero-store to a Vec/String alloca's `cap` field
     /// (slot index 2 of the `{data, len, cap}` struct). Used to suppress
     /// a queued `FreeVecBuffer` whose buffer ownership has moved to a
@@ -1232,6 +1256,65 @@ impl<'ctx> super::Codegen<'ctx> {
                 self.builder
                     .build_call(self.free_fn, &[data.into()], "")
                     .unwrap();
+                self.builder.build_unconditional_branch(skip_bb).unwrap();
+                self.builder.position_at_end(skip_bb);
+            }
+            CleanupAction::FreeSoaGroups {
+                soa_alloca,
+                soa_struct_ty,
+                num_hot_groups,
+                has_cold,
+            } => {
+                // cap > 0 ⇒ groups were allocated. Read cap via the SoA
+                // struct type so the GEP lands on the actual cap slot
+                // (last field), not whichever slot collides with the
+                // plain Vec `{ptr,len,cap}` layout's field 2.
+                let cap_idx = *num_hot_groups + if *has_cold { 1 } else { 0 } + 1;
+                let cap_ptr = self
+                    .builder
+                    .build_struct_gep(*soa_struct_ty, *soa_alloca, cap_idx, "soa.cleanup.cap.ptr")
+                    .unwrap();
+                let cap = self
+                    .builder
+                    .build_load(i64_t, cap_ptr, "soa.cleanup.cap")
+                    .unwrap()
+                    .into_int_value();
+                let zero = i64_t.const_int(0, false);
+                let is_heap = self
+                    .builder
+                    .build_int_compare(IntPredicate::UGT, cap, zero, "soa.cleanup.is_heap")
+                    .unwrap();
+                let free_bb = self.context.append_basic_block(fn_val, "soa.cleanup.free");
+                let skip_bb = self.context.append_basic_block(fn_val, "soa.cleanup.skip");
+                self.builder
+                    .build_conditional_branch(is_heap, free_bb, skip_bb)
+                    .unwrap();
+
+                self.builder.position_at_end(free_bb);
+                // Free each hot group buffer in declaration order, then the
+                // cold buffer if present. Each group is its own malloc
+                // (see `compile_soa_method`'s push-grow loop); a single
+                // `free(g0)` leaks the rest.
+                let total_ptrs = *num_hot_groups + if *has_cold { 1 } else { 0 };
+                for gi in 0..total_ptrs {
+                    let grp_ptr_ptr = self
+                        .builder
+                        .build_struct_gep(
+                            *soa_struct_ty,
+                            *soa_alloca,
+                            gi,
+                            &format!("soa.cleanup.g{}.ptr", gi),
+                        )
+                        .unwrap();
+                    let grp_ptr = self
+                        .builder
+                        .build_load(ptr_ty, grp_ptr_ptr, &format!("soa.cleanup.g{}.buf", gi))
+                        .unwrap()
+                        .into_pointer_value();
+                    self.builder
+                        .build_call(self.free_fn, &[grp_ptr.into()], "")
+                        .unwrap();
+                }
                 self.builder.build_unconditional_branch(skip_bb).unwrap();
                 self.builder.position_at_end(skip_bb);
             }
