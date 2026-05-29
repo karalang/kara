@@ -24713,6 +24713,41 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_user_impl_ord_cmp_returns_ordering() {
+        // Regression: `impl Ord for T { fn cmp(self, other: T) -> Ordering }`
+        // used to emit the function with `i64` return type (the int tag of
+        // the unit-only Ordering enum) instead of the `{ i64 }` struct shape
+        // its body builds via the `.cmp` lowering in method_call.rs:670 —
+        // module verification rejected the program with
+        // `Function return type does not match operand type of return inst!
+        //  ret { i64 } %ord  i64`. Root cause: `Ordering` wasn't seeded in
+        // `seed_builtin_enum_layouts`, so `llvm_type_for_name("Ordering")`
+        // fell through to the i64 default. The seed lands the layout
+        // consistently across declaration and value sites. The bug had been
+        // latent forever because no consumer made user-Ord-impl
+        // typechecker-reachable; the user-impl-Ord investigation surfaced
+        // it. See docs/implementation_checklist/phase-7-codegen.md.
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+impl PartialEq for Score { fn eq(self, other: Score) -> bool { self.v == other.v } }
+impl Eq for Score {}
+impl PartialOrd for Score { fn partial_cmp(self, other: Score) -> Option[Ordering] { Some(self.v.cmp(other.v)) } }
+impl Ord for Score { fn cmp(self, other: Score) -> Ordering { self.v.cmp(other.v) } }
+fn main() {
+    let s1 = Score { v: 1i64 };
+    let s2 = Score { v: 2i64 };
+    let _ = s1.cmp(s2);
+    println(10i64);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "10");
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

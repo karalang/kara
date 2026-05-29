@@ -2986,6 +2986,56 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("Json".to_string());
         }
 
+        // Stdlib `Ordering` enum — unit-only `Less` / `Equal` / `Greater`,
+        // baked into the stdlib like Json / TcpError above. Without a
+        // seed here, `llvm_type_for_name("Ordering")` falls through to
+        // the `i64` default in `types_lowering.rs`, so any function
+        // declaring `-> Ordering` (e.g. user `impl Ord for T { fn cmp
+        // -> Ordering }`, or the typechecker-accepted `partial_cmp`
+        // returning `Option[Ordering]`) gets `define i64` while its
+        // body lowers `Ordering`-producing expressions to `{ i64 tag }`
+        // via the manual fallback in `method_call.rs:670`'s `.cmp` arm.
+        // The mismatch was previously latent: until user `impl Ord`
+        // became typechecker-reachable (see the user-impl-Ord entry
+        // and the related sort_by_key follow-ons in
+        // docs/implementation_checklist/phase-7-codegen.md), no program
+        // could exercise an `Ordering`-returning function decl in user
+        // code. With the seed, `Ordering` resolves consistently to the
+        // 1-word `{ i64 tag }` struct at both declaration and value
+        // sites. No payload words (every variant is unit) and no
+        // drop kinds (no fields to drop).
+        if !self.enum_layouts.contains_key("Ordering") {
+            let ordering_type = self.context.struct_type(&[i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Less".to_string(), 0u64);
+            tags.insert("Equal".to_string(), 1u64);
+            tags.insert("Greater".to_string(), 2u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Less".to_string(), 0usize);
+            field_counts.insert("Equal".to_string(), 0usize);
+            field_counts.insert("Greater".to_string(), 0usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Less".to_string(), Vec::new());
+            field_word_offsets.insert("Equal".to_string(), Vec::new());
+            field_word_offsets.insert("Greater".to_string(), Vec::new());
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Less".to_string(), Vec::new());
+            field_drop_kinds.insert("Equal".to_string(), Vec::new());
+            field_drop_kinds.insert("Greater".to_string(), Vec::new());
+            self.enum_layouts.insert(
+                "Ordering".to_string(),
+                EnumLayout {
+                    llvm_type: ordering_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("Ordering".to_string());
+        }
+
         // Phase 6 line 17 slice 9b — stdlib `TcpError` enum. Baked
         // into `runtime/stdlib/tcp.kara` so the typechecker sees it
         // via `STDLIB_PROGRAMS`; codegen's `declare_enums` only walks
