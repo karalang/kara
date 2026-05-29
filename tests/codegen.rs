@@ -23926,4 +23926,110 @@ fn main() {
             assert_eq!(out.trim(), "2");
         }
     }
+
+    #[test]
+    fn test_e2e_vec_sort_default_ascending() {
+        // Bare `Vec.sort()` (no comparator) must actually sort in codegen.
+        // Regression: it previously fell through the vec_method catch-all to
+        // a stand-in `0` and silently left the Vec unsorted in compiled
+        // binaries (correct only in the interpreter).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5); v.push(2); v.push(8); v.push(1); v.push(2);
+    v.sort();
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "2", "5", "8"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_reverse() {
+        // `Vec.reverse()` must reverse in place in codegen (same silent-no-op
+        // regression class as `sort`).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(1); v.push(2); v.push(3); v.push(4);
+    v.reverse();
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["4", "3", "2", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_codegen_rejected() {
+        // `sort_by_key` has no codegen arm yet. The hardened catch-all must
+        // reject it at compile time rather than silently no-op (the bug this
+        // change fixes). Pin the diagnostic so the rejection can't regress
+        // back to a fall-through compile.
+        let src = r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(3); v.push(1);
+    v.sort_by_key(|x| x);
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("expected codegen to reject sort_by_key");
+        assert!(
+            err.contains("sort_by_key") && err.contains("not yet supported in codegen"),
+            "expected loud sort_by_key rejection; got: {}",
+            err
+        );
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_non_integer_element_rejected() {
+        // `sort()` only has a default comparator for integer element types.
+        // A tuple-element Vec typechecks but must be rejected loudly in
+        // codegen (directing the user to sort_by) rather than silently
+        // leaving it unsorted.
+        let src = r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 1));
+    v.push((1, 2));
+    v.sort();
+    println(v.len());
+}
+"#;
+        let mut parsed = karac::parse(src);
+        assert!(
+            parsed.errors.is_empty(),
+            "parse errors: {:?}",
+            parsed.errors
+        );
+        let resolved = karac::resolve(&parsed.program);
+        let typed = karac::typecheck(&parsed.program, &resolved);
+        karac::lower(&mut parsed.program, &typed);
+        let err = compile_to_ir(&parsed.program, None, None)
+            .expect_err("expected codegen to reject sort() on non-integer elements");
+        assert!(
+            err.contains("only integer element types"),
+            "expected integer-only sort diagnostic; got: {}",
+            err
+        );
+    }
 }

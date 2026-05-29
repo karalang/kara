@@ -1760,8 +1760,221 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+            "sort" => {
+                if !args.is_empty() {
+                    return Err(format!("Vec.sort expects 0 arguments, got {}", args.len()));
+                }
+                // Bare `sort()` is `sort_by` with the natural ascending order.
+                // Only integer element types have a default comparator in
+                // codegen today — consistent with the signed `.cmp` lowering
+                // in method_call.rs. Other element types (floats, tuples,
+                // strings) must use `sort_by(|a, b| ...)` with an explicit
+                // comparator; the typechecker accepts them but the default
+                // ordering has no lowering yet, so error loudly here rather
+                // than silently leaving the Vec unsorted.
+                if !elem_ty.is_int_type() {
+                    return Err(
+                        "Vec.sort() in codegen supports only integer element types; \
+                         use sort_by(|a, b| a.cmp(b)) for other element types"
+                            .to_string(),
+                    );
+                }
+                let thunk = self.emit_default_sort_thunk(elem_ty);
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+
+                let runtime_fn = self
+                    .module
+                    .get_function("karac_vec_sort_by")
+                    .unwrap_or_else(|| {
+                        let void_t = self.context.void_type();
+                        let fn_ty = void_t.fn_type(
+                            &[
+                                ptr_ty.into(),
+                                i64_t.into(),
+                                i64_t.into(),
+                                ptr_ty.into(),
+                                ptr_ty.into(),
+                            ],
+                            false,
+                        );
+                        self.module.add_function(
+                            "karac_vec_sort_by",
+                            fn_ty,
+                            Some(Linkage::External),
+                        )
+                    });
+
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+                let null_ctx = ptr_ty.const_null();
+                self.builder
+                    .build_call(
+                        runtime_fn,
+                        &[
+                            BasicMetadataValueEnum::from(data),
+                            BasicMetadataValueEnum::from(len),
+                            BasicMetadataValueEnum::from(elem_size),
+                            BasicMetadataValueEnum::from(thunk_ptr),
+                            BasicMetadataValueEnum::from(null_ctx),
+                        ],
+                        "",
+                    )
+                    .unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            "reverse" => {
+                if !args.is_empty() {
+                    return Err(format!(
+                        "Vec.reverse expects 0 arguments, got {}",
+                        args.len()
+                    ));
+                }
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+
+                let runtime_fn = self
+                    .module
+                    .get_function("karac_vec_reverse")
+                    .unwrap_or_else(|| {
+                        let void_t = self.context.void_type();
+                        let fn_ty =
+                            void_t.fn_type(&[ptr_ty.into(), i64_t.into(), i64_t.into()], false);
+                        self.module.add_function(
+                            "karac_vec_reverse",
+                            fn_ty,
+                            Some(Linkage::External),
+                        )
+                    });
+
+                self.builder
+                    .build_call(
+                        runtime_fn,
+                        &[
+                            BasicMetadataValueEnum::from(data),
+                            BasicMetadataValueEnum::from(len),
+                            BasicMetadataValueEnum::from(elem_size),
+                        ],
+                        "",
+                    )
+                    .unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
+            // No silent fall-through: a Vec/String method the typechecker
+            // accepts but codegen has no arm for must fail the build loudly,
+            // not return a stand-in `0` that masquerades as a no-op result
+            // (the bug that hid `sort` / `sort_by_key` / `reverse` silently
+            // doing nothing in compiled binaries). See design.md § Codegen.
+            other => Err(format!(
+                "Vec/String method '{}' is not yet supported in codegen",
+                other
+            )),
         }
+    }
+
+    /// Default ascending-order comparator thunk for `Vec.sort()` on integer
+    /// element types. Signature `extern "C" fn(ctx, *a, *b) -> i64` matching
+    /// `karac_vec_sort_by`'s contract; `ctx` is unused (no captures). Returns
+    /// `-1 / 0 / +1` via a signed compare, mirroring the `.cmp` lowering in
+    /// method_call.rs so `sort()` and `sort_by(|a, b| a.cmp(b))` agree.
+    pub(super) fn emit_default_sort_thunk(
+        &mut self,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> FunctionValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_default_cmp_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        self.current_fn = Some(thunk_fn);
+
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+        let a = self
+            .builder
+            .build_load(elem_ty, a_ptr, "a")
+            .unwrap()
+            .into_int_value();
+        let b = self
+            .builder
+            .build_load(elem_ty, b_ptr, "b")
+            .unwrap()
+            .into_int_value();
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, a, b, "lt")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, a, b, "gt")
+            .unwrap();
+        let zero = i64_t.const_zero();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let gt_sel = self
+            .builder
+            .build_select(gt, pos_one, zero, "gt.sel")
+            .unwrap()
+            .into_int_value();
+        let res = self
+            .builder
+            .build_select(lt, neg_one, gt_sel, "cmp.sel")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        self.current_fn = saved_fn;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        thunk_fn
     }
 
     /// Inline-closure fast path for `Vec.sort_by`. Fuses the closure body

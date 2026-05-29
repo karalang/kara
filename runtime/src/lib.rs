@@ -3397,6 +3397,36 @@ pub unsafe extern "C" fn karac_vec_sort_by(
     ptr::copy_nonoverlapping(tmp.as_ptr(), data, total_bytes);
 }
 
+/// In-place reverse of a raw byte buffer (`len` elements of `elem_size` bytes).
+/// Backs `Vec.reverse` codegen. See `src/codegen/vec_method.rs` `"reverse"`
+/// arm and the matching interpreter arm.
+///
+/// # Safety
+///
+/// `data` must point to `len * elem_size` initialized, contiguous bytes that
+/// the caller exclusively owns for the duration of the call. `len < 2` or
+/// `elem_size <= 0` are accepted and produce a no-op.
+#[no_mangle]
+pub unsafe extern "C" fn karac_vec_reverse(data: *mut u8, len: i64, elem_size: i64) {
+    if data.is_null() || len < 2 || elem_size <= 0 {
+        return;
+    }
+    let n = len as usize;
+    let sz = elem_size as usize;
+    let mut tmp: Vec<u8> = vec![0u8; sz];
+    let mut lo = 0usize;
+    let mut hi = n - 1;
+    while lo < hi {
+        let lp = data.add(lo * sz);
+        let hp = data.add(hi * sz);
+        ptr::copy_nonoverlapping(lp, tmp.as_mut_ptr(), sz);
+        ptr::copy_nonoverlapping(hp, lp, sz);
+        ptr::copy_nonoverlapping(tmp.as_ptr(), hp, sz);
+        lo += 1;
+        hi -= 1;
+    }
+}
+
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
 //
 // The runtime crate's `cargo test -p karac-runtime` binary has its own
