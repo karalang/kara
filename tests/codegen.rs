@@ -24220,6 +24220,85 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_tuple_lexicographic() {
+        // Integer-tuple keys (`(i64, i64)`) sort lexicographically — first
+        // field is primary, second tie-breaks. Pins the StructValue arm of
+        // emit_sort_by_key_inline_thunk's key dispatch.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((3, 1));
+    v.push((1, 2));
+    v.push((2, 3));
+    v.sort_by_key(|t| (t.1, t.0));
+    for t in v.iter() {
+        let (a, b) = t;
+        println(a);
+        println(b);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Keys: (1,3), (2,1), (3,2) — already ascending by key, so order
+            // is (3,1), (1,2), (2,3).
+            assert_eq!(lines, vec!["3", "1", "1", "2", "2", "3"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_tuple_tie_break() {
+        // First field ties on 1 across three elements; second field must
+        // break the tie ascending. Verifies the cascade's `(neq ? cmp_i :
+        // rest)` doesn't short-circuit on the tied primary field.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[(i64, i64)] = Vec.new();
+    v.push((1, 5));
+    v.push((2, 0));
+    v.push((1, 2));
+    v.push((1, 8));
+    v.sort_by_key(|t| (t.0, t.1));
+    for t in v.iter() {
+        let (a, b) = t;
+        println(a);
+        println(b);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Expected: (1,2), (1,5), (1,8), (2,0).
+            assert_eq!(lines, vec!["1", "2", "1", "5", "1", "8", "2", "0"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_triple_tuple_cascade() {
+        // Three-component integer-tuple key exercises a three-level cascade.
+        // All inputs are odd, so `x % 2 == 1` ties the primary component;
+        // the second component (the raw value) must drive the order.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(7); v.push(3); v.push(7); v.push(1);
+    v.sort_by_key(|x| (x % 2i64, x, x % 3i64));
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "3", "7", "7"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

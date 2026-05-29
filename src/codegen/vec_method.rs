@@ -2214,42 +2214,131 @@ impl<'ctx> super::Codegen<'ctx> {
         );
         let key_b_val = self.compile_expr(body)?;
 
-        // 10. Compare the two keys via signed -1/0/+1 select, matching the
-        // default-order `sort()` thunk's shape. Restricted to integer key
-        // types — non-integer keys fail loudly here rather than producing
-        // a silently-wrong ordering.
-        let (ka, kb) = match (key_a_val, key_b_val) {
-            (BasicValueEnum::IntValue(ka), BasicValueEnum::IntValue(kb)) => (ka, kb),
+        // 10. Compare the two keys → i64 `-1 / 0 / +1`. Two key shapes:
+        //   (a) plain integer key — signed compare, matching the
+        //       default-order `sort()` thunk and the `.cmp` lowering in
+        //       method_call.rs.
+        //   (b) integer-tuple key (`(i64, i64)`, `(i64, i64, i64)`, …) —
+        //       lexicographic compare, equivalent to Rust's derived
+        //       `Ord` on tuples. Detectable without Kara-type plumbing
+        //       because all-integer tuples are unambiguous at the LLVM
+        //       struct level. Implemented as a cascade of selects: build
+        //       the result from the last field backward, with each
+        //       earlier field's `(neq ? cmp_i : rest)` overriding the
+        //       accumulated rest when it differs. Pure data-flow, no new
+        //       basic blocks.
+        // Other key shapes (String, structs implementing Ord, floats)
+        // still error loudly — see the *non-integer key type* follow-on
+        // entry in docs/implementation_checklist/phase-7-codegen.md.
+        let i64_zero = i64_t.const_zero();
+        let i64_neg_one = i64_t.const_int((-1i64) as u64, true);
+        let i64_pos_one = i64_t.const_int(1, false);
+        let res = match (key_a_val, key_b_val) {
+            (BasicValueEnum::IntValue(ka), BasicValueEnum::IntValue(kb)) => {
+                let lt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SLT, ka, kb, "key.lt")
+                    .unwrap();
+                let gt = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::SGT, ka, kb, "key.gt")
+                    .unwrap();
+                let gt_sel = self
+                    .builder
+                    .build_select(gt, i64_pos_one, i64_zero, "key.gt.sel")
+                    .unwrap()
+                    .into_int_value();
+                self.builder
+                    .build_select(lt, i64_neg_one, gt_sel, "key.cmp.sel")
+                    .unwrap()
+                    .into_int_value()
+            }
+            (BasicValueEnum::StructValue(ka), BasicValueEnum::StructValue(kb)) => {
+                let struct_ty = ka.get_type();
+                let n_fields = struct_ty.count_fields();
+                if n_fields == 0 {
+                    return Err(
+                        "Vec.sort_by_key key cannot be an empty tuple / unit type".to_string()
+                    );
+                }
+                let all_int = (0..n_fields).all(|i| {
+                    struct_ty
+                        .get_field_type_at_index(i)
+                        .map(|t| t.is_int_type())
+                        .unwrap_or(false)
+                });
+                if !all_int {
+                    return Err(
+                        "Vec.sort_by_key in codegen supports integer and integer-tuple key \
+                         types today; use sort_by(|a, b| ...) with an explicit comparator \
+                         for other key types"
+                            .to_string(),
+                    );
+                }
+                // Cascade from the last field backward so the FIRST field
+                // takes priority (its `(neq ? cmp_0 : rest)` wraps the
+                // accumulated rest from fields 1..n).
+                let mut result = i64_zero;
+                for i in (0..n_fields).rev() {
+                    let ai = self
+                        .builder
+                        .build_extract_value(ka, i, &format!("ka.f{}", i))
+                        .unwrap()
+                        .into_int_value();
+                    let bi = self
+                        .builder
+                        .build_extract_value(kb, i, &format!("kb.f{}", i))
+                        .unwrap()
+                        .into_int_value();
+                    let lt = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SLT,
+                            ai,
+                            bi,
+                            &format!("f{}.lt", i),
+                        )
+                        .unwrap();
+                    let gt = self
+                        .builder
+                        .build_int_compare(
+                            inkwell::IntPredicate::SGT,
+                            ai,
+                            bi,
+                            &format!("f{}.gt", i),
+                        )
+                        .unwrap();
+                    let neq = self
+                        .builder
+                        .build_or(lt, gt, &format!("f{}.neq", i))
+                        .unwrap();
+                    let gt_sel = self
+                        .builder
+                        .build_select(gt, i64_pos_one, i64_zero, &format!("f{}.gt.sel", i))
+                        .unwrap()
+                        .into_int_value();
+                    let cmp_i = self
+                        .builder
+                        .build_select(lt, i64_neg_one, gt_sel, &format!("f{}.cmp", i))
+                        .unwrap()
+                        .into_int_value();
+                    result = self
+                        .builder
+                        .build_select(neq, cmp_i, result, &format!("f{}.acc", i))
+                        .unwrap()
+                        .into_int_value();
+                }
+                result
+            }
             _ => {
                 return Err(
-                    "Vec.sort_by_key in codegen supports only integer key types today; \
-                     use sort_by(|a, b| ...) with an explicit comparator for keys of \
-                     other types"
+                    "Vec.sort_by_key in codegen supports integer and integer-tuple key \
+                     types today; use sort_by(|a, b| ...) with an explicit comparator for \
+                     other key types"
                         .to_string(),
                 );
             }
         };
-        let lt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SLT, ka, kb, "key.lt")
-            .unwrap();
-        let gt = self
-            .builder
-            .build_int_compare(inkwell::IntPredicate::SGT, ka, kb, "key.gt")
-            .unwrap();
-        let zero = i64_t.const_zero();
-        let neg_one = i64_t.const_int((-1i64) as u64, true);
-        let pos_one = i64_t.const_int(1, false);
-        let gt_sel = self
-            .builder
-            .build_select(gt, pos_one, zero, "key.gt.sel")
-            .unwrap()
-            .into_int_value();
-        let res = self
-            .builder
-            .build_select(lt, neg_one, gt_sel, "key.cmp.sel")
-            .unwrap()
-            .into_int_value();
         self.builder.build_return(Some(&res)).unwrap();
 
         // 11. Restore outer state.
