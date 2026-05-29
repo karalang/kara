@@ -64,6 +64,18 @@ pub enum Command {
         /// 4b polish. Threaded into [`Pipeline`] via
         /// [`Pipeline::with_lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
+        /// Optional `--timeout DURATION` opt-in wall-clock cap on the
+        /// interpreter (tracker line 861). `None` for the default
+        /// behaviour: no cap — `karac run` legitimately targets
+        /// long-running services (web servers, daemons, REPLs, batch
+        /// jobs) where a default would silently break real workloads.
+        /// `Some(d)` makes the runner fail loudly after `d` instead
+        /// of hanging — useful for CI smoke tests, scripted
+        /// invocations, and exploratory `karac run examples/foo.kara`
+        /// where forgetting about a runaway costs real laptop
+        /// battery. Exit code on timeout: 124, matching GNU
+        /// `timeout(1)` so existing shell pipelines compose.
+        timeout: Option<std::time::Duration>,
     },
     RunExample {
         name: String,
@@ -483,6 +495,7 @@ pub fn execute(cmd: Command) {
             manifest_override,
             no_manifest,
             lint_overrides,
+            timeout,
         } => cmd_run(
             &file,
             output,
@@ -490,6 +503,7 @@ pub fn execute(cmd: Command) {
             manifest_override.as_deref(),
             no_manifest,
             lint_overrides,
+            timeout,
         ),
         Command::RunExample {
             name,
@@ -3341,7 +3355,7 @@ fn cmd_run_example(
     // `karac run --example NAME` runs an example file out of the
     // examples/ directory; it has no `kara.toml`-style project root,
     // so manifest discovery is intentionally skipped.
-    cmd_run(&path, output, sequential, None, true, lint_overrides);
+    cmd_run(&path, output, sequential, None, true, lint_overrides, None);
 }
 
 fn list_available_examples() {
@@ -3362,6 +3376,7 @@ fn cmd_run(
     manifest_override: Option<&str>,
     no_manifest: bool,
     lint_overrides: crate::lints::CliLintOverrides,
+    timeout: Option<std::time::Duration>,
 ) {
     // Mutual exclusion at the entry point — both flags together would
     // be ambiguous (which wins?). Reject early so the operator gets a
@@ -3703,7 +3718,26 @@ fn cmd_run(
         OutputMode::Text => DbgOutputMode::Terminal,
     });
     interp.sequential_mode = sequential;
+    // `karac run --timeout DURATION` (tracker line 861): opt-in
+    // wall-clock cap on the interpreter. Reuses the per-test deadline
+    // mechanism the test runner ships with — interpreter polls the
+    // deadline at every statement boundary and raises
+    // `ControlFlow::TimedOut` on observation past it. Default is no
+    // cap (long-running services / daemons / REPLs are legitimate
+    // `karac run` workloads, so a default would silently break real
+    // operations). On timeout: print the GNU `timeout(1)`-style
+    // diagnostic to stderr and exit with code 124 so existing shell
+    // pipelines compose.
+    if let Some(d) = timeout {
+        interp.set_test_deadline(Some(std::time::Instant::now() + d));
+    }
     interp.run();
+    if interp.timed_out {
+        if let Some(d) = timeout {
+            eprintln!("karac: timed out after {}s", d.as_secs());
+        }
+        process::exit(124);
+    }
 
     // Emit error return trace if present
     if !interp.error_trace().is_empty() {

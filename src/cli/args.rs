@@ -91,6 +91,7 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
     let mut manifest_override: Option<String> = None;
     let mut no_manifest = false;
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
+    let mut timeout: Option<std::time::Duration> = None;
     let mut i = file_idx;
     while i < args.len() {
         let arg = &args[i];
@@ -100,6 +101,15 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
             output = OutputMode::Jsonl;
         } else if arg == "--sequential" {
             sequential = true;
+        } else if let Some(rest) = arg.strip_prefix("--timeout=") {
+            timeout = Some(parse_timeout_arg(rest));
+        } else if arg == "--timeout" {
+            if i + 1 >= args.len() {
+                eprintln!("error: --timeout requires a duration argument");
+                process::exit(1);
+            }
+            timeout = Some(parse_timeout_arg(&args[i + 1]));
+            i += 1;
         } else if let Some(rest) = arg.strip_prefix("--manifest=") {
             if rest.trim().is_empty() {
                 eprintln!("error: --manifest requires a non-empty path value");
@@ -154,6 +164,63 @@ fn parse_run_command_from(args: &[String], file_idx: usize) -> Command {
         manifest_override,
         no_manifest,
         lint_overrides,
+        timeout,
+    }
+}
+
+/// Parse a `--timeout` argument's duration value. Accepts the
+/// humantime-style shorthand `Nms` / `Ns` / `Nm` / `Nh` and bare
+/// numeric strings (interpreted as seconds for compatibility with
+/// shell-typical "--timeout 60"). Rejects negative / zero /
+/// unparseable values with a CLI diagnostic + `exit(1)` so a
+/// pipeline never silently runs without the cap the operator asked
+/// for. Tracker line 861.
+fn parse_timeout_arg(raw: &str) -> std::time::Duration {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        eprintln!("error: --timeout requires a non-empty duration value");
+        process::exit(1);
+    }
+    let parsed: Option<std::time::Duration> = if let Some(ms) = trimmed.strip_suffix("ms") {
+        ms.trim()
+            .parse::<u64>()
+            .ok()
+            .map(std::time::Duration::from_millis)
+    } else if let Some(s) = trimmed.strip_suffix('s') {
+        s.trim()
+            .parse::<u64>()
+            .ok()
+            .map(std::time::Duration::from_secs)
+    } else if let Some(m) = trimmed.strip_suffix('m') {
+        m.trim()
+            .parse::<u64>()
+            .ok()
+            .map(|n| std::time::Duration::from_secs(n * 60))
+    } else if let Some(h) = trimmed.strip_suffix('h') {
+        h.trim()
+            .parse::<u64>()
+            .ok()
+            .map(|n| std::time::Duration::from_secs(n * 3600))
+    } else {
+        // Bare integer → seconds, matching the GNU `timeout(1)` default.
+        trimmed
+            .parse::<u64>()
+            .ok()
+            .map(std::time::Duration::from_secs)
+    };
+    match parsed {
+        Some(d) if !d.is_zero() => d,
+        Some(_) => {
+            eprintln!("error: --timeout value '{trimmed}' must be greater than zero");
+            process::exit(1);
+        }
+        None => {
+            eprintln!(
+                "error: --timeout value '{trimmed}' is not a valid duration \
+                 (examples: '60', '500ms', '5m', '1h')"
+            );
+            process::exit(1);
+        }
     }
 }
 

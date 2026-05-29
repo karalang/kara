@@ -1869,6 +1869,146 @@ fn test_test_two_positional_args_rejected() {
     assert!(stderr.contains("at most one"));
 }
 
+// ── karac run --timeout DURATION (line 861) ──
+// Opt-in wall-clock cap on the interpreter. No default — long-running
+// services / daemons / REPLs are legitimate `karac run` workloads, so
+// a default would silently break real operations. Useful for CI smoke
+// tests and exploratory runs where forgetting about a runaway costs
+// real laptop battery. On timeout, exits with code 124 matching GNU
+// timeout(1).
+
+#[test]
+fn test_run_timeout_kills_infinite_loop() {
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-run-timeout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("loop.kara");
+    std::fs::write(
+        &path,
+        "fn main() { let mut i: i64 = 0; while true { i = i + 1; } }",
+    )
+    .unwrap();
+
+    let started = std::time::Instant::now();
+    let out = karac_bin()
+        .args(["run", "--timeout=1s", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let wall = started.elapsed();
+    let _ = std::fs::remove_dir_all(&tmp);
+
+    // Exit code 124 matches GNU `timeout(1)`.
+    assert_eq!(
+        out.status.code(),
+        Some(124),
+        "expected exit 124 (GNU timeout convention); stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    // Should fire within ~1 s + a small slack. Generous 12 s ceiling
+    // so a slow CI box can't flake on a working timeout.
+    assert!(
+        wall < std::time::Duration::from_secs(12),
+        "expected --timeout=1s to kill the runaway in ~1s; took {:?}",
+        wall
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("karac: timed out after 1s"),
+        "expected GNU-timeout-style stderr message; got: {stderr}"
+    );
+}
+
+#[test]
+fn test_run_no_timeout_default_runs_to_completion() {
+    // Without --timeout, a fast program runs to completion with no
+    // deadline overhead. Regression guard against accidentally adding
+    // a default timeout (which would silently break long-running
+    // services).
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-run-no-timeout-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("hello.kara");
+    std::fs::write(&path, "fn main() { println(42); }").unwrap();
+
+    let out = karac_bin()
+        .args(["run", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(out.status.success(), "expected exit 0; stdout:\n{stdout}");
+    assert!(stdout.contains("42"));
+}
+
+#[test]
+fn test_run_timeout_rejects_zero_value() {
+    // `--timeout=0` is meaningless (would fire immediately) — reject
+    // at parse time with a clear diagnostic rather than running a
+    // pre-aborted process.
+    let out = karac_bin()
+        .args(["run", "--timeout=0", "dummy.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--timeout") && stderr.contains("greater than zero"),
+        "expected zero-value rejection; got stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_run_timeout_rejects_unparseable_value() {
+    let out = karac_bin()
+        .args(["run", "--timeout=fast", "dummy.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("--timeout") && stderr.contains("not a valid duration"),
+        "expected unparseable-value rejection; got stderr: {stderr}"
+    );
+}
+
+#[test]
+fn test_run_timeout_accepts_bare_integer_as_seconds() {
+    // GNU `timeout 60 cmd` compat: bare integer is seconds. Parse
+    // success path (the timer doesn't fire because the program is
+    // fast).
+    let tmp = std::env::temp_dir().join(format!(
+        "karac-run-timeout-bareint-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::create_dir_all(&tmp).unwrap();
+    let path = tmp.join("quick.kara");
+    std::fs::write(&path, "fn main() { println(7); }").unwrap();
+
+    let out = karac_bin()
+        .args(["run", "--timeout=60", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_dir_all(&tmp);
+    assert!(out.status.success());
+    assert!(String::from_utf8_lossy(&out.stdout).contains("7"));
+}
+
 // ── Per-test timeout (line 847 sub-step 1) ──
 // A runaway loop in a test must be killed within `KARAC_TEST_TIMEOUT_SECS`
 // (default 30 s, overridable via env var for fast CI / fixture

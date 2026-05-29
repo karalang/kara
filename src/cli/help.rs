@@ -135,6 +135,18 @@ OPTIONS:
                         only, ignore any enclosing project's
                         [package].profile and karac-toolchain.toml pin).
                         Mutually exclusive with --manifest.
+    --timeout DURATION  Opt-in wall-clock cap on the interpreter. No
+                        default — long-running services / daemons /
+                        REPLs are legitimate workloads, so a default
+                        would silently break real operations. Useful
+                        for CI smoke tests, scripted invocations, and
+                        ad-hoc `karac run` where forgetting about a
+                        runaway costs real laptop battery. On
+                        timeout, exits with code 124 (matching GNU
+                        timeout(1)). Duration formats: '60' (bare
+                        integer = seconds), '500ms', '5m', '1h'.
+                        Accepts the `=`-separated `--timeout=60s`
+                        form too.
     -h, --help          Print this message
 
 MANIFEST DISCOVERY:
