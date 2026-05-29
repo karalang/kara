@@ -53,6 +53,8 @@
 //!     each, asserts auto-par wall-clock ≤ sequential / 2.0 (relaxed
 //!     2.0x speedup threshold).
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod parallax_tests {
     use std::path::PathBuf;
@@ -510,7 +512,10 @@ mod parallax_tests {
         )
         .ok()?;
         link_executable(&obj, &exe).ok()?;
-        let out = std::process::Command::new(&exe).output().ok()?;
+        let out = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )?;
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let _ = std::fs::remove_file(&obj);
         let _ = std::fs::remove_file(&exe);
@@ -549,9 +554,15 @@ mod parallax_tests {
         // Warmup once, then measure one run. Single-run timing is
         // intentionally simple — the 2.0x threshold has enough headroom
         // to absorb single-run variance.
-        let _ = std::process::Command::new(&exe).output().ok()?;
+        let _ = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )?;
         let start = std::time::Instant::now();
-        let _ = std::process::Command::new(&exe).output().ok()?;
+        let _ = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )?;
         let secs = start.elapsed().as_secs_f64();
         let _ = std::fs::remove_file(&obj);
         let _ = std::fs::remove_file(&exe);

@@ -41,6 +41,8 @@
 //! exercise the auto-par lowering directly through the in-process
 //! pipeline machinery.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod parallax_lite_tests {
     use std::path::PathBuf;
@@ -470,9 +472,15 @@ mod parallax_lite_tests {
         // Warmup once, then measure one run. Wall-clock numbers from
         // a single run are intentionally simple — the 1.3x threshold
         // has enough headroom to absorb single-run variance.
-        let _ = std::process::Command::new(&exe).output().ok()?;
+        let _ = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )?;
         let start = std::time::Instant::now();
-        let _ = std::process::Command::new(&exe).output().ok()?;
+        let _ = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )?;
         let secs = start.elapsed().as_secs_f64();
 
         let _ = std::fs::remove_file(&obj);

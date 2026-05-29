@@ -4,10 +4,62 @@
 //! If a test fails, either the output format has regressed (fix the code) or
 //! the format intentionally changed (update the expected output).
 
-use std::process::Command;
+mod common;
 
-fn karac_bin() -> Command {
-    Command::new(env!("CARGO_BIN_EXE_karac"))
+use std::ffi::OsStr;
+use std::path::Path;
+use std::process::{Command, Output};
+
+/// Wrapper around `Command` that routes `.output()` through the
+/// shared `output_with_hang_watchdog` helper (15 s timeout per call)
+/// so a hung `karac` invocation can't lock up the cli test suite — same
+/// concurrent-spawn-deadlock defense the codegen suite picked up in
+/// commit `62af025`. Builder methods (`.arg`, `.args`, `.current_dir`,
+/// `.env`, `.env_remove`) delegate to the inner `Command` so call sites
+/// keep their existing chain shape verbatim — only the `karac_bin()`
+/// return type changed. Each cli test does at most a handful of fast
+/// karac invocations, so the per-spawn cost of one extra watchdog
+/// thread is invisible at suite scale.
+struct KaracBin(Command);
+
+impl KaracBin {
+    fn arg<S: AsRef<OsStr>>(mut self, arg: S) -> Self {
+        self.0.arg(arg);
+        self
+    }
+
+    fn args<I, S>(mut self, args: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        self.0.args(args);
+        self
+    }
+
+    fn current_dir<P: AsRef<Path>>(mut self, dir: P) -> Self {
+        self.0.current_dir(dir);
+        self
+    }
+
+    fn env<K: AsRef<OsStr>, V: AsRef<OsStr>>(mut self, k: K, v: V) -> Self {
+        self.0.env(k, v);
+        self
+    }
+
+    fn env_remove<K: AsRef<OsStr>>(mut self, k: K) -> Self {
+        self.0.env_remove(k);
+        self
+    }
+
+    fn output(self) -> std::io::Result<Output> {
+        common::output_with_hang_watchdog(self.0, std::time::Duration::from_secs(15))
+            .ok_or_else(|| std::io::Error::other("karac child spawn failed"))
+    }
+}
+
+fn karac_bin() -> KaracBin {
+    KaracBin(Command::new(env!("CARGO_BIN_EXE_karac")))
 }
 
 // ── Help & Version ──────────────────────────────────────────────

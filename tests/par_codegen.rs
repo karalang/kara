@@ -11,6 +11,8 @@
 //! Cargo available in the test environment) the tests soft-skip by returning
 //! early, matching the pattern in tests/codegen.rs.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod par_codegen_tests {
     use karac::codegen::compile_to_ir;
@@ -152,7 +154,10 @@ mod par_codegen_tests {
         }
         link_executable(&obj_path, &exe_path).ok()?;
 
-        let output = std::process::Command::new(&exe_path).output().ok()?;
+        let output = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe_path),
+            std::time::Duration::from_secs(60),
+        )?;
 
         let _ = std::fs::remove_file(&obj_path);
         let _ = std::fs::remove_file(&exe_path);
@@ -1681,7 +1686,11 @@ fn main() {
         compile_to_object_with_options(&parsed.program, &obj, None, Some(&analysis), None, None)
             .unwrap();
         link_executable(&obj, &exe).unwrap();
-        let out = std::process::Command::new(&exe).output().unwrap();
+        let out = super::common::output_with_hang_watchdog(
+            std::process::Command::new(&exe),
+            std::time::Duration::from_secs(60),
+        )
+        .expect("child binary spawn failed");
         let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
         let _ = std::fs::remove_file(&obj);
         let _ = std::fs::remove_file(&exe);

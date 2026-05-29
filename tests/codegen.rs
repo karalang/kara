@@ -7,6 +7,8 @@
 //! End-to-end execution tests (compile → link → run → compare output) are
 //! gated on the host having `cc` available and are marked accordingly.
 
+mod common;
+
 #[cfg(feature = "llvm")]
 mod codegen_tests {
     use karac::codegen::compile_to_ir;
@@ -571,65 +573,11 @@ fn main() {
     // These compile → link → run and verify stdout.
 
     /// Spawn a built kara test binary and capture stdout+stderr, with a
-    /// per-spawn hang watchdog.
-    ///
-    /// The test suite spawns hundreds of these concurrently under
-    /// `cargo test`'s default parallelism, and `Command::output()` was
-    /// observed to deadlock under that load on 2026-05-25 (one child
-    /// hung indefinitely in the full suite but the same binary ran fine
-    /// standalone, and `--test-threads=1` ran all 785 tests to
-    /// completion in 113 s). Without a watchdog one hung child hangs
-    /// the whole suite indefinitely; with it, the hang fails its own
-    /// test with a clear message after the timeout, the rest of the
-    /// suite continues, and the developer doesn't have to manually
-    /// interrupt cargo test to recover. 15 s is generous — the slowest
-    /// legitimate test program is well under 1 s.
-    ///
-    /// Returns `None` on spawn/wait failure (matches the existing
-    /// soft-skip pattern for environments without a working linker).
-    /// Panics on timeout — a hung child is a real bug, not an env issue.
-    fn output_with_hang_watchdog(mut cmd: std::process::Command) -> Option<std::process::Output> {
-        use std::process::Stdio;
-        use std::sync::mpsc;
-        use std::time::Duration;
-
-        const TIMEOUT: Duration = Duration::from_secs(15);
-
-        let child = cmd
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .ok()?;
-        let pid = child.id();
-
-        let (tx, rx) = mpsc::channel::<()>();
-        let watchdog = std::thread::spawn(move || {
-            if rx.recv_timeout(TIMEOUT).is_err() {
-                eprintln!(
-                    "FATAL: test child (pid {pid}) hung for >{}s — killing. \
-                     Likely a concurrent Command::output() deadlock under \
-                     cargo test parallelism. Re-run with `--test-threads=1` \
-                     to isolate, or run the failing test alone.",
-                    TIMEOUT.as_secs(),
-                );
-                let _ = std::process::Command::new("kill")
-                    .args(["-9", &pid.to_string()])
-                    .status();
-                true
-            } else {
-                false
-            }
-        });
-
-        let result = child.wait_with_output().ok();
-        let _ = tx.send(());
-        let killed = watchdog.join().unwrap_or(false);
-
-        if killed {
-            panic!("test child binary hung — see stderr above for diagnostics");
-        }
-        result
+    /// per-spawn 15s hang watchdog. Thin wrapper over the shared helper
+    /// in `tests/common/mod.rs` — see the module doc there for the full
+    /// rationale (concurrent-spawn deadlock, 2026-05-25 incident).
+    fn output_with_hang_watchdog(cmd: std::process::Command) -> Option<std::process::Output> {
+        super::common::output_with_hang_watchdog(cmd, std::time::Duration::from_secs(15))
     }
 
     fn run_program(src: &str) -> Option<String> {
