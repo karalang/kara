@@ -218,6 +218,7 @@ fn parse_build_command(args: &[String]) -> Command {
     let mut enable_hot_swap = false;
     let mut no_proxy = false;
     let mut target: Option<String> = None;
+    let mut monomorphization_budget = crate::monomorphization::MonomorphizationBudget::default();
     let mut lint_overrides = crate::lints::CliLintOverrides::default();
     let mut i = 2usize;
     while i < args.len() {
@@ -259,6 +260,13 @@ fn parse_build_command(args: &[String]) -> Command {
             }
             target = Some(val.clone());
             i += 1;
+        } else if let Some(rest) = arg.strip_prefix("--monomorphization-budget=") {
+            // `--monomorphization-budget=warn:N,error:M` (single-file only,
+            // v1.x). Reads the same instantiation table as `karac query
+            // monomorphization`; the build enforces the ceilings after
+            // typecheck, before codegen. Default thresholds are deferred
+            // (phase-7-codegen.md line 266) — the flag is opt-in.
+            monomorphization_budget = parse_monomorphization_budget(rest);
         } else if arg.starts_with("--output=") {
             eprintln!(
                 "error: unknown output mode '{}'. Use json or jsonl.",
@@ -287,16 +295,82 @@ fn parse_build_command(args: &[String]) -> Command {
             enable_hot_swap,
             no_proxy,
             target,
+            monomorphization_budget,
             lint_overrides,
         },
-        None => Command::BuildProject {
-            output,
-            offline,
-            enable_hot_swap,
-            no_proxy,
-            target,
-        },
+        None => {
+            // Project-mode monomorphization budget would need the merged
+            // multi-module instantiation table; the v1.x mechanism is
+            // single-file only. Reject loudly rather than silently drop a
+            // budget the user expected to be enforced.
+            if monomorphization_budget.is_enabled() {
+                eprintln!(
+                    "error: --monomorphization-budget is only supported in single-file build (v1.x); project-mode support is a follow-up"
+                );
+                process::exit(1);
+            }
+            Command::BuildProject {
+                output,
+                offline,
+                enable_hot_swap,
+                no_proxy,
+                target,
+            }
+        }
     }
+}
+
+/// Parse `--monomorphization-budget=warn:N,error:M`. Both keys are
+/// optional but at least one is required; thresholds must be positive
+/// integers and `warn` must not exceed `error`. Any malformed input
+/// exits with a diagnostic rather than silently disabling the budget.
+fn parse_monomorphization_budget(spec: &str) -> crate::monomorphization::MonomorphizationBudget {
+    let mut budget = crate::monomorphization::MonomorphizationBudget::default();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((key, val)) = part.split_once(':') else {
+            eprintln!(
+                "error: --monomorphization-budget expects warn:N and/or error:M, got '{part}'"
+            );
+            process::exit(1);
+        };
+        let n = match val.trim().parse::<usize>() {
+            Ok(n) if n >= 1 => n,
+            _ => {
+                eprintln!(
+                    "error: --monomorphization-budget threshold must be a positive integer, got '{}'",
+                    val.trim()
+                );
+                process::exit(1);
+            }
+        };
+        match key.trim() {
+            "warn" => budget.warn = Some(n),
+            "error" => budget.error = Some(n),
+            other => {
+                eprintln!(
+                    "error: --monomorphization-budget unknown key '{other}' (expected 'warn' or 'error')"
+                );
+                process::exit(1);
+            }
+        }
+    }
+    if !budget.is_enabled() {
+        eprintln!("error: --monomorphization-budget requires at least one of warn:N or error:M");
+        process::exit(1);
+    }
+    if let (Some(w), Some(e)) = (budget.warn, budget.error) {
+        if w > e {
+            eprintln!(
+                "error: --monomorphization-budget warn:{w} exceeds error:{e}; warn must be <= error"
+            );
+            process::exit(1);
+        }
+    }
+    budget
 }
 
 fn parse_cache_command(args: &[String]) -> Command {

@@ -3236,6 +3236,237 @@ fn test_query_monomorphization_help_and_kind_routing() {
     );
 }
 
+// ── karac build --monomorphization-budget (phase-7-codegen.md line 266) ──
+
+/// One generic (`identity`) instantiated at three distinct primitive
+/// types → one generic, three instances. Budget tests dial thresholds
+/// around the count of 3. All three literal forms (`i64`, `bool`, `char`)
+/// are Copy, so the warn/default variants link cleanly.
+const MONO_BUDGET_FIXTURE: &str = r#"
+fn identity[T](x: T) -> T { x }
+fn main() {
+    let _ = identity(1i64);
+    let _ = identity(true);
+    let _ = identity('c');
+}
+"#;
+
+/// Fresh temp `.kara` path keyed by pid + tag + nanos so parallel runs
+/// (and the per-test built executable, named after the file stem) don't
+/// collide.
+fn mono_budget_scratch(tag: &str, source: &str) -> std::path::PathBuf {
+    let path = std::env::temp_dir().join(format!(
+        "karac-monobudget-{}-{}-{}.kara",
+        std::process::id(),
+        tag,
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0),
+    ));
+    std::fs::write(&path, source).expect("write scratch source");
+    path
+}
+
+/// `karac build` links an executable named after the source file stem
+/// into CWD. Remove it so the warn/default builds don't pollute the tree
+/// (mirrors test_build_bare_file_hot_swap_accepted). No-op when the build
+/// exited before codegen (the error-threshold variants).
+fn remove_built_exe(src: &std::path::Path) {
+    if let Some(stem) = src.file_stem().and_then(|s| s.to_str()) {
+        let exe = if cfg!(windows) {
+            format!("{stem}.exe")
+        } else {
+            stem.to_string()
+        };
+        let _ = std::fs::remove_file(exe);
+    }
+}
+
+// Parse-layer rejections run without the llvm feature: the malformed
+// flag exits during arg parsing, before the (llvm-gated) build body.
+
+#[test]
+fn test_monomorphization_budget_rejects_empty_spec() {
+    let out = karac_bin()
+        .args(["build", "--monomorphization-budget=", "ignored.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("at least one of warn:N or error:M"),
+        "got: {stderr}",
+    );
+}
+
+#[test]
+fn test_monomorphization_budget_rejects_unknown_key() {
+    let out = karac_bin()
+        .args(["build", "--monomorphization-budget=oops:5", "ignored.kara"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("unknown key 'oops'"), "got: {stderr}");
+}
+
+#[test]
+fn test_monomorphization_budget_rejects_non_numeric_threshold() {
+    let out = karac_bin()
+        .args([
+            "build",
+            "--monomorphization-budget=warn:abc",
+            "ignored.kara",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("must be a positive integer"),
+        "got: {stderr}",
+    );
+}
+
+#[test]
+fn test_monomorphization_budget_rejects_warn_exceeding_error() {
+    let out = karac_bin()
+        .args([
+            "build",
+            "--monomorphization-budget=warn:10,error:5",
+            "ignored.kara",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("warn:10 exceeds error:5"), "got: {stderr}",);
+}
+
+#[test]
+fn test_monomorphization_budget_listed_in_build_help() {
+    let help = karac_bin().args(["build", "--help"]).output().unwrap();
+    assert!(help.status.success());
+    let stdout = String::from_utf8_lossy(&help.stdout);
+    assert!(
+        stdout.contains("--monomorphization-budget"),
+        "expected the flag in build help; got:\n{stdout}",
+    );
+}
+
+// Build-behavior tests need the llvm path (cmd_build's body is llvm-gated)
+// and, for the warn/default variants, the runtime archive to link.
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_monomorphization_budget_error_fails_build() {
+    let path = mono_budget_scratch("err", MONO_BUDGET_FIXTURE);
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--monomorphization-budget=error:2",
+        ])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    remove_built_exe(&path);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !out.status.success(),
+        "expected non-zero exit; stderr={stderr}"
+    );
+    assert!(
+        stderr.contains("error[monomorphization-budget]"),
+        "expected the error diagnostic; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("identity"),
+        "expected the offending generic named; stderr={stderr}",
+    );
+    assert!(
+        stderr.contains("limit 2"),
+        "expected the breached threshold reported; stderr={stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_monomorphization_budget_warn_emits_note_but_builds() {
+    let path = mono_budget_scratch("warn", MONO_BUDGET_FIXTURE);
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--monomorphization-budget=warn:3",
+        ])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    remove_built_exe(&path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("warning[monomorphization-budget]"),
+        "expected the warn note (count 3 >= warn 3); stderr={stderr}",
+    );
+    assert!(
+        out.status.success() && stdout.contains("Built: "),
+        "warn-only must still build; status={:?} stdout={stdout} stderr={stderr}",
+        out.status,
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_monomorphization_budget_error_supersedes_warn() {
+    let path = mono_budget_scratch("super", MONO_BUDGET_FIXTURE);
+    let out = karac_bin()
+        .args([
+            "build",
+            path.to_str().unwrap(),
+            "--monomorphization-budget=warn:2,error:3",
+        ])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    remove_built_exe(&path);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "expected failure; stderr={stderr}");
+    assert!(
+        stderr.contains("error[monomorphization-budget]") && stderr.contains("limit 3"),
+        "expected error at the error threshold; stderr={stderr}",
+    );
+    // The same generic must not also be reported at warn level.
+    assert!(
+        !stderr.contains("warning[monomorphization-budget]"),
+        "error level supersedes warn for the same generic; stderr={stderr}",
+    );
+}
+
+#[cfg(feature = "llvm")]
+#[test]
+fn test_monomorphization_budget_disabled_without_flag() {
+    let path = mono_budget_scratch("off", MONO_BUDGET_FIXTURE);
+    let out = karac_bin()
+        .args(["build", path.to_str().unwrap()])
+        .output()
+        .unwrap();
+    let _ = std::fs::remove_file(&path);
+    remove_built_exe(&path);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stdout.contains("monomorphization-budget") && !stderr.contains("monomorphization-budget"),
+        "no budget output expected without the flag; stdout={stdout} stderr={stderr}",
+    );
+    assert!(
+        out.status.success() && stdout.contains("Built: "),
+        "default build should succeed; stderr={stderr}",
+    );
+}
+
 // ── karac fix ──────────────────────────────────────────────────
 
 /// Build a temp `.kara` file with the given source. Returns the path so

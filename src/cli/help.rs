@@ -218,6 +218,15 @@ OPTIONS:
                             Single-file mode accepts the flag for shape
                             compatibility but it has no manifest to
                             apply against. See the TARGETS section.
+    --monomorphization-budget=warn:N,error:M
+                            Cap per-generic instantiations. After typecheck
+                            (before codegen), any generic instantiated >= N
+                            times emits warning[monomorphization-budget];
+                            >= M fails the build. Either threshold may be
+                            given alone; warn must be <= error. Off by
+                            default (opt-in; default thresholds are a v1.x
+                            follow-up). Single-file build only. Inspect the
+                            same counts with `karac query monomorphization`.
     -h, --help              Print this message
 
 TARGETS:

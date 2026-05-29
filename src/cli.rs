@@ -132,6 +132,14 @@ pub enum Command {
         /// shape compatibility with project mode but does not affect
         /// codegen today.
         target: Option<String>,
+        /// `--monomorphization-budget=warn:N,error:M` (v1.x, single-file
+        /// only): per-generic instantiation ceiling enforced after
+        /// typecheck. A disabled (all-`None`) budget — the default — skips
+        /// the check. Thresholds are opt-in; default thresholds are
+        /// deferred to v1.x pending codegen data (phase-7-codegen.md line
+        /// 266). Reads the same instantiation table as `karac query
+        /// monomorphization`.
+        monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
         /// See [`Command::Run::lint_overrides`].
         lint_overrides: crate::lints::CliLintOverrides,
     },
@@ -504,6 +512,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target,
+            monomorphization_budget,
             lint_overrides,
         } => cmd_build(
             &file,
@@ -513,6 +522,7 @@ pub fn execute(cmd: Command) {
             enable_hot_swap,
             no_proxy,
             target.as_deref(),
+            monomorphization_budget,
             lint_overrides,
         ),
         Command::BuildProject {
@@ -3908,6 +3918,7 @@ fn cmd_build(
     enable_hot_swap: bool,
     no_proxy: bool,
     target: Option<&str>,
+    monomorphization_budget: crate::monomorphization::MonomorphizationBudget,
     lint_overrides: crate::lints::CliLintOverrides,
 ) {
     // Single-file mode runs no dep resolution and reaches no network surface,
@@ -3955,6 +3966,15 @@ fn cmd_build(
             }
         }
 
+        // Monomorphization budget (v1.x): per-generic instantiation
+        // ceiling enforced after a clean typecheck, before codegen. A
+        // disabled budget is a no-op; an error-level violation fails the
+        // build here (sparing codegen work), warn-level emits a note and
+        // continues. See phase-7-codegen.md line 266.
+        if monomorphization_budget.is_enabled() {
+            enforce_monomorphization_budget(&pipeline, &monomorphization_budget, output);
+        }
+
         // Derive output executable name from the source filename.
         let exe_name = std::path::Path::new(filename)
             .file_stem()
@@ -3998,8 +4018,91 @@ fn cmd_build(
     #[cfg(not(feature = "llvm"))]
     {
         let _ = enable_hot_swap;
+        // The budget check rides the llvm build path (after typecheck,
+        // before codegen); the non-llvm fallback type-checks only, so the
+        // flag is accepted-but-inert here, consistent with --offline /
+        // --target.
+        let _ = monomorphization_budget;
         eprintln!("note: karac build requires the llvm feature; falling back to type check");
         cmd_check(filename, output, None, concurrency_report, lint_overrides);
+    }
+}
+
+/// Enforce a `--monomorphization-budget` ceiling after typecheck. Human-
+/// readable `warning[monomorphization-budget]` / `error[…]` diagnostics
+/// go to stderr (keeping stdout reserved for the build result). Any
+/// error-level violation fails the build with status 1 before codegen
+/// runs — in JSON mode it also emits a diagnostics envelope on stdout,
+/// mirroring the `has_fatal_errors` JSON path. The caller gates on
+/// `is_enabled`, so a disabled budget never reaches here.
+#[cfg(feature = "llvm")]
+fn enforce_monomorphization_budget(
+    pipeline: &Pipeline,
+    budget: &crate::monomorphization::MonomorphizationBudget,
+    output: OutputMode,
+) {
+    use crate::monomorphization::{BudgetLevel, BudgetViolation};
+
+    let Some(tc) = pipeline.typed.as_ref() else {
+        return;
+    };
+    let table = crate::monomorphization::analyze(&pipeline.parsed.program, tc);
+    let violations = table.budget_violations(budget);
+    if violations.is_empty() {
+        return;
+    }
+
+    let render = |v: &BudgetViolation| {
+        let kind = match v.level {
+            BudgetLevel::Error => "error",
+            BudgetLevel::Warning => "warning",
+        };
+        format!(
+            "{kind}[monomorphization-budget]: {}:{}:{}: generic `{}` has {} instantiations (limit {})",
+            pipeline.filename, v.site.line, v.site.column, v.generic, v.count, v.threshold
+        )
+    };
+
+    // Human-readable diagnostics (warnings and errors alike) always go to
+    // stderr so stdout stays reserved for the single build-result line.
+    for v in &violations {
+        eprintln!("{}", render(v));
+    }
+
+    let errors: Vec<&BudgetViolation> = violations
+        .iter()
+        .filter(|v| v.level == BudgetLevel::Error)
+        .collect();
+    if errors.is_empty() {
+        // Warn-only: the build continues to codegen.
+        return;
+    }
+
+    match output {
+        OutputMode::Text => process::exit(1),
+        OutputMode::Json => {
+            let diags: Vec<String> = errors
+                .iter()
+                .map(|v| {
+                    format!(
+                        "{{\"severity\":\"error\",\"phase\":\"monomorphization-budget\",\"generic\":{},\"count\":{},\"limit\":{},\"site\":{}}}",
+                        json_string(&v.generic),
+                        v.count,
+                        v.threshold,
+                        json_string(&format!(
+                            "{}:{}:{}",
+                            pipeline.filename, v.site.line, v.site.column
+                        )),
+                    )
+                })
+                .collect();
+            println!(
+                "{{\"status\":\"error\",\"diagnostics\":[{}]}}",
+                diags.join(",")
+            );
+            process::exit(1);
+        }
+        OutputMode::Jsonl => unreachable!(),
     }
 }
 

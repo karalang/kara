@@ -88,6 +88,46 @@ pub struct MonomorphizationTable {
     pub by_generic: Vec<GenericRecord>,
 }
 
+/// Per-generic instantiation ceiling supplied by
+/// `--monomorphization-budget=warn:N,error:M`. Both thresholds are
+/// optional; an all-`None` budget is disabled. The v1 default is
+/// disabled — picking concrete default thresholds is deferred to v1.x
+/// pending codegen data (phase-7-codegen.md line 266).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MonomorphizationBudget {
+    pub warn: Option<usize>,
+    pub error: Option<usize>,
+}
+
+impl MonomorphizationBudget {
+    /// True when at least one threshold is set. A disabled budget skips
+    /// the check entirely.
+    pub fn is_enabled(&self) -> bool {
+        self.warn.is_some() || self.error.is_some()
+    }
+}
+
+/// Severity of a budget violation. `Error` (count ≥ error threshold)
+/// fails the build; `Warning` (count ≥ warn threshold, below error)
+/// emits a note and continues.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BudgetLevel {
+    Warning,
+    Error,
+}
+
+/// One generic whose instantiation count met or exceeded a budget
+/// threshold. Carries the first-seen call site so the diagnostic can
+/// point at a concrete location.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BudgetViolation {
+    pub generic: String,
+    pub count: usize,
+    pub threshold: usize,
+    pub level: BudgetLevel,
+    pub site: Span,
+}
+
 impl MonomorphizationTable {
     pub fn generic_count(&self) -> usize {
         self.by_generic.len()
@@ -95,6 +135,45 @@ impl MonomorphizationTable {
 
     pub fn instance_count(&self) -> usize {
         self.by_generic.iter().map(|g| g.instances.len()).sum()
+    }
+
+    /// Compare each generic's instantiation count against `budget`. A
+    /// generic that meets the error threshold yields a single `Error`
+    /// violation (its warn threshold is not also reported); otherwise
+    /// meeting the warn threshold yields a `Warning`. Result preserves
+    /// `by_generic` order (already sorted by generic name).
+    pub fn budget_violations(&self, budget: &MonomorphizationBudget) -> Vec<BudgetViolation> {
+        let mut out = Vec::new();
+        for g in &self.by_generic {
+            let Some(first) = g.instances.first() else {
+                continue;
+            };
+            let count = g.instances.len();
+            if let Some(error) = budget.error {
+                if count >= error {
+                    out.push(BudgetViolation {
+                        generic: g.generic.clone(),
+                        count,
+                        threshold: error,
+                        level: BudgetLevel::Error,
+                        site: first.site.clone(),
+                    });
+                    continue;
+                }
+            }
+            if let Some(warn) = budget.warn {
+                if count >= warn {
+                    out.push(BudgetViolation {
+                        generic: g.generic.clone(),
+                        count,
+                        threshold: warn,
+                        level: BudgetLevel::Warning,
+                        site: first.site.clone(),
+                    });
+                }
+            }
+        }
+        out
     }
 }
 
@@ -415,5 +494,79 @@ mod tests {
         let table = MonomorphizationTable::default();
         assert_eq!(table.generic_count(), 0);
         assert_eq!(table.instance_count(), 0);
+    }
+
+    /// Build a table with one generic carrying `n` distinct instances.
+    fn table_with(generic: &str, n: usize) -> MonomorphizationTable {
+        let instances = (0..n)
+            .map(|i| Instance {
+                types: vec![format!("T{i}")],
+                effects: Vec::new(),
+                site: Span::default(),
+            })
+            .collect();
+        MonomorphizationTable {
+            by_generic: vec![GenericRecord {
+                generic: generic.to_string(),
+                instances,
+            }],
+        }
+    }
+
+    #[test]
+    fn budget_disabled_reports_no_violations() {
+        let table = table_with("process", 9);
+        assert!(table
+            .budget_violations(&MonomorphizationBudget::default())
+            .is_empty());
+    }
+
+    #[test]
+    fn budget_below_threshold_is_silent() {
+        let table = table_with("process", 1);
+        let budget = MonomorphizationBudget {
+            warn: Some(2),
+            error: Some(4),
+        };
+        assert!(table.budget_violations(&budget).is_empty());
+    }
+
+    #[test]
+    fn budget_warn_threshold_trips_at_equality() {
+        let table = table_with("process", 3);
+        let budget = MonomorphizationBudget {
+            warn: Some(3),
+            error: None,
+        };
+        let v = table.budget_violations(&budget);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].level, BudgetLevel::Warning);
+        assert_eq!(v[0].count, 3);
+        assert_eq!(v[0].threshold, 3);
+        assert_eq!(v[0].generic, "process");
+    }
+
+    #[test]
+    fn budget_error_supersedes_warn_for_same_generic() {
+        let table = table_with("process", 5);
+        let budget = MonomorphizationBudget {
+            warn: Some(2),
+            error: Some(5),
+        };
+        let v = table.budget_violations(&budget);
+        // A single Error violation — the warn level is not also reported.
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].level, BudgetLevel::Error);
+        assert_eq!(v[0].threshold, 5);
+    }
+
+    #[test]
+    fn budget_error_only_ignores_sub_error_counts() {
+        let table = table_with("process", 3);
+        let budget = MonomorphizationBudget {
+            warn: None,
+            error: Some(4),
+        };
+        assert!(table.budget_violations(&budget).is_empty());
     }
 }
