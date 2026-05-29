@@ -113,6 +113,72 @@ impl<'ctx> super::Codegen<'ctx> {
         Ok(listener_val.into_struct_value().into())
     }
 
+    /// Phase-8 line 22 — lower `TlsStream.connect(addr: String,
+    /// server_name: String, roots_pem: String) -> TlsStream`. Client-
+    /// side counterpart of `TlsListener.bind_tls` + `.accept`:
+    ///   1. Extract `(ptr, len)` from each of the three String args.
+    ///   2. Call `karac_runtime_tls_client_connect(addr_ptr, addr_len,
+    ///      server_name_ptr, server_name_len, roots_pem_ptr,
+    ///      roots_pem_len) -> i32` — TCP connect + sync rustls
+    ///      handshake + register the `ClientConnection` in the shared
+    ///      per-fd session map. Returns the post-handshake fd or -1.
+    ///   3. Pack into `TlsStream { fd: i32 }` (same single-i32 layout
+    ///      `accept` produces; user code can't tell which side of the
+    ///      connection the stream came from at the type level — the
+    ///      runtime treats both directions uniformly).
+    ///
+    /// On any failure (addr parse, server-name parse, PEM parse, TCP
+    /// connect, handshake) the FFI returns -1; the resulting
+    /// `TlsStream { fd: -1 }` surfaces as a write/read error on first
+    /// use (`Err(TcpError)` via `wrap_tcp_io_result`).
+    pub(super) fn lower_tls_stream_connect(
+        &mut self,
+        addr_val: BasicValueEnum<'ctx>,
+        server_name_val: BasicValueEnum<'ctx>,
+        roots_pem_val: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let (addr_ptr, addr_len) = self.extract_string_ptr_len(addr_val, "tls.connect.addr");
+        let (server_name_ptr, server_name_len) =
+            self.extract_string_ptr_len(server_name_val, "tls.connect.name");
+        let (roots_ptr, roots_len) =
+            self.extract_string_ptr_len(roots_pem_val, "tls.connect.roots");
+
+        let connect_fn = self
+            .module
+            .get_function("karac_runtime_tls_client_connect")
+            .expect("karac_runtime_tls_client_connect declared in Codegen::new");
+        let connect_call = self
+            .builder
+            .build_call(
+                connect_fn,
+                &[
+                    addr_ptr.into(),
+                    addr_len.into(),
+                    server_name_ptr.into(),
+                    server_name_len.into(),
+                    roots_ptr.into(),
+                    roots_len.into(),
+                ],
+                "tls.connect.fd",
+            )
+            .expect("call karac_runtime_tls_client_connect");
+        let fd = connect_call
+            .try_as_basic_value()
+            .unwrap_basic()
+            .into_int_value();
+
+        // Same `TlsStream { fd: i32 }` shape `accept` produces.
+        let stream_ty = self
+            .context
+            .struct_type(&[self.context.i32_type().into()], false);
+        let undef = stream_ty.get_undef();
+        let stream_val = self
+            .builder
+            .build_insert_value(undef, fd, 0, "tls.connect.stream.val")
+            .expect("insert fd into TlsStream struct value");
+        Ok(stream_val.into_struct_value().into())
+    }
+
     /// Phase 6 line 236 slice 3 — `WebSocket.accept_tls(listener:
     /// TlsListener) -> WebSocket`. Composes a TLS-wrapped accept +
     /// WS HTTP upgrade in one shot through

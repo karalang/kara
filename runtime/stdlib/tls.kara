@@ -135,6 +135,34 @@ impl TlsListener {
 }
 
 impl TlsStream {
+    // Phase-8 line 22 — client-side connect + synchronous handshake.
+    // Open a TCP connection to `addr` (e.g. `"127.0.0.1:8443"` or a
+    // hostname:port resolved before this call), build a rustls
+    // `ClientConfig` whose root store trusts the certs in `roots_pem`,
+    // negotiate against `server_name` for SNI + cert verification, run
+    // the TLS handshake synchronously, and return a `TlsStream`
+    // wrapping the post-handshake fd. The returned stream is
+    // interchangeable with one from `TlsListener.accept` — same
+    // single-i32-field shape, same per-fd session map, same
+    // `read` / `write` / `write_all` / `Drop` paths.
+    //
+    // Trust posture: only the certs in `roots_pem` are trusted; there
+    // is no fallback to system roots / webpki-roots at v1. Callers
+    // that need public-CA trust (e.g. `Client.get("https://...")`)
+    // must supply the relevant root CA PEM(s). Same minimal posture as
+    // `TlsListener.bind_tls`'s "explicit PEM only".
+    //
+    // Returns `TlsStream { fd: -1 }` on any failure (addr / name /
+    // PEM parse, TCP connect, rustls config build, handshake). Stub
+    // body never executes — codegen replaces via
+    // `lower_tls_stream_connect`.
+    #[compiler_builtin]
+    fn connect(addr: String, server_name: String, roots_pem: String) -> TlsStream
+        with sends(Network) receives(Network)
+    {
+        TlsStream { fd: -1 }
+    }
+
     // Park on read-readiness of `self.fd`, then pump rustls's inbound
     // packet processor until at least one decrypted plaintext byte is
     // available. The FFI returns the byte count (>= 0; 0 = clean EOF

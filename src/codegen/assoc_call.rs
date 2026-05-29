@@ -399,6 +399,19 @@ impl<'ctx> super::Codegen<'ctx> {
             let key_val = self.compile_expr(&_args[2].value)?;
             return self.lower_tls_listener_bind_tls(addr_val, cert_val, key_val);
         }
+        // Phase-8 line 22 — `TlsStream.connect(addr, server_name,
+        // roots_pem) -> TlsStream`. Client-side counterpart of
+        // `TlsListener.bind_tls + .accept`: TCP connect + sync rustls
+        // handshake + register `Connection::Client` in the shared
+        // per-fd session map; returns `TlsStream { fd }` (same shape
+        // as `.accept`'s output — both directions are interchangeable
+        // for downstream `read` / `write` / `Drop`).
+        if type_name == "TlsStream" && method == "connect" && _args.len() == 3 {
+            let addr_val = self.compile_expr(&_args[0].value)?;
+            let server_name_val = self.compile_expr(&_args[1].value)?;
+            let roots_pem_val = self.compile_expr(&_args[2].value)?;
+            return self.lower_tls_stream_connect(addr_val, server_name_val, roots_pem_val);
+        }
         // Phase 6 line 17 slice 9e.1 — `WebSocket.from_fd(fd) -> WebSocket`.
         // Pure value construction: pack the i32 fd into a fresh
         // `WebSocket { fd }` struct value (same single-i32-field

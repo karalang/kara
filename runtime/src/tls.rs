@@ -58,7 +58,7 @@
 //! providers could coexist in principle).
 
 use rustls::pki_types::CertificateDer;
-use rustls::{ServerConfig, ServerConnection};
+use rustls::{ClientConfig, ClientConnection, ServerConfig, ServerConnection};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
@@ -78,8 +78,15 @@ pub struct KaracTlsConfig {
 /// framing FFIs) consults the session via [`lookup_session`] and
 /// drives `conn` through rustls's `reader()` / `writer()` /
 /// `read_tls` / `write_tls` surface.
+///
+/// **Phase-8 line 22 (`TlsClientStream`):** `conn` is `rustls::Connection`
+/// (the enum over `ServerConnection` + `ClientConnection`) so the same
+/// `SESSIONS` map and the same read/write/close paths serve both
+/// directions — both inner variants delegate the methods called by
+/// `drive_read` / `drive_write` (`reader` / `writer` / `wants_read` /
+/// `read_tls` / `wants_write` / `write_tls` / `process_new_packets`).
 pub(crate) struct TlsSession {
-    pub(crate) conn: ServerConnection,
+    pub(crate) conn: rustls::Connection,
 }
 
 type SessionRegistry = RwLock<HashMap<i32, Arc<Mutex<TlsSession>>>>;
@@ -116,7 +123,7 @@ pub(crate) fn lookup_session(fd: i32) -> Option<Arc<Mutex<TlsSession>>> {
 /// [`karac_runtime_tls_accept`]; this version is callable from
 /// outside the FFI for cases where the handshake driver lives in a
 /// different module.
-pub(crate) fn register_session_for_fd(fd: i32, conn: ServerConnection) {
+pub(crate) fn register_session_for_fd(fd: i32, conn: rustls::Connection) {
     let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
     reg.insert(fd, Arc::new(Mutex::new(TlsSession { conn })));
 }
@@ -178,6 +185,41 @@ pub(crate) fn build_server_config(
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|_| ConfigBuildError::RustlsConfig)?;
+
+    Ok(config)
+}
+
+/// Phase-8 line 22 — client-side mirror of [`build_server_config`].
+/// Parses `roots_pem` (one or more PEM-encoded trust anchor certs) into
+/// a `rustls::RootCertStore` and builds a `ClientConfig` that trusts
+/// only those roots. No client auth, safe default protocol versions,
+/// `ring` crypto provider — same posture as the server config so client
+/// + server use a compatible cipher / version surface.
+///
+/// Visibility: `pub(crate)` so `karac_runtime_tls_client_connect` can
+/// reuse this off the same PEM-parsing path the server config goes
+/// through.
+pub(crate) fn build_client_config(roots_pem: &[u8]) -> Result<ClientConfig, ConfigBuildError> {
+    let mut reader = std::io::BufReader::new(roots_pem);
+    let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut reader)
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|_| ConfigBuildError::InvalidPem)?;
+    if certs.is_empty() {
+        return Err(ConfigBuildError::NoCertsFound);
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    for cert in certs {
+        roots
+            .add(cert)
+            .map_err(|_| ConfigBuildError::RustlsConfig)?;
+    }
+
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let config = ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()
+        .map_err(|_| ConfigBuildError::ProtocolSetup)?
+        .with_root_certificates(roots)
+        .with_no_client_auth();
 
     Ok(config)
 }
@@ -308,7 +350,121 @@ pub unsafe extern "C" fn karac_runtime_tls_accept(
 
     let fd = sock.into_raw_fd();
     let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
-    reg.insert(fd, Arc::new(Mutex::new(TlsSession { conn })));
+    reg.insert(
+        fd,
+        Arc::new(Mutex::new(TlsSession {
+            conn: rustls::Connection::Server(conn),
+        })),
+    );
+    fd
+}
+
+/// Phase-8 line 22 — TLS client-side connect + synchronous handshake.
+/// Open a TCP connection to `addr`, build a `ClientConfig` whose root
+/// store contains the trust anchors in `roots_pem`, build a
+/// `ClientConnection` bound to `server_name` for SNI + cert
+/// verification, run `complete_io` against the blocking socket to
+/// finish the handshake, and register the resulting session in the
+/// shared `SESSIONS` map. Returns the connection fd on success or `-1`
+/// on any failure (addr / name parse, PEM parse, TCP connect, rustls
+/// build, handshake) — the partial TCP connection (if any) is closed
+/// when the local `TcpStream` drops.
+///
+/// The fd is interchangeable with one returned by
+/// `karac_runtime_tls_accept`: `karac_runtime_tls_read` / `_write` /
+/// `_close` all look up the session by fd and drive rustls through the
+/// `rustls::Connection` enum — direction-agnostic.
+///
+/// Trust posture: only the certs in `roots_pem` are trusted. There is
+/// no fallback to system / webpki-roots — the caller is responsible
+/// for supplying the right trust anchors. Public-CA trust lands when a
+/// real consumer (typically `Client.get("https://...")`) wires
+/// webpki-roots as the default; for v1 the explicit PEM keeps the
+/// surface minimal and the dep tree small.
+///
+/// # Safety
+///
+/// Each of `addr_ptr` / `server_name_ptr` / `roots_pem_ptr` must point
+/// at the matching `_len` initialized bytes (or be null with `_len <=
+/// 0`, in which case the call fails with `-1`).
+#[cfg(unix)]
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_tls_client_connect(
+    addr_ptr: *const u8,
+    addr_len: i64,
+    server_name_ptr: *const u8,
+    server_name_len: i64,
+    roots_pem_ptr: *const u8,
+    roots_pem_len: i64,
+) -> i32 {
+    use std::os::unix::io::IntoRawFd;
+
+    // ── Parse the destination address ──
+    if addr_ptr.is_null() || addr_len <= 0 {
+        return -1;
+    }
+    let addr_bytes = std::slice::from_raw_parts(addr_ptr, addr_len as usize);
+    let addr_str = match std::str::from_utf8(addr_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return -1,
+    };
+
+    // ── Parse the server name (SNI + cert verification) ──
+    if server_name_ptr.is_null() || server_name_len <= 0 {
+        return -1;
+    }
+    let server_name_bytes = std::slice::from_raw_parts(server_name_ptr, server_name_len as usize);
+    let server_name_str = match std::str::from_utf8(server_name_bytes) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    // `ServerName::try_from(String)` yields a `ServerName<'static>`
+    // (owned), which is what `ClientConnection::new` requires.
+    let server_name = match rustls::pki_types::ServerName::try_from(server_name_str.to_owned()) {
+        Ok(n) => n,
+        Err(_) => return -1,
+    };
+
+    // ── Build the `ClientConfig` from the supplied trust anchors ──
+    let roots_bytes: &[u8] = if roots_pem_ptr.is_null() || roots_pem_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(roots_pem_ptr, roots_pem_len as usize)
+    };
+    let client_config = match build_client_config(roots_bytes) {
+        Ok(c) => c,
+        Err(_) => return -1,
+    };
+
+    // ── TCP connect + handshake ──
+    let mut sock = match std::net::TcpStream::connect(socket_addr) {
+        Ok(s) => s,
+        Err(_) => return -1,
+    };
+    let mut client_conn = match ClientConnection::new(Arc::new(client_config), server_name) {
+        Ok(c) => c,
+        Err(_) => return -1,
+    };
+    if client_conn.complete_io(&mut sock).is_err() {
+        // `sock` drops here, closing the partially-open TCP connection.
+        return -1;
+    }
+
+    // ── Register the session keyed by fd (same map the server side
+    // uses; `karac_runtime_tls_read`/`_write`/`_close` reach this
+    // through `lookup_session`). ──
+    let fd = sock.into_raw_fd();
+    let mut reg = sessions().write().unwrap_or_else(|p| p.into_inner());
+    reg.insert(
+        fd,
+        Arc::new(Mutex::new(TlsSession {
+            conn: rustls::Connection::Client(client_conn),
+        })),
+    );
     fd
 }
 
@@ -369,7 +525,7 @@ pub unsafe extern "C" fn karac_runtime_tls_read(
 /// (which pull more ciphertext from the socket) until plaintext is
 /// available or a terminal condition fires.
 fn drive_read(
-    conn: &mut ServerConnection,
+    conn: &mut rustls::Connection,
     sock: &mut std::net::TcpStream,
     buf_ptr: *mut u8,
     buf_len: usize,
@@ -467,7 +623,7 @@ pub unsafe extern "C" fn karac_runtime_tls_write(
     result
 }
 
-fn drive_write(conn: &mut ServerConnection, sock: &mut std::net::TcpStream, buf: &[u8]) -> i64 {
+fn drive_write(conn: &mut rustls::Connection, sock: &mut std::net::TcpStream, buf: &[u8]) -> i64 {
     // Buffer the plaintext into rustls — this performs encryption
     // into the connection's sendable_tls buffer but doesn't touch the
     // socket. write() never short-writes per rustls's API.
@@ -744,6 +900,125 @@ mod tests {
         assert_eq!(server_n, msg.len());
 
         unsafe { karac_runtime_tls_config_free(cfg) };
+    }
+
+    /// Phase-8 line 22 — same round trip as `round_trip_echo`, but the
+    /// CLIENT side now goes through `karac_runtime_tls_client_connect`
+    /// and the shared `karac_runtime_tls_read` / `_write` / `_close`
+    /// FFIs instead of driving a `rustls::ClientConnection` directly.
+    /// What this pins: the client handshake completes; the resulting
+    /// fd registers in the shared `SESSIONS` map (the
+    /// `Connection::Client` variant); the existing read/write paths
+    /// handle the client direction because `drive_read` / `drive_write`
+    /// operate on the `rustls::Connection` enum.
+    #[test]
+    fn round_trip_via_client_connect_ffi() {
+        let (cert_pem, key_pem) = gen_test_cert();
+        let cfg = unsafe {
+            karac_runtime_tls_config_new(
+                cert_pem.as_ptr(),
+                cert_pem.len() as i64,
+                key_pem.as_ptr(),
+                key_pem.len() as i64,
+            )
+        };
+        assert!(!cfg.is_null());
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let cfg_addr = cfg as usize;
+        use std::os::unix::io::IntoRawFd;
+        let listener_fd = listener.into_raw_fd();
+        let server = thread::spawn(move || {
+            let fd = unsafe { karac_runtime_tls_accept(listener_fd, cfg_addr as *mut _) };
+            assert!(fd >= 0, "tls_accept failed");
+            let mut buf = vec![0u8; 64];
+            let n = unsafe { karac_runtime_tls_read(fd, buf.as_mut_ptr(), buf.len() as i64) };
+            assert!(n > 0, "server tls_read returned {}", n);
+            let w = unsafe { karac_runtime_tls_write(fd, buf.as_ptr(), n) };
+            assert_eq!(w, n);
+            karac_runtime_tls_close(fd);
+            use std::os::unix::io::FromRawFd;
+            let _ = unsafe { std::net::TcpListener::from_raw_fd(listener_fd) };
+            n as usize
+        });
+
+        thread::sleep(Duration::from_millis(50));
+
+        // Client side via the NEW FFI.
+        let addr = format!("127.0.0.1:{port}");
+        let server_name = "localhost";
+        let client_fd = unsafe {
+            karac_runtime_tls_client_connect(
+                addr.as_ptr(),
+                addr.len() as i64,
+                server_name.as_ptr(),
+                server_name.len() as i64,
+                cert_pem.as_ptr(),
+                cert_pem.len() as i64,
+            )
+        };
+        assert!(client_fd >= 0, "tls_client_connect failed: {client_fd}");
+
+        let msg = b"hello via client-connect ffi";
+        let w = unsafe { karac_runtime_tls_write(client_fd, msg.as_ptr(), msg.len() as i64) };
+        assert_eq!(w, msg.len() as i64, "client tls_write returned {}", w);
+
+        let mut echo = vec![0u8; msg.len()];
+        let n = unsafe { karac_runtime_tls_read(client_fd, echo.as_mut_ptr(), echo.len() as i64) };
+        assert!(n > 0, "client tls_read returned {}", n);
+        assert_eq!(&echo[..n as usize], &msg[..n as usize], "echo mismatch");
+
+        karac_runtime_tls_close(client_fd);
+        let server_n = server.join().unwrap();
+        assert_eq!(server_n, msg.len());
+
+        unsafe { karac_runtime_tls_config_free(cfg) };
+    }
+
+    /// `karac_runtime_tls_client_connect` returns `-1` when the
+    /// destination address fails to parse — earliest failure point,
+    /// before any PEM parsing or TCP work.
+    #[test]
+    fn client_connect_with_bad_addr_returns_minus_one() {
+        let (cert_pem, _key_pem) = gen_test_cert();
+        let bad = b"not-an-address";
+        let name = b"localhost";
+        let fd = unsafe {
+            karac_runtime_tls_client_connect(
+                bad.as_ptr(),
+                bad.len() as i64,
+                name.as_ptr(),
+                name.len() as i64,
+                cert_pem.as_ptr(),
+                cert_pem.len() as i64,
+            )
+        };
+        assert_eq!(fd, -1);
+    }
+
+    /// `karac_runtime_tls_client_connect` returns `-1` when the
+    /// supplied roots PEM doesn't contain any usable certificate
+    /// (parse succeeds but yields no certs → `NoCertsFound`).
+    #[test]
+    fn client_connect_with_garbage_roots_returns_minus_one() {
+        // Use a port that is almost certainly closed so even if PEM
+        // parsing succeeded the connect would fail — but the PEM
+        // failure should fire first.
+        let addr = b"127.0.0.1:1";
+        let name = b"localhost";
+        let roots = b"not a pem certificate";
+        let fd = unsafe {
+            karac_runtime_tls_client_connect(
+                addr.as_ptr(),
+                addr.len() as i64,
+                name.as_ptr(),
+                name.len() as i64,
+                roots.as_ptr(),
+                roots.len() as i64,
+            )
+        };
+        assert_eq!(fd, -1);
     }
 
     #[test]

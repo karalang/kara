@@ -69,12 +69,41 @@ mod tls_codegen_tests {
             "karac_runtime_tls_read",
             "karac_runtime_tls_write",
             "karac_runtime_tls_close",
+            // Phase-8 line 22 — client connect FFI joins the same
+            // unconditional-declaration set.
+            "karac_runtime_tls_client_connect",
         ] {
             assert!(
                 ir.contains("declare ") && ir.contains(name),
                 "expected declaration of `{name}` in IR"
             );
         }
+    }
+
+    /// Phase-8 line 22 — `TlsStream.connect(addr, server_name,
+    /// roots_pem)` lowers through `lower_tls_stream_connect` to a
+    /// single `karac_runtime_tls_client_connect(addr_ptr, addr_len,
+    /// name_ptr, name_len, roots_ptr, roots_len) -> i32` call, then
+    /// packs the returned fd into a `TlsStream { i32 }` struct value.
+    /// Pins the dispatch arm + extern wiring.
+    #[test]
+    fn test_ir_tls_stream_connect_dispatches_to_runtime_ffi() {
+        let ir = ir_for(
+            r#"
+fn main() {
+    let addr: String = "127.0.0.1:8443";
+    let name: String = "localhost";
+    let roots: String = "fake-pem";
+    let stream: TlsStream = TlsStream.connect(addr, name, roots);
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call i32 @karac_runtime_tls_client_connect("),
+            "main should call _tls_client_connect; body was:\n{}",
+            main_body
+        );
     }
 
     #[test]

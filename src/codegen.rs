@@ -1801,6 +1801,29 @@ impl<'ctx> Codegen<'ctx> {
             tls_accept_ty,
             Some(Linkage::External),
         );
+        // Phase-8 line 22 — `karac_runtime_tls_client_connect(addr_ptr,
+        // addr_len, server_name_ptr, server_name_len, roots_pem_ptr,
+        // roots_pem_len) -> i32`. Client-side mirror of `_tls_accept`:
+        // build a `ClientConfig` from `roots_pem`, TCP connect, sync
+        // handshake against `server_name`, register session in the
+        // shared per-fd map (`Connection::Client` variant). Returns the
+        // connection fd or -1. Backs `TlsStream.connect`.
+        let tls_client_connect_ty = context.i32_type().fn_type(
+            &[
+                ptr_type.into(), // addr_ptr
+                i64_type.into(), // addr_len
+                ptr_type.into(), // server_name_ptr
+                i64_type.into(), // server_name_len
+                ptr_type.into(), // roots_pem_ptr
+                i64_type.into(), // roots_pem_len
+            ],
+            false,
+        );
+        module.add_function(
+            "karac_runtime_tls_client_connect",
+            tls_client_connect_ty,
+            Some(Linkage::External),
+        );
         // `karac_runtime_tls_read(fd, buf_ptr, buf_len) -> i64` /
         // `karac_runtime_tls_write(fd, buf_ptr, buf_len) -> i64` — pump
         // rustls's inbound / outbound packet processors. Caller parks

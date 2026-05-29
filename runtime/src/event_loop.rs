@@ -2096,7 +2096,14 @@ pub extern "C" fn karac_runtime_ws_accept(listener_fd: i32) -> i32 {
 
 #[cfg(unix)]
 struct TlsConnIo<'a> {
-    conn: &'a mut rustls::ServerConnection,
+    // Phase-8 line 22: widened from `&mut ServerConnection` to
+    // `&mut rustls::Connection` (the enum over Server + Client) so the
+    // shared `SESSIONS` map can carry both directions — `tls.rs`'s
+    // `TlsSession.conn` switched to the enum at the same time. The
+    // method calls below (`reader` / `writer` / `wants_read` /
+    // `wants_write` / `read_tls` / `write_tls` / `process_new_packets`)
+    // are all available on the enum; both inner variants delegate.
+    conn: &'a mut rustls::Connection,
     sock: &'a mut std::net::TcpStream,
 }
 
@@ -2199,7 +2206,9 @@ unsafe fn ws_handshake_conn_tls(conn_fd: i32, config: *mut crate::tls::KaracTlsC
     // it. The fd ownership stays with `sock` for now; we'll
     // `into_raw_fd` it at the end.
     let fd = sock.as_raw_fd();
-    crate::tls::register_session_for_fd(fd, conn);
+    // Phase-8 line 22 widening: `register_session_for_fd` now takes
+    // `rustls::Connection`; wrap the freshly-built `ServerConnection`.
+    crate::tls::register_session_for_fd(fd, rustls::Connection::Server(conn));
 
     // HTTP upgrade exchange over TLS. The `TlsConnIo` wrapper drives
     // the rustls session against the existing socket. Look up the
