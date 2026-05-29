@@ -65,7 +65,25 @@ cargo build -p karac-runtime --release
 Key flags (`--help` for all): `-n/--connections`, `--concurrency`
 (in-flight handshake cap), `--churn-rounds` (0 = off), `--churn-fraction`,
 `--hold-secs`, `--connect-timeout-ms` (per-connection deadline so a stuck
-connection is counted as a failure instead of hanging the run).
+connection is counted as a failure instead of hanging the run),
+`--source-ips` (see below).
+
+### `--source-ips` — beating the loopback ephemeral-port cap
+
+A single client source IP dialing one `127.0.0.1:<port>` is capped by
+`net.ipv4.ip_local_port_range` (≈28K ports on a stock kernel) — every
+connection burns one ephemeral *source* port on the `(src_ip, dst_ip,
+dst_port)` tuple — and establishment slows sharply as that pool nears
+exhaustion. Widening the range needs root.
+
+`--source-ips 127.0.0.2,127.0.0.3,127.0.0.4,127.0.0.5` makes the harness
+bind each connection's source to one of the listed loopback addresses
+(round-robin by connection index). Linux routes all of `127.0.0.0/8` to
+`lo`, so binding these succeeds **without root**, and each source IP
+carries its own ephemeral-port pool: N IPs ⇒ ~N×28K ceiling, and keeping
+each IP well under its cap also keeps establishment fast. This is the
+path to >28K (toward 100K) on a single box. Empty (the default) = single
+implicit `127.0.0.1` source. Echoed back in the JSON `config.source_ips`.
 
 TLS verification is disabled (the demo's cert is the self-signed
 loopback test fixture). This harness must only ever target loopback.
@@ -90,23 +108,29 @@ loopback test fixture). This harness must only ever target loopback.
 `ok` is `true` iff every requested connection established. The CI gate
 (slice 7, line 168) parses this object and threshold-checks the numbers.
 
-## Status — verified at N=1; multi-connection blocked by a server bug
+## Status — clean to 50K; 100K blocked by establishment-rate collapse
 
-The harness pipeline is verified end-to-end at **N=1** (connect ~0.8 ms,
-RSS delta captured, well-formed JSON, exit 0). It is **correct and
-complete as a measurement instrument.**
+The original accept-loop wedge (held ≤1 concurrent connection) was
+**resolved 2026-05-28** (dispatcher-yield async integration +
+`spawn`-move double-drop fix). With that fixed, the harness now drives
+real scale on a single unprivileged Linux box (2 cores, 8 GB):
 
-Running it at N≥2 immediately surfaced a **server-side concurrency bug**:
-the demo accepts and handshakes one connection but wedges its accept
-loop once a handler is parked — it holds **at most 1 concurrent**
-connection (or 2 sequential with close-before-next) before further TLS
-handshakes hang. Slices 1/2 were only ever smoke-tested at a *single*
-connection (`nc` / one Python `ssl` client), so this harness is the
-first multi-connection exercise of the server — and it did its job by
-catching the wedge. This is a hard blocker for slice 4 (M1 100K) and is
-tracked as its own P0 entry under phase-6-runtime.md (see "Demo 1
-flagship-server accept loop wedges under concurrency"). The harness will
-produce the M1 number unchanged once that bug is fixed.
+- **Clean baseline: 50,000 idle wss:// connections** — 50000/50000
+  established, 0 failed, in 72.8 s; connect p99 208 ms; **7.9 KB/conn**;
+  churn cliff_ratio 6.6.
+- Per-connection memory is linear at ~7.9 KB/conn from 1K upward, so
+  100K would cost only ~790 MB server RSS — memory is not the limiter.
+
+**100K is not yet reachable**: establishment throughput degrades
+superlinearly with held-connection count (925/s @10K → 686/s @50K →
+~6/s @77K), stalling acceptance near ~77K. The *hold* is stable (linear
+memory, ~5 server threads for tens of thousands of parked connections);
+the wall is server-side accept/establish throughput. Full topology,
+tuning, the results ladder, and root-cause analysis live in
+`docs/investigations/demo1_m1_verification.md`. The collapse is filed as
+its own P0 blocker under phase-6-runtime.md (Demo 1 sub-entries). The
+harness itself is correct and complete — it will produce the 100K number
+unchanged once that blocker is fixed.
 
 ## See also
 

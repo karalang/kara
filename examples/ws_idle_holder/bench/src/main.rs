@@ -24,6 +24,7 @@
 //! client disables certificate verification — standard for a loopback
 //! test rig. This harness never deploys to a reachable address.
 
+use std::net::SocketAddr;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -34,7 +35,7 @@ use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, SignatureScheme};
 use serde::Serialize;
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
-use tokio::net::TcpStream;
+use tokio::net::{TcpSocket, TcpStream};
 use tokio::process::{Child, Command};
 use tokio::sync::Semaphore;
 use tokio::time::timeout;
@@ -62,6 +63,14 @@ struct Args {
     hold_secs: u64,
     connect_timeout_ms: u64,
     server_name: String,
+    /// Client source IPs to spread connections across (round-robin by
+    /// connection index). Empty = let the kernel pick (single implicit
+    /// 127.0.0.1 source). Each distinct loopback source IP gets its own
+    /// ephemeral-port pool, so N source IPs multiply the connection
+    /// ceiling past the ~28K single-tuple `ip_local_port_range` cap —
+    /// the path to 100K+ on a single box without root to widen the
+    /// range. See README § "Beating the loopback port cap".
+    source_ips: Vec<String>,
 }
 
 impl Default for Args {
@@ -77,6 +86,7 @@ impl Default for Args {
             hold_secs: 1,
             connect_timeout_ms: 10_000,
             server_name: "localhost".to_string(),
+            source_ips: Vec::new(),
         }
     }
 }
@@ -105,6 +115,11 @@ OPTIONS:
   --hold-secs <N>           settle time before final RSS  (default 1)
   --connect-timeout-ms <N>  per-connection deadline       (default 10000)
   --server-name <name>      TLS SNI name                  (default localhost)
+  --source-ips <a,b,...>    client source IPs to spread connections over
+                            (round-robin); each loopback IP has its own
+                            ephemeral-port pool, so N IPs raise the
+                            ceiling past the ~28K single-tuple port cap.
+                            e.g. 127.0.0.2,127.0.0.3,127.0.0.4,127.0.0.5
   -h, --help                this help
 "
 }
@@ -125,6 +140,13 @@ fn parse_args() -> Result<Args, BoxErr> {
             "--hold-secs" => a.hold_secs = next()?.parse()?,
             "--connect-timeout-ms" => a.connect_timeout_ms = next()?.parse()?,
             "--server-name" => a.server_name = next()?,
+            "--source-ips" => {
+                a.source_ips = next()?
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect()
+            }
             "-h" | "--help" => {
                 eprint!("{}", usage());
                 std::process::exit(0);
@@ -140,6 +162,13 @@ fn parse_args() -> Result<Args, BoxErr> {
     }
     if a.concurrency == 0 {
         return Err("--concurrency must be > 0".into());
+    }
+    // Validate source IPs up front so a typo fails fast instead of
+    // surfacing as a per-connection bind error mid-run.
+    for ip in &a.source_ips {
+        format!("{ip}:0")
+            .parse::<SocketAddr>()
+            .map_err(|e| format!("invalid --source-ips entry {ip:?}: {e}"))?;
     }
     Ok(a)
 }
@@ -207,8 +236,19 @@ async fn establish(
     connector: &TlsConnector,
     addr: &str,
     server_name: ServerName<'static>,
+    source_ip: Option<&str>,
 ) -> Result<Tls, BoxErr> {
-    let tcp = TcpStream::connect(addr).await?;
+    let tcp = match source_ip {
+        // Bind a specific loopback source IP so this connection draws
+        // from that IP's own ephemeral-port pool (the multi-IP fan-out
+        // that lifts the ~28K single-tuple port cap).
+        Some(ip) => {
+            let sock = TcpSocket::new_v4()?;
+            sock.bind(format!("{ip}:0").parse()?)?;
+            sock.connect(addr.parse()?).await?
+        }
+        None => TcpStream::connect(addr).await?,
+    };
     tcp.set_nodelay(true).ok();
     let mut tls = connector.connect(server_name, tcp).await?;
 
@@ -250,6 +290,7 @@ async fn establish(
 /// in-flight. Returns the established streams (held open) and the
 /// per-connection establishment latencies in milliseconds, plus the
 /// failure count.
+#[allow(clippy::too_many_arguments)]
 async fn open_batch(
     connector: &TlsConnector,
     addr: &str,
@@ -257,18 +298,31 @@ async fn open_batch(
     count: usize,
     concurrency: usize,
     connect_timeout: Duration,
+    source_ips: &[String],
 ) -> (Vec<Tls>, Vec<f64>, usize, Vec<String>) {
     let sem = Arc::new(Semaphore::new(concurrency));
     let mut handles = Vec::with_capacity(count);
-    for _ in 0..count {
+    for i in 0..count {
         let sem = sem.clone();
         let connector = connector.clone();
         let addr = addr.to_string();
         let sni = server_name.clone();
+        // Round-robin the source IP by connection index so the load is
+        // even across the pool; None when no --source-ips were given.
+        let src_ip = if source_ips.is_empty() {
+            None
+        } else {
+            Some(source_ips[i % source_ips.len()].clone())
+        };
         handles.push(tokio::spawn(async move {
             let _permit = sem.acquire_owned().await.expect("semaphore closed");
             let t0 = Instant::now();
-            match timeout(connect_timeout, establish(&connector, &addr, sni)).await {
+            match timeout(
+                connect_timeout,
+                establish(&connector, &addr, sni, src_ip.as_deref()),
+            )
+            .await
+            {
                 Ok(Ok(stream)) => Ok((t0.elapsed(), stream)),
                 Ok(Err(e)) => Err(e.to_string()),
                 Err(_) => Err(format!(
@@ -412,6 +466,8 @@ struct Config {
     concurrency: usize,
     churn_rounds: usize,
     churn_fraction: f64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    source_ips: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -494,6 +550,7 @@ async fn main() -> Result<(), BoxErr> {
         args.connections,
         args.concurrency,
         connect_timeout,
+        &args.source_ips,
     )
     .await;
     let established = held.len();
@@ -545,6 +602,7 @@ async fn main() -> Result<(), BoxErr> {
                 drop_n,
                 args.concurrency,
                 connect_timeout,
+                &args.source_ips,
             )
             .await;
             re_failed += f;
@@ -577,6 +635,7 @@ async fn main() -> Result<(), BoxErr> {
             concurrency: args.concurrency,
             churn_rounds: args.churn_rounds,
             churn_fraction: args.churn_fraction,
+            source_ips: args.source_ips.clone(),
         },
         connect: ConnectReport {
             established,
