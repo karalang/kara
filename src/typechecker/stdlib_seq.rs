@@ -73,10 +73,23 @@ impl<'a> super::TypeChecker<'a> {
             }
             _ => return,
         };
+        // Float keys are accepted for `sort_by_key` specifically, even
+        // though `type_supports_ord` returns false for them (floats fail Eq
+        // under standard IEEE 754 semantics — NaN ≠ NaN). The codegen
+        // lowering dispatches float keys to a `karac_float_cmp` runtime
+        // call that uses bit-level total-order semantics (the equivalent
+        // of Rust's `f64::total_cmp` / `f32::total_cmp`: sign-flip the bit
+        // pattern, compare as i64) — that gives a well-defined ordering
+        // for every float including NaNs without forcing the typechecker
+        // to widen `Ord` for other Ord consumers (derive checks,
+        // SortedSet, etc.). Documented as a sort_by_key-scoped concession
+        // in docs/implementation_checklist/phase-7-codegen.md.
+        let key_is_float = matches!(resolved_k, Type::Float(_));
         if !matches!(
             resolved_k,
             Type::TypeParam(_) | Type::TypeVar(_) | Type::Error
-        ) && !self.type_supports_ord(&resolved_k)
+        ) && !key_is_float
+            && !self.type_supports_ord(&resolved_k)
         {
             self.type_error(
                 format!(

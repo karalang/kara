@@ -24521,6 +24521,52 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_float_total_cmp_ascending() {
+        // Float keys go through `karac_float_cmp` (Rust's `f64::total_cmp`
+        // semantics: sign-flip the bit pattern, integer-compare). The
+        // typechecker accepts floats as a sort_by_key-scoped concession
+        // (other Ord consumers still reject them).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[f64] = Vec.new();
+    v.push(3.5); v.push(-1.2); v.push(2.7); v.push(-0.5);
+    v.sort_by_key(|x| x);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["-1.2", "-0.5", "2.7", "3.5"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_float_nan_sorts_largest() {
+        // NaN sorts as the largest value under total_cmp semantics. Pins the
+        // NaN-handling policy and guards against a regression to IEEE 754
+        // unordered semantics (where NaN would compare unordered with
+        // everything and produce a non-deterministic permutation).
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[f64] = Vec.new();
+    let nan: f64 = 0.0 / 0.0;
+    v.push(3.5); v.push(nan); v.push(1.2); v.push(-2.0); v.push(2.7);
+    v.sort_by_key(|x| x);
+    println(v.len());
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["5", "-2", "1.2", "2.7", "3.5", "nan"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

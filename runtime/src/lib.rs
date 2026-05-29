@@ -3686,6 +3686,38 @@ pub unsafe extern "C" fn karac_string_cmp(
     }
 }
 
+/// Total-order compare on two `f64` values, returning `-1` / `0` / `+1`.
+/// Implements Rust's `f64::total_cmp` semantics: sign-flip the bit pattern
+/// of negative values so the integer compare matches IEEE 754 numeric order
+/// for finite values, with the side effect of giving every `f64` (including
+/// every NaN payload, ±0, ±∞) a well-defined position in a total order.
+/// Negative NaNs sort smallest, then -∞, then negative finites, then -0,
+/// +0, positive finites, +∞, then positive NaNs (largest). Backs the
+/// float-key arm of `Vec.sort_by_key` codegen.
+///
+/// # Safety
+///
+/// Trivially safe — the inputs are by-value `f64`s with no aliasing.
+/// `#[no_mangle]` is required for codegen to link by symbol; the
+/// `extern "C"` ABI is chosen to keep the calling convention stable
+/// across optimisation levels.
+#[no_mangle]
+pub extern "C" fn karac_float_cmp(a: f64, b: f64) -> i64 {
+    // Convert to a sortable i64 via Rust's standard total_cmp algorithm:
+    // (left ^ ((left >> 63) >> 1)) gives the same ordering as IEEE 754 for
+    // finite values and a well-defined ordering for NaNs (largest by
+    // absolute bit pattern after the sign-flip).
+    let mut left = a.to_bits() as i64;
+    let mut right = b.to_bits() as i64;
+    left ^= (((left >> 63) as u64) >> 1) as i64;
+    right ^= (((right >> 63) as u64) >> 1) as i64;
+    match left.cmp(&right) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    }
+}
+
 // ── Slice 5 test stand-ins for slice 3 globals ─────────────────────────────
 //
 // The runtime crate's `cargo test -p karac-runtime` binary has its own

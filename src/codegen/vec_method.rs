@@ -2342,6 +2342,55 @@ impl<'ctx> super::Codegen<'ctx> {
                         .unwrap()
                         .into_int_value()
                 }
+                (BasicValueEnum::FloatValue(ka), BasicValueEnum::FloatValue(kb)) => {
+                    // Float key: dispatch to `karac_float_cmp` (total-order
+                    // semantics on the bit pattern, equivalent to Rust's
+                    // `f64::total_cmp`). f32 keys are widened to f64 first —
+                    // the conversion is exact and preserves the total order,
+                    // so a single f64 entry-point covers every float width
+                    // the language supports. The typechecker accepts floats
+                    // here as a sort_by_key-scoped concession; other Ord
+                    // consumers still reject them (see check_sort_key_closure
+                    // in src/typechecker/stdlib_seq.rs).
+                    let f64_t = self.context.f64_type();
+                    let ka_f64 = if ka.get_type() == f64_t {
+                        ka
+                    } else {
+                        self.builder
+                            .build_float_ext(ka, f64_t, "key.a.f64")
+                            .unwrap()
+                    };
+                    let kb_f64 = if kb.get_type() == f64_t {
+                        kb
+                    } else {
+                        self.builder
+                            .build_float_ext(kb, f64_t, "key.b.f64")
+                            .unwrap()
+                    };
+                    let runtime_fn =
+                        self.module
+                            .get_function("karac_float_cmp")
+                            .unwrap_or_else(|| {
+                                let fn_ty = i64_t.fn_type(&[f64_t.into(), f64_t.into()], false);
+                                self.module.add_function(
+                                    "karac_float_cmp",
+                                    fn_ty,
+                                    Some(Linkage::External),
+                                )
+                            });
+                    let call = self
+                        .builder
+                        .build_call(
+                            runtime_fn,
+                            &[
+                                BasicMetadataValueEnum::from(ka_f64),
+                                BasicMetadataValueEnum::from(kb_f64),
+                            ],
+                            "key.float.cmp",
+                        )
+                        .unwrap();
+                    call.try_as_basic_value().unwrap_basic().into_int_value()
+                }
                 (BasicValueEnum::StructValue(ka), BasicValueEnum::StructValue(kb)) => {
                     let struct_ty = ka.get_type();
                     let n_fields = struct_ty.count_fields();
