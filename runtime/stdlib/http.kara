@@ -219,4 +219,21 @@ impl Server {
     fn serve(addr: String, handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
         Err(HttpError { message: "" })
     }
+
+    // HTTPS variant of `serve`: bind on `addr` and dispatch every
+    // request through `handler`, but terminate TLS in front of hyper
+    // using the supplied PEM-encoded server cert + private key (each
+    // any of PKCS#8 / RSA / SEC1; the runtime picks the first key
+    // block). Backed by `karac_runtime_serve_https`, which wraps each
+    // accepted TCP stream in a `tokio_rustls::TlsAcceptor` before
+    // feeding it to hyper. The handler ABI is identical to `serve` —
+    // `Request` / `Response` are transport-independent. Modern-TLS-
+    // only (no SSLv3, no insecure ciphers); rustls + `ring` provider.
+    // Per-connection handshake failures drop the connection silently
+    // so a single bad client cannot kill the accept loop. Same
+    // `BOUND_PORT=<n>` stdout convention as `serve`.
+    #[compiler_builtin]
+    fn serve_tls(addr: String, cert_pem: String, key_pem: String, handler: Fn(Request) -> Response) -> Result[Unit, HttpError] with sends(Network) receives(Network) {
+        Err(HttpError { message: "" })
+    }
 }

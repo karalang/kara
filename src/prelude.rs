@@ -1414,7 +1414,11 @@ mod tests {
         // Slice B (2026-05-09): server surface. `serve` is the Slice B
         // follow-up handler-dispatch entry (codegen + thin stdlib
         // declaration; runtime extern at `runtime/src/lib.rs:1879`).
-        assert_inherent_impl_compiler_builtin("http.kara", "Server", &["serve_static", "serve"]);
+        assert_inherent_impl_compiler_builtin(
+            "http.kara",
+            "Server",
+            &["serve_static", "serve", "serve_tls"],
+        );
         // HTTP handler ABI trampoline (2026-05-09): F3 method surface —
         // `Request.path()` + `Request.method()` + `Request.body()` +
         // `Request.header(name)` round-trip through the runtime externs

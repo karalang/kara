@@ -138,7 +138,7 @@ pub(crate) unsafe fn clone_config_arc(config: *const KaracTlsConfig) -> Arc<Serv
 /// Slice 2's `TlsError` enum decodes the FFI failure into kara-visible
 /// variants if a real consumer needs them.
 #[derive(Debug)]
-enum ConfigBuildError {
+pub(crate) enum ConfigBuildError {
     NoCertsFound,
     NoPrivateKey,
     InvalidPem,
@@ -149,7 +149,15 @@ enum ConfigBuildError {
 /// Parse PEM bytes into a rustls `ServerConfig`. Accepts any of the
 /// PEM private-key formats rustls-pemfile recognises (PKCS#8, RSA,
 /// SEC1) — `private_key()` returns the first key block it finds.
-fn build_server_config(cert_pem: &[u8], key_pem: &[u8]) -> Result<ServerConfig, ConfigBuildError> {
+///
+/// Visibility: `pub(crate)` so `karac_runtime_serve_https` in
+/// `lib.rs` can reuse the same PEM-parsing path the
+/// `TlsListener.bind_tls` FFI uses, rather than re-deriving the
+/// rustls config-builder dance.
+pub(crate) fn build_server_config(
+    cert_pem: &[u8],
+    key_pem: &[u8],
+) -> Result<ServerConfig, ConfigBuildError> {
     let mut cert_reader = std::io::BufReader::new(cert_pem);
     let certs: Vec<CertificateDer<'static>> = rustls_pemfile::certs(&mut cert_reader)
         .collect::<Result<Vec<_>, _>>()

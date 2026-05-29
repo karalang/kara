@@ -1079,4 +1079,260 @@ mod http_server_tests {
              (`hello world`) and the `lang=en` param; got: {body:?}"
         );
     }
+
+    /// Custom rustls `ServerCertVerifier` for the smoke test that skips
+    /// chain validation entirely. Necessary because the checked-in
+    /// fixture cert has `basicConstraints: CA:TRUE` (OpenSSL default)
+    /// and rustls's webpki rejects a CA cert presented as an
+    /// end-entity (`CaUsedAsEndEntity`). The smoke test is verifying
+    /// karac's `Server.serve_tls` wiring — the TLS handshake completes,
+    /// the handler runs through the encrypted stream, the response
+    /// comes back encrypted — not rustls's chain validation. Live with
+    /// the no-verify cost here rather than regenerating the fixture
+    /// (which would affect Phase-6 / Demo 1 tests using the same PEM).
+    #[derive(Debug)]
+    struct NoVerify;
+
+    impl rustls::client::danger::ServerCertVerifier for NoVerify {
+        fn verify_server_cert(
+            &self,
+            _end_entity: &rustls::pki_types::CertificateDer<'_>,
+            _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+            _server_name: &rustls::pki_types::ServerName<'_>,
+            _ocsp_response: &[u8],
+            _now: rustls::pki_types::UnixTime,
+        ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+            Ok(rustls::client::danger::ServerCertVerified::assertion())
+        }
+        fn verify_tls12_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn verify_tls13_signature(
+            &self,
+            _message: &[u8],
+            _cert: &rustls::pki_types::CertificateDer<'_>,
+            _dss: &rustls::DigitallySignedStruct,
+        ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
+            Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
+        }
+        fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+            vec![
+                rustls::SignatureScheme::RSA_PSS_SHA256,
+                rustls::SignatureScheme::RSA_PSS_SHA384,
+                rustls::SignatureScheme::RSA_PSS_SHA512,
+                rustls::SignatureScheme::RSA_PKCS1_SHA256,
+                rustls::SignatureScheme::RSA_PKCS1_SHA384,
+                rustls::SignatureScheme::RSA_PKCS1_SHA512,
+                rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
+                rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
+                rustls::SignatureScheme::ED25519,
+            ]
+        }
+    }
+
+    /// Synchronous rustls-backed HTTPS GET. Builds a `ClientConfig`
+    /// with chain validation disabled (see `NoVerify` above for why
+    /// the fixture cert forces this), connects to `127.0.0.1:<port>`
+    /// via plain `TcpStream`, completes the TLS handshake via
+    /// `rustls::Stream`, sends a single HTTP/1.1 GET, and parses
+    /// status + body out of the response. Hand-rolled to avoid
+    /// pulling tokio-rustls (async) into the karac test crate; mirrors
+    /// the sync-rustls usage already in `runtime/src/tls.rs`'s unit
+    /// tests.
+    fn https_get_no_verify(port: u16, path: &str) -> Result<(u16, String), String> {
+        use std::sync::Arc;
+
+        let provider = Arc::new(rustls::crypto::ring::default_provider());
+        let config = rustls::ClientConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .map_err(|e| format!("client config protocol setup: {e}"))?
+            .dangerous()
+            .with_custom_certificate_verifier(Arc::new(NoVerify))
+            .with_no_client_auth();
+
+        let server_name = rustls::pki_types::ServerName::try_from("localhost")
+            .map_err(|e| format!("server name: {e}"))?;
+        let mut conn = rustls::ClientConnection::new(Arc::new(config), server_name)
+            .map_err(|e| format!("client conn: {e}"))?;
+
+        let mut sock = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("tcp connect: {e}"))?;
+        sock.set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout: {e}"))?;
+        sock.set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_write_timeout: {e}"))?;
+
+        let mut tls = rustls::Stream::new(&mut conn, &mut sock);
+        let req = format!("GET {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        tls.write_all(req.as_bytes())
+            .map_err(|e| format!("tls write: {e}"))?;
+
+        let mut buf = Vec::new();
+        // Read until EOF / close-notify; rustls returns `Err(UnexpectedEof)`
+        // for some servers that drop the socket without close-notify after
+        // sending Connection: close — fold both into a successful read.
+        let _ = tls.read_to_end(&mut buf);
+
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut parts = text.split("\r\n\r\n");
+        let head = parts.next().unwrap_or("");
+        let body = parts.collect::<Vec<_>>().join("\r\n\r\n");
+        let first = head.lines().next().ok_or("empty response")?;
+        let mut tokens = first.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+        Ok((status, body))
+    }
+
+    /// `Server.serve_tls` end-to-end smoke. Reads the checked-in
+    /// `tests/fixtures/tls/cert.pem` + `key.pem` (Phase-6 line 236
+    /// slice 4 fixtures, self-signed CN=localhost), embeds them as
+    /// inline string literals in a Kāra program that calls
+    /// `Server.serve_tls("127.0.0.1:0", cert, key, handle)`, spawns the
+    /// binary, reads BOUND_PORT, performs an HTTPS GET via
+    /// `https_get_with_cert` (rustls client trusting the same cert),
+    /// and asserts the handler ran and the response body echoes the
+    /// request path. Pins: `karac_runtime_serve_https` end-to-end
+    /// (tokio-rustls `TlsAcceptor` in front of hyper) + the codegen
+    /// `Server.serve_tls` dispatch + the shared handler shim across
+    /// the TLS layer.
+    #[test]
+    fn test_server_serve_tls_https_smoke() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+
+        let cert_path = workspace_root().join("tests/fixtures/tls/cert.pem");
+        let key_path = workspace_root().join("tests/fixtures/tls/key.pem");
+        let cert_pem = match std::fs::read_to_string(&cert_path) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!(
+                    "skip: {} not present (Phase-6 line 236 slice 4 fixture)",
+                    cert_path.display()
+                );
+                return;
+            }
+        };
+        let key_pem = match std::fs::read_to_string(&key_path) {
+            Ok(s) => s,
+            Err(_) => {
+                eprintln!(
+                    "skip: {} not present (Phase-6 line 236 slice 4 fixture)",
+                    key_path.display()
+                );
+                return;
+            }
+        };
+
+        // Escape for embedding in a Kāra `"..."` string literal: order
+        // matters — `\` first, then `"`, then newline → `\n`.
+        fn kara_escape(s: &str) -> String {
+            s.replace('\\', "\\\\")
+                .replace('"', "\\\"")
+                .replace('\n', "\\n")
+        }
+        let cert_lit = kara_escape(&cert_pem);
+        let key_lit = kara_escape(&key_pem);
+
+        let src = format!(
+            r#"
+            struct Response {{ status: i64, body: String }}
+
+            fn handle(req: Request) -> Response {{
+                Response {{ status: 200, body: req.path() }}
+            }}
+
+            fn main() {{
+                let cert = "{cert_lit}";
+                let key = "{key_lit}";
+                let _result = Server.serve_tls("127.0.0.1:0", cert, key, handle);
+                println("server exited unexpectedly");
+            }}
+            "#
+        );
+
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_https_smoke_{pid}_{nanos}"));
+
+        if let Err(e) = compile_and_link(&src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn HTTPS server binary");
+
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("HTTPS server did not emit BOUND_PORT line within timeout");
+            }
+        };
+        assert!(port > 0, "BOUND_PORT must be a non-zero ephemeral port");
+
+        let started = Instant::now();
+        let mut last_err: Option<String> = None;
+        let mut response: Option<(u16, String)> = None;
+        for _ in 0..10 {
+            match https_get_no_verify(port, "/secure-path/42") {
+                Ok(r) => {
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let (status, body) = match response {
+            Some(r) => r,
+            None => panic!(
+                "HTTPS GET against 127.0.0.1:{port} never succeeded; last error: {:?}",
+                last_err
+            ),
+        };
+        assert_eq!(status, 200, "expected 200 status; body={body:?}");
+        assert!(
+            body.contains("/secure-path/42"),
+            "expected response body to echo path /secure-path/42 (proving \
+             handler ran through the TLS layer); got: {body:?}"
+        );
+    }
 }

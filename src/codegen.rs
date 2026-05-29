@@ -1357,6 +1357,28 @@ impl<'ctx> Codegen<'ctx> {
             karac_runtime_serve_http_type,
             Some(Linkage::External),
         );
+        // HTTPS variant: same shape as `karac_runtime_serve_http` plus
+        // inline cert + key PEM byte slices (`ptr` + `i64` len each).
+        // Terminates TLS via `tokio_rustls::TlsAcceptor` in front of
+        // hyper. Backs `Server.serve_tls(addr, cert_pem, key_pem,
+        // handler)`.
+        let karac_runtime_serve_https_type = context.i32_type().fn_type(
+            &[
+                ptr_type.into(), // addr_cstr
+                ptr_type.into(), // cert_pem
+                i64_type.into(), // cert_len
+                ptr_type.into(), // key_pem
+                i64_type.into(), // key_len
+                ptr_type.into(), // handler fn-ptr
+                ptr_type.into(), // bound_port_out
+            ],
+            false,
+        );
+        let _karac_runtime_serve_https_fn = module.add_function(
+            "karac_runtime_serve_https",
+            karac_runtime_serve_https_type,
+            Some(Linkage::External),
+        );
 
         // HTTP handler ABI trampoline (2026-05-09): per-request runtime
         // externs invoked from the Kāra-side `Request.path()` / `.method()`

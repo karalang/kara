@@ -60,6 +60,17 @@ serde_json = { version = "1", features = ["preserve_order"] }
 ureq = "2"
 rustyline = "18.0.0"
 
+[dev-dependencies]
+# Phase-8 std.http HTTPS test client (`tests/http_server.rs` E2E for
+# `Server.serve_tls`). Synchronous rustls — same version + `ring`
+# provider the `runtime` crate uses — drives a single GET through the
+# handshake against the karac-built HTTPS server. Chain validation is
+# disabled in the test client (`NoVerify`) because the checked-in
+# fixture cert has `CA:TRUE` and rustls rejects CA certs presented as
+# end-entity; the smoke proves karac's serve_tls wiring, not rustls
+# verification — see the test comment.
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring", "logging"] }
+
 # Binary-size phase 1: drop `__eh_frame` + `__unwind_info` from emitted
 # binaries by removing unwind tables from the runtime's release build.
 # `karac_par_run` uses `std::panic::catch_unwind`; with `panic = "abort"`

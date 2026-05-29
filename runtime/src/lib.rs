@@ -2958,6 +2958,126 @@ pub unsafe extern "C" fn karac_runtime_serve_http(
     })
 }
 
+/// Synchronously serve HTTPS/1.1 traffic on `addr_cstr` until a fatal
+/// error breaks the accept loop. Parallels `karac_runtime_serve_http`
+/// — same per-request `block_in_place` dispatch via `serve_request`
+/// and same `BOUND_PORT=<n>` stdout convention — but terminates TLS
+/// in front of hyper via `tokio_rustls::TlsAcceptor`. The cert + key
+/// are supplied as inline PEM byte slices; PEM parsing reuses
+/// `tls::build_server_config` (rustls 0.23 + `ring` provider,
+/// server-only / no client auth / safe-default protocol versions).
+///
+/// Per-connection handshake failures are swallowed — a single bad
+/// client must not break the accept loop. Successful TLS streams
+/// route through the same `serve_request` body the plain-HTTP path
+/// uses, so request parsing + response assembly are shared.
+///
+/// Return codes: same shared classes as `karac_runtime_serve_http`
+/// (1 = null addr, 2 = invalid utf-8, 3 = parse fail, 4 = runtime
+/// build fail, 5 = bind fail); plus 6 = cert/key PEM invalid or
+/// rustls config-build failure.
+///
+/// # Safety
+///
+/// Same caller obligations as `karac_runtime_serve_http`, plus
+/// `cert_pem` / `key_pem` must each point at `cert_len` / `key_len`
+/// initialized bytes (or be null with the matching length `<= 0`,
+/// in which case the rustls config build fails with return code 6).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_serve_https(
+    addr_cstr: *const std::os::raw::c_char,
+    cert_pem: *const u8,
+    cert_len: i64,
+    key_pem: *const u8,
+    key_len: i64,
+    handler: extern "C" fn(*const KaracHttpRequest, *mut KaracHttpResponse),
+    bound_port_out: *mut u16,
+) -> i32 {
+    if addr_cstr.is_null() {
+        return 1;
+    }
+    let cstr = std::ffi::CStr::from_ptr(addr_cstr);
+    let addr_str = match cstr.to_str() {
+        Ok(s) => s,
+        Err(_) => return 2,
+    };
+    let socket_addr: std::net::SocketAddr = match addr_str.parse() {
+        Ok(a) => a,
+        Err(_) => return 3,
+    };
+
+    // Build the rustls `ServerConfig` from the supplied PEM bytes via
+    // the shared `tls::build_server_config` helper (same path used by
+    // `karac_runtime_tls_config_new`). Any malformed cert / key
+    // collapses into return code 6 — callers see "TLS config failed"
+    // without leaking rustls's internal error enum across the FFI.
+    let cert_bytes: &[u8] = if cert_pem.is_null() || cert_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(cert_pem, cert_len as usize)
+    };
+    let key_bytes: &[u8] = if key_pem.is_null() || key_len <= 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(key_pem, key_len as usize)
+    };
+    let server_config = match crate::tls::build_server_config(cert_bytes, key_bytes) {
+        Ok(c) => c,
+        Err(_) => return 6,
+    };
+    let acceptor = tokio_rustls::TlsAcceptor::from(std::sync::Arc::new(server_config));
+
+    let runtime = match tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(rt) => rt,
+        Err(_) => return 4,
+    };
+
+    runtime.block_on(async move {
+        let listener = match tokio::net::TcpListener::bind(socket_addr).await {
+            Ok(l) => l,
+            Err(_) => return 5,
+        };
+        if let Ok(local) = listener.local_addr() {
+            if !bound_port_out.is_null() {
+                *bound_port_out = local.port();
+            }
+            // Same `BOUND_PORT=<n>\n` stdout convention as
+            // `karac_runtime_serve_http` so the smoke-test harness can
+            // discover the ephemeral port when binding to
+            // `"127.0.0.1:0"`.
+            use std::io::Write;
+            let mut stdout = std::io::stdout().lock();
+            let _ = writeln!(stdout, "BOUND_PORT={}", local.port());
+            let _ = stdout.flush();
+        }
+        loop {
+            let (tcp_stream, _peer) = match listener.accept().await {
+                Ok(pair) => pair,
+                Err(_) => continue,
+            };
+            let acceptor = acceptor.clone();
+            tokio::spawn(async move {
+                let tls_stream = match acceptor.accept(tcp_stream).await {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let io = hyper_util::rt::TokioIo::new(tls_stream);
+                let svc = hyper::service::service_fn(
+                    move |req: hyper::Request<hyper::body::Incoming>| async move {
+                        serve_request(req, handler).await
+                    },
+                );
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(io, svc)
+                    .await;
+            });
+        }
+    })
+}
+
 /// Serve a single hardcoded JSON body for every incoming GET request on
 /// `addr_cstr`. This is the **minimal smoke surface** Slice B's B5 test
 /// exercises: it bypasses the full handler-fn-ptr codegen path while
