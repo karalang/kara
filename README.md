@@ -6,12 +6,12 @@
 
 ```
  compiling the compiler...
-  [▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▒▒▒▒▒▒▒▒▒▒▒▒░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░]
+ [▓▓▓▓▓▓▓▓▓▓▓▓▒▒░░░░░░░░░░░░]
 ```
 
 Kāra is a systems programming language designed for the AI era. The compiler handles memory layout and concurrency; the programmer handles intent — and hardware targets, like GPU, when they matter.
 
-Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/gowthamswe/karac-rust/discussions/new/choose) — all input welcome.
+Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose) — all input welcome.
 
 ---
 
@@ -85,7 +85,7 @@ layout entities: Collection<Entity> {
 
 All compiler output available as structured JSON with machine-applicable fix diffs. Compiler query API for programmatic access to effect inference, ownership decisions, and concurrency analysis. Canonical formatter for clean semantic diffs.
 
-## Production-Ready
+## Production Readiness
 
 What v1 ships with, what the numbers look like, and what the toolchain gives you.
 
