@@ -1,21 +1,21 @@
 # Kāra
 
-<p align="center">
-  <img src="docs/img/wip.png" alt="Work In Progress" width="150">
-</p>
-
 ```
  compiling the compiler...
  [▓▓▓▓▓▓▓▓▓▓▓▓▒▒░░░░░░░░░░░░]
 ```
 
-Kāra is a systems programming language designed for the AI era. The compiler handles memory layout and concurrency; the programmer handles intent — and hardware targets, like GPU, when they matter.
+Kāra is a systems programming language for the age of AI-written code. Declare intent; the compiler handles what LLMs get wrong — memory layout, ownership, concurrency — and emits every decision as structured output agents can consume.
 
 Questions, ideas, or design feedback? [Start a GitHub Discussion](https://github.com/karalang/kara/discussions/new/choose) — all input welcome.
 
 ---
 
 ## What Makes Kāra Different
+
+### AI-First Compiler Interface
+
+All compiler output available as structured JSON with machine-applicable fix diffs. Compiler query API for programmatic access to effect inference, ownership decisions, and concurrency analysis. Canonical formatter for clean semantic diffs.
 
 ### Effect System — No Async/Await, No Colored Functions
 
@@ -81,15 +81,9 @@ layout entities: Collection<Entity> {
 }
 ```
 
-### AI-First Compiler Interface
-
-All compiler output available as structured JSON with machine-applicable fix diffs. Compiler query API for programmatic access to effect inference, ownership decisions, and concurrency analysis. Canonical formatter for clean semantic diffs.
-
 ## Production Readiness
 
 What v1 ships with, what the numbers look like, and what the toolchain gives you.
-
-> **Status:** skeleton. Each subsection lands its numbers and links once the underlying feature is measured end-to-end. Empty rows are placeholders, not commitments — they ship when the data does.
 
 ### Concurrency Runtime
 
@@ -119,6 +113,11 @@ _TBD: per-kata table and graphs, sourced from `bench/` and the `kara-katas` repo
 - LLVM-backed codegen.
 - Address-sanitizer–clean across the codegen E2E suite.
 - Structured diagnostics and the AI-first compiler interface described above.
+
+### Targets
+
+- **Native** — the v1 compile target.
+- **WASM, GPU, and embedded** — on the roadmap (Phase 10); one language across targets under per-target profile constraints. GPU ships as a compile target first; call-site ergonomics come later. See [docs/design.md](docs/design.md).
 
 ## Docs
 
@@ -160,3 +159,16 @@ cargo fmt                            # format
 Codegen E2E tests (`tests/codegen.rs`, `tests/par_codegen.rs`, `tests/memory_sanitizer.rs`) are gated on `--features llvm` and need the runtime library built once via `cargo build -p karac-runtime --release`. The memory-sanitizer suite additionally needs a `cc` toolchain that supports `-fsanitize=address`; it skips gracefully on hosts that don't.
 
 See [docs/roadmap.md](docs/roadmap.md) for current progress and [docs/design.md](docs/design.md) for the language specification.
+
+## License
+
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+- MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
