@@ -202,10 +202,7 @@ mod http_server_tests {
     /// returned as the server emitted them (hyper normalizes inbound
     /// request header names to lowercase, but emits response header
     /// names case-preserving for the value the handler set).
-    fn http_get_with_response_headers(
-        port: u16,
-        path: &str,
-    ) -> Result<HttpResponseTriple, String> {
+    fn http_get_with_response_headers(port: u16, path: &str) -> Result<HttpResponseTriple, String> {
         let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
             .map_err(|e| format!("connect failed: {e}"))?;
         stream
