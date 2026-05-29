@@ -1896,6 +1896,90 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
+            "sort_by_key" => {
+                if args.len() != 1 {
+                    return Err(format!(
+                        "Vec.sort_by_key expects 1 argument (key closure), got {}",
+                        args.len()
+                    ));
+                }
+                // V1: only inline-closure callees. A named function or
+                // closure-typed local would need a bridge thunk with an
+                // indirect call through the closure's fat pointer (mirror
+                // of `emit_sort_by_thunk` for sort_by) — not yet wired up.
+                let (params, body) = match &args[0].value.kind {
+                    ExprKind::Closure { params, body, .. } => (params, body.as_ref()),
+                    _ => {
+                        return Err(
+                            "Vec.sort_by_key in codegen only supports an inline closure \
+                             argument today (a named function or closure-typed local \
+                             is not yet wired through the bridge thunk)"
+                                .to_string(),
+                        );
+                    }
+                };
+                let (thunk, ctx_alloca) =
+                    self.emit_sort_by_key_inline_thunk(params, body, elem_ty)?;
+
+                let data_ptr_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 0, "vec.data.ptr")
+                    .unwrap();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(vec_ty, data_ptr, 1, "vec.len.ptr")
+                    .unwrap();
+                let data = self
+                    .builder
+                    .build_load(ptr_ty, data_ptr_ptr, "data")
+                    .unwrap()
+                    .into_pointer_value();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "len")
+                    .unwrap()
+                    .into_int_value();
+                let elem_size = elem_ty.size_of().unwrap();
+
+                let runtime_fn = self
+                    .module
+                    .get_function("karac_vec_sort_by")
+                    .unwrap_or_else(|| {
+                        let void_t = self.context.void_type();
+                        let fn_ty = void_t.fn_type(
+                            &[
+                                ptr_ty.into(),
+                                i64_t.into(),
+                                i64_t.into(),
+                                ptr_ty.into(),
+                                ptr_ty.into(),
+                            ],
+                            false,
+                        );
+                        self.module.add_function(
+                            "karac_vec_sort_by",
+                            fn_ty,
+                            Some(Linkage::External),
+                        )
+                    });
+
+                let thunk_ptr = thunk.as_global_value().as_pointer_value();
+                self.builder
+                    .build_call(
+                        runtime_fn,
+                        &[
+                            BasicMetadataValueEnum::from(data),
+                            BasicMetadataValueEnum::from(len),
+                            BasicMetadataValueEnum::from(elem_size),
+                            BasicMetadataValueEnum::from(thunk_ptr),
+                            BasicMetadataValueEnum::from(ctx_alloca),
+                        ],
+                        "",
+                    )
+                    .unwrap();
+
+                Ok(self.context.i64_type().const_int(0, false).into())
+            }
             // No silent fall-through: a Vec/String method the typechecker
             // accepts but codegen has no arm for must fail the build loudly,
             // not return a stand-in `0` that masquerades as a no-op result
@@ -1975,6 +2059,212 @@ impl<'ctx> super::Codegen<'ctx> {
             self.builder.position_at_end(bb);
         }
         thunk_fn
+    }
+
+    /// Inline-closure fast path for `Vec.sort_by_key`. The closure takes ONE
+    /// param and returns a key; the bridge thunk computes the key for each
+    /// of the two elements by compiling the closure body twice into itself
+    /// (so both key extractions inline cleanly under LLVM's later passes),
+    /// then returns the signed compare of the two keys as `-1 / 0 / +1` —
+    /// the same comparator contract `karac_vec_sort_by` consumes. Captures
+    /// ride the same env-struct + outer-stack-alloca shape as
+    /// `emit_sort_by_inline_thunk`. The compiler restricts the key type to
+    /// integers (consistent with the `.cmp` lowering in method_call.rs and
+    /// the default-order `sort()` thunk above), so non-integer keys error
+    /// loudly rather than silently producing wrong output.
+    #[allow(clippy::too_many_lines)]
+    pub(super) fn emit_sort_by_key_inline_thunk(
+        &mut self,
+        params: &[ClosureParam],
+        body: &Expr,
+        elem_ty: BasicTypeEnum<'ctx>,
+    ) -> Result<(FunctionValue<'ctx>, PointerValue<'ctx>), String> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        if params.len() != 1 {
+            return Err(format!(
+                "Vec.sort_by_key key closure must take exactly 1 argument, got {}",
+                params.len()
+            ));
+        }
+
+        // 1. Captures (same shape as emit_sort_by_inline_thunk).
+        let free_vars = self.collect_closure_free_vars(params, body);
+        let env_field_types: Vec<BasicTypeEnum<'ctx>> = if free_vars.is_empty() {
+            vec![self.context.i8_type().into()]
+        } else {
+            free_vars.iter().map(|n| self.variables[n].ty).collect()
+        };
+        let env_struct_ty = self.context.struct_type(&env_field_types, false);
+
+        // 2. Stack-allocate + populate env in the outer frame.
+        let outer_fn = self.current_fn.unwrap();
+        let env_alloca =
+            self.create_entry_alloca(outer_fn, "sort_by_key.env", env_struct_ty.into());
+        if !free_vars.is_empty() {
+            let mut env_agg = env_struct_ty.get_undef();
+            for (i, var_name) in free_vars.iter().enumerate() {
+                let slot = self.variables[var_name];
+                let val = self
+                    .builder
+                    .build_load(slot.ty, slot.ptr, var_name)
+                    .unwrap();
+                env_agg = self
+                    .builder
+                    .build_insert_value(env_agg, val, i as u32, "env.field")
+                    .unwrap()
+                    .into_struct_value();
+            }
+            self.builder.build_store(env_alloca, env_agg).unwrap();
+        }
+
+        // 3. Declare thunk: extern "C" fn(ctx, *a, *b) -> i64.
+        let id = self.closure_counter;
+        self.closure_counter += 1;
+        let name = format!("__sort_by_key_inline_{}", id);
+        let thunk_ty = i64_t.fn_type(&[ptr_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+        let thunk_fn = self
+            .module
+            .add_function(&name, thunk_ty, Some(Linkage::Internal));
+
+        // 4. Save outer codegen state.
+        let saved_bb = self.builder.get_insert_block();
+        let saved_fn = self.current_fn;
+        let saved_vars = std::mem::take(&mut self.variables);
+        let saved_var_types = std::mem::take(&mut self.var_type_names);
+        let saved_loop_stack = std::mem::take(&mut self.loop_stack);
+        let saved_subst = std::mem::take(&mut self.type_subst);
+        let saved_cfn = std::mem::take(&mut self.closure_fn_types);
+        let saved_pct = self.pending_closure_fn_type.take();
+
+        // 5. Build thunk body.
+        self.current_fn = Some(thunk_fn);
+        let entry = self.context.append_basic_block(thunk_fn, "entry");
+        self.builder.position_at_end(entry);
+
+        let ctx_ptr = thunk_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let a_ptr = thunk_fn.get_nth_param(1).unwrap().into_pointer_value();
+        let b_ptr = thunk_fn.get_nth_param(2).unwrap().into_pointer_value();
+
+        if !free_vars.is_empty() {
+            let env_val = self
+                .builder
+                .build_load(env_struct_ty, ctx_ptr, "env")
+                .unwrap()
+                .into_struct_value();
+            for (i, var_name) in free_vars.iter().enumerate() {
+                let cap_ty = env_field_types[i];
+                let field_val = self
+                    .builder
+                    .build_extract_value(env_val, i as u32, var_name)
+                    .unwrap();
+                let alloca = self.create_entry_alloca(thunk_fn, var_name, cap_ty);
+                self.builder.build_store(alloca, field_val).unwrap();
+                self.variables.insert(
+                    var_name.clone(),
+                    VarSlot {
+                        ptr: alloca,
+                        ty: cap_ty,
+                    },
+                );
+                if let Some(type_name) = saved_var_types.get(var_name) {
+                    self.var_type_names
+                        .insert(var_name.clone(), type_name.clone());
+                }
+            }
+        }
+
+        // 6. Load both elements through their typed pointers.
+        let a_val = self.builder.build_load(elem_ty, a_ptr, "a.val").unwrap();
+        let b_val = self.builder.build_load(elem_ty, b_ptr, "b.val").unwrap();
+
+        // 7. Resolve the key-closure's single param name.
+        let param_name = match &params[0].pattern.kind {
+            PatternKind::Binding(n) => n.clone(),
+            _ => "_kp".to_string(),
+        };
+        let param_ty = a_val.get_type();
+
+        // 8. First compile (key_a): bind param to element a, compile body.
+        let alloca_a = self.create_entry_alloca(thunk_fn, &format!("{}.a", param_name), param_ty);
+        self.builder.build_store(alloca_a, a_val).unwrap();
+        self.variables.insert(
+            param_name.clone(),
+            VarSlot {
+                ptr: alloca_a,
+                ty: param_ty,
+            },
+        );
+        let key_a_val = self.compile_expr(body)?;
+
+        // 9. Second compile (key_b): rebind param to element b, compile body
+        // again. Compiling the body twice produces two copies of the key
+        // expression in the thunk, but for the realistic key shapes
+        // (`|x| x`, `|x| -x`, `|x| x.field`) the body is small and the
+        // duplication folds away under LLVM's later optimisation passes.
+        let alloca_b = self.create_entry_alloca(thunk_fn, &format!("{}.b", param_name), param_ty);
+        self.builder.build_store(alloca_b, b_val).unwrap();
+        self.variables.insert(
+            param_name.clone(),
+            VarSlot {
+                ptr: alloca_b,
+                ty: param_ty,
+            },
+        );
+        let key_b_val = self.compile_expr(body)?;
+
+        // 10. Compare the two keys via signed -1/0/+1 select, matching the
+        // default-order `sort()` thunk's shape. Restricted to integer key
+        // types — non-integer keys fail loudly here rather than producing
+        // a silently-wrong ordering.
+        let (ka, kb) = match (key_a_val, key_b_val) {
+            (BasicValueEnum::IntValue(ka), BasicValueEnum::IntValue(kb)) => (ka, kb),
+            _ => {
+                return Err(
+                    "Vec.sort_by_key in codegen supports only integer key types today; \
+                     use sort_by(|a, b| ...) with an explicit comparator for keys of \
+                     other types"
+                        .to_string(),
+                );
+            }
+        };
+        let lt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SLT, ka, kb, "key.lt")
+            .unwrap();
+        let gt = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::SGT, ka, kb, "key.gt")
+            .unwrap();
+        let zero = i64_t.const_zero();
+        let neg_one = i64_t.const_int((-1i64) as u64, true);
+        let pos_one = i64_t.const_int(1, false);
+        let gt_sel = self
+            .builder
+            .build_select(gt, pos_one, zero, "key.gt.sel")
+            .unwrap()
+            .into_int_value();
+        let res = self
+            .builder
+            .build_select(lt, neg_one, gt_sel, "key.cmp.sel")
+            .unwrap()
+            .into_int_value();
+        self.builder.build_return(Some(&res)).unwrap();
+
+        // 11. Restore outer state.
+        self.type_subst = saved_subst;
+        self.loop_stack = saved_loop_stack;
+        self.var_type_names = saved_var_types;
+        self.variables = saved_vars;
+        self.current_fn = saved_fn;
+        self.closure_fn_types = saved_cfn;
+        self.pending_closure_fn_type = saved_pct;
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+
+        Ok((thunk_fn, env_alloca))
     }
 
     /// Inline-closure fast path for `Vec.sort_by`. Fuses the closure body

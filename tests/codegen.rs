@@ -24094,16 +24094,85 @@ fn main() {
     }
 
     #[test]
-    fn test_e2e_vec_sort_by_key_codegen_rejected() {
-        // `sort_by_key` has no codegen arm yet. The hardened catch-all must
-        // reject it at compile time rather than silently no-op (the bug this
-        // change fixes). Pin the diagnostic so the rejection can't regress
-        // back to a fall-through compile.
+    fn test_e2e_vec_sort_by_key_identity_ascending() {
+        // `sort_by_key(|x| x)` sorts in ascending order — the canonical key
+        // closure. Replaces the prior loud-rejection test now that the
+        // codegen arm in vec_method.rs is wired up.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5); v.push(2); v.push(8); v.push(1); v.push(2);
+    v.sort_by_key(|x| x);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "2", "5", "8"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_negation_descending() {
+        // `sort_by_key(|x| -x)` is the standard descending-sort idiom — it
+        // exercises a non-identity key closure body and pins that the key
+        // is recomputed correctly for each element across the two body
+        // compiles inside the bridge thunk.
+        let out = run_program(
+            r#"
+fn main() {
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5); v.push(2); v.push(8); v.push(1); v.push(2);
+    v.sort_by_key(|x| -x);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["8", "5", "2", "2", "1"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_with_captured_variable() {
+        // Key closure captures an outer-scope variable (`offset`). Exercises
+        // the env-struct + outer-stack-alloca capture path inside the bridge
+        // thunk — subtracting a constant from each element preserves the
+        // ordering, so the result mirrors `|x| x` ascending.
+        let out = run_program(
+            r#"
+fn main() {
+    let offset = 100i64;
+    let mut v: Vec[i64] = Vec.new();
+    v.push(5); v.push(2); v.push(8); v.push(1);
+    v.sort_by_key(|x| x - offset);
+    for x in v.iter() { println(x); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "5", "8"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_named_fn_callee_rejected() {
+        // V1 scope: only inline closures are supported. A named function
+        // (or closure-typed local) needs a bridge thunk with an indirect
+        // call through the closure's fat pointer — not yet wired up. Pin
+        // the loud-error path so the scope boundary doesn't silently
+        // regress to a wrong-output compile.
         let src = r#"
+fn key(x: i64) -> i64 { x }
 fn main() {
     let mut v: Vec[i64] = Vec.new();
     v.push(3); v.push(1);
-    v.sort_by_key(|x| x);
+    v.sort_by_key(key);
+    println(v.len());
 }
 "#;
         let mut parsed = karac::parse(src);
@@ -24116,10 +24185,10 @@ fn main() {
         let typed = karac::typecheck(&parsed.program, &resolved);
         karac::lower(&mut parsed.program, &typed);
         let err = compile_to_ir(&parsed.program, None, None)
-            .expect_err("expected codegen to reject sort_by_key");
+            .expect_err("expected codegen to reject non-inline sort_by_key callee");
         assert!(
-            err.contains("sort_by_key") && err.contains("not yet supported in codegen"),
-            "expected loud sort_by_key rejection; got: {}",
+            err.contains("sort_by_key") && err.contains("inline closure"),
+            "expected non-inline-callee rejection; got: {}",
             err
         );
     }
