@@ -298,6 +298,15 @@ pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
 /// via `Codegen.struct_field_type_names`.
 pub type ExprStructTypeNamesTable = std::collections::HashMap<(usize, usize), String>;
 
+/// Side-table populated by the lowering pass: for every expression whose
+/// Kāra type is a struct (or shared struct) with a user-supplied
+/// `impl Ord for T` (rather than `#[derive(Ord)]`), maps
+/// `(span.offset, span.length)` to the canonical callee key
+/// (`"Type.cmp"`). `sort_by_key`'s codegen consults this map before the
+/// field-by-field derive cascade, so a user impl can encode arbitrary
+/// logic (reverse order, custom tiebreaks) the cascade can't reproduce.
+pub type UserOrdTypedExprsTable = std::collections::HashMap<(usize, usize), String>;
+
 /// Borrow form for a pattern binding under a `ref` / `mut ref` scrutinee.
 /// `Ref` corresponds to a `ref T` scrutinee mode; `MutRef` to `mut ref T`.
 /// Owned bindings have no entry in `PatternBindingBorrowModesTable` —
@@ -397,6 +406,13 @@ pub struct Program {
     /// can dispatch field-aware compares for struct keys with mixed
     /// integer / `String` fields.
     pub expr_struct_type_names: ExprStructTypeNamesTable,
+    /// Set by the lowering pass: for every expression whose Kāra type
+    /// is a struct with a user `impl Ord for T`, maps span → canonical
+    /// `"Type.cmp"` callee key. Lets codegen route `sort_by_key` keys to
+    /// the user's `cmp` function (via direct call) rather than the
+    /// derive-equivalent field cascade, preserving custom orderings
+    /// (e.g. reverse, multi-key tiebreaks).
+    pub user_ord_typed_exprs: UserOrdTypedExprsTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

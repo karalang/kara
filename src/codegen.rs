@@ -684,6 +684,13 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch the right per-field comparator (int / String) when the
     /// key is a struct with mixed-type fields.
     pub(crate) expr_struct_type_names: HashMap<(usize, usize), String>,
+    /// Sibling to `expr_struct_type_names`: for every expression whose
+    /// Kāra type is a struct with a user-supplied `impl Ord for T`, maps
+    /// span → canonical `"Type.cmp"` callee key. Populated from
+    /// `Program.user_ord_typed_exprs`. `emit_sort_by_key_inline_thunk`
+    /// consults this map before the field-aware cascade so the user's
+    /// `cmp` runs instead of a synthesized derive-equivalent lex compare.
+    pub(crate) user_ord_typed_exprs: HashMap<(usize, usize), String>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -2461,6 +2468,7 @@ impl<'ctx> Codegen<'ctx> {
             method_unwrap_inner_types: HashMap::new(),
             string_typed_exprs: HashSet::new(),
             expr_struct_type_names: HashMap::new(),
+            user_ord_typed_exprs: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -2792,6 +2800,11 @@ impl<'ctx> Codegen<'ctx> {
         // field-aware lex cascade that picks the right per-field
         // comparator via `self.struct_field_type_names[struct_name]`.
         self.expr_struct_type_names = program.expr_struct_type_names.clone();
+        // Sibling map for spans whose struct type has a user `impl Ord`.
+        // `emit_sort_by_key_inline_thunk` consults it before the derive
+        // cascade to dispatch to the user's compiled `Type.cmp` via
+        // direct call.
+        self.user_ord_typed_exprs = program.user_ord_typed_exprs.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads

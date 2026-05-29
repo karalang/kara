@@ -169,6 +169,23 @@ impl<'a> super::TypeChecker<'a> {
         }
     }
 
+    /// True if the user has an `impl Ord for Type` registered on the
+    /// canonical type name. Sibling to the `derived_traits` check below;
+    /// lets a user-supplied `cmp` (which can encode arbitrary order —
+    /// reverse, custom tiebreaks, partial-field — that the derive-equivalent
+    /// field cascade can't reproduce) count toward the Ord bound at any
+    /// consumer site. Scans `env.impls` directly: the impl list is small
+    /// (one entry per impl block), and Ord checks aren't a hot path. The
+    /// codegen consumer (`emit_sort_by_key_inline_thunk`) consults
+    /// `Program.user_ord_typed_exprs` to dispatch to the user's compiled
+    /// `Type.cmp` indirectly.
+    fn has_user_impl_ord(&self, name: &str) -> bool {
+        self.env
+            .impls
+            .iter()
+            .any(|imp| imp.trait_name.as_deref() == Some("Ord") && imp.target_type == name)
+    }
+
     /// Check whether a type supports total `Ord`. Floats do not (see Eq).
     pub(super) fn type_supports_ord(&self, ty: &Type) -> bool {
         match ty {
@@ -180,9 +197,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Ref(inner) | Type::MutRef(inner) => self.type_supports_ord(inner),
             Type::Named { name, .. } => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Ord")
+                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Ord")
+                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
                 } else {
                     true
                 }
@@ -190,9 +207,9 @@ impl<'a> super::TypeChecker<'a> {
             Type::Rc(inner) | Type::Arc(inner) => self.type_supports_ord(inner),
             Type::Shared(name) => {
                 if let Some(info) = self.env.structs.get(name) {
-                    info.derived_traits.contains("Ord")
+                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
                 } else if let Some(info) = self.env.enums.get(name) {
-                    info.derived_traits.contains("Ord")
+                    info.derived_traits.contains("Ord") || self.has_user_impl_ord(name)
                 } else {
                     true
                 }

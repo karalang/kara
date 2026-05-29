@@ -11,7 +11,7 @@
 use crate::ast::*;
 
 use inkwell::module::Linkage;
-use inkwell::types::{BasicType, BasicTypeEnum, FunctionType};
+use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType};
 use inkwell::values::{
     BasicMetadataValueEnum, BasicValueEnum, FunctionValue, IntValue, PointerValue,
 };
@@ -2338,6 +2338,73 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
+        } else if let Some(cmp_callee_key) = self.user_ord_typed_exprs.get(&key_body_span).cloned()
+        {
+            // User `impl Ord for T` struct key — dispatch to the user's
+            // compiled `Type.cmp` via direct call. Takes precedence over
+            // the field cascade below: the user's cmp may encode logic
+            // (reverse order, custom tiebreaks, partial-field orderings)
+            // that the derive-equivalent cascade can't reproduce. Gated
+            // by the typechecker change in `derives.rs` (has_user_impl_ord)
+            // so this path only fires when the user opted in via
+            // `impl Ord` rather than `#[derive(Ord)]`.
+            let cmp_fn = match self.module.get_function(&cmp_callee_key) {
+                Some(f) => f,
+                None => {
+                    return Err(format!(
+                        "Vec.sort_by_key: user `impl Ord` callee '{}' not found in the \
+                         module (compiler bug — typechecker accepted impl Ord but codegen \
+                         never emitted the cmp function)",
+                        cmp_callee_key
+                    ));
+                }
+            };
+            // Inspect the cmp function's first param to decide the
+            // calling convention: pointer-typed (`ref self`) means
+            // alloca + store + pass pointer; struct-typed (owned `self`)
+            // means pass by value. Mirrors the receiver-convention
+            // inspection in `compile_method_call:951`.
+            let first_param_is_ptr = cmp_fn
+                .get_type()
+                .get_param_types()
+                .first()
+                .map(|t| matches!(t, BasicMetadataTypeEnum::PointerType(_)))
+                .unwrap_or(false);
+            let (a_arg, b_arg): (BasicMetadataValueEnum<'ctx>, BasicMetadataValueEnum<'ctx>) =
+                if first_param_is_ptr {
+                    let val_ty = key_a_val.get_type();
+                    let alloca_a = self.create_entry_alloca(thunk_fn, "user_cmp.a", val_ty);
+                    let alloca_b = self.create_entry_alloca(thunk_fn, "user_cmp.b", val_ty);
+                    self.builder.build_store(alloca_a, key_a_val).unwrap();
+                    self.builder.build_store(alloca_b, key_b_val).unwrap();
+                    (alloca_a.into(), alloca_b.into())
+                } else {
+                    (
+                        BasicMetadataValueEnum::from(key_a_val),
+                        BasicMetadataValueEnum::from(key_b_val),
+                    )
+                };
+            let call = self
+                .builder
+                .build_call(cmp_fn, &[a_arg, b_arg], "user.cmp")
+                .unwrap();
+            let ord_val = call.try_as_basic_value().unwrap_basic();
+            // Ordering lowers to `{ i64 tag }` (unit-only enum, Less=0,
+            // Equal=1, Greater=2 from `seed_builtin_enum_layouts`).
+            // `tag - 1` yields `-1 / 0 / +1` — same conversion
+            // `emit_sort_by_thunk` uses for sort_by's named-callee path.
+            let tag = if ord_val.is_struct_value() {
+                self.builder
+                    .build_extract_value(ord_val.into_struct_value(), 0, "user.cmp.tag")
+                    .unwrap()
+                    .into_int_value()
+            } else {
+                ord_val.into_int_value()
+            };
+            let one = i64_t.const_int(1, false);
+            self.builder
+                .build_int_sub(tag, one, "user.cmp.shift")
+                .unwrap()
         } else if let Some(struct_name) = self.expr_struct_type_names.get(&key_body_span).cloned() {
             // Struct-typed key (`sort_by_key(|item| item)` where
             // `item: MyStruct`). Delegate to the recursive cascade helper —

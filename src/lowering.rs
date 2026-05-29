@@ -108,6 +108,35 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             _ => None,
         })
         .collect();
+    // For every expression whose Kāra type is a struct (or shared
+    // struct) that the user provided an `impl Ord for T` for, record
+    // the canonical `"Type.cmp"` callee key. `emit_sort_by_key_inline_thunk`
+    // consults this map before the field-by-field derive cascade and
+    // dispatches via direct call to the user's compiled cmp — preserves
+    // custom orderings (reverse, multi-key tiebreaks, partial-field)
+    // the cascade can't reproduce. Gated by the typechecker change in
+    // derives.rs that lets `impl Ord` count toward the Ord bound:
+    // without it, no sort_by_key call would ever reach codegen with a
+    // user-impl-Ord struct key.
+    program.user_ord_typed_exprs = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| {
+            let name = match ty {
+                Type::Named { name, .. } => name,
+                Type::Shared(name) => name,
+                _ => return None,
+            };
+            if tc
+                .trait_impls
+                .contains(&("Ord".to_string(), name.to_string()))
+            {
+                Some(((k.0, k.1), format!("{}.cmp", name)))
+            } else {
+                None
+            }
+        })
+        .collect();
     // Forward per-leaf-binding borrow modes so codegen's
     // `bind_pattern_values` can wrap each ref/mut-ref leaf in a ref-shim
     // alloca (alloca-of-pointer-to-value-alloca, registered in

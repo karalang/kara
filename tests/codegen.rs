@@ -24748,6 +24748,42 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_user_impl_ord_reverse() {
+        // User `impl Ord for T` takes precedence over the derive cascade.
+        // The cmp body intentionally REVERSES order (other.v.cmp(self.v))
+        // — if the dispatch fell through to the all-int cascade, the sort
+        // would come out ascending; with user-cmp dispatch it must come
+        // out descending. Pins that:
+        //   (1) `type_supports_ord` accepts user `impl Ord` (else the
+        //       program wouldn't reach codegen at all);
+        //   (2) `user_ord_typed_exprs` is populated by the lowering pass;
+        //   (3) the codegen arm calls the user's `Score.cmp` directly
+        //       rather than the field cascade.
+        let out = run_program(
+            r#"
+struct Score { v: i64 }
+impl PartialEq for Score { fn eq(self, other: Score) -> bool { self.v == other.v } }
+impl Eq for Score {}
+impl PartialOrd for Score { fn partial_cmp(self, other: Score) -> Option[Ordering] { Some(other.v.cmp(self.v)) } }
+impl Ord for Score { fn cmp(self, other: Score) -> Ordering { other.v.cmp(self.v) } }
+
+fn main() {
+    let mut v: Vec[Score] = Vec.new();
+    v.push(Score { v: 10i64 });
+    v.push(Score { v: 30i64 });
+    v.push(Score { v: 20i64 });
+    v.sort_by_key(|s| s);
+    for s in v.iter() { println(s.v); }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["30", "20", "10"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_by_key_struct_field_access_body() {
         // Regression: `Vec[Struct].sort_by_key(|s| s.field)` (closure body
         // is a field access on a struct element) used to silently return
