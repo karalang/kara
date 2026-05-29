@@ -190,6 +190,56 @@ mod http_server_tests {
         Ok((status, body))
     }
 
+    /// Triple returned by `http_get_with_response_headers` —
+    /// `(status, headers, body)`. Factored as a type alias so clippy's
+    /// `type_complexity` lint stays happy.
+    type HttpResponseTriple = (u16, Vec<(String, String)>, String);
+
+    /// Phase-8 line 14 — variant of `http_get` that also returns the
+    /// response headers as `(name, value)` pairs. Hand-rolled parse:
+    /// skips the status line, splits each remaining header line on the
+    /// first `:`, trims surrounding whitespace. Header names are
+    /// returned as the server emitted them (hyper normalizes inbound
+    /// request header names to lowercase, but emits response header
+    /// names case-preserving for the value the handler set).
+    fn http_get_with_response_headers(
+        port: u16,
+        path: &str,
+    ) -> Result<HttpResponseTriple, String> {
+        let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("connect failed: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout failed: {e}"))?;
+        let req = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| format!("write failed: {e}"))?;
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("read failed: {e}"))?;
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut parts = text.split("\r\n\r\n");
+        let head = parts.next().unwrap_or("");
+        let body = parts.collect::<Vec<_>>().join("\r\n\r\n");
+        let mut head_lines = head.lines();
+        let first = head_lines.next().ok_or("empty response")?;
+        let mut tokens = first.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+        let mut headers: Vec<(String, String)> = Vec::new();
+        for line in head_lines {
+            if let Some((k, v)) = line.split_once(':') {
+                headers.push((k.trim().to_string(), v.trim().to_string()));
+            }
+        }
+        Ok((status, headers, body))
+    }
+
     /// B5 smoke test (the primary deliverable).
     ///
     /// Compiles a minimal Kāra program that calls
@@ -1333,6 +1383,121 @@ mod http_server_tests {
             body.contains("/secure-path/42"),
             "expected response body to echo path /secure-path/42 (proving \
              handler ran through the TLS layer); got: {body:?}"
+        );
+    }
+
+    /// Phase-8 line 14 — handler-set response headers end-to-end. The
+    /// handler returns a 3-field `Response { status, body, headers:
+    /// Vec[(String, String)] }`; the codegen shim picks up the third
+    /// field and emits one `karac_runtime_http_response_set_header`
+    /// call per pair; the runtime drains the thread-local stage into
+    /// hyper's response builder. Asserts the custom headers come back
+    /// in the response. Also verifies that a user-set `Content-Type`
+    /// overrides the smoke-path default `application/json`.
+    #[test]
+    fn test_server_serve_handler_sets_response_headers() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String, headers: Vec[(String, String)] }
+
+            fn handle(req: Request) -> Response {
+                let mut headers: Vec[(String, String)] = Vec.new();
+                headers.push(("X-Custom-Header", "custom-value"));
+                headers.push(("X-Trace-Id", "abc-123"));
+                headers.push(("Content-Type", "text/plain"));
+                Response { status: 200, body: "ok", headers: headers }
+            }
+
+            fn main() {
+                let _r = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_resp_headers_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+        assert!(port > 0);
+
+        let started = Instant::now();
+        let mut last_err: Option<String> = None;
+        let mut response: Option<HttpResponseTriple> = None;
+        for _ in 0..10 {
+            match http_get_with_response_headers(port, "/headers") {
+                Ok(r) => {
+                    response = Some(r);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(e);
+                    std::thread::sleep(Duration::from_millis(50));
+                }
+            }
+            if started.elapsed() > Duration::from_secs(10) {
+                break;
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let (status, headers, body) = match response {
+            Some(r) => r,
+            None => panic!("GET /headers never succeeded; last error: {:?}", last_err),
+        };
+        assert_eq!(status, 200, "expected 200; body={body:?}");
+        assert_eq!(body, "ok", "body should be 'ok'; got: {body:?}");
+
+        let has = |name: &str, value: &str| {
+            headers
+                .iter()
+                .any(|(k, v)| k.eq_ignore_ascii_case(name) && v == value)
+        };
+        assert!(
+            has("X-Custom-Header", "custom-value"),
+            "expected `X-Custom-Header: custom-value`; got headers: {headers:?}"
+        );
+        assert!(
+            has("X-Trace-Id", "abc-123"),
+            "expected `X-Trace-Id: abc-123`; got headers: {headers:?}"
+        );
+        // User-set Content-Type should win over the smoke-path default.
+        assert!(
+            has("Content-Type", "text/plain"),
+            "expected user Content-Type to override default `application/json`; \
+             got headers: {headers:?}"
         );
     }
 }

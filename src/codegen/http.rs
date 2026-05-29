@@ -237,6 +237,140 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap();
 
+        // Phase-8 line 14 — response-header round-trip. If the user's
+        // `Response` struct carries a third field (the convention
+        // is `headers: Vec[(String, String)]`), iterate it and emit
+        // one `karac_runtime_http_response_set_header` call per pair.
+        // 2-field Response (`{ status, body }`) — the existing
+        // backward-compatible shape — skips the loop entirely. No
+        // field-NAME introspection is required at v1: the convention
+        // is positional (field 2) and the codegen check is purely
+        // structural.
+        if resp_struct.get_type().count_fields() >= 3 {
+            let str_ty = self.vec_struct_type();
+            let tuple_ty = self
+                .context
+                .struct_type(&[str_ty.into(), str_ty.into()], false);
+
+            let headers_vec = self
+                .builder
+                .build_extract_value(resp_struct, 2, "shim.resp.headers")
+                .unwrap()
+                .into_struct_value();
+            let headers_data = self
+                .builder
+                .build_extract_value(headers_vec, 0, "shim.resp.headers.data")
+                .unwrap()
+                .into_pointer_value();
+            let headers_len = self
+                .builder
+                .build_extract_value(headers_vec, 1, "shim.resp.headers.len")
+                .unwrap()
+                .into_int_value();
+
+            let cond_bb = self.context.append_basic_block(shim, "shim.hdrs.cond");
+            let body_bb = self.context.append_basic_block(shim, "shim.hdrs.body");
+            let done_bb = self.context.append_basic_block(shim, "shim.hdrs.done");
+            let i_alloca = self.create_entry_alloca(shim, "shim.hdrs.i", i64_ty.into());
+            self.builder
+                .build_store(i_alloca, i64_ty.const_zero())
+                .unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(cond_bb);
+            let i_cur = self
+                .builder
+                .build_load(i64_ty, i_alloca, "shim.hdrs.i.cur")
+                .unwrap()
+                .into_int_value();
+            let lt = self
+                .builder
+                .build_int_compare(
+                    inkwell::IntPredicate::SLT,
+                    i_cur,
+                    headers_len,
+                    "shim.hdrs.lt",
+                )
+                .unwrap();
+            self.builder
+                .build_conditional_branch(lt, body_bb, done_bb)
+                .unwrap();
+
+            self.builder.position_at_end(body_bb);
+            // GEP into the Vec's element buffer at index i_cur — stride
+            // is the tuple type's size_of (LLVM computes this from the
+            // element type).
+            let elem_ptr = unsafe {
+                self.builder
+                    .build_gep(tuple_ty, headers_data, &[i_cur], "shim.hdrs.elem.ptr")
+                    .unwrap()
+            };
+            // Load the tuple by value, then extract the two String
+            // halves and their `(data, len)` slices.
+            let elem_val = self
+                .builder
+                .build_load(tuple_ty, elem_ptr, "shim.hdrs.elem")
+                .unwrap()
+                .into_struct_value();
+            let key_str = self
+                .builder
+                .build_extract_value(elem_val, 0, "shim.hdrs.key")
+                .unwrap()
+                .into_struct_value();
+            let val_str = self
+                .builder
+                .build_extract_value(elem_val, 1, "shim.hdrs.val")
+                .unwrap()
+                .into_struct_value();
+            let key_data = self
+                .builder
+                .build_extract_value(key_str, 0, "shim.hdrs.key.data")
+                .unwrap()
+                .into_pointer_value();
+            let key_len = self
+                .builder
+                .build_extract_value(key_str, 1, "shim.hdrs.key.len")
+                .unwrap()
+                .into_int_value();
+            let val_data = self
+                .builder
+                .build_extract_value(val_str, 0, "shim.hdrs.val.data")
+                .unwrap()
+                .into_pointer_value();
+            let val_len = self
+                .builder
+                .build_extract_value(val_str, 1, "shim.hdrs.val.len")
+                .unwrap()
+                .into_int_value();
+            let set_header_fn = self
+                .module
+                .get_function("karac_runtime_http_response_set_header")
+                .expect("karac_runtime_http_response_set_header declared in Codegen::new");
+            self.builder
+                .build_call(
+                    set_header_fn,
+                    &[
+                        resp_ptr.into(),
+                        key_data.into(),
+                        key_len.into(),
+                        val_data.into(),
+                        val_len.into(),
+                    ],
+                    "shim.set_header",
+                )
+                .unwrap();
+
+            let one = i64_ty.const_int(1, false);
+            let i_next = self
+                .builder
+                .build_int_add(i_cur, one, "shim.hdrs.i.next")
+                .unwrap();
+            self.builder.build_store(i_alloca, i_next).unwrap();
+            self.builder.build_unconditional_branch(cond_bb).unwrap();
+
+            self.builder.position_at_end(done_bb);
+        }
+
         self.builder.build_return(None).unwrap();
 
         // Restore cursor.

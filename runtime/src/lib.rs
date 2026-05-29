@@ -2550,6 +2550,70 @@ pub unsafe extern "C" fn karac_runtime_http_response_set_body(
     resp.body_cap = cap;
 }
 
+/// Phase-8 line 14 — accumulate a `(key, value)` header pair into a
+/// thread-local staging buffer that `serve_request` drains after the
+/// handler returns. The codegen handler shim (`emit_http_handler_shim`)
+/// calls this once per `(key, value)` entry it extracts from the
+/// user's `Response.headers: Vec[(String, String)]` field (when
+/// present). The `response` argument is unused at v1 (kept in the
+/// signature for symmetry with `_set_status` / `_set_body`); v1 has at
+/// most one response in flight per worker thread (handlers run inside
+/// `block_in_place`), so the thread-local is unambiguous.
+///
+/// **Contract**: must be called only from within the handler invocation
+/// path that `serve_request` drives. Calls outside that path push into
+/// a stray buffer that the next request on the same worker thread will
+/// drain — behavior is unspecified.
+///
+/// # Safety
+///
+/// `key_ptr` / `val_ptr` must point at `key_len` / `val_len`
+/// initialized bytes (or be null with `_len == 0`).
+#[no_mangle]
+pub unsafe extern "C" fn karac_runtime_http_response_set_header(
+    _response: *mut KaracHttpResponse,
+    key_ptr: *const u8,
+    key_len: usize,
+    val_ptr: *const u8,
+    val_len: usize,
+) {
+    let key_bytes: &[u8] = if key_ptr.is_null() || key_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(key_ptr, key_len)
+    };
+    let val_bytes: &[u8] = if val_ptr.is_null() || val_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(val_ptr, val_len)
+    };
+    // `CString::new` rejects interior NULs; on rejection swallow the
+    // header rather than abort the handler (matches the lenient posture
+    // the request-side header lookup takes for malformed cstrings).
+    let key_cstr = match std::ffi::CString::new(key_bytes) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let val_cstr = match std::ffi::CString::new(val_bytes) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    PENDING_RESPONSE_HEADERS.with(|cell| {
+        cell.borrow_mut().push((key_cstr, val_cstr));
+    });
+}
+
+thread_local! {
+    /// Phase-8 line 14 — per-worker-thread staging buffer for
+    /// `karac_runtime_http_response_set_header`. Drained by
+    /// `serve_request` after each handler invocation and reset at the
+    /// start of every `invoke` closure so headers from a prior handler
+    /// (running on the same tokio worker thread for a different
+    /// request) can't leak into the next response.
+    static PENDING_RESPONSE_HEADERS: std::cell::RefCell<Vec<(std::ffi::CString, std::ffi::CString)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 /// Set the HTTP status code on the response slot.
 ///
 /// # Safety
@@ -3296,6 +3360,13 @@ async fn serve_request(
     // requires a length-prefixed FFI shape (next step). See
     // `docs/investigations/http_layer_perf.md § H2`.
     let invoke = move || {
+        // Phase-8 line 14 — clear any stray header state from a prior
+        // handler that ran on this worker thread (block_in_place is
+        // synchronous so concurrent handlers on the same thread can't
+        // race, but sequential ones can if a prior handler didn't drain
+        // because of an early panic).
+        PENDING_RESPONSE_HEADERS.with(|cell| cell.borrow_mut().clear());
+
         let method_str: &str = parts.method.as_str();
         let path_str: &str = parts.uri.path();
         let query_str: &str = parts.uri.query().unwrap_or("");
@@ -3402,9 +3473,27 @@ async fn serve_request(
             &hdr_vals_ptrs,
         );
 
-        (resp_struct.status, body_out, panicked)
+        // Phase-8 line 14 — drain the handler's staged response
+        // headers into an owned Vec. Done inside the closure so the
+        // thread-local is consumed before the worker thread becomes
+        // available for the next request (the next request's
+        // `invoke` start clears as a safety net, but this drain is
+        // the primary cleanup).
+        let user_headers: Vec<(String, String)> = PENDING_RESPONSE_HEADERS.with(|cell| {
+            cell.borrow_mut()
+                .drain(..)
+                .map(|(k, v)| {
+                    (
+                        k.to_string_lossy().into_owned(),
+                        v.to_string_lossy().into_owned(),
+                    )
+                })
+                .collect()
+        });
+
+        (resp_struct.status, body_out, user_headers, panicked)
     };
-    let (status, body_out, panicked) = if skip_block_in_place {
+    let (status, body_out, user_headers, panicked) = if skip_block_in_place {
         invoke()
     } else {
         tokio::task::block_in_place(invoke)
@@ -3421,13 +3510,22 @@ async fn serve_request(
         return Ok(resp);
     }
 
-    // v1's response builder doesn't surface user headers (`headers_len`
-    // is always zero on the response slot). Set a sensible default
-    // content-type so curl / reqwest read the body cleanly. Smoke path
-    // uses `application/json`.
-    let response = hyper::Response::builder()
-        .status(status)
-        .header("content-type", "application/json")
+    // Phase-8 line 14 — apply user-set response headers (via
+    // `karac_runtime_http_response_set_header`). If the user set
+    // their own `content-type` it overrides the smoke-path default;
+    // otherwise the default keeps the existing JSON-friendly behavior
+    // for `serve(handler)` cases that don't touch headers.
+    let user_set_content_type = user_headers
+        .iter()
+        .any(|(k, _)| k.eq_ignore_ascii_case("content-type"));
+    let mut builder = hyper::Response::builder().status(status);
+    for (k, v) in &user_headers {
+        builder = builder.header(k.as_str(), v.as_str());
+    }
+    if !user_set_content_type {
+        builder = builder.header("content-type", "application/json");
+    }
+    let response = builder
         .body(http_body_util::Full::new(body_out))
         .unwrap_or_else(|_| {
             hyper::Response::new(http_body_util::Full::new(bytes::Bytes::from_static(

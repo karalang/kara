@@ -1572,6 +1572,29 @@ impl<'ctx> Codegen<'ctx> {
             response_set_body_type,
             Some(Linkage::External),
         );
+        // Phase-8 line 14 — `karac_runtime_http_response_set_header(
+        //   *mut KaracHttpResponse, *const u8 key, usize key_len,
+        //   *const u8 val, usize val_len) -> void`. Called per
+        // `(key, value)` pair from the handler shim when the user's
+        // `Response` carries a third `headers: Vec[(String, String)]`
+        // field. The runtime accumulates these into a thread-local
+        // staged Vec that `serve_request` drains into hyper's response
+        // builder after the handler returns.
+        let response_set_header_type = context.void_type().fn_type(
+            &[
+                ptr_type.into(), // *mut KaracHttpResponse
+                ptr_type.into(), // key_ptr
+                i64_type.into(), // key_len
+                ptr_type.into(), // val_ptr
+                i64_type.into(), // val_len
+            ],
+            false,
+        );
+        let _karac_runtime_http_response_set_header_fn = module.add_function(
+            "karac_runtime_http_response_set_header",
+            response_set_header_type,
+            Some(Linkage::External),
+        );
         let strlen_type = i64_type.fn_type(&[ptr_type.into()], false);
         if module.get_function("strlen").is_none() {
             module.add_function("strlen", strlen_type, Some(Linkage::External));
