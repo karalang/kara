@@ -186,6 +186,57 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // Plain owned-struct Vec element field read: `entities[i].field`
+        // where `entities: Vec[Entity]` and `Entity` is a non-shared,
+        // non-SoA user struct. The shared-struct branch above covers
+        // `Vec[Shared(T)]`; the SoA branch covers layout-annotated
+        // Vec[T]. Without this arm, plain `Vec[Struct][i].field` falls
+        // through to the generic struct-field path which returns the
+        // `i64 0` placeholder, so the access silently produces 0 for
+        // any field — the gap surfaced (but unfixed) during the SoA
+        // work on 2026-05-29 (`tests/codegen.rs::test_e2e_soa_whole_element_matches_aos`
+        // used whole-element binding instead of direct field access for
+        // exactly this reason). Materializes the element via
+        // `compile_vec_index`, then extracts the field by its position
+        // in the element struct. Primitive (non-heap) fields only:
+        // for heap-bearing fields the materialized copy aliases the
+        // outer Vec's buffer exactly as `let e = entities[i]` already
+        // does, so this arm matches the latent alias hazard of the
+        // existing whole-element-binding path — not a new exposure.
+        if let ExprKind::Index {
+            object: inner,
+            index,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier(outer_name) = &inner.kind {
+                if self.vec_elem_types.contains_key(outer_name.as_str()) {
+                    if let Some(elem_te) =
+                        self.var_elem_type_exprs.get(outer_name.as_str()).cloned()
+                    {
+                        if let TypeKind::Path(path) = &elem_te.kind {
+                            if let Some(seg) = path.segments.first() {
+                                if self.struct_types.contains_key(seg.as_str())
+                                    && !self.shared_types.contains_key(seg.as_str())
+                                {
+                                    if let Some(names) = self.struct_field_names.get(seg).cloned() {
+                                        if let Some(fidx) = names.iter().position(|n| n == field) {
+                                            let outer_name = outer_name.clone();
+                                            let elem = self
+                                                .compile_vec_index(&outer_name, index)?
+                                                .into_struct_value();
+                                            return Ok(self
+                                                .builder
+                                                .build_extract_value(elem, fidx as u32, field)
+                                                .unwrap());
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
         // Call-chain field access on a shared-struct return — bug #8.
         // `helper().val` where `helper() -> SharedT` lowers the call to
         // a pointer to the heap object; we GEP into the field, load, then

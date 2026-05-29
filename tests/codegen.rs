@@ -4478,6 +4478,39 @@ fn main() {
         }
     }
 
+    // Regression test for the plain-struct `v[i].field` codegen gap
+    // surfaced during the SoA work (2026-05-29). `compile_field_access`'s
+    // Index-receiver branch handled shared structs and (then-new) SoA
+    // vars, but not plain owned `Vec[Struct]` — for non-first fields it
+    // fell through to the generic struct-field path which returns the
+    // `i64 0` placeholder, so `entities[i].y` silently produced 0 even
+    // though the corresponding `let e = entities[i]; e.y` worked. Pins
+    // the fix in `src/codegen/expr_ops.rs` so the gap can't reopen.
+    #[test]
+    fn test_e2e_vec_struct_indexed_field_access() {
+        let out = run_program(
+            r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    println(entities[0].x);
+    println(entities[4].y);
+    println(entities[5].vx);
+    println(entities[5].vy);
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "40", "500", "5000"]);
+        }
+    }
+
     #[test]
     fn test_e2e_soa_whole_element_matches_aos() {
         // Whole-element binding `let e = entities[i]` on a SoA-laid-out
