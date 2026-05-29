@@ -218,6 +218,29 @@ impl<'a> super::Resolver<'a> {
             return;
         };
 
+        // Build a lookup of field-name → field type expression by
+        // scanning the program's items for the matching StructDef.
+        // Used to reject heap-owning field types in any group / cold
+        // section — SoA push, materialize, and per-element drop all
+        // need a coordinated move/clone/borrow story for heap-owning
+        // fields (currently unresolved); rejecting at the layout site
+        // produces a focused diagnostic instead of silent leak or
+        // double-free further downstream. See `phase-7-codegen.md`
+        // § *SoA drop semantics > Per-element destructor calls for
+        // heap-bearing element fields* for the open design issue.
+        let mut field_types: std::collections::HashMap<&str, &TypeExpr> =
+            std::collections::HashMap::new();
+        for item in &self.program.items {
+            if let Item::StructDef(s) = item {
+                if s.name == struct_name {
+                    for f in &s.fields {
+                        field_types.insert(f.name.as_str(), &f.ty);
+                    }
+                    break;
+                }
+            }
+        }
+
         // Validate layout items: field existence, uniqueness, cold constraints, align(N).
         let mut assigned: HashSet<String> = HashSet::new();
         let mut cold_count = 0usize;
@@ -254,6 +277,27 @@ impl<'a> super::Resolver<'a> {
                                 replacement: None,
                                 stub_hint: None,
                             });
+                        } else if let Some(ty) = field_types.get(field.as_str()) {
+                            if let Some(why) = self.layout_field_heap_reason(ty) {
+                                self.errors.push(ResolveError {
+                                    message: format!(
+                                        "layout '{}' group '{}': field '{}' has heap-owning type ({}), \
+                                         which is not yet supported in SoA layouts",
+                                        layout.name, name, field, why
+                                    ),
+                                    span: span.clone(),
+                                    kind: ResolveErrorKind::UndefinedField,
+                                    suggestion: Some(
+                                        "move the field outside the layout block (it will fall back to AoS) \
+                                         or store it via a separate Vec; SoA push / materialize / drop for \
+                                         heap-owning fields is tracked under 'SoA drop semantics' in the \
+                                         phase-7 codegen tracker"
+                                            .to_string(),
+                                    ),
+                                    replacement: None,
+                                    stub_hint: None,
+                                });
+                            }
                         }
                     }
                     if let Some(n) = align {
@@ -314,6 +358,27 @@ impl<'a> super::Resolver<'a> {
                                 replacement: None,
                                 stub_hint: None,
                             });
+                        } else if let Some(ty) = field_types.get(field.as_str()) {
+                            if let Some(why) = self.layout_field_heap_reason(ty) {
+                                self.errors.push(ResolveError {
+                                    message: format!(
+                                        "layout '{}' cold section: field '{}' has heap-owning type ({}), \
+                                         which is not yet supported in SoA layouts",
+                                        layout.name, field, why
+                                    ),
+                                    span: span.clone(),
+                                    kind: ResolveErrorKind::UndefinedField,
+                                    suggestion: Some(
+                                        "move the field outside the layout block (it will fall back to AoS) \
+                                         or store it via a separate Vec; SoA push / materialize / drop for \
+                                         heap-owning fields is tracked under 'SoA drop semantics' in the \
+                                         phase-7 codegen tracker"
+                                            .to_string(),
+                                    ),
+                                    replacement: None,
+                                    stub_hint: None,
+                                });
+                            }
                         }
                     }
                 }
@@ -354,6 +419,74 @@ impl<'a> super::Resolver<'a> {
                 replacement: None,
                 stub_hint: None,
             });
+        }
+    }
+
+    /// Return a human-readable description of why a layout-group field's
+    /// type is heap-owning, or `None` if the type is safe (primitive,
+    /// inline struct of primitives, etc.) for SoA storage.
+    ///
+    /// Drives the diagnostic surface emitted by `validate_layout`: SoA
+    /// push currently `memcpy`s field bits into per-group buffers, the
+    /// read-side `compile_soa_index_read` (`src/codegen/collections.rs`)
+    /// memcpys them back, and per-element drop for heap-owning fields
+    /// is not implemented. Allowing a `String` / `Vec` / `Map` / `Set`
+    /// field in a group today silently produces either a leak (if push
+    /// suppression fires) or a double-free (if it doesn't), neither of
+    /// which has a clean diagnostic at the use site. Rejecting at
+    /// layout-validation time gives the user one focused error pointing
+    /// at the tracker entry where the design question is being worked.
+    ///
+    /// The check is syntactic — it looks at the `TypeExpr` shape, not
+    /// the resolved `Type`. That keeps it fast (no typecheck dependency)
+    /// and is sound for the names it recognizes: `Vec` / `String` /
+    /// `Map` / `Set` / `VecDeque` / `TreeMap` / `SortedSet` are
+    /// reserved type names in the prelude (never user-overridable), so
+    /// a path whose first segment is one of those *always* refers to
+    /// the heap-owning stdlib type. Tuples / Arrays recurse so e.g.
+    /// `(i64, String)` and `Array[String, 4]` also get flagged.
+    /// `shared struct` / `shared enum` field types are flagged via a
+    /// `program.items` lookup against the AST.
+    fn layout_field_heap_reason(&self, ty: &TypeExpr) -> Option<String> {
+        match &ty.kind {
+            TypeKind::Path(p) => {
+                let seg = p.segments.first()?.as_str();
+                match seg {
+                    "String" => Some("String".to_string()),
+                    "Vec" => Some("Vec[…]".to_string()),
+                    "Map" => Some("Map[…, …]".to_string()),
+                    "Set" => Some("Set[…]".to_string()),
+                    "VecDeque" => Some("VecDeque[…]".to_string()),
+                    "TreeMap" => Some("TreeMap[…, …]".to_string()),
+                    "SortedSet" => Some("SortedSet[…]".to_string()),
+                    _ => {
+                        for item in &self.program.items {
+                            match item {
+                                Item::StructDef(s) if s.name == seg && s.is_shared => {
+                                    return Some(format!("shared struct {seg}"));
+                                }
+                                Item::EnumDef(e) if e.name == seg && e.is_shared => {
+                                    return Some(format!("shared enum {seg}"));
+                                }
+                                _ => {}
+                            }
+                        }
+                        None
+                    }
+                }
+            }
+            TypeKind::Tuple(elems) => {
+                for el in elems {
+                    if let Some(reason) = self.layout_field_heap_reason(el) {
+                        return Some(format!("tuple containing {reason}"));
+                    }
+                }
+                None
+            }
+            TypeKind::Array { element, .. } => self
+                .layout_field_heap_reason(element)
+                .map(|r| format!("Array of {r}")),
+            _ => None,
         }
     }
 

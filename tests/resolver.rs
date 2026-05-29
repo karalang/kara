@@ -1326,6 +1326,158 @@ layout entities: Vec[Entity] {
     );
 }
 
+// ── Heap-owning fields in SoA layouts (rejected) ──────────────
+// SoA push currently `memcpy`s field bits into per-group buffers;
+// read materialization (`compile_soa_index_read`) memcpys them
+// back; per-element drop for heap-owning fields isn't implemented.
+// Allowing a `String` / `Vec` / `Map` / `Set` field today silently
+// produces either a leak (if push suppression fires) or a double-
+// free (if it doesn't). Rejecting at layout validation gives a
+// focused diagnostic at the use site instead of silent UB. Tracker
+// entry: phase-7-codegen.md § *SoA drop semantics > Per-element
+// destructor calls for heap-bearing element fields*.
+
+#[test]
+fn test_layout_rejects_string_field_in_group() {
+    let errors = resolve_errors(
+        r#"
+struct Entity { x: f64, name: String }
+layout entities: Vec[Entity] {
+    group physics { x }
+    group meta { name }
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("heap-owning type (String)")
+                && e.message.contains("group 'meta'")),
+        "expected heap-owning String rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_rejects_vec_field_in_group() {
+    let errors = resolve_errors(
+        r#"
+struct Grid { width: i64, cells: Vec[bool] }
+layout grids: Vec[Grid] {
+    group dims { width }
+    group bulk { cells }
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("heap-owning type (Vec[…])")
+                && e.message.contains("group 'bulk'")),
+        "expected heap-owning Vec rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_rejects_map_field_in_group() {
+    let errors = resolve_errors(
+        r#"
+struct Index { id: i64, table: Map[String, i64] }
+layout indexes: Vec[Index] {
+    group ids { id }
+    group lookup { table }
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("heap-owning type (Map[…, …])")),
+        "expected heap-owning Map rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_rejects_heap_field_in_cold_section() {
+    let errors = resolve_errors(
+        r#"
+struct Entity { x: f64, label: String }
+layout entities: Vec[Entity] {
+    group physics { x }
+    cold { label }
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("cold section: field 'label'")
+                && e.message.contains("heap-owning type (String)")),
+        "expected cold-section String rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_rejects_tuple_containing_string() {
+    let errors = resolve_errors(
+        r#"
+struct Entity { x: f64, tag: (i64, String) }
+layout entities: Vec[Entity] {
+    group physics { x }
+    group meta { tag }
+}
+"#,
+    );
+    assert!(
+        errors.iter().any(|e| e
+            .message
+            .contains("heap-owning type (tuple containing String)")),
+        "expected tuple-of-String rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_rejects_shared_struct_field() {
+    let errors = resolve_errors(
+        r#"
+shared struct Inner { x: i64 }
+struct Outer { id: i64, inner: Inner }
+layout outers: Vec[Outer] {
+    group ids { id }
+    group refs { inner }
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.message.contains("heap-owning type (shared struct Inner)")),
+        "expected shared-struct rejection, got: {:?}",
+        errors
+    );
+}
+
+#[test]
+fn test_layout_accepts_primitive_only_fields() {
+    // All-primitive SoA must resolve cleanly — no heap-owning
+    // rejection should fire and no other layout errors should be
+    // raised either.
+    resolve_ok(
+        r#"
+struct Entity { x: f64, y: f64, hp: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+    cold { label }
+}
+"#,
+    );
+}
+
 // ── Operator-trait impl restriction (Step 7) ──────────────────
 
 #[test]
