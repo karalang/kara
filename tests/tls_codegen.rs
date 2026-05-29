@@ -106,6 +106,57 @@ fn main() {
         );
     }
 
+    /// Phase-8 line 24 — `TlsStream.read` / `.write` wrap their FFI
+    /// return through `wrap_tls_io_result`, producing `Result[i64,
+    /// TlsError]`. The new codegen emits a distinctive `is_protocol`
+    /// comparison + `tls_err.w0` label that pin the new path versus
+    /// the previous `wrap_tcp_io_result` path.
+    #[test]
+    fn test_ir_tls_stream_read_wraps_with_tls_io_result() {
+        let ir = ir_for(
+            r#"
+fn handle(s: ref TlsStream, buf: mut Slice[u8]) -> Result[i64, TlsError]
+    with sends(Network) receives(Network)
+{
+    s.read(buf)
+}
+"#,
+        );
+        let body = function_body(&ir, "handle").expect("handle body");
+        assert!(
+            body.contains("tls.read.is_protocol"),
+            "expected Protocol-vs-other classification select; body was:\n{}",
+            body
+        );
+        assert!(
+            body.contains("tls.read.err.tls_err.w0"),
+            "expected TlsError tag word in Err arm; body was:\n{}",
+            body
+        );
+    }
+
+    /// `TlsStream.write_all`'s err_exit block now classifies
+    /// `n == -1` as `Protocol(-1)` rather than `Other(1)`. Pins the
+    /// `tls.wa.err.is_protocol` select in the IR.
+    #[test]
+    fn test_ir_tls_stream_write_all_classifies_protocol_in_err_exit() {
+        let ir = ir_for(
+            r#"
+fn handle(s: ref TlsStream, buf: Slice[u8]) -> Result[i64, TlsError]
+    with sends(Network) receives(Network)
+{
+    s.write_all(buf)
+}
+"#,
+        );
+        let body = function_body(&ir, "handle").expect("handle body");
+        assert!(
+            body.contains("tls.wa.err.is_protocol"),
+            "write_all err_exit should classify Protocol vs Other; body was:\n{}",
+            body
+        );
+    }
+
     #[test]
     fn test_ir_tls_bind_tls_dispatches_to_runtime_ffis() {
         // `TlsListener.bind_tls(addr, cert, key)` should lower to

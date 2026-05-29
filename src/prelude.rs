@@ -123,6 +123,14 @@ pub const PRELUDE_TYPES: &[&str] = &[
     "TlsConfig",
     "TlsListener",
     "TlsStream",
+    // Phase-8 line 24 (2026-05-29) — `TlsError` is the
+    // `Result[i64, TlsError]` error type for `TlsStream.read /
+    // .write / .write_all`. Three variants (`Interrupted`, `Other`,
+    // `Protocol`); same shape mirror of `TcpError` plus the
+    // rustls-protocol-fault catch-all. Scope-0 like the other
+    // structured-error siblings (`IoError`, `HttpError`, `CliError`,
+    // …) so user code can pattern-match without an explicit import.
+    "TlsError",
     "Base64",
     "Hex",
     "Url",

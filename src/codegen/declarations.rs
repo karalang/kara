@@ -3033,6 +3033,45 @@ impl<'ctx> super::Codegen<'ctx> {
             self.seeded_enum_names.insert("TcpError".to_string());
         }
 
+        // Phase-8 line 24 — `TlsError` mirrors `TcpError`'s 2-word
+        // `{ tag, payload }` shape (same `wrap_tls_io_result` codegen
+        // path produces it), with one extra variant:
+        //   Interrupted (tag=0) — 0 payload words
+        //   Other       (tag=1) — 1 payload word (i32 errno widened)
+        //   Protocol    (tag=2) — 1 payload word (i32 rustls fault code)
+        // All payloads are pure integers; drop kinds uniformly None.
+        if !self.enum_layouts.contains_key("TlsError") {
+            let tls_error_type = self.context.struct_type(&[i64_t, i64_t], false);
+            let mut tags = HashMap::new();
+            tags.insert("Interrupted".to_string(), 0u64);
+            tags.insert("Other".to_string(), 1u64);
+            tags.insert("Protocol".to_string(), 2u64);
+            let mut field_counts = HashMap::new();
+            field_counts.insert("Interrupted".to_string(), 0usize);
+            field_counts.insert("Other".to_string(), 1usize);
+            field_counts.insert("Protocol".to_string(), 1usize);
+            let mut field_word_offsets = HashMap::new();
+            field_word_offsets.insert("Interrupted".to_string(), Vec::new());
+            field_word_offsets.insert("Other".to_string(), vec![(0, 1usize)]);
+            field_word_offsets.insert("Protocol".to_string(), vec![(0, 1usize)]);
+            let mut field_drop_kinds = HashMap::new();
+            field_drop_kinds.insert("Interrupted".to_string(), Vec::new());
+            field_drop_kinds.insert("Other".to_string(), vec![EnumDropKind::None]);
+            field_drop_kinds.insert("Protocol".to_string(), vec![EnumDropKind::None]);
+            self.enum_layouts.insert(
+                "TlsError".to_string(),
+                EnumLayout {
+                    llvm_type: tls_error_type,
+                    tags,
+                    field_counts,
+                    field_word_offsets,
+                    field_drop_kinds,
+                    is_shared: false,
+                },
+            );
+            self.seeded_enum_names.insert("TlsError".to_string());
+        }
+
         // Result[T, E]: { i64 tag, i64 w0, i64 w1, i64 w2, i64 w3 }
         // — Err(tag=0) | Ok(tag=1), payload occupies w0..w3.
         //

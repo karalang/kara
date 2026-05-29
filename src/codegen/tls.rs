@@ -23,15 +23,16 @@
 //! since the TLS session state lives in the runtime-side `SESSIONS`
 //! registry keyed by fd (see `runtime/src/tls.rs` `## Session storage`).
 //!
-//! **Result wrapping reuses `wrap_tcp_io_result`** because the TLS FFI
-//! returns the same negative-errno-on-failure convention as the TCP
-//! FFI. `-1` (the TLS-specific non-syscall error sentinel) maps to
-//! `TcpError.Other(1)` since `wrap_tcp_io_result` reads `errno = -n`
-//! (so n=-1 → errno=1 → not EINTR → `Other(1)`). For v1 this is
-//! "any error other than EINTR is unrecoverable" — sufficient for
-//! Demo 1 slice 2; a dedicated `TlsError` enum with distinct
-//! protocol-vs-syscall variants is a slice-2 follow-on if a workload
-//! needs the structured distinction.
+//! **Result wrapping uses `wrap_tls_io_result`** (Phase-8 line 24,
+//! 2026-05-29). Mirrors `wrap_tcp_io_result`'s shape but produces
+//! `TlsError` (`Interrupted` / `Other(errno)` / `Protocol(code)`)
+//! instead of `TcpError`. The negative-errno-on-failure convention is
+//! shared with TCP; the v1 distinction is that `n == -1` (the runtime's
+//! non-syscall sentinel for rustls-detected protocol errors) classifies
+//! as `Protocol(-1)` rather than `Other(1)`. rustls 0.23 doesn't expose
+//! handshake / cert-verify / renegotiation as distinct API-level
+//! variants, so `Protocol` is intentionally a catch-all with the i32
+//! carried as a reserved code for finer future classification.
 
 use inkwell::values::{BasicValue, BasicValueEnum};
 use inkwell::{AddressSpace, IntPredicate};
@@ -304,9 +305,10 @@ impl<'ctx> super::Codegen<'ctx> {
 
     /// Shared lowering for `TlsStream.read` / `.write`: same shape as
     /// `lower_tcp_stream_io` but routes to `karac_runtime_tls_read /
-    /// _tls_write`. Uses the shared `wrap_tcp_io_result` helper for
-    /// the `Result[i64, TcpError]` wrapping (TCP and TLS FFIs share
-    /// the negative-errno return convention).
+    /// _tls_write`. Uses `wrap_tls_io_result` (Phase-8 line 24) for
+    /// the `Result[i64, TlsError]` wrapping — distinguishes the
+    /// rustls-protocol sentinel (`n == -1` → `Protocol(-1)`) from
+    /// syscall errnos.
     fn lower_tls_stream_io(
         &mut self,
         self_val: BasicValueEnum<'ctx>,
@@ -355,7 +357,7 @@ impl<'ctx> super::Codegen<'ctx> {
             )
             .unwrap_or_else(|_| panic!("call {fn_name}"));
         let n = io_call.try_as_basic_value().unwrap_basic().into_int_value();
-        self.wrap_tcp_io_result(n, is_write)
+        self.wrap_tls_io_result(n, is_write)
     }
 
     /// Lower `TlsStream.write_all(ref self, buf: Slice[u8])` — same
@@ -485,10 +487,21 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap();
         let err_check_end_bb = self.builder.get_insert_block().unwrap();
 
-        // ── err_exit: build Result.Err(TcpError.Other(errno)), br cont.
+        // ── err_exit: classify n into TlsError. `n == -1` is the
+        // runtime's rustls-protocol sentinel → `Protocol(-1)`. Anything
+        // else is a syscall errno (EINTR already retried back to
+        // loop_head from err_check) → `Other(errno)`. Phi `n` and
+        // `errno` from `err_check_end_bb` (single-edge phi for IR
+        // clarity; both values dominate err_exit but the phi makes the
+        // join point explicit).
         self.builder.position_at_end(err_exit);
+        let n_phi = self.builder.build_phi(i64_ty, "tls.wa.n.phi").unwrap();
+        n_phi.add_incoming(&[(&n.as_basic_value_enum(), err_check_end_bb)]);
         let errno_phi = self.builder.build_phi(i64_ty, "tls.wa.errno.phi").unwrap();
         errno_phi.add_incoming(&[(&errno.as_basic_value_enum(), err_check_end_bb)]);
+        let n_phi_val = n_phi.as_basic_value().into_int_value();
+        let errno_phi_val = errno_phi.as_basic_value().into_int_value();
+
         let result_layout = self
             .enum_layouts
             .get("Result")
@@ -499,14 +512,51 @@ impl<'ctx> super::Codegen<'ctx> {
             .get("Err")
             .expect("Result.Err tag seeded");
         let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
-        let tcp_err_layout = self
+        let tls_err_layout = self
             .enum_layouts
-            .get("TcpError")
-            .expect("TcpError layout seeded");
-        let other_tag = *tcp_err_layout
+            .get("TlsError")
+            .expect("TlsError layout seeded");
+        let other_tag = *tls_err_layout
             .tags
             .get("Other")
-            .expect("TcpError.Other tag seeded");
+            .expect("TlsError.Other tag seeded");
+        let protocol_tag = *tls_err_layout
+            .tags
+            .get("Protocol")
+            .expect("TlsError.Protocol tag seeded");
+
+        let neg_one = i64_ty.const_int(u64::MAX, false); // -1 as i64
+        let is_protocol = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                n_phi_val,
+                neg_one,
+                "tls.wa.err.is_protocol",
+            )
+            .unwrap();
+        let tag_w0 = self
+            .builder
+            .build_select(
+                is_protocol,
+                i64_ty.const_int(protocol_tag, false),
+                i64_ty.const_int(other_tag, false),
+                "tls.wa.err.tls_err.tag",
+            )
+            .unwrap()
+            .into_int_value();
+        // Payload: Protocol carries the original n (-1); Other carries errno.
+        let payload_w1 = self
+            .builder
+            .build_select(
+                is_protocol,
+                n_phi_val,
+                errno_phi_val,
+                "tls.wa.err.tls_err.payload",
+            )
+            .unwrap()
+            .into_int_value();
+
         let mut err_agg = result_ty.get_undef();
         err_agg = self
             .builder
@@ -520,18 +570,12 @@ impl<'ctx> super::Codegen<'ctx> {
             .into_struct_value();
         err_agg = self
             .builder
-            .build_insert_value(
-                err_agg,
-                i64_ty.const_int(other_tag, false),
-                1,
-                "tls.wa.err.tcp_err.w0",
-            )
+            .build_insert_value(err_agg, tag_w0, 1, "tls.wa.err.tls_err.w0")
             .unwrap()
             .into_struct_value();
-        let errno_phi_val = errno_phi.as_basic_value().into_int_value();
         err_agg = self
             .builder
-            .build_insert_value(err_agg, errno_phi_val, 2, "tls.wa.err.tcp_err.w1")
+            .build_insert_value(err_agg, payload_w1, 2, "tls.wa.err.tls_err.w1")
             .unwrap()
             .into_struct_value();
         let err_exit_end_bb = self.builder.get_insert_block().unwrap();
@@ -689,5 +733,218 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_int_value();
         (ptr, len)
+    }
+
+    /// Phase-8 line 24 — TLS counterpart to `wrap_tcp_io_result`.
+    /// Wraps a raw FFI return `n: i64` into `Result[i64, TlsError]`.
+    /// Classification:
+    ///   - `n >= 0` → `Ok(n)`.
+    ///   - `n == -1` → `Err(TlsError.Protocol(-1))` (runtime's
+    ///     non-syscall sentinel — rustls protocol fault / session
+    ///     lookup miss; rustls 0.23 doesn't expose the specific cause).
+    ///   - `errno == 4` (EINTR) → `Err(TlsError.Interrupted)`.
+    ///   - otherwise → `Err(TlsError.Other(errno))` where
+    ///     `errno = -n` (raw syscall errno such as EPIPE / ECONNRESET).
+    ///
+    /// Structurally identical to `wrap_tcp_io_result` modulo (a) the
+    /// `TlsError` tags and (b) the extra `n == -1 → Protocol` branch.
+    pub(super) fn wrap_tls_io_result(
+        &mut self,
+        n: inkwell::values::IntValue<'ctx>,
+        is_write: bool,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let ctx = self.context;
+        let i64_ty = ctx.i64_type();
+        let label_prefix = if is_write { "tls.write" } else { "tls.read" };
+
+        let result_layout = self
+            .enum_layouts
+            .get("Result")
+            .expect("Result layout seeded by seed_builtin_enum_layouts");
+        let result_ty = result_layout.llvm_type;
+        let ok_tag = *result_layout.tags.get("Ok").expect("Result.Ok tag seeded");
+        let err_tag = *result_layout
+            .tags
+            .get("Err")
+            .expect("Result.Err tag seeded");
+
+        let tls_err_layout = self
+            .enum_layouts
+            .get("TlsError")
+            .expect("TlsError layout seeded by seed_builtin_enum_layouts");
+        let interrupted_tag = *tls_err_layout
+            .tags
+            .get("Interrupted")
+            .expect("TlsError.Interrupted tag seeded");
+        let other_tag = *tls_err_layout
+            .tags
+            .get("Other")
+            .expect("TlsError.Other tag seeded");
+        let protocol_tag = *tls_err_layout
+            .tags
+            .get("Protocol")
+            .expect("TlsError.Protocol tag seeded");
+
+        let fn_val = self
+            .current_fn
+            .ok_or_else(|| "tls io Result wrapping outside fn".to_string())?;
+        let ok_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.ok"));
+        let err_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.err"));
+        let cont_bb = ctx.append_basic_block(fn_val, &format!("{label_prefix}.cont"));
+
+        let zero_i64 = i64_ty.const_zero();
+        let is_success = self
+            .builder
+            .build_int_compare(
+                IntPredicate::SGE,
+                n,
+                zero_i64,
+                &format!("{label_prefix}.is_ok"),
+            )
+            .unwrap();
+        self.builder
+            .build_conditional_branch(is_success, ok_bb, err_bb)
+            .unwrap();
+
+        // ── Ok arm: Result.Ok(n).
+        self.builder.position_at_end(ok_bb);
+        let mut ok_agg = result_ty.get_undef();
+        ok_agg = self
+            .builder
+            .build_insert_value(
+                ok_agg,
+                i64_ty.const_int(ok_tag, false),
+                0,
+                &format!("{label_prefix}.ok.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        ok_agg = self
+            .builder
+            .build_insert_value(ok_agg, n, 1, &format!("{label_prefix}.ok.n"))
+            .unwrap()
+            .into_struct_value();
+        let ok_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Err arm: classify n. `n == -1` is the runtime's
+        // non-syscall protocol sentinel → Protocol(-1). errno==4 →
+        // Interrupted. Everything else → Other(errno).
+        self.builder.position_at_end(err_bb);
+        let errno = self
+            .builder
+            .build_int_sub(zero_i64, n, &format!("{label_prefix}.errno"))
+            .unwrap();
+        let neg_one = i64_ty.const_int(u64::MAX, false); // -1 as i64
+        let is_protocol = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                n,
+                neg_one,
+                &format!("{label_prefix}.is_protocol"),
+            )
+            .unwrap();
+        let eintr = i64_ty.const_int(4, false);
+        let is_eintr = self
+            .builder
+            .build_int_compare(
+                IntPredicate::EQ,
+                errno,
+                eintr,
+                &format!("{label_prefix}.is_eintr"),
+            )
+            .unwrap();
+        // Tag selection: Protocol if n==-1, else Interrupted if errno==4,
+        // else Other. Use nested selects.
+        let tag_after_eintr = self
+            .builder
+            .build_select(
+                is_eintr,
+                i64_ty.const_int(interrupted_tag, false),
+                i64_ty.const_int(other_tag, false),
+                &format!("{label_prefix}.tls_err.tag.eintr_or_other"),
+            )
+            .unwrap()
+            .into_int_value();
+        let tls_err_word_0 = self
+            .builder
+            .build_select(
+                is_protocol,
+                i64_ty.const_int(protocol_tag, false),
+                tag_after_eintr,
+                &format!("{label_prefix}.tls_err.tag"),
+            )
+            .unwrap()
+            .into_int_value();
+        // Payload selection:
+        //   Protocol → -1 (we use the original n, which is -1 here).
+        //   Interrupted → 0 (no payload).
+        //   Other → errno.
+        let payload_after_eintr = self
+            .builder
+            .build_select(
+                is_eintr,
+                zero_i64,
+                errno,
+                &format!("{label_prefix}.tls_err.payload.eintr_or_other"),
+            )
+            .unwrap()
+            .into_int_value();
+        let tls_err_word_1 = self
+            .builder
+            .build_select(
+                is_protocol,
+                n, // -1 carried through to Protocol's payload word
+                payload_after_eintr,
+                &format!("{label_prefix}.tls_err.payload"),
+            )
+            .unwrap()
+            .into_int_value();
+        let mut err_agg = result_ty.get_undef();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                i64_ty.const_int(err_tag, false),
+                0,
+                &format!("{label_prefix}.err.tag"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                tls_err_word_0,
+                1,
+                &format!("{label_prefix}.err.tls_err.w0"),
+            )
+            .unwrap()
+            .into_struct_value();
+        err_agg = self
+            .builder
+            .build_insert_value(
+                err_agg,
+                tls_err_word_1,
+                2,
+                &format!("{label_prefix}.err.tls_err.w1"),
+            )
+            .unwrap()
+            .into_struct_value();
+        let err_end_bb = self.builder.get_insert_block().unwrap();
+        self.builder.build_unconditional_branch(cont_bb).unwrap();
+
+        // ── Continuation: phi between Ok and Err arms.
+        self.builder.position_at_end(cont_bb);
+        let phi = self
+            .builder
+            .build_phi(result_ty, &format!("{label_prefix}.result"))
+            .unwrap();
+        phi.add_incoming(&[
+            (&ok_agg.as_basic_value_enum(), ok_end_bb),
+            (&err_agg.as_basic_value_enum(), err_end_bb),
+        ]);
+        Ok(phi.as_basic_value())
     }
 }

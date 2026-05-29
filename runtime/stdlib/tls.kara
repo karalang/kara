@@ -20,25 +20,39 @@
 //     connection. Returns a `TlsStream` wrapping the post-handshake
 //     fd. On failure (raw-accept or handshake) returns
 //     `TlsStream { fd: -1 }`.
-//   - `TlsStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]`
+//   - `TlsStream.read(ref self, buf: mut Slice[u8]) -> Result[i64, TlsError]`
 //     parks on read-readiness, then pumps `karac_runtime_tls_read`
 //     until at least one decrypted plaintext byte is available.
-//     `Ok(n)` (n=0 is clean EOF); `Err(TcpError)` on syscall or
-//     protocol error.
-//   - `TlsStream.write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//     `Ok(n)` (n=0 is clean EOF); `Err(TlsError)` on syscall or
+//     rustls-detected protocol error.
+//   - `TlsStream.write(ref self, buf: Slice[u8]) -> Result[i64, TlsError]`
 //     parks on write-readiness; rustls's writer never short-writes so
 //     the byte count returned always equals `buf.len()` on success.
-//   - `TlsStream.write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]`
+//   - `TlsStream.write_all(ref self, buf: Slice[u8]) -> Result[i64, TlsError]`
 //     symmetric with the TCP variant — same retry-on-EINTR loop.
 //
-// **Error type — reusing `TcpError`.** Cert/handshake-validation
-// errors fold into `TcpError.Other(errno)` with errno = `-1` (the FFI
-// negative-1 sentinel for non-syscall errors). A distinct `TlsError`
-// variant family lands when a real consumer needs to distinguish
-// "handshake failed because cert validation rejected the peer" from
-// "socket write failed with EPIPE" — the tracker entry leaves this as
-// a follow-on. For v1, callers can treat any `Err(_)` as "connection
-// unrecoverable" without losing structured-error correctness.
+// **Error type — `TlsError`** (Phase-8 line 24, 2026-05-29). Three
+// variants distinguish the actionable failure classes the audit
+// requires:
+//   - `Interrupted` — EINTR; retry without backoff (same semantics as
+//     `TcpError.Interrupted`).
+//   - `Other(errno)` — underlying socket syscall failure (EPIPE,
+//     ECONNRESET, EAGAIN, etc.).
+//   - `Protocol(code)` — rustls-detected fault: handshake failure,
+//     cert verification failure, peer-misbehavior, attempted
+//     renegotiation (rustls 0.23 rejects), truncation attack. rustls
+//     0.23 does NOT distinguish these at the API surface (handshake /
+//     cert-verify / renegotiation all collapse to opaque errors at
+//     `complete_io` / `process_new_packets`), so v1 folds them under
+//     one variant; `code` is reserved for future finer-grained
+//     classification if rustls grows a richer error API.
+//
+// v1 quirk: a runtime `n == -1` return that originated from
+// `io_err_to_neg` with EPERM (errno=1) is currently mis-classified as
+// `Protocol(-1)` rather than `Other(1)` — EPERM during a TLS socket
+// read/write is exceedingly rare in practice (it usually means a bad
+// fd was passed). A runtime sentinel rework that disambiguates lands
+// when a real workload surfaces the case.
 //
 // **TlsConfig opacity.** `TlsConfig` is an empty kara struct standing
 // in for the rustls `ServerConfig` allocation owned by the runtime.
@@ -57,6 +71,31 @@
 // also removes the session entry from the runtime-side registry).
 // Both bodies are hand-rolled in codegen (mirrors `TcpListener.drop`
 // from slice 9d of phase-6 line 17).
+
+// Phase-8 line 24 — TLS-specific error type for `TlsStream.read` /
+// `.write` / `.write_all`. Three variants give the audit-required
+// actionable distinctions without inventing variants rustls 0.23 can't
+// actually surface (see file-header **Error type** block):
+//   - `Interrupted` — EINTR retry signal (same meaning as
+//     `TcpError.Interrupted`).
+//   - `Other(errno)` — underlying socket syscall failure; the i32
+//     payload is the raw errno (EPIPE / ECONNRESET / EAGAIN / etc.).
+//   - `Protocol(code)` — rustls-detected fault. Catch-all for
+//     handshake error, cert verification failure, peer-misbehavior,
+//     renegotiation attempt, truncation. rustls 0.23 surfaces these
+//     opaquely; `code` is currently always `-1` and reserved for
+//     finer-grained classification if a future rustls release distin-
+//     guishes them.
+//
+// Same 2-word `{ tag, payload }` layout as `TcpError` (the codegen
+// `wrap_tls_io_result` mirrors `wrap_tcp_io_result` modulo the
+// `-1` → `Protocol(-1)` branch). The `i32` payload on `Other` /
+// `Protocol` is widened to i64 in the lowered struct.
+enum TlsError {
+    Interrupted,
+    Other(i32),
+    Protocol(i32),
+}
 
 // Opaque marker type — see file-header `TlsConfig opacity` block.
 // Field-list intentionally empty: the runtime owns the underlying
@@ -167,32 +206,33 @@ impl TlsStream {
     // packet processor until at least one decrypted plaintext byte is
     // available. The FFI returns the byte count (>= 0; 0 = clean EOF
     // including close_notify), `-errno` for socket errors, or `-1`
-    // for TLS protocol errors and session-lookup misses. Codegen
-    // wraps via `wrap_tcp_io_result` into `Ok(n)` / `Err(TcpError)`
-    // (same wrapper used by `TcpStream.read`).
+    // for rustls-detected protocol errors and session-lookup misses.
+    // Codegen wraps via `wrap_tls_io_result` into `Ok(n)` /
+    // `Err(TlsError)` — see the file-header **Error type** block for
+    // the variant semantics.
     //
     // The park step uses `direction = 0u8` (Read). Stub body never
     // executes — codegen replaces via `lower_tls_stream_read`.
     #[compiler_builtin]
-    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TcpError]
+    fn read(ref self, buf: mut Slice[u8]) -> Result[i64, TlsError]
         with sends(Network) receives(Network)
     {
-        Result.Err(TcpError.Other(-1))
+        Result.Err(TlsError.Protocol(-1))
     }
 
     // Park on write-readiness of `self.fd`, then push plaintext into
     // rustls's writer and flush the resulting ciphertext to the
     // socket. rustls's writer never short-writes so the byte count
     // returned always equals `buf.len()` on success. Same
-    // `wrap_tcp_io_result` wrapping as `read` — `Ok(n)` / `Err(TcpError)`.
+    // `wrap_tls_io_result` wrapping as `read` — `Ok(n)` / `Err(TlsError)`.
     //
     // The park step uses `direction = 1u8` (Write). Stub body never
     // executes — codegen replaces via `lower_tls_stream_write`.
     #[compiler_builtin]
-    fn write(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+    fn write(ref self, buf: Slice[u8]) -> Result[i64, TlsError]
         with sends(Network) receives(Network)
     {
-        Result.Err(TcpError.Other(-1))
+        Result.Err(TlsError.Protocol(-1))
     }
 
     // Loop `write` until all `buf.len()` bytes have been pushed (or
@@ -200,15 +240,15 @@ impl TlsStream {
     // rustls's writer doesn't currently short-write, the wrapper is
     // structurally identical to `TcpStream.write_all` so future
     // partial-write behaviour at the rustls layer composes through
-    // unchanged. Retries on `TcpError.Interrupted` (EINTR).
+    // unchanged. Retries on `TlsError.Interrupted` (EINTR).
     //
     // Stub body never executes — codegen replaces via
     // `lower_tls_stream_write_all`.
     #[compiler_builtin]
-    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TcpError]
+    fn write_all(ref self, buf: Slice[u8]) -> Result[i64, TlsError]
         with sends(Network) receives(Network)
     {
-        Result.Err(TcpError.Other(-1))
+        Result.Err(TlsError.Protocol(-1))
     }
 }
 
