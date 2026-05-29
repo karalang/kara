@@ -286,6 +286,18 @@ pub type PatternBindingInnerTypesTable = std::collections::HashMap<(usize, usize
 /// without taking a full `TypeCheckResult` dependency.
 pub type StringTypedExprsTable = std::collections::HashSet<(usize, usize)>;
 
+/// Side-table populated by the lowering pass from the typechecker's
+/// `expr_types` map: for every expression whose Kāra type is a `Named`
+/// struct (`Type::Named { name, .. }`), maps `(span.offset, span.length)`
+/// to the canonical struct name. Sibling to `StringTypedExprsTable` but
+/// expanded with a per-span value because the codegen consumer needs the
+/// struct name to look up its field-type table. First consumer:
+/// `emit_sort_by_key_inline_thunk` dispatches struct-typed keys
+/// (`sort_by_key(|item| item)` where `item: MyStruct`) to a field-by-field
+/// lex cascade that picks the right per-field comparator (int / String)
+/// via `Codegen.struct_field_type_names`.
+pub type ExprStructTypeNamesTable = std::collections::HashMap<(usize, usize), String>;
+
 /// Borrow form for a pattern binding under a `ref` / `mut ref` scrutinee.
 /// `Ref` corresponds to a `ref T` scrutinee mode; `MutRef` to `mut ref T`.
 /// Owned bindings have no entry in `PatternBindingBorrowModesTable` —
@@ -377,6 +389,14 @@ pub struct Program {
     /// the same `{ptr, i64, i64}` LLVM struct shape without taking a
     /// `TypeCheckResult` dependency.
     pub string_typed_exprs: StringTypedExprsTable,
+    /// Set by the lowering pass from `TypeCheckResult.expr_types`: for
+    /// every expression whose Kāra type is a `Named` struct, maps
+    /// `(offset, length)` to the canonical struct name. Lets codegen
+    /// recover the source-level struct identity from a value alone (the
+    /// LLVM struct type doesn't carry the name back) so `sort_by_key`
+    /// can dispatch field-aware compares for struct keys with mixed
+    /// integer / `String` fields.
+    pub expr_struct_type_names: ExprStructTypeNamesTable,
     /// Set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_borrow_modes`. Consumed by codegen
     /// to apply the ref-binding shim at match-arm leaf bindings under a

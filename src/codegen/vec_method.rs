@@ -2301,6 +2301,169 @@ impl<'ctx> super::Codegen<'ctx> {
                     );
                 }
             }
+        } else if let Some(struct_name) = self.expr_struct_type_names.get(&key_body_span).cloned() {
+            // Struct-typed key (`sort_by_key(|item| item)` where
+            // `item: MyStruct`). Cascade through the user struct's fields
+            // in declaration order, dispatching per field type — `int*`
+            // fields use a signed compare, `String` fields call
+            // `karac_string_cmp`, anything else errors loudly. Equivalent
+            // to the lex order `#[derive(Ord)]` would produce. Recovers
+            // the struct's field-type names via `struct_field_type_names`
+            // (populated at `declare_structs`), which the
+            // `expr_struct_type_names` span-keyed lookup gates by the
+            // closure body's static type.
+            let field_type_names = match self.struct_field_type_names.get(&struct_name).cloned() {
+                Some(v) => v,
+                None => {
+                    return Err(format!(
+                        "Vec.sort_by_key: struct '{}' has no field-type info in codegen \
+                         (struct_field_type_names lookup miss — likely a generic-args \
+                         monomorphization edge case)",
+                        struct_name
+                    ));
+                }
+            };
+            let (ka, kb) = match (key_a_val, key_b_val) {
+                (BasicValueEnum::StructValue(ka), BasicValueEnum::StructValue(kb)) => (ka, kb),
+                _ => {
+                    return Err(format!(
+                        "Vec.sort_by_key: struct-typed key '{}' did not compile to a struct \
+                         value (compiler bug — expr_struct_type_names and the closure body's \
+                         value type disagree)",
+                        struct_name
+                    ));
+                }
+            };
+            let n_fields = ka.get_type().count_fields();
+            if n_fields == 0 {
+                return Err(format!(
+                    "Vec.sort_by_key: struct '{}' has zero fields; cannot derive an order",
+                    struct_name
+                ));
+            }
+            let mut result = i64_zero;
+            for i in (0..n_fields).rev() {
+                let ai = self
+                    .builder
+                    .build_extract_value(ka, i, &format!("ka.{}.f{}", struct_name, i))
+                    .unwrap();
+                let bi = self
+                    .builder
+                    .build_extract_value(kb, i, &format!("kb.{}.f{}", struct_name, i))
+                    .unwrap();
+                let field_ty_name = field_type_names.get(i as usize).and_then(|o| o.as_deref());
+                let cmp_i = match (ai, bi, field_ty_name) {
+                    (BasicValueEnum::IntValue(av), BasicValueEnum::IntValue(bv), _) => {
+                        let lt = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SLT,
+                                av,
+                                bv,
+                                &format!("f{}.lt", i),
+                            )
+                            .unwrap();
+                        let gt = self
+                            .builder
+                            .build_int_compare(
+                                inkwell::IntPredicate::SGT,
+                                av,
+                                bv,
+                                &format!("f{}.gt", i),
+                            )
+                            .unwrap();
+                        let gt_sel = self
+                            .builder
+                            .build_select(gt, i64_pos_one, i64_zero, &format!("f{}.gt.sel", i))
+                            .unwrap()
+                            .into_int_value();
+                        self.builder
+                            .build_select(lt, i64_neg_one, gt_sel, &format!("f{}.cmp", i))
+                            .unwrap()
+                            .into_int_value()
+                    }
+                    (
+                        BasicValueEnum::StructValue(av),
+                        BasicValueEnum::StructValue(bv),
+                        Some("String"),
+                    ) => {
+                        let a_ptr = self
+                            .builder
+                            .build_extract_value(av, 0, &format!("f{}.ka.ptr", i))
+                            .unwrap()
+                            .into_pointer_value();
+                        let a_len = self
+                            .builder
+                            .build_extract_value(av, 1, &format!("f{}.ka.len", i))
+                            .unwrap()
+                            .into_int_value();
+                        let b_ptr = self
+                            .builder
+                            .build_extract_value(bv, 0, &format!("f{}.kb.ptr", i))
+                            .unwrap()
+                            .into_pointer_value();
+                        let b_len = self
+                            .builder
+                            .build_extract_value(bv, 1, &format!("f{}.kb.len", i))
+                            .unwrap()
+                            .into_int_value();
+                        let runtime_fn = self
+                            .module
+                            .get_function("karac_string_cmp")
+                            .unwrap_or_else(|| {
+                                let fn_ty = i64_t.fn_type(
+                                    &[ptr_ty.into(), i64_t.into(), ptr_ty.into(), i64_t.into()],
+                                    false,
+                                );
+                                self.module.add_function(
+                                    "karac_string_cmp",
+                                    fn_ty,
+                                    Some(Linkage::External),
+                                )
+                            });
+                        let call = self
+                            .builder
+                            .build_call(
+                                runtime_fn,
+                                &[
+                                    BasicMetadataValueEnum::from(a_ptr),
+                                    BasicMetadataValueEnum::from(a_len),
+                                    BasicMetadataValueEnum::from(b_ptr),
+                                    BasicMetadataValueEnum::from(b_len),
+                                ],
+                                &format!("f{}.str.cmp", i),
+                            )
+                            .unwrap();
+                        call.try_as_basic_value().unwrap_basic().into_int_value()
+                    }
+                    _ => {
+                        return Err(format!(
+                            "Vec.sort_by_key: struct '{}' field {} has unsupported type {:?} \
+                             for codegen cascade — supported field types today are signed \
+                             integers and String. Use sort_by(|a, b| ...) with an explicit \
+                             comparator if the struct has other Ord-implementing field types.",
+                            struct_name,
+                            i,
+                            field_ty_name.unwrap_or("<unknown>"),
+                        ));
+                    }
+                };
+                let neq = self
+                    .builder
+                    .build_int_compare(
+                        inkwell::IntPredicate::NE,
+                        cmp_i,
+                        i64_zero,
+                        &format!("f{}.neq", i),
+                    )
+                    .unwrap();
+                result = self
+                    .builder
+                    .build_select(neq, cmp_i, result, &format!("f{}.acc", i))
+                    .unwrap()
+                    .into_int_value();
+            }
+            result
         } else {
             match (key_a_val, key_b_val) {
                 (BasicValueEnum::IntValue(ka), BasicValueEnum::IntValue(kb)) => {

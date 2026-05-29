@@ -24383,6 +24383,74 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_vec_sort_by_key_struct_mixed_fields() {
+        // `derive(Ord)` on a struct with mixed int + String fields produces
+        // a lex compare in declaration order. The struct-aware cascade in
+        // `emit_sort_by_key_inline_thunk` uses `expr_struct_type_names` to
+        // recover the struct name from the body Expr's span, then
+        // dispatches each field's compare via `struct_field_type_names`:
+        // int fields use a signed select, the String field calls
+        // `karac_string_cmp`. Three items with two scoring-10 entries that
+        // tie on the primary field — the secondary String field must break
+        // the tie in alphabetical order.
+        let out = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Item { score: i64, name: String }
+
+fn main() {
+    let mut v: Vec[Item] = Vec.new();
+    v.push(Item { score: 10i64, name: "z" });
+    v.push(Item { score: 10i64, name: "a" });
+    v.push(Item { score: 5i64, name: "m" });
+    v.sort_by_key(|i| i);
+    for it in v.iter() {
+        println(it.score);
+        println(it.name);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["5", "m", "10", "a", "10", "z"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_vec_sort_by_key_struct_all_int_fields() {
+        // `derive(Ord)` on a struct with all-integer fields. Pins that the
+        // single-field-int case still works (it could have routed through
+        // either the all-int StructValue cascade or the struct-aware
+        // dispatch — the struct-aware path takes precedence and must
+        // produce the same result).
+        let out = run_program(
+            r#"
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Pt { x: i64, y: i64 }
+
+fn main() {
+    let mut v: Vec[Pt] = Vec.new();
+    v.push(Pt { x: 3i64, y: 1i64 });
+    v.push(Pt { x: 1i64, y: 9i64 });
+    v.push(Pt { x: 3i64, y: 0i64 });
+    v.push(Pt { x: 1i64, y: 2i64 });
+    v.sort_by_key(|p| p);
+    for p in v.iter() {
+        println(p.x);
+        println(p.y);
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            // Sorted ascending by (x, y): (1,2), (1,9), (3,0), (3,1).
+            assert_eq!(lines, vec!["1", "2", "1", "9", "3", "0", "3", "1"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_sort_non_integer_element_rejected() {
         // `sort()` only has a default comparator for integer element types.
         // A tuple-element Vec typechecks but must be rejected loudly in

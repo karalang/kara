@@ -94,6 +94,20 @@ pub fn lower_program(program: &mut Program, tc: &TypeCheckResult) {
             }
         })
         .collect();
+    // Sibling to `string_typed_exprs`: for each expression whose Kāra
+    // type is a `Named` struct, record the canonical struct name. Codegen
+    // uses this in `emit_sort_by_key_inline_thunk` to dispatch struct-typed
+    // keys to a field-aware lex cascade (the all-int-tuple cascade doesn't
+    // cover mixed int + String fields, and the LLVM struct type alone
+    // can't recover the source-level struct name to query its field types).
+    program.expr_struct_type_names = tc
+        .expr_types
+        .iter()
+        .filter_map(|(k, ty)| match ty {
+            Type::Named { name, .. } => Some(((k.0, k.1), name.clone())),
+            _ => None,
+        })
+        .collect();
     // Forward per-leaf-binding borrow modes so codegen's
     // `bind_pattern_values` can wrap each ref/mut-ref leaf in a ref-shim
     // alloca (alloca-of-pointer-to-value-alloca, registered in

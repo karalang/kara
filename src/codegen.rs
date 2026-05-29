@@ -675,6 +675,15 @@ pub(super) struct Codegen<'ctx> {
     /// dispatch arm — `String` and `Vec[u8]` are indistinguishable from
     /// the LLVM value alone, so the span-set is what tells them apart.
     pub(crate) string_typed_exprs: HashSet<(usize, usize)>,
+    /// Sibling to `string_typed_exprs`: for every expression whose Kāra
+    /// type is a `Named` struct, the canonical struct name. Populated
+    /// from `Program.expr_struct_type_names`. Lets codegen recover the
+    /// source-level struct identity from a value alone — the LLVM struct
+    /// type doesn't carry the name back — so `emit_sort_by_key_inline_thunk`
+    /// can look up per-field type names via `struct_field_type_names` and
+    /// dispatch the right per-field comparator (int / String) when the
+    /// key is a struct with mixed-type fields.
+    pub(crate) expr_struct_type_names: HashMap<(usize, usize), String>,
     /// Per-pattern-binding surface type table — populated from
     /// `Program.pattern_binding_types` (set by the lowering pass from
     /// `TypeCheckResult.pattern_binding_types`). Key: pattern's
@@ -2428,6 +2437,7 @@ impl<'ctx> Codegen<'ctx> {
             call_effect_subs: crate::ast::CallEffectSubsTable::new(),
             method_unwrap_inner_types: HashMap::new(),
             string_typed_exprs: HashSet::new(),
+            expr_struct_type_names: HashMap::new(),
             pattern_binding_types: HashMap::new(),
             pattern_binding_inner_types: HashMap::new(),
             pattern_binding_borrow_modes: HashMap::new(),
@@ -2752,6 +2762,13 @@ impl<'ctx> Codegen<'ctx> {
         // LLVM struct shape is identical to `Vec[u8]` and a few other
         // 3-word types, so the value alone can't distinguish them.
         self.string_typed_exprs = program.string_typed_exprs.clone();
+        // Sibling to `string_typed_exprs` for `Type::Named` struct
+        // expressions. Maps span → struct name. `emit_sort_by_key_inline_thunk`
+        // consults this to dispatch struct-typed keys (e.g.
+        // `sort_by_key(|item| item)` where `item: MyStruct`) to a
+        // field-aware lex cascade that picks the right per-field
+        // comparator via `self.struct_field_type_names[struct_name]`.
+        self.expr_struct_type_names = program.expr_struct_type_names.clone();
 
         // Phase 6 line 26 slice 8ab: snapshot the per-call effect-
         // variable substitution table. Slice 8y (entry 32) reads
