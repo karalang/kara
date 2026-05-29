@@ -617,6 +617,19 @@ pub(super) fn is_numeric(ty: &Type) -> bool {
     matches!(ty, Type::Int(_) | Type::UInt(_) | Type::Float(_))
 }
 
+/// True for operands `String + String` accepts: a `String` value or a
+/// borrow of one (`ref String` / `mut ref String`). Borrows are stripped
+/// because both backends materialize the underlying String value for the
+/// concat — the interpreter holds a plain `Value::String` for a borrowed
+/// param, and codegen auto-loads the pointee before the binop.
+pub(super) fn is_string_concat_operand(ty: &Type) -> bool {
+    match ty {
+        Type::Str => true,
+        Type::Ref(inner) | Type::MutRef(inner) => matches!(inner.as_ref(), Type::Str),
+        _ => false,
+    }
+}
+
 pub(super) fn is_integer(ty: &Type) -> bool {
     matches!(ty, Type::Int(_) | Type::UInt(_))
 }

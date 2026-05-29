@@ -26,8 +26,8 @@ use crate::resolver::SpanKey;
 use crate::token::Span;
 
 use super::types::{
-    is_integer, is_numeric, is_prelude_type_or_module_name, type_display, types_compatible, Type,
-    UIntSize, VariantTypeInfo,
+    is_integer, is_numeric, is_prelude_type_or_module_name, is_string_concat_operand, type_display,
+    types_compatible, Type, UIntSize, VariantTypeInfo,
 };
 use super::TypeErrorKind;
 
@@ -481,7 +481,18 @@ impl<'a> super::TypeChecker<'a> {
 
         match op {
             BinOp::Add | BinOp::Sub | BinOp::Mul | BinOp::Div | BinOp::Mod => {
-                if is_numeric(&left_ty) {
+                // String concatenation: `String + String -> String`. Only
+                // `+` is defined for strings; codegen (`compile_string_binop`)
+                // and the interpreter (`eval_ops`) both allocate a fresh
+                // String and copy both operands. `String + <non-String>`
+                // (and `String - String` etc.) fall through to the
+                // numeric/distinct paths below and are rejected there.
+                if matches!(op, BinOp::Add)
+                    && is_string_concat_operand(&left_ty)
+                    && is_string_concat_operand(&right_ty)
+                {
+                    Type::Str
+                } else if is_numeric(&left_ty) {
                     if !types_compatible(&left_ty, &right_ty) {
                         self.type_error(
                             format!(

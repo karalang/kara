@@ -9498,6 +9498,42 @@ fn test_literal_promotion_string_concat_no_int_promo() {
     );
 }
 
+#[test]
+fn test_string_concat_ok() {
+    // `String + String -> String` (codegen + interpreter already
+    // implement the fresh-buffer concat; this pins the typechecker arm).
+    typecheck_ok(r#"fn f(a: String, b: String) -> String { a + b }"#);
+}
+
+#[test]
+fn test_string_concat_with_literal_ok() {
+    typecheck_ok(r#"fn f(name: String) -> String { name + "!" }"#);
+}
+
+#[test]
+fn test_string_concat_chained_ok() {
+    typecheck_ok(r#"fn f(k: String, v: String) -> String { k + "=" + v + ";" }"#);
+}
+
+#[test]
+fn test_string_concat_ref_operand_ok() {
+    // Borrowed String operands concatenate in either position — both
+    // backends materialize the underlying String for the concat.
+    typecheck_ok(r#"fn f(name: ref String) -> String { "hello " + name }"#);
+    typecheck_ok(r#"fn f(name: ref String) -> String { name + "!" }"#);
+    typecheck_ok(r#"fn f(a: ref String, b: ref String) -> String { a + b }"#);
+}
+
+#[test]
+fn test_string_subtraction_rejected() {
+    // Only `+` concatenates; other arithmetic ops on String stay errors.
+    let errors = typecheck_errors(r#"fn f(a: String, b: String) -> String { a - b }"#);
+    assert!(
+        !errors.is_empty(),
+        "Expected type error for String - String, got none"
+    );
+}
+
 // ── std.http ──────────────────────────────────────────────────────────────────
 
 #[test]

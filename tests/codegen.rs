@@ -6408,6 +6408,39 @@ fn main() {
         }
     }
 
+    /// `+` concatenation accepts borrowed String operands (`ref String`)
+    /// in either position — codegen auto-loads the pointee struct before
+    /// the concat, so `"a" + ref_s`, `ref_s + "b"`, and `ref_a + ref_b`
+    /// all produce a fresh owned String. Pairs with the typechecker arm
+    /// (`test_string_concat_ref_operand_ok`) that admits the borrow forms.
+    #[test]
+    fn test_e2e_string_concat_ref_operands() {
+        let out = run_program(
+            r#"
+fn right(name: ref String) -> String {
+    "hello " + name
+}
+fn left(name: ref String) -> String {
+    name + "!"
+}
+fn both(a: ref String, b: ref String) -> String {
+    a + b
+}
+fn main() {
+    let x = "foo";
+    let y = "bar";
+    println(right(x));
+    println(left(x));
+    println(both(x, y));
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["hello foo", "foo!", "foobar"]);
+        }
+    }
+
     // ── Struct equality ───────────────────────────────────────────
 
     #[test]
