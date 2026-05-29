@@ -1497,4 +1497,310 @@ mod http_server_tests {
              got headers: {headers:?}"
         );
     }
+
+    /// Phase-8 line 16 (verification half) — keep-alive persistence.
+    /// hyper's `http1` connection handles persistent connections at
+    /// the protocol level: a client that doesn't send `Connection:
+    /// close` should be able to issue multiple HTTP/1.1 requests on
+    /// the same TCP socket and get each response back without the
+    /// server tearing down between requests. The smoke tests above
+    /// all set `Connection: close`, so nothing previously exercised
+    /// this. We open one socket, send two GETs with different paths,
+    /// parse each response with Content-Length framing, and assert
+    /// both round-trip end-to-end (handler ran twice on the same
+    /// connection, each saw the right path).
+    ///
+    /// Reads exactly Content-Length body bytes between responses so
+    /// the framing boundary is unambiguous; the second request sends
+    /// `Connection: close` so the server tears down after responding
+    /// and the test can clean up.
+    #[test]
+    fn test_server_serve_handler_keep_alive_persistence() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.path() }
+            }
+
+            fn main() {
+                let _r = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_keepalive_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+
+        // Settle race window between BOUND_PORT print and accept().
+        std::thread::sleep(Duration::from_millis(50));
+
+        let result: Result<KeepAlivePair, String> = run_keepalive_round_trip(port);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let (status1, body1, status2, body2) = result.expect("keep-alive round-trip failed");
+        assert_eq!(status1, 200, "first response status; body={body1:?}");
+        assert_eq!(
+            body1, "/first",
+            "first response body should echo path /first; got: {body1:?}"
+        );
+        assert_eq!(status2, 200, "second response status; body={body2:?}");
+        assert_eq!(
+            body2, "/second",
+            "second response body should echo path /second on the SAME tcp \
+             socket as the first request — proves keep-alive persistence; got: {body2:?}"
+        );
+    }
+
+    /// Two-response result from a keep-alive round trip on one socket
+    /// — `(status1, body1, status2, body2)`. Factored as a type alias
+    /// so clippy's `type_complexity` stays quiet.
+    type KeepAlivePair = (u16, String, u16, String);
+
+    /// Issue two HTTP/1.1 GETs over a single `TcpStream`, parsing each
+    /// response with Content-Length framing. First request keeps the
+    /// connection alive (no `Connection: close` header); second
+    /// request requests close so the server tears down after replying.
+    fn run_keepalive_round_trip(port: u16) -> Result<KeepAlivePair, String> {
+        use std::io::{BufReader, Write};
+
+        let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("tcp connect: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout: {e}"))?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_write_timeout: {e}"))?;
+
+        // Request 1: persistent (no Connection header → HTTP/1.1
+        // default keep-alive).
+        let req1 = b"GET /first HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n";
+        stream
+            .write_all(req1)
+            .map_err(|e| format!("write request 1: {e}"))?;
+
+        let mut reader = BufReader::new(stream);
+        let (status1, body1) = read_one_keepalive_response(&mut reader)?;
+
+        // Recover the stream from the BufReader (any buffered residue
+        // is consumed by read_exact in the body read, so this is safe).
+        let mut stream = reader.into_inner();
+        let req2 = b"GET /second HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n";
+        stream
+            .write_all(req2)
+            .map_err(|e| format!("write request 2: {e}"))?;
+
+        let mut reader = BufReader::new(stream);
+        let (status2, body2) = read_one_keepalive_response(&mut reader)?;
+        Ok((status1, body1, status2, body2))
+    }
+
+    /// Read one HTTP/1.1 response from a `BufReader<TcpStream>`,
+    /// respecting `Content-Length` framing so the reader stops at the
+    /// end of the body and is ready for the next response on the same
+    /// connection. Returns `(status, body)`.
+    fn read_one_keepalive_response(
+        reader: &mut std::io::BufReader<std::net::TcpStream>,
+    ) -> Result<(u16, String), String> {
+        use std::io::{BufRead, Read};
+
+        let mut status_line = String::new();
+        reader
+            .read_line(&mut status_line)
+            .map_err(|e| format!("read status line: {e}"))?;
+        let trimmed = status_line.trim_end_matches("\r\n").trim_end_matches('\n');
+        let mut tokens = trimmed.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+
+        let mut content_length: Option<usize> = None;
+        loop {
+            let mut line = String::new();
+            reader
+                .read_line(&mut line)
+                .map_err(|e| format!("read header line: {e}"))?;
+            let trimmed = line.trim_end_matches("\r\n").trim_end_matches('\n');
+            if trimmed.is_empty() {
+                break;
+            }
+            if let Some((k, v)) = trimmed.split_once(':') {
+                if k.eq_ignore_ascii_case("content-length") {
+                    content_length = v.trim().parse().ok();
+                }
+            }
+        }
+
+        let body = if let Some(n) = content_length {
+            let mut buf = vec![0u8; n];
+            reader
+                .read_exact(&mut buf)
+                .map_err(|e| format!("read body: {e}"))?;
+            String::from_utf8_lossy(&buf).into_owned()
+        } else {
+            String::new()
+        };
+        Ok((status, body))
+    }
+
+    /// Phase-8 line 16 (verification half) — chunked request body
+    /// decode. Send a POST with `Transfer-Encoding: chunked` framing
+    /// instead of a fixed `Content-Length`; hyper assembles the chunks
+    /// into a single body before invoking our handler, which echoes
+    /// `req.body()` back as the response. Proves the chunked request
+    /// transfer encoding round-trips through `serve_request`'s
+    /// `body.collect().await` correctly.
+    #[test]
+    fn test_server_serve_handler_chunked_request_body_decode() {
+        let _guard = HTTP_TEST_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let src = r#"
+            struct Response { status: i64, body: String }
+
+            fn handle(req: Request) -> Response {
+                Response { status: 200, body: req.body() }
+            }
+
+            fn main() {
+                let _r = Server.serve("127.0.0.1:0", handle);
+                println("server exited unexpectedly");
+            }
+        "#;
+        let Some(rt) = runtime_path() else {
+            eprintln!(
+                "skip: libkarac_runtime.a not built \
+                 (run `cargo build -p karac-runtime --release`)"
+            );
+            return;
+        };
+        std::env::set_var("KARAC_RUNTIME", &rt);
+
+        let pid = std::process::id();
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let exe_path = PathBuf::from(format!("/tmp/karac_http_chunked_{pid}_{nanos}"));
+        if let Err(e) = compile_and_link(src, &exe_path) {
+            panic!("compile/link failed: {e}");
+        }
+
+        let mut child = Command::new(&exe_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("failed to spawn server binary");
+        let stdout = child.stdout.take().expect("child stdout missing");
+        let (port_opt, _join) = await_bound_port(stdout, Duration::from_secs(15));
+        let port = match port_opt {
+            Some(p) => p,
+            None => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = std::fs::remove_file(&exe_path);
+                panic!("server did not emit BOUND_PORT line within timeout");
+            }
+        };
+
+        std::thread::sleep(Duration::from_millis(50));
+        let result = send_chunked_post(port);
+
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = std::fs::remove_file(&exe_path);
+
+        let (status, body) = result.expect("chunked POST failed");
+        assert_eq!(status, 200, "expected 200; body={body:?}");
+        assert_eq!(
+            body, "hello world",
+            "handler's `req.body()` should see the chunks assembled into \
+             `hello world` (proves hyper decoded chunked transfer encoding); \
+             got: {body:?}"
+        );
+    }
+
+    /// Send a POST with `Transfer-Encoding: chunked` body of two
+    /// chunks (`"hello"` + `" world"`). Returns `(status, body)` from
+    /// the response.
+    fn send_chunked_post(port: u16) -> Result<(u16, String), String> {
+        use std::io::{Read, Write};
+
+        let mut stream = std::net::TcpStream::connect(format!("127.0.0.1:{port}"))
+            .map_err(|e| format!("tcp connect: {e}"))?;
+        stream
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_read_timeout: {e}"))?;
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .map_err(|e| format!("set_write_timeout: {e}"))?;
+
+        // Two-chunk body. Chunk size is a hex string, followed by
+        // CRLF, then the chunk bytes, then CRLF. A `0`-length chunk
+        // terminates. Final CRLF after the terminator.
+        let head = "POST /chunked-echo HTTP/1.1\r\nHost: 127.0.0.1\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+        let body = "5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n";
+        stream
+            .write_all(head.as_bytes())
+            .map_err(|e| format!("write head: {e}"))?;
+        stream
+            .write_all(body.as_bytes())
+            .map_err(|e| format!("write body: {e}"))?;
+
+        let mut buf = Vec::new();
+        stream
+            .read_to_end(&mut buf)
+            .map_err(|e| format!("read response: {e}"))?;
+        let text = String::from_utf8_lossy(&buf).into_owned();
+        let mut parts = text.split("\r\n\r\n");
+        let head = parts.next().unwrap_or("");
+        let resp_body = parts.collect::<Vec<_>>().join("\r\n\r\n");
+        let first = head.lines().next().ok_or("empty response")?;
+        let mut tokens = first.split_whitespace();
+        let _proto = tokens.next();
+        let status_str = tokens.next().ok_or("missing status code")?;
+        let status: u16 = status_str
+            .parse()
+            .map_err(|e| format!("bad status code '{status_str}': {e}"))?;
+        Ok((status, resp_body))
+    }
 }
