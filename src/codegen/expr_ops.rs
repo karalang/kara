@@ -155,6 +155,37 @@ impl<'ctx> super::Codegen<'ctx> {
                 }
             }
         }
+        // SoA-laid-out Vec element field read: `entities[i].field`. The
+        // generic struct-field path returns the `i64 0` placeholder for an
+        // Index receiver (it never recurses into `compile_index`), so the
+        // headline SoA access shape is handled explicitly: materialize the
+        // element via `compile_soa_index_read`, then extract the requested
+        // field by its position in the element struct. The direct group-
+        // indexed load that skips materialization entirely is the deferred
+        // optimization sub-slice; this materialize-then-extract form is
+        // semantically identical, just not the cache-optimal lowering.
+        if let ExprKind::Index {
+            object: inner,
+            index,
+        } = &object.kind
+        {
+            if let ExprKind::Identifier(soa_var) = &inner.kind {
+                if let Some(soa) = self.soa_layouts.get(soa_var.as_str()).cloned() {
+                    if let Some(names) = self.struct_field_names.get(&soa.struct_name) {
+                        if let Some(fidx) = names.iter().position(|n| n == field) {
+                            let soa_var = soa_var.clone();
+                            let elem = self
+                                .compile_soa_index_read(&soa_var, index)?
+                                .into_struct_value();
+                            return Ok(self
+                                .builder
+                                .build_extract_value(elem, fidx as u32, field)
+                                .unwrap());
+                        }
+                    }
+                }
+            }
+        }
         // Call-chain field access on a shared-struct return — bug #8.
         // `helper().val` where `helper() -> SharedT` lowers the call to
         // a pointer to the heap object; we GEP into the field, load, then

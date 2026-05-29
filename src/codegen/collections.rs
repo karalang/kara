@@ -16,7 +16,7 @@ use inkwell::values::{BasicValueEnum, PointerValue};
 use inkwell::AddressSpace;
 
 use super::helpers::vec_inner_type_expr;
-use super::state::{AssertedIndexBound, SetOpFilter, VarSlot};
+use super::state::{AssertedIndexBound, SetOpFilter, SoaGroup, VarSlot};
 
 impl<'ctx> super::Codegen<'ctx> {
     /// Compile method calls on `Set[T]` variables. `Set[T]` lowers to
@@ -765,6 +765,21 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
 
+        // SoA-laid-out Vec indexing: `entities[i]` materializes the AoS
+        // element struct from the per-group buffers. Detected by the var
+        // name matching a registered layout (SoA-ness is codegen-only —
+        // the typechecker sees a plain `Vec[Entity]`), mirroring the
+        // method-dispatch check in `compile_indexed_receiver_method`'s
+        // sibling at the SoA `.push()` / `.len()` site. Routed before the
+        // Vec branch because SoA vars are never registered in
+        // `vec_elem_types`; without this they'd fall through to the
+        // "non-array type" error at the tail.
+        if let ExprKind::Identifier(name) = &object.kind {
+            if self.soa_layouts.contains_key(name.as_str()) {
+                return self.compile_soa_index_read(name, index);
+            }
+        }
+
         // Vec variable indexing: route through `compile_vec_index` so both
         // owned and `ref Vec[T]` forms work. The downstream slot.ty branch
         // can't handle ref Vecs — for them slot.ty is `ptr`, not the Vec
@@ -874,6 +889,130 @@ impl<'ctx> super::Codegen<'ctx> {
             .build_load(elem_ty, elem_ptr, "v.elem")
             .unwrap();
         Ok(val)
+    }
+
+    /// Index into a SoA-laid-out Vec variable: `entities[i]`. Materializes
+    /// the AoS element struct on the fly by loading one sub-struct from
+    /// each group buffer at `[i]` and scattering its fields back into the
+    /// element struct at their original positions — the exact inverse of
+    /// the push decomposition in `compile_soa_method`. Bounds-checked
+    /// against the SoA `len`. Returning the whole element value is what
+    /// lets `entities[i].field` reads work through the generic field-
+    /// extract path with no SoA-specific field-access code.
+    ///
+    /// Primitive (non-heap) element fields only: a heap field (`String` /
+    /// `Vec` stored in a group) would have its header copied here exactly
+    /// as `push` copies it on the way in, aliasing the group buffer — and
+    /// SoA per-element drop (the separate "SoA drop semantics" entry) is
+    /// not yet implemented, so heap-bearing SoA elements are out of scope
+    /// until that lands.
+    pub(super) fn compile_soa_index_read(
+        &mut self,
+        name: &str,
+        index: &Expr,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        let soa = self
+            .soa_layouts
+            .get(name)
+            .cloned()
+            .ok_or_else(|| format!("'{}' is not a SoA-laid-out collection", name))?;
+        let slot = self
+            .variables
+            .get(name)
+            .copied()
+            .ok_or_else(|| format!("Undefined SoA variable '{}' in index expression", name))?;
+
+        let has_cold = soa.cold_group.is_some();
+        let soa_ty = self.soa_vec_type(soa.num_groups, has_cold);
+        let len_idx = Self::soa_len_index(soa.num_groups, has_cold);
+        let i64_t = self.context.i64_type();
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+
+        let elem_struct_ty = *self
+            .struct_types
+            .get(&soa.struct_name)
+            .ok_or_else(|| format!("Unknown SoA element struct '{}'", soa.struct_name))?;
+
+        // Bounds check against len: panic if idx >= len.
+        let idx_val = self.compile_expr(index)?.into_int_value();
+        let len_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.len.ptr")
+            .unwrap();
+        let len = self
+            .builder
+            .build_load(i64_t, len_ptr, "soa.len")
+            .unwrap()
+            .into_int_value();
+        let fn_val = self.current_fn.unwrap();
+        let oob_bb = self.context.append_basic_block(fn_val, "soa.idx.oob");
+        let ok_bb = self.context.append_basic_block(fn_val, "soa.idx.ok");
+        let oob = self
+            .builder
+            .build_int_compare(inkwell::IntPredicate::UGE, idx_val, len, "soa.bounds")
+            .unwrap();
+        self.builder
+            .build_conditional_branch(oob, oob_bb, ok_bb)
+            .unwrap();
+        self.builder.position_at_end(oob_bb);
+        self.emit_panic("index out of bounds");
+        self.builder.build_unreachable().unwrap();
+        self.builder.position_at_end(ok_bb);
+
+        // Materialize the element struct: for each group, load its sub-
+        // struct at [idx] and scatter the fields back to their original
+        // positions in the element struct.
+        let mut elem_val = elem_struct_ty.get_undef();
+        let scatter_group = |this: &mut Self,
+                             elem_val: &mut inkwell::values::StructValue<'ctx>,
+                             struct_field_idx: u32,
+                             group: &SoaGroup,
+                             tag: &str| {
+            let group_elem_ty = this.soa_group_elem_type(&soa.struct_name, group);
+            let grp_ptr_ptr = this
+                .builder
+                .build_struct_gep(soa_ty, slot.ptr, struct_field_idx, &format!("{}.ptr", tag))
+                .unwrap();
+            let grp_buf = this
+                .builder
+                .build_load(ptr_ty, grp_ptr_ptr, &format!("{}.buf", tag))
+                .unwrap()
+                .into_pointer_value();
+            let src = unsafe {
+                this.builder
+                    .build_gep(group_elem_ty, grp_buf, &[idx_val], &format!("{}.src", tag))
+                    .unwrap()
+            };
+            let grp_val = this
+                .builder
+                .build_load(group_elem_ty, src, &format!("{}.val", tag))
+                .unwrap()
+                .into_struct_value();
+            for (fi, &dst_idx) in group.field_indices.iter().enumerate() {
+                let field_val = this
+                    .builder
+                    .build_extract_value(grp_val, fi as u32, "gf")
+                    .unwrap();
+                *elem_val = this
+                    .builder
+                    .build_insert_value(*elem_val, field_val, dst_idx as u32, "ef")
+                    .unwrap()
+                    .into_struct_value();
+            }
+        };
+
+        // Hot groups: struct field index == group index.
+        let hot_groups = soa.groups.clone();
+        for (gi, group) in hot_groups.iter().enumerate() {
+            scatter_group(self, &mut elem_val, gi as u32, group, &format!("g{}", gi));
+        }
+        // Cold group: pointer is last, after all hot groups.
+        if let Some(cold) = soa.cold_group.clone() {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            scatter_group(self, &mut elem_val, cold_idx, &cold, "cold");
+        }
+
+        Ok(elem_val.into())
     }
 
     /// Compute the pointer to `vec_var[index]`'s element slot (the GEP

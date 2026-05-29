@@ -4453,6 +4453,130 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_soa_whole_element_matches_aos() {
+        // Whole-element binding `let e = entities[i]` on a SoA-laid-out
+        // Vec[Entity] must materialize exactly the values an AoS
+        // Vec[Entity] (no layout block) produces. Running the identical
+        // program with and without the layout block and asserting equal
+        // output validates both the new SoA read path
+        // (compile_soa_index_read) AND the previously-untestable
+        // push/growth decomposition — 6 pushes cross the cap 0→4→8
+        // realloc boundary for every group buffer, so a mis-reallocated
+        // group would surface as a read mismatch here. Uses whole-element
+        // binding (not direct `entities[i].field`) so the AoS baseline is
+        // valid: direct field-access on an Index receiver is a separate
+        // pre-existing gap for plain-struct Vecs, exercised SoA-side in
+        // `test_e2e_soa_indexed_field_access` below.
+        let body = r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+LAYOUT
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    println(entities.len());
+    let a = entities[0];
+    println(a.x);
+    let b = entities[4];
+    println(b.y);
+    let c = entities[5];
+    println(c.vx);
+    println(c.vy);
+    let e = entities[3];
+    println(e.x);
+    println(e.y);
+    println(e.vx);
+    println(e.vy);
+}
+"#;
+        let soa_src = body.replace(
+            "LAYOUT",
+            "layout entities: Vec[Entity] {\n    group pos { x, y }\n    group vel { vx, vy }\n}",
+        );
+        let aos_src = body.replace("LAYOUT", "");
+
+        let expected = vec!["6", "0", "40", "500", "5000", "3", "30", "300", "3000"];
+
+        if let Some(aos) = run_program(&aos_src) {
+            let lines: Vec<&str> = aos.trim().lines().collect();
+            assert_eq!(lines, expected, "AoS baseline output mismatch");
+        }
+        if let Some(soa) = run_program(&soa_src) {
+            let lines: Vec<&str> = soa.trim().lines().collect();
+            assert_eq!(lines, expected, "SoA read output must match AoS baseline");
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_indexed_field_access() {
+        // The headline SoA access shape `entities[i].field` (direct field
+        // access on an indexed SoA element) — materialize-then-extract via
+        // the compile_field_access SoA branch. Field reads span both hot
+        // groups (pos: x/y, vel: vx/vy) and an index past the first
+        // realloc (i=4, 5).
+        let src = r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx, vy }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, vx: i * 100, vy: i * 1000 });
+        i = i + 1;
+    }
+    println(entities[0].x);
+    println(entities[4].y);
+    println(entities[5].vx);
+    println(entities[5].vy);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["0", "40", "500", "5000"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_index_read_with_cold_group() {
+        // Exercises the cold-group branch of compile_soa_index_read: `vy`
+        // lives in a separate cold allocation, `x`/`y` in one hot group,
+        // `vx` in another. Materializing entities[i] must reassemble
+        // fields from all three buffers in struct order.
+        let src = r#"
+struct Entity { x: i64, y: i64, vx: i64, vy: i64 }
+layout entities: Vec[Entity] {
+    group pos { x, y }
+    group vel { vx }
+    cold { vy }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 5 {
+        entities.push(Entity { x: i, y: i + 1, vx: i + 2, vy: i + 3 });
+        i = i + 1;
+    }
+    let e = entities[4];
+    println(e.x);
+    println(e.y);
+    println(e.vx);
+    println(e.vy);
+    println(entities[2].vy);
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["4", "5", "6", "7", "5"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_of_vec_index_ref_arg() {
         // Regression: passing `stake[idx]` (an aggregate element of a
         // Vec[Vec[T]]) to a `ref Vec[T]` parameter shallow-copied the
