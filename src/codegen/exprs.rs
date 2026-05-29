@@ -1373,7 +1373,373 @@ impl<'ctx> super::Codegen<'ctx> {
 
                 Ok(self.context.i64_type().const_int(0, false).into())
             }
-            _ => Ok(self.context.i64_type().const_int(0, false).into()),
+            // `pop` / `pop_back` / `pop_front` return `Option[Entity]`;
+            // `remove(i)` returns `Entity` directly. All three share the
+            // materialize-then-shift pattern: scatter-read the element
+            // at the removal index from every group buffer into an AoS
+            // element struct (the inverse of push's decompose-and-
+            // scatter), optionally memmove each group's tail left, then
+            // decrement the shared `len`. Heap-owning element fields
+            // are rejected at layout validation (`src/resolver/collect.rs`),
+            // so the scatter read can safely treat field bits as
+            // owned-copy without aliasing concerns.
+            "pop" | "pop_back" | "pop_front" => {
+                let is_front = method == "pop_front";
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.pop.len.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "soa.pop.len")
+                    .unwrap()
+                    .into_int_value();
+
+                let fn_val = self.current_fn.unwrap();
+                let empty_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("soa.{method}.empty"));
+                let some_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("soa.{method}.some"));
+                let merge_bb = self
+                    .context
+                    .append_basic_block(fn_val, &format!("soa.{method}.merge"));
+
+                let zero = i64_t.const_int(0, false);
+                let one = i64_t.const_int(1, false);
+                let is_empty = self
+                    .builder
+                    .build_int_compare(inkwell::IntPredicate::EQ, len, zero, "soa.pop.is_empty")
+                    .unwrap();
+                self.builder
+                    .build_conditional_branch(is_empty, empty_bb, some_bb)
+                    .unwrap();
+
+                // Empty: no shift, no len decrement.
+                self.builder.position_at_end(empty_bb);
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Some: materialize at read_idx (0 for front, len-1 for back).
+                self.builder.position_at_end(some_bb);
+                let read_idx = if is_front {
+                    zero
+                } else {
+                    self.builder
+                        .build_int_sub(len, one, "soa.pop.last_idx")
+                        .unwrap()
+                };
+                let elem_val = self.soa_materialize_at(soa, slot, soa_ty, read_idx);
+
+                // pop_front: shift each group's [1..len] left by one
+                // element. pop_back: no shift needed (the trailing
+                // slot just falls out of `len`).
+                if is_front {
+                    let tail_count = self
+                        .builder
+                        .build_int_sub(len, one, "soa.pop_front.tail_count")
+                        .unwrap();
+                    self.soa_shift_groups_left(soa, slot, soa_ty, one, zero, tail_count);
+                }
+
+                let new_len = self
+                    .builder
+                    .build_int_sub(len, one, "soa.pop.new_len")
+                    .unwrap();
+                self.builder.build_store(len_ptr, new_len).unwrap();
+                let some_payload_words = self.coerce_to_payload_words(elem_val.into(), 3)?;
+                let some_end_bb = self.builder.get_insert_block().unwrap();
+                self.builder.build_unconditional_branch(merge_bb).unwrap();
+
+                // Merge: build Option struct via phi on tag + payload words.
+                self.builder.position_at_end(merge_bb);
+                let option_ty = self.enum_layouts["Option"].llvm_type;
+                let tag_phi = self.builder.build_phi(i64_t, "soa.pop.opt.tag").unwrap();
+                tag_phi.add_incoming(&[(&zero, empty_bb), (&one, some_end_bb)]);
+                let mut word_phis: Vec<inkwell::values::PhiValue<'ctx>> =
+                    Vec::with_capacity(some_payload_words.len());
+                for (i, w) in some_payload_words.iter().enumerate() {
+                    let word_phi = self
+                        .builder
+                        .build_phi(i64_t, &format!("soa.pop.opt.w{i}"))
+                        .unwrap();
+                    word_phi.add_incoming(&[(&zero, empty_bb), (w, some_end_bb)]);
+                    word_phis.push(word_phi);
+                }
+                let mut agg: BasicValueEnum<'ctx> = option_ty.get_undef().into();
+                agg = self
+                    .builder
+                    .build_insert_value(
+                        agg.into_struct_value(),
+                        tag_phi.as_basic_value(),
+                        0,
+                        "soa.pop.opt.tag.ins",
+                    )
+                    .unwrap()
+                    .into_struct_value()
+                    .into();
+                for (i, phi) in word_phis.iter().enumerate() {
+                    agg = self
+                        .builder
+                        .build_insert_value(
+                            agg.into_struct_value(),
+                            phi.as_basic_value(),
+                            (i + 1) as u32,
+                            &format!("soa.pop.opt.w{i}.ins"),
+                        )
+                        .unwrap()
+                        .into_struct_value()
+                        .into();
+                }
+                Ok(agg)
+            }
+            // `remove(idx) -> T` — materialize at `idx`, shift the tail
+            // down in every group buffer, decrement len, return the
+            // removed element. Mirrors plain `Vec.remove` (no Option
+            // wrap, no bounds check — caller responsibility, matching
+            // Rust's contract).
+            "remove" => {
+                if args.is_empty() {
+                    return Err("SoA Vec.remove requires an index argument".to_string());
+                }
+                let idx_val = self.compile_expr(&args[0].value)?.into_int_value();
+                let len_ptr = self
+                    .builder
+                    .build_struct_gep(soa_ty, slot.ptr, len_idx, "soa.remove.len.ptr")
+                    .unwrap();
+                let len = self
+                    .builder
+                    .build_load(i64_t, len_ptr, "soa.remove.len")
+                    .unwrap()
+                    .into_int_value();
+                let one = i64_t.const_int(1, false);
+
+                let elem_val = self.soa_materialize_at(soa, slot, soa_ty, idx_val);
+
+                // memmove(group[idx], group[idx+1], (len - 1 - idx) * sizeof(group_elem))
+                let new_len = self
+                    .builder
+                    .build_int_sub(len, one, "soa.remove.new_len")
+                    .unwrap();
+                let tail_count = self
+                    .builder
+                    .build_int_sub(new_len, idx_val, "soa.remove.tail_count")
+                    .unwrap();
+                let next_idx = self
+                    .builder
+                    .build_int_add(idx_val, one, "soa.remove.next_idx")
+                    .unwrap();
+                self.soa_shift_groups_left(soa, slot, soa_ty, next_idx, idx_val, tail_count);
+
+                self.builder.build_store(len_ptr, new_len).unwrap();
+                Ok(elem_val.into())
+            }
+            // Catch-all so unsupported methods don't silently return 0
+            // (the pre-2026-05-29 shape — masked many real codegen
+            // gaps). New methods on SoA Vec must add a dedicated arm
+            // above.
+            other => Err(format!(
+                "SoA Vec method '{other}' is not implemented; supported methods: \
+                 len, push, pop, pop_back, pop_front, remove"
+            )),
         }
+    }
+
+    /// Materialize the AoS element struct at `idx_val` in a SoA-laid-out
+    /// Vec. Scatter-loads each group's sub-struct at `[idx_val]` and
+    /// re-assembles fields into the original struct positions, the
+    /// inverse of `compile_soa_method`'s push decomposition and the
+    /// same shape used by `compile_soa_index_read`. Caller is
+    /// responsible for bounds-checking `idx_val < len` — the helper
+    /// emits no bounds check itself.
+    fn soa_materialize_at(
+        &mut self,
+        soa: &SoaLayout,
+        slot: VarSlot<'ctx>,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        idx_val: inkwell::values::IntValue<'ctx>,
+    ) -> inkwell::values::StructValue<'ctx> {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let elem_struct_ty = *self
+            .struct_types
+            .get(&soa.struct_name)
+            .expect("SoA element struct missing in struct_types");
+        let mut elem_val = elem_struct_ty.get_undef();
+        let hot_groups = soa.groups.clone();
+        for (gi, group) in hot_groups.iter().enumerate() {
+            self.soa_scatter_group_into(
+                &mut elem_val,
+                soa,
+                slot,
+                soa_ty,
+                ptr_ty,
+                gi as u32,
+                group,
+                idx_val,
+                &format!("g{}", gi),
+            );
+        }
+        if let Some(cold) = soa.cold_group.clone() {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            self.soa_scatter_group_into(
+                &mut elem_val,
+                soa,
+                slot,
+                soa_ty,
+                ptr_ty,
+                cold_idx,
+                &cold,
+                idx_val,
+                "cold",
+            );
+        }
+        elem_val
+    }
+
+    /// Scatter-load one group's sub-struct at `[idx_val]` and insert
+    /// each field back into the AoS element struct at its original
+    /// position. Helper for `soa_materialize_at`.
+    #[allow(clippy::too_many_arguments)]
+    fn soa_scatter_group_into(
+        &mut self,
+        elem_val: &mut inkwell::values::StructValue<'ctx>,
+        soa: &SoaLayout,
+        slot: VarSlot<'ctx>,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        struct_field_idx: u32,
+        group: &SoaGroup,
+        idx_val: inkwell::values::IntValue<'ctx>,
+        tag: &str,
+    ) {
+        let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+        let grp_ptr_ptr = self
+            .builder
+            .build_struct_gep(soa_ty, slot.ptr, struct_field_idx, &format!("{}.ptr", tag))
+            .unwrap();
+        let grp_buf = self
+            .builder
+            .build_load(ptr_ty, grp_ptr_ptr, &format!("{}.buf", tag))
+            .unwrap()
+            .into_pointer_value();
+        let src = unsafe {
+            self.builder
+                .build_gep(group_elem_ty, grp_buf, &[idx_val], &format!("{}.src", tag))
+                .unwrap()
+        };
+        let grp_val = self
+            .builder
+            .build_load(group_elem_ty, src, &format!("{}.val", tag))
+            .unwrap()
+            .into_struct_value();
+        for (fi, &dst_idx) in group.field_indices.iter().enumerate() {
+            let field_val = self
+                .builder
+                .build_extract_value(grp_val, fi as u32, "gf")
+                .unwrap();
+            *elem_val = self
+                .builder
+                .build_insert_value(*elem_val, field_val, dst_idx as u32, "ef")
+                .unwrap()
+                .into_struct_value();
+        }
+    }
+
+    /// Shift each group's tail elements left by one element-slot:
+    /// `memmove(group + dst_idx, group + src_idx, count * sizeof(group_elem))`.
+    /// Used by `pop_front` (src_idx=1, dst_idx=0, count=len-1) and
+    /// `remove` (src_idx=idx+1, dst_idx=idx, count=len-1-idx). Each
+    /// group has its own element type and size, so the byte count is
+    /// computed per group inside the helper.
+    fn soa_shift_groups_left(
+        &mut self,
+        soa: &SoaLayout,
+        slot: VarSlot<'ctx>,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        src_idx: inkwell::values::IntValue<'ctx>,
+        dst_idx: inkwell::values::IntValue<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+    ) {
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let hot_groups = soa.groups.clone();
+        for (gi, group) in hot_groups.iter().enumerate() {
+            self.soa_shift_one_group_left(
+                soa,
+                slot,
+                soa_ty,
+                ptr_ty,
+                gi as u32,
+                group,
+                src_idx,
+                dst_idx,
+                count,
+                &format!("g{}", gi),
+            );
+        }
+        if let Some(cold) = soa.cold_group.clone() {
+            let cold_idx = Self::soa_cold_ptr_index(soa.num_groups);
+            self.soa_shift_one_group_left(
+                soa, slot, soa_ty, ptr_ty, cold_idx, &cold, src_idx, dst_idx, count, "cold",
+            );
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn soa_shift_one_group_left(
+        &mut self,
+        soa: &SoaLayout,
+        slot: VarSlot<'ctx>,
+        soa_ty: inkwell::types::StructType<'ctx>,
+        ptr_ty: inkwell::types::PointerType<'ctx>,
+        struct_field_idx: u32,
+        group: &SoaGroup,
+        src_idx: inkwell::values::IntValue<'ctx>,
+        dst_idx: inkwell::values::IntValue<'ctx>,
+        count: inkwell::values::IntValue<'ctx>,
+        tag: &str,
+    ) {
+        let group_elem_ty = self.soa_group_elem_type(&soa.struct_name, group);
+        let elem_size = group_elem_ty.size_of().unwrap();
+        let byte_count = self
+            .builder
+            .build_int_mul(count, elem_size, &format!("{}.shift.bytes", tag))
+            .unwrap();
+        let grp_ptr_ptr = self
+            .builder
+            .build_struct_gep(
+                soa_ty,
+                slot.ptr,
+                struct_field_idx,
+                &format!("{}.shift.ptr", tag),
+            )
+            .unwrap();
+        let grp_buf = self
+            .builder
+            .build_load(ptr_ty, grp_ptr_ptr, &format!("{}.shift.buf", tag))
+            .unwrap()
+            .into_pointer_value();
+        let src = unsafe {
+            self.builder
+                .build_gep(
+                    group_elem_ty,
+                    grp_buf,
+                    &[src_idx],
+                    &format!("{}.shift.src", tag),
+                )
+                .unwrap()
+        };
+        let dst = unsafe {
+            self.builder
+                .build_gep(
+                    group_elem_ty,
+                    grp_buf,
+                    &[dst_idx],
+                    &format!("{}.shift.dst", tag),
+                )
+                .unwrap()
+        };
+        self.builder
+            .build_memmove(dst, 8, src, 8, byte_count)
+            .unwrap();
     }
 }

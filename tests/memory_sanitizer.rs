@@ -2639,6 +2639,45 @@ fn main() {
     }
 
     #[test]
+    fn asan_soa_pop_remove_no_leak_or_uaf() {
+        // Exercises every SoA mutator together (pop, pop_front, remove)
+        // alongside the scope-exit FreeSoaGroups cleanup. The shift-
+        // memmoves run against the same group buffers the cleanup will
+        // later free, so a wrong shift pointer / wrong byte count
+        // would surface as ASAN heap-buffer-overflow or UAF. Two hot
+        // groups + cold ensures the per-group shift loop covers each
+        // path. (Primitive fields only — heap-owning fields are
+        // rejected at layout validation.)
+        assert_clean_asan_run(
+            r#"
+struct Entity { x: i64, y: i64, hp: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    let mut i: i64 = 0;
+    while i < 6 {
+        entities.push(Entity { x: i, y: i * 10, hp: i * 100, label: i * 1000 });
+        i = i + 1;
+    }
+    let _front = entities.pop_front();
+    let _middle = entities.remove(2);
+    match entities.pop() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    println(entities.len());
+}
+"#,
+            &["5", "3"],
+            "soa_pop_remove_no_leak_or_uaf",
+        );
+    }
+
+    #[test]
     fn asan_soa_drop_empty_collection() {
         // Empty SoA — never pushed, so cap stays 0 and the cleanup
         // should short-circuit at the `is_heap` guard without freeing

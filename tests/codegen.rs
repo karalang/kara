@@ -4636,6 +4636,152 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_soa_pop_returns_last_element() {
+        // SoA `pop` materializes the trailing element across every
+        // group (and the cold buffer, if present) by scatter-reading
+        // each group's sub-struct at len-1, then decrements the shared
+        // len. The returned value is wrapped in `Option[T]`.
+        let src = r#"
+struct Entity { x: i64, y: i64, hp: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    group combat { hp }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, hp: 100 });
+    entities.push(Entity { x: 2, y: 20, hp: 200 });
+    entities.push(Entity { x: 3, y: 30, hp: 300 });
+    println(entities.len());
+    match entities.pop() {
+        Some(e) => {
+            println(e.x);
+            println(e.y);
+            println(e.hp);
+        }
+        None => println(-1),
+    }
+    println(entities.len());
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["3", "3", "30", "300", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_pop_on_empty_returns_none() {
+        // Empty SoA: `pop` must return `None` and leave len untouched
+        // (= 0). Exercises the cap=0 / len=0 short-circuit alongside
+        // the Option-tag merge.
+        let src = r#"
+struct Entity { x: i64, y: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    match entities.pop() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    println(entities.len());
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["-1", "0"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_pop_front_shifts_each_group() {
+        // `pop_front` materializes the head element, then memmoves the
+        // tail of every hot group + cold group left by one slot. After
+        // the shift, the new head must match what was at index 1.
+        // Multiple pops verify the per-group shift is consistent across
+        // calls (a bug that shifted only the first group would surface
+        // as misaligned reads on later pops).
+        let src = r#"
+struct Entity { x: i64, y: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, label: 100 });
+    entities.push(Entity { x: 2, y: 20, label: 200 });
+    entities.push(Entity { x: 3, y: 30, label: 300 });
+    entities.push(Entity { x: 4, y: 40, label: 400 });
+    match entities.pop_front() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    let head = entities[0];
+    println(head.x);
+    println(head.y);
+    println(head.label);
+    match entities.pop_front() {
+        Some(e) => println(e.x),
+        None => println(-1),
+    }
+    let head2 = entities[0];
+    println(head2.x);
+    println(head2.label);
+    println(entities.len());
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "2", "20", "200", "2", "3", "300", "2"]);
+        }
+    }
+
+    #[test]
+    fn test_e2e_soa_remove_at_index_shifts_tail() {
+        // `remove(idx)` materializes the element at idx, then memmoves
+        // the (len-1-idx) tail elements down by one across every group
+        // + cold. Returns the removed element directly (no Option
+        // wrap) per plain `Vec.remove`'s contract.
+        let src = r#"
+struct Entity { x: i64, y: i64, label: i64 }
+layout entities: Vec[Entity] {
+    group physics { x, y }
+    cold { label }
+}
+fn main() {
+    let mut entities: Vec[Entity] = Vec.new();
+    entities.push(Entity { x: 1, y: 10, label: 100 });
+    entities.push(Entity { x: 2, y: 20, label: 200 });
+    entities.push(Entity { x: 3, y: 30, label: 300 });
+    entities.push(Entity { x: 4, y: 40, label: 400 });
+    let removed = entities.remove(1);
+    println(removed.x);
+    println(removed.y);
+    println(removed.label);
+    let now0 = entities[0];
+    let now1 = entities[1];
+    let now2 = entities[2];
+    println(now0.x);
+    println(now1.x);
+    println(now1.label);
+    println(now2.x);
+    println(now2.label);
+    println(entities.len());
+}
+"#;
+        if let Some(out) = run_program(src) {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(
+                lines,
+                vec!["2", "20", "200", "1", "3", "300", "4", "400", "3"]
+            );
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_of_vec_index_ref_arg() {
         // Regression: passing `stake[idx]` (an aggregate element of a
         // Vec[Vec[T]]) to a `ref Vec[T]` parameter shallow-copied the
