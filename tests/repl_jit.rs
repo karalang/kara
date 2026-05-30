@@ -118,3 +118,105 @@ fn repl_jit_runs_let_bindings() {
     assert!(r.errors.is_empty(), "use: {:?}", r.errors);
     assert_eq!(r.stdout.trim(), "8");
 }
+
+#[test]
+fn repl_jit_declare_only_linkage_across_three_cells() {
+    // Slice c-repl.B.4 latent-bug probe: cell 1 defines a fn via the
+    // pure-items path; cell 2 runs through JIT and registers the fn
+    // in `jit_installed_fns` (so its body is now live in the runner's
+    // JITDylib); cell 3 hits the declare-only emission path for that
+    // fn. B.4's `declare_function` applies `Linkage::Internal` for
+    // non-pub fns, but Internal linkage requires a body in the SAME
+    // module — for declare-only it must be External. Before the fix,
+    // cell 3 fails LLVM verifier with `Global is external, but doesn't
+    // have external or weak linkage!`. Existing B.4 tests are 2-cell
+    // so they never tripped this. Fixed in B.5.1 alongside the
+    // value-snapshot port (the snapshot test depends on this path).
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("fn note() -> i64 { 42 }");
+    assert!(r.errors.is_empty(), "cell 1 (item): {:?}", r.errors);
+    let r = s.evaluate_cell_captured("println(note());");
+    assert!(r.errors.is_empty(), "cell 2 (use): {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "42");
+    let r = s.evaluate_cell_captured("println(note() + 1);");
+    assert!(r.errors.is_empty(), "cell 3 (declare-only): {:?}", r.errors);
+    assert_eq!(r.stdout.trim(), "43");
+}
+
+#[test]
+fn repl_jit_let_rhs_is_not_re_evaluated() {
+    // Slice c-repl.B.5.1 — value-snapshot port for primitive let
+    // bindings. Cell 1 binds `let x = side_effecting_fn()`; cell 2
+    // references `x`. The interpreter caches the bound value, so
+    // cell 2 does NOT re-run `side_effecting_fn()`. Before B.5.1 the
+    // JIT path re-evaluated the RHS in cell 2 (the synthetic source
+    // re-emits the let into cell 2's main, and codegen lowered it
+    // verbatim). B.5.1 routes primitive-typed lets through a per-
+    // binding LLVM global as a cross-cell side channel: cell 1's
+    // codegen emits a store to the global; cell 2's codegen replays
+    // the let by loading from the same global instead of re-running
+    // the original RHS. End result: `side_effecting_fn`'s `println`
+    // fires exactly once, matching the interpreter path.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured("fn note() -> i64 { println(\"called\"); 42 }");
+    assert!(r.errors.is_empty(), "fn def: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let x = note();");
+    assert!(r.errors.is_empty(), "let cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "called",
+        "let cell should print the side effect once",
+    );
+    let r = s.evaluate_cell_captured("println(x);");
+    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+    assert_eq!(
+        r.stdout.trim(),
+        "42",
+        "use cell should print only `x`'s cached value — `note()` must NOT re-run",
+    );
+}
+
+#[test]
+fn repl_jit_snapshot_covers_f64_bool_char() {
+    // Slice c-repl.B.5.1 — verify the snapshot replay path handles
+    // every supported primitive kind. Each `tag` fn fires a side-
+    // effect on first eval; the replay cell should print only the
+    // cached value, not the tag.
+    let mut s = Session::new();
+    enable_jit(&mut s);
+    let r = s.evaluate_cell_captured(
+        "fn fnote() -> f64 { println(\"fcalled\"); 3.5 } \
+         fn bnote() -> bool { println(\"bcalled\"); true } \
+         fn cnote() -> char { println(\"ccalled\"); 'k' }",
+    );
+    assert!(r.errors.is_empty(), "items: {:?}", r.errors);
+    let r = s.evaluate_cell_captured("let f = fnote(); let b = bnote(); let c = cnote();");
+    assert!(r.errors.is_empty(), "bind cell: {:?}", r.errors);
+    let stdout = r.stdout.trim();
+    assert!(
+        stdout.contains("fcalled") && stdout.contains("bcalled") && stdout.contains("ccalled"),
+        "bind cell should print all three side effects, got: {:?}",
+        stdout,
+    );
+    // Replay cell: every RHS must be skipped, so none of the tag
+    // strings should fire. Printing each value confirms the global
+    // load delivered the captured datum (not the zero initializer).
+    let r = s.evaluate_cell_captured("println(f); println(b); println(c);");
+    assert!(r.errors.is_empty(), "use cell: {:?}", r.errors);
+    let stdout = r.stdout.trim();
+    assert!(
+        !stdout.contains("fcalled") && !stdout.contains("bcalled") && !stdout.contains("ccalled"),
+        "replay should skip every RHS; stdout: {:?}",
+        stdout,
+    );
+    // Kāra's `println` on a `char` value prints the Unicode codepoint
+    // as an integer (107 == 'k'), not the glyph. The captured-value
+    // assertion checks the codepoint.
+    assert!(
+        stdout.contains("3.5") && stdout.contains("true") && stdout.contains("107"),
+        "replay should bind each name to its captured value; stdout: {:?}",
+        stdout,
+    );
+}

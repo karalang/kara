@@ -118,6 +118,30 @@ pub fn compile_to_ir_with_options(
     )
 }
 
+/// Slice c-repl.B.5.1: primitive types eligible for REPL value-
+/// snapshotting. A top-level `let name = expr` binding whose Kāra
+/// type lowers to one of these forms can have its bound value
+/// stashed in an LLVM global at first emission and replayed (via
+/// a load from that global, skipping the original RHS) by every
+/// subsequent cell. The supported set is intentionally narrow:
+/// these are the types with trivial copy semantics and a fixed
+/// width that round-trips through a single LLVM `load` / `store`
+/// pair. String and the aggregate types (Vec, Map, struct, …)
+/// would each need their own per-type stash format and ownership
+/// handshake; they're deferred to follow-on slices.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SnapshotPrimKind {
+    /// Kāra `i64`.
+    I64,
+    /// Kāra `f64`.
+    F64,
+    /// Kāra `bool` — lowered as i1 in slot, but the global stashes
+    /// as i8 so the storage width is portable.
+    Bool,
+    /// Kāra `Char` — lowered as i32 (Unicode scalar value).
+    Char,
+}
+
 /// Slice c-repl.B.4: REPL-cell codegen entry for the JIT path.
 ///
 /// `declare_only_fns`: names of free functions whose bodies are
@@ -141,10 +165,54 @@ pub fn compile_to_ir_for_repl_cell(
     declare_only_fns: &std::collections::HashSet<String>,
     main_symbol: &str,
 ) -> Result<String, String> {
+    compile_to_ir_for_repl_cell_with_snapshots(
+        program,
+        declare_only_fns,
+        main_symbol,
+        &HashMap::new(),
+        &HashMap::new(),
+    )
+}
+
+/// Slice c-repl.B.5.1: extended variant of
+/// [`compile_to_ir_for_repl_cell`] that threads two snapshot sets
+/// through to the codegen pass.
+///
+/// `snapshot_capture`: top-level `let <name> = <expr>` bindings in
+///   the current cell whose post-bind value should be stored to an
+///   externally-visible LLVM global `__karac_repl_snapshot_<name>`.
+///   The original RHS still runs (this is the binding's first
+///   evaluation in the session). Subsequent cells will discover
+///   the global via `snapshot_replay`.
+///
+/// `snapshot_replay`: top-level `let <name> = <expr>` bindings
+///   whose RHS should be SKIPPED in this cell's codegen — the
+///   bound value is loaded from `__karac_repl_snapshot_<name>`
+///   (declared external in this module) instead. The synthetic
+///   source still carries the let stmt so resolver/typechecker
+///   accept downstream references to the binding.
+///
+/// Mutual exclusion: a name appears in at most one of the two maps
+/// per cell; replay wins when the parent's set-builder sees both
+/// possible (the binding was both replayed AND newly defined in
+/// the same cell, which Kāra's resolver rejects anyway).
+///
+/// The original [`compile_to_ir_for_repl_cell`] entry delegates here
+/// with empty snapshot maps; non-REPL callers don't need to know
+/// this variant exists.
+pub fn compile_to_ir_for_repl_cell_with_snapshots(
+    program: &Program,
+    declare_only_fns: &std::collections::HashSet<String>,
+    main_symbol: &str,
+    snapshot_capture: &HashMap<String, SnapshotPrimKind>,
+    snapshot_replay: &HashMap<String, SnapshotPrimKind>,
+) -> Result<String, String> {
     let context = Context::create();
     let mut cg = Codegen::new(&context, "karac_repl_cell");
     cg.declare_only_fns = declare_only_fns.clone();
     cg.main_symbol_override = Some(main_symbol.to_string());
+    cg.snapshot_capture = snapshot_capture.clone();
+    cg.snapshot_replay = snapshot_replay.clone();
     cg.compile_program(program)?;
     Ok(cg.module.print_to_string().to_string())
 }
@@ -1313,6 +1381,31 @@ pub(super) struct Codegen<'ctx> {
     /// `None` everywhere else preserves the standalone-binary
     /// `int main(void)` shape.
     pub(crate) main_symbol_override: Option<String>,
+    /// Slice c-repl.B.5.1: REPL value-snapshot capture set. Maps a
+    /// top-level `let <name> = <expr>` binding name (where `<name>`
+    /// is a single-binding pattern) to the primitive type its RHS
+    /// evaluates to. Codegen emits the let body unchanged AND a
+    /// post-bind store of the bound value to an LLVM global named
+    /// `__karac_repl_snapshot_<name>`. Subsequent cells in the same
+    /// REPL session can replay the value from that global rather
+    /// than re-evaluating the original RHS — important when the RHS
+    /// has side effects (`let log = read_file("big.json")` should
+    /// not reread the file on every cell that uses `log`). Empty
+    /// in every non-REPL codegen entry. Mutually exclusive with
+    /// `snapshot_replay` per binding name (the parent assembles the
+    /// two sets so they never overlap; replay always wins).
+    pub(crate) snapshot_capture: HashMap<String, SnapshotPrimKind>,
+    /// Slice c-repl.B.5.1: REPL value-snapshot replay set. Maps a
+    /// top-level `let <name> = <expr>` binding name to its primitive
+    /// type. When the codegen pass encounters such a binding, it
+    /// SKIPS the original RHS, emits a load from the matching
+    /// `__karac_repl_snapshot_<name>` global (declared as external
+    /// in this module since the previous cell defined it), and
+    /// binds the loaded value to the pattern. The synthetic source
+    /// still carries the original `let <name> = <expr>` text — the
+    /// resolver / typechecker need it to typecheck downstream uses
+    /// — but codegen never lowers the original `<expr>`.
+    pub(crate) snapshot_replay: HashMap<String, SnapshotPrimKind>,
     /// Per-pub-fn slot index in `@karac_hotswap_table`, populated as
     /// pub function declarations are emitted. The slot list is also
     /// kept ordered in `hot_swap_fns` so the module-init ctor can
@@ -2956,6 +3049,8 @@ impl<'ctx> Codegen<'ctx> {
             hot_swap_enabled: false,
             declare_only_fns: std::collections::HashSet::new(),
             main_symbol_override: None,
+            snapshot_capture: HashMap::new(),
+            snapshot_replay: HashMap::new(),
             hot_swap_slots: HashMap::new(),
             hot_swap_fns: Vec::new(),
         }

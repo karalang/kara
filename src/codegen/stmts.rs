@@ -12,8 +12,9 @@ use std::collections::{HashMap, HashSet};
 use crate::ast::*;
 use crate::concurrency::ParallelGroup;
 
+use inkwell::module::Linkage;
 use inkwell::types::BasicTypeEnum;
-use inkwell::values::BasicValueEnum;
+use inkwell::values::{BasicValue, BasicValueEnum, GlobalValue};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 
@@ -701,6 +702,20 @@ impl<'ctx> super::Codegen<'ctx> {
     }
 
     pub(super) fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
+        // Slice c-repl.B.5.1: REPL value-snapshot replay short-circuit.
+        // When this stmt is a top-level `let <name> = <expr>` whose
+        // binding name is in `snapshot_replay`, skip the original
+        // RHS entirely and bind `<name>` to a load from the cell-
+        // spanning `__karac_repl_snapshot_<name>` global instead. The
+        // prior cell's codegen captured the value into that global,
+        // so the binding sees the same value the user would have got
+        // from re-evaluating the RHS — minus the RHS's side effects.
+        // This closes the interpreter-vs-JIT semantic gap for
+        // primitive-typed lets (see slice c-repl.B.5 design).
+        if self.try_compile_snapshot_replay(stmt)? {
+            return Ok(());
+        }
+
         // Detect `let _ = m.insert(k, v)` / bare `m.insert(k, v);` where V
         // is a shared struct/enum. The flag is consumed by the `insert`
         // arm of `compile_map_method` to emit a follow-up rc_dec on the
@@ -1613,6 +1628,16 @@ impl<'ctx> super::Codegen<'ctx> {
                         }
                     }
                 }
+                // Slice c-repl.B.5.1: REPL value-snapshot capture site.
+                // After the binding's slot is alloca'd + populated, copy
+                // the bound value into the cell-spanning
+                // `__karac_repl_snapshot_<name>` global so subsequent
+                // cells can replay the value without re-evaluating the
+                // original RHS. No-op when the binding name is not in
+                // `snapshot_capture` (every non-REPL build, plus REPL
+                // cells whose binding doesn't qualify for snapshotting
+                // — non-primitive type, destructuring pattern, etc.).
+                self.try_emit_snapshot_capture(pattern);
                 Ok(())
                 // (`Set.new()` and `Map.new()` register their own
                 // `FreeMapHandle` cleanup inside `compile_set_new_stmt` /
@@ -2108,6 +2133,206 @@ impl<'ctx> super::Codegen<'ctx> {
             }
             _ => Ok(()),
         }
+    }
+
+    // ── Slice c-repl.B.5.1: REPL value-snapshot helpers ─────────────────
+    //
+    // Routes top-level `let <name> = <expr>` lets through a per-binding
+    // LLVM global as a cross-cell side channel. Cell N (capture) defines
+    // `@__karac_repl_snapshot_<name>` with External linkage and stores
+    // the bound value into it just after `bind_pattern`. Cell N+1
+    // (replay) declares the same symbol as external and emits a load
+    // from it, skipping the original RHS. The JIT linker resolves both
+    // references through the shared JITDylib's symbol table — the
+    // mechanism mirrors slice B.4's function declare-only path but for
+    // data, not code.
+    //
+    // Caveats baked into the design:
+    //   * Single-binding `PatternKind::Binding` only. Destructuring lets
+    //     (`let (a, b) = …`, struct patterns, slice patterns) fall
+    //     through to normal RHS evaluation — keyed on a single name
+    //     doesn't cover them, mirrors the interpreter's snapshot
+    //     classification (`parse_let_binding_names`).
+    //   * Primitive types only (i64, f64, bool, char). String /
+    //     aggregates would need a per-type stash format + ownership
+    //     handshake; deferred to follow-on slices.
+
+    /// Short-circuit `compile_stmt` when this stmt is a top-level
+    /// `let <name> = <expr>` whose binding name is in
+    /// `snapshot_replay`. Emits a load from the cell-spanning global
+    /// `__karac_repl_snapshot_<name>` into the binding's slot and
+    /// returns `Ok(true)`, instructing the caller to skip the rest of
+    /// the per-stmt dispatch (including the original RHS lowering).
+    /// Returns `Ok(false)` for every non-replay stmt; non-REPL builds
+    /// always take the false arm because `snapshot_replay` is empty.
+    fn try_compile_snapshot_replay(&mut self, stmt: &Stmt) -> Result<bool, String> {
+        let StmtKind::Let { pattern, .. } = &stmt.kind else {
+            return Ok(false);
+        };
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return Ok(false);
+        };
+        let Some(&kind) = self.snapshot_replay.get(name) else {
+            return Ok(false);
+        };
+
+        let global = self.get_or_declare_snapshot_global(name, kind);
+        let llvm_ty = self.snapshot_storage_type(kind);
+        let loaded = self
+            .builder
+            .build_load(
+                llvm_ty,
+                global.as_pointer_value(),
+                &format!("snap_load_{name}"),
+            )
+            .map_err(|e| format!("snapshot load: {e}"))?;
+        let bound_val = self.snapshot_storage_to_binding(kind, loaded)?;
+        self.bind_pattern(pattern, bound_val)?;
+        Ok(true)
+    }
+
+    /// Mirror of `try_compile_snapshot_replay` for the capture side.
+    /// Called from the bottom of the `StmtKind::Let` arm just after
+    /// `bind_pattern` has alloca'd + populated the binding's slot.
+    /// Loads the slot's value, converts it to the storage form, and
+    /// stores into `__karac_repl_snapshot_<name>`. No-op when the
+    /// binding is not in `snapshot_capture` (every non-REPL build
+    /// passes through here without effect because the map is empty).
+    fn try_emit_snapshot_capture(&mut self, pattern: &Pattern) {
+        let PatternKind::Binding(name) = &pattern.kind else {
+            return;
+        };
+        let Some(&kind) = self.snapshot_capture.get(name) else {
+            return;
+        };
+        let Some(slot) = self.variables.get(name).copied() else {
+            return;
+        };
+
+        let global = self.get_or_define_snapshot_global(name, kind);
+        let loaded =
+            match self
+                .builder
+                .build_load(slot.ty, slot.ptr, &format!("snap_capture_{name}"))
+            {
+                Ok(v) => v,
+                Err(_) => return,
+            };
+        let stored = match self.snapshot_binding_to_storage(kind, loaded) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let _ = self.builder.build_store(global.as_pointer_value(), stored);
+    }
+
+    /// LLVM storage type for a snapshot global. Distinct from the
+    /// binding-slot LLVM type for `Bool` (slot is i1, storage is i8)
+    /// so the global's width is portable across cells that may load
+    /// it through a different codegen invocation; every other kind
+    /// uses the same width as the slot.
+    fn snapshot_storage_type(&self, kind: super::SnapshotPrimKind) -> BasicTypeEnum<'ctx> {
+        match kind {
+            super::SnapshotPrimKind::I64 => self.context.i64_type().into(),
+            super::SnapshotPrimKind::F64 => self.context.f64_type().into(),
+            super::SnapshotPrimKind::Bool => self.context.i8_type().into(),
+            super::SnapshotPrimKind::Char => self.context.i32_type().into(),
+        }
+    }
+
+    /// Convert a value loaded from the snapshot global into the LLVM
+    /// type the binding's slot expects. Identity for i64/f64/char;
+    /// i8 → i1 for Bool.
+    fn snapshot_storage_to_binding(
+        &self,
+        kind: super::SnapshotPrimKind,
+        loaded: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match kind {
+            super::SnapshotPrimKind::I64
+            | super::SnapshotPrimKind::F64
+            | super::SnapshotPrimKind::Char => Ok(loaded),
+            super::SnapshotPrimKind::Bool => {
+                let i8_val = loaded.into_int_value();
+                let zero = self.context.i8_type().const_zero();
+                let i1 = self
+                    .builder
+                    .build_int_compare(IntPredicate::NE, i8_val, zero, "snap_to_i1")
+                    .map_err(|e| format!("snapshot bool->i1: {e}"))?;
+                Ok(i1.as_basic_value_enum())
+            }
+        }
+    }
+
+    /// Inverse of `snapshot_storage_to_binding`: convert a slot-loaded
+    /// value into the storage representation. Bool gets z-extended
+    /// i1 → i8; every other kind passes through.
+    fn snapshot_binding_to_storage(
+        &self,
+        kind: super::SnapshotPrimKind,
+        loaded: BasicValueEnum<'ctx>,
+    ) -> Result<BasicValueEnum<'ctx>, String> {
+        match kind {
+            super::SnapshotPrimKind::I64
+            | super::SnapshotPrimKind::F64
+            | super::SnapshotPrimKind::Char => Ok(loaded),
+            super::SnapshotPrimKind::Bool => {
+                let i1 = loaded.into_int_value();
+                let i8_ty = self.context.i8_type();
+                let extended = self
+                    .builder
+                    .build_int_z_extend(i1, i8_ty, "snap_bool_to_i8")
+                    .map_err(|e| format!("snapshot bool->i8: {e}"))?;
+                Ok(extended.as_basic_value_enum())
+            }
+        }
+    }
+
+    /// Get-or-declare the externally-visible `__karac_repl_snapshot_<name>`
+    /// global for replay. Returns the existing global if this cell's
+    /// codegen pass has already touched it; otherwise emits a body-
+    /// less external declaration so the JIT linker can resolve the
+    /// reference against the defining cell's module in the same
+    /// JITDylib.
+    fn get_or_declare_snapshot_global(
+        &self,
+        name: &str,
+        kind: super::SnapshotPrimKind,
+    ) -> GlobalValue<'ctx> {
+        let sym = format!("__karac_repl_snapshot_{name}");
+        if let Some(g) = self.module.get_global(&sym) {
+            return g;
+        }
+        let ty = self.snapshot_storage_type(kind);
+        let g = self.module.add_global(ty, None, &sym);
+        g.set_linkage(Linkage::External);
+        g
+    }
+
+    /// Get-or-define the externally-visible snapshot global for
+    /// capture. Mirror of the declare path but with a zero
+    /// initializer (which lets LLVM treat the symbol as defined
+    /// here — the JIT installs the slot into the JITDylib so
+    /// future cells' external declarations can resolve to it).
+    fn get_or_define_snapshot_global(
+        &self,
+        name: &str,
+        kind: super::SnapshotPrimKind,
+    ) -> GlobalValue<'ctx> {
+        let sym = format!("__karac_repl_snapshot_{name}");
+        if let Some(g) = self.module.get_global(&sym) {
+            return g;
+        }
+        let ty = self.snapshot_storage_type(kind);
+        let g = self.module.add_global(ty, None, &sym);
+        let zero: BasicValueEnum<'ctx> = match kind {
+            super::SnapshotPrimKind::I64 => self.context.i64_type().const_zero().into(),
+            super::SnapshotPrimKind::F64 => self.context.f64_type().const_zero().into(),
+            super::SnapshotPrimKind::Bool => self.context.i8_type().const_zero().into(),
+            super::SnapshotPrimKind::Char => self.context.i32_type().const_zero().into(),
+        };
+        g.set_initializer(&zero);
+        g.set_linkage(Linkage::External);
+        g
     }
 }
 

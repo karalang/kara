@@ -136,7 +136,37 @@ impl<'ctx> super::Codegen<'ctx> {
         // external linkage so future multi-crate compilation can resolve them,
         // and `#[no_mangle]` / `#[used]` keep external so the symbol survives
         // for FFI consumers / link-section anchors. `main` is handled above.
-        let linkage = if func.is_pub
+        //
+        // Slice c-repl.B.4 follow-on: in REPL-cell mode (signaled by
+        // `main_symbol_override.is_some()`), force External linkage on
+        // every top-level user fn. Two correctness requirements:
+        //
+        //   (a) Body-emitting cells must export their fns so a later
+        //       cell's declare-only reference resolves to them via
+        //       the shared JITDylib's symbol table. Internal linkage
+        //       hides the body from the JIT linker — cell N+1 sees an
+        //       unresolved symbol and the call crashes the runner
+        //       subprocess silently.
+        //
+        //   (b) Declare-only cells (`declare_only_fns` contains the
+        //       name) must use External linkage because LLVM's
+        //       verifier rejects Internal on body-less declarations
+        //       (Internal implies "definition is local to this TU").
+        //
+        // Both arms collapse to the same rule: in REPL-cell mode,
+        // every top-level fn is External. Non-REPL builds (AOT, one-
+        // shot JIT, `karac test` synthesized harness) keep the
+        // existing pub/FFI-vs-Internal split so the inliner can still
+        // elide non-pub local fns.
+        //
+        // The latent bug surfaced in a 3-cell scenario (pure-items
+        // cell defining the fn, then a stmt cell that JIT-installs
+        // it, then a stmt cell that re-references it via declare-
+        // only); B.4's existing 2-cell tests never exercised this
+        // codepath because either the declare-only set was empty or
+        // the cross-cell symbol resolution never fired.
+        let linkage = if self.main_symbol_override.is_some()
+            || func.is_pub
             || func
                 .attributes
                 .iter()

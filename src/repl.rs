@@ -550,6 +550,20 @@ pub struct Session {
     /// JITDylib) or on `:reset` (which also wipes `items_source`).
     #[cfg(feature = "lljit_prototype")]
     jit_installed_fns: std::collections::HashSet<String>,
+    /// Slice c-repl.B.5.1: top-level `let <name> = <expr>` bindings
+    /// whose bound value has been stashed into a cell-spanning LLVM
+    /// global by a prior successful cell. Each entry maps the binding
+    /// name to the primitive kind the snapshot global was emitted at.
+    /// The next cell that sees a re-emitted `let <name> = …` (via
+    /// `persistent_lets` replay in the synthetic source) skips the
+    /// original RHS and binds to a load from the global instead —
+    /// closing the interpreter-vs-JIT semantic gap where a
+    /// side-effecting RHS would otherwise re-execute on every cell.
+    /// Cleared on runner death (the fresh runner's JITDylib has no
+    /// globals) and on `:reset`. Only primitive types (i64, f64,
+    /// bool, char) qualify in B.5.1; richer types deferred.
+    #[cfg(feature = "lljit_prototype")]
+    jit_snapshotted_lets: std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -635,6 +649,8 @@ impl Session {
             jit_next_cell_id: 0,
             #[cfg(feature = "lljit_prototype")]
             jit_installed_fns: std::collections::HashSet::new(),
+            #[cfg(feature = "lljit_prototype")]
+            jit_snapshotted_lets: std::collections::HashMap::new(),
         }
     }
 
@@ -1633,12 +1649,15 @@ impl Session {
             // (slice B.A) instead of the in-process tree-walk
             // interpreter. The branch returns directly with a
             // WrapperOutcome so the interpreter-specific snapshot
-            // replay / watch-name setup below is skipped — the JIT
-            // path doesn't yet implement value-snapshot semantics
-            // (filed as slice c-repl.B.4).
+            // replay / watch-name setup below is skipped.
+            //
+            // Slice c-repl.B.5.1: the JIT branch now implements
+            // value-snapshot semantics for primitive-typed lets — see
+            // `run_cell_via_jit` for the capture/replay handoff via
+            // codegen-emitted LLVM globals in the runner's JITDylib.
             #[cfg(feature = "lljit_prototype")]
             if self.jit_enabled {
-                return Ok(self.run_cell_via_jit(&parsed.program, capture, notes));
+                return Ok(self.run_cell_via_jit(&parsed.program, &typed, capture, notes));
             }
 
             let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
@@ -1881,17 +1900,23 @@ impl Session {
     /// runner's echoed `result <id>` line cross-checks framing
     /// integrity.
     ///
-    /// Currently does NOT implement value-snapshot semantics (the
-    /// interpreter's `let_value_overrides` cache) — a `let x =
-    /// expensive();` in cell N has its RHS re-evaluated every
-    /// subsequent cell that replays it. Filed as c-repl.B.4 +
-    /// follow-on. For the typical small-cell REPL flow the
-    /// regression is invisible; users with expensive `let` RHS
-    /// should define them as `fn` instead.
+    /// Slice c-repl.B.5.1: implements value-snapshot semantics for
+    /// primitive-typed lets via codegen-emitted LLVM globals as a
+    /// cross-cell side channel. Cell N's top-level `let x = expr` of
+    /// i64/f64/bool/char type writes its bound value into
+    /// `@__karac_repl_snapshot_x` (External linkage, lives in the
+    /// runner's JITDylib past the cell's tracker scope); subsequent
+    /// cells' codegen skips the original RHS and binds `x` to a load
+    /// from the same global. Closes the interpreter-vs-JIT semantic
+    /// gap for the canonical `let log = read_file(…)` pattern.
+    /// Non-primitive types (String, Vec, Map, structs) still fall
+    /// through to the re-evaluating path; see slice c-repl.B.5
+    /// follow-ons for those.
     #[cfg(feature = "lljit_prototype")]
     fn run_cell_via_jit(
         &mut self,
         program: &crate::ast::Program,
+        typed: &crate::typechecker::TypeCheckResult,
         capture: bool,
         notes: Vec<String>,
     ) -> WrapperOutcome {
@@ -1901,15 +1926,29 @@ impl Session {
         let cell_id = self.jit_next_cell_id;
         let main_symbol = format!("cell_main_{cell_id}");
 
+        // Slice c-repl.B.5.1: classify this cell's top-level lets into
+        // replay (prior cell stashed a primitive value into a
+        // snapshot global — codegen loads from the global instead of
+        // re-evaluating) and capture (new binding with a primitive
+        // type — codegen stores the bound value into a fresh global
+        // so future cells can replay it). The classification reads
+        // the synthesized program directly so the binding's pattern
+        // span lines up with the typechecker's recorded inferred
+        // type.
+        let (snapshot_replay, snapshot_capture) =
+            self.compute_snapshot_sets_for_cell(program, typed);
+
         // Slice c-repl.B.4: prior cells' fn bodies live in the
         // runner's JITDylib. Emit them as `declare`-only in this
         // cell's IR so codegen + jitlink skip the body for them;
         // the JIT linker resolves call sites against the
         // already-installed definitions.
-        let ir = match crate::codegen::compile_to_ir_for_repl_cell(
+        let ir = match crate::codegen::compile_to_ir_for_repl_cell_with_snapshots(
             program,
             &self.jit_installed_fns,
             &main_symbol,
+            &snapshot_capture,
+            &snapshot_replay,
         ) {
             Ok(s) => s,
             Err(e) => {
@@ -1984,6 +2023,17 @@ impl Session {
                             }
                         }
                     }
+                    // Slice c-repl.B.5.1: every let in `snapshot_capture`
+                    // has been materialized into a live global in the
+                    // runner's JITDylib by this cell's main. Record the
+                    // names + their primitive kinds so subsequent cells
+                    // know to take the replay path. Skipped on cell
+                    // failure (same reasoning as `jit_installed_fns`:
+                    // a half-initialized symbol shouldn't shadow a
+                    // future correct emission).
+                    for (name, kind) in &snapshot_capture {
+                        self.jit_snapshotted_lets.insert(name.clone(), *kind);
+                    }
                 }
                 WrapperOutcome {
                     stdout: if capture {
@@ -2007,6 +2057,12 @@ impl Session {
                 // with its body on the next cell. Clear the installed
                 // set to reflect that.
                 self.jit_installed_fns.clear();
+                // Slice c-repl.B.5.1: snapshot globals lived in the
+                // dead runner's JITDylib — they're gone too. Clear so
+                // subsequent cells re-take the capture path for every
+                // persistent let, not a replay path that would
+                // resolve to an unmapped symbol.
+                self.jit_snapshotted_lets.clear();
                 let exit_code = wait_status.and_then(|s| s.code());
                 let mut errors = vec![format!(
                     "JIT runner subprocess died mid-cell (exit code {:?}); \
@@ -2031,6 +2087,79 @@ impl Session {
                 }
             }
         }
+    }
+
+    /// Slice c-repl.B.5.1: classify every top-level `let` in this
+    /// cell's synthetic `fn main` into one of three bins:
+    ///
+    ///   - **Replay**: binding name already lives in
+    ///     `jit_snapshotted_lets` (a prior cell stashed a primitive
+    ///     value into the cell-spanning global). Codegen will skip
+    ///     the original RHS and emit a load from the global.
+    ///
+    ///   - **Capture**: binding name is NOT in `jit_snapshotted_lets`
+    ///     AND the inferred type is one of the supported primitives
+    ///     (i64 / f64 / bool / char) AND the pattern is a single
+    ///     `PatternKind::Binding` (destructuring deferred). Codegen
+    ///     will emit the let normally and stash the bound value into
+    ///     a fresh global so future cells can replay it.
+    ///
+    ///   - **Pass-through** (neither map populated): everything
+    ///     else — destructuring lets, non-primitive types, wildcards,
+    ///     `let mut` rebinding chains, etc. The original RHS still
+    ///     runs every cell as in pre-B.5.1 behavior. Closing those
+    ///     gaps is the work of B.5.2 (String) and beyond.
+    ///
+    /// The classification reads the typechecker's `expr_types` table
+    /// keyed by the let's value expression span. Type extraction
+    /// goes through `snapshot_kind_for_type` which intentionally
+    /// only accepts the explicit primitive forms (so an `i32` or
+    /// `u64` doesn't quietly get stashed at the wrong storage width).
+    #[cfg(feature = "lljit_prototype")]
+    fn compute_snapshot_sets_for_cell(
+        &self,
+        program: &crate::ast::Program,
+        typed: &crate::typechecker::TypeCheckResult,
+    ) -> (
+        std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
+        std::collections::HashMap<String, crate::codegen::SnapshotPrimKind>,
+    ) {
+        use crate::ast::{Item, PatternKind, StmtKind};
+        use crate::resolver::SpanKey;
+        let mut replay = std::collections::HashMap::new();
+        let mut capture = std::collections::HashMap::new();
+        let Some(main_fn) = program.items.iter().find_map(|item| match item {
+            Item::Function(f) if f.name == "main" => Some(f),
+            _ => None,
+        }) else {
+            return (replay, capture);
+        };
+        for stmt in &main_fn.body.stmts {
+            let StmtKind::Let { pattern, value, .. } = &stmt.kind else {
+                continue;
+            };
+            let PatternKind::Binding(name) = &pattern.kind else {
+                continue;
+            };
+            // Replay path wins: if this binding already has a global
+            // installed in the runner, we ALWAYS route through the
+            // load-from-global codepath rather than re-emit the RHS
+            // and reinstall the global. (The same-cell collision
+            // case — a let with a name that matches a prior snapshot
+            // — is structurally impossible: Kāra's resolver rejects
+            // same-scope re-declaration before codegen runs.)
+            if let Some(kind) = self.jit_snapshotted_lets.get(name) {
+                replay.insert(name.clone(), *kind);
+                continue;
+            }
+            let Some(ty) = typed.expr_types.get(&SpanKey::from_span(&value.span)) else {
+                continue;
+            };
+            if let Some(kind) = snapshot_kind_for_type(ty) {
+                capture.insert(name.clone(), kind);
+            }
+        }
+        (replay, capture)
     }
 
     /// an entry in `pruned_provider_lets`, append a notebook-aware

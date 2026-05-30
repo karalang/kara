@@ -964,6 +964,39 @@ pub(super) fn parse_let_binding_names(let_src: &str) -> std::collections::HashSe
     names
 }
 
+/// Slice c-repl.B.5.1: classify a typechecker `Type` as a snapshot-
+/// eligible primitive, or return `None` for everything else.
+///
+/// Only the four primitive shapes that round-trip cleanly through a
+/// single LLVM `load`/`store` pair qualify: `i64`, `f64`, `bool`,
+/// `Char`. The supported integer width is intentionally narrow —
+/// stashing an `i32` binding through an i64 global would either
+/// truncate on the load (wrong value) or store wider than the slot
+/// (LLVM verifier reject). Adding width-correct lowering for
+/// i8/i16/i32/u*/etc. is mechanical follow-up work; a single
+/// primitive form per snapshot kind keeps the storage discipline
+/// tight for B.5.1.
+///
+/// String, Vec, Map, struct, enum, tuple, Slice, Option, Rc/Arc,
+/// closures, etc. all return `None`. Each of those types would
+/// need its own cross-cell ownership story (the global holds a
+/// heap pointer; who runs the destructor? when?), which is a
+/// dedicated slice of work each.
+#[cfg(feature = "lljit_prototype")]
+pub(super) fn snapshot_kind_for_type(
+    ty: &crate::typechecker::Type,
+) -> Option<crate::codegen::SnapshotPrimKind> {
+    use crate::codegen::SnapshotPrimKind;
+    use crate::typechecker::{FloatSize, IntSize, Type};
+    match ty {
+        Type::Int(IntSize::I64) => Some(SnapshotPrimKind::I64),
+        Type::Float(FloatSize::F64) => Some(SnapshotPrimKind::F64),
+        Type::Bool => Some(SnapshotPrimKind::Bool),
+        Type::Char => Some(SnapshotPrimKind::Char),
+        _ => None,
+    }
+}
+
 pub(super) fn strip_main(src: &str) -> String {
     // Remove every `fn main(...) { ... }` definition from `src` so the
     // synthetic wrapper can install its own entry point. Uses brace
