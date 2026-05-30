@@ -509,6 +509,25 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => {
                 self.emit_hash_fn_for_tuple(&type_name, elems)
             }
+            // User-struct path: dispatch to per-field hash (mirrors the
+            // tuple shape) when the path resolves to a registered
+            // struct. The byte-loop fallback in `emit_hash_fn_for_type`
+            // hashes raw struct bytes — which includes ptr fields of
+            // any `String` / `Vec` / `Map` field — so two structurally-
+            // equal instances with different inner allocations hash
+            // unequally. AOT used to mask this via the post-codegen
+            // `ConstantMerge` pass folding identical string-literal
+            // globals into one (so all `"alice"` Tags happened to
+            // share a data pointer); LLJIT runs the pre-O2 IR and gets
+            // bitten. See `wip-always-jit.md` W3.5 bug 4.
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && self.struct_field_type_exprs.contains_key(&p.segments[0])
+                    && !self.shared_types.contains_key(&p.segments[0]) =>
+            {
+                let struct_name = p.segments[0].clone();
+                self.emit_hash_fn_for_struct(&struct_name)
+            }
             _ => {
                 let key_ty = self.llvm_type_for_type_expr(te);
                 self.emit_hash_fn_for_type(&type_name, key_ty)
@@ -527,11 +546,185 @@ impl<'ctx> super::Codegen<'ctx> {
             TypeKind::Tuple(elems) if !elems.is_empty() => {
                 self.emit_eq_fn_for_tuple(&type_name, elems)
             }
+            TypeKind::Path(p)
+                if p.segments.len() == 1
+                    && self.struct_field_type_exprs.contains_key(&p.segments[0])
+                    && !self.shared_types.contains_key(&p.segments[0]) =>
+            {
+                let struct_name = p.segments[0].clone();
+                self.emit_eq_fn_for_struct(&struct_name)
+            }
             _ => {
                 let key_ty = self.llvm_type_for_type_expr(te);
                 self.emit_eq_fn_for_type(&type_name, key_ty)
             }
         }
+    }
+
+    /// Per-field-recursive hash for a registered user struct. Uses the
+    /// struct's LLVM type from `self.struct_types` and the field
+    /// TypeExprs cached during `declare_structs` in
+    /// `self.struct_field_type_exprs`. Shape mirrors
+    /// `emit_hash_fn_for_tuple`.
+    ///
+    /// Only invoked for non-shared structs (value layout): shared
+    /// structs flow through a different code path that's pointer-
+    /// based already (the heap layout has a refcount prefix; identity
+    /// equality / refcount hashing applies). Map-of-shared-struct keys
+    /// route through `emit_hash_fn_for_type`'s integer/pointer path,
+    /// not here.
+    pub(super) fn emit_hash_fn_for_struct(&mut self, struct_name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_hash_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+            .expect("emit_hash_fn_for_struct: struct must be registered");
+        let struct_ty = *self
+            .struct_types
+            .get(struct_name)
+            .expect("emit_hash_fn_for_struct: struct LLVM type must be registered");
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .map(|te| self.emit_hash_fn_for_type_expr(te))
+            .collect();
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let i64_t = self.context.i64_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let hash_fn_ty = i64_t.fn_type(&[ptr_ty.into()], false);
+        let hash_fn = self
+            .module
+            .add_function(&fn_name, hash_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(hash_fn, "entry");
+        self.builder.position_at_end(entry_bb);
+        let key_ptr = hash_fn.get_nth_param(0).unwrap().into_pointer_value();
+
+        // FxHash tail-mix, identical to the tuple combiner.
+        let seed = i64_t.const_int(Self::FXHASH_SEED, false);
+        let rotate_amt = i64_t.const_int(Self::FXHASH_ROTATE, false);
+        let rotate_inv = i64_t.const_int(64 - Self::FXHASH_ROTATE, false);
+        let mut state: IntValue<'ctx> = i64_t.const_zero();
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let field_ptr = self
+                .builder
+                .build_struct_gep(struct_ty, key_ptr, i as u32, &format!("s.f{i}.p"))
+                .unwrap();
+            let elem_hash = self
+                .builder
+                .build_call(*child_fn, &[field_ptr.into()], &format!("s.f{i}.h"))
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let shl = self
+                .builder
+                .build_left_shift(state, rotate_amt, &format!("s.f{i}.shl"))
+                .unwrap();
+            let shr = self
+                .builder
+                .build_right_shift(state, rotate_inv, false, &format!("s.f{i}.shr"))
+                .unwrap();
+            let rotated = self
+                .builder
+                .build_or(shl, shr, &format!("s.f{i}.rot"))
+                .unwrap();
+            let xored = self
+                .builder
+                .build_xor(rotated, elem_hash, &format!("s.f{i}.xor"))
+                .unwrap();
+            state = self
+                .builder
+                .build_int_mul(xored, seed, &format!("s.f{i}.mul"))
+                .unwrap();
+        }
+        self.builder.build_return(Some(&state)).unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        hash_fn
+    }
+
+    /// Per-field-recursive eq for a registered user struct. Mirrors
+    /// `emit_eq_fn_for_tuple`; short-circuits to `false` on the first
+    /// mismatching field.
+    pub(super) fn emit_eq_fn_for_struct(&mut self, struct_name: &str) -> FunctionValue<'ctx> {
+        let fn_name = format!("karac_eq_{struct_name}");
+        if let Some(f) = self.module.get_function(&fn_name) {
+            return f;
+        }
+        let field_tes = self
+            .struct_field_type_exprs
+            .get(struct_name)
+            .cloned()
+            .expect("emit_eq_fn_for_struct: struct must be registered");
+        let struct_ty = *self
+            .struct_types
+            .get(struct_name)
+            .expect("emit_eq_fn_for_struct: struct LLVM type must be registered");
+        let child_fns: Vec<FunctionValue<'ctx>> = field_tes
+            .iter()
+            .map(|te| self.emit_eq_fn_for_type_expr(te))
+            .collect();
+
+        let ptr_ty = self.context.ptr_type(AddressSpace::default());
+        let bool_t = self.context.bool_type();
+
+        let saved_bb = self.builder.get_insert_block();
+        let eq_fn_ty = bool_t.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+        let eq_fn = self
+            .module
+            .add_function(&fn_name, eq_fn_ty, Some(Linkage::Internal));
+
+        let entry_bb = self.context.append_basic_block(eq_fn, "entry");
+        let neq_bb = self.context.append_basic_block(eq_fn, "neq");
+        self.builder.position_at_end(neq_bb);
+        self.builder
+            .build_return(Some(&bool_t.const_int(0, false)))
+            .unwrap();
+
+        self.builder.position_at_end(entry_bb);
+        let a_ptr = eq_fn.get_nth_param(0).unwrap().into_pointer_value();
+        let b_ptr = eq_fn.get_nth_param(1).unwrap().into_pointer_value();
+
+        for (i, child_fn) in child_fns.iter().enumerate() {
+            let fa = self
+                .builder
+                .build_struct_gep(struct_ty, a_ptr, i as u32, &format!("s.fa{i}"))
+                .unwrap();
+            let fb = self
+                .builder
+                .build_struct_gep(struct_ty, b_ptr, i as u32, &format!("s.fb{i}"))
+                .unwrap();
+            let r = self
+                .builder
+                .build_call(*child_fn, &[fa.into(), fb.into()], &format!("s.eq{i}"))
+                .unwrap()
+                .try_as_basic_value()
+                .unwrap_basic()
+                .into_int_value();
+            let next_bb = self
+                .context
+                .append_basic_block(eq_fn, &format!("eq.next{i}"));
+            self.builder
+                .build_conditional_branch(r, next_bb, neq_bb)
+                .unwrap();
+            self.builder.position_at_end(next_bb);
+        }
+        self.builder
+            .build_return(Some(&bool_t.const_int(1, false)))
+            .unwrap();
+
+        if let Some(bb) = saved_bb {
+            self.builder.position_at_end(bb);
+        }
+        eq_fn
     }
 
     /// Emit a per-field-recursive hash function for an n-tuple. Each field's
