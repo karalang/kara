@@ -390,7 +390,19 @@ impl<'ctx> super::Codegen<'ctx> {
                 let source_is_unsigned = self.expr_is_unsigned_int(inner);
                 let val = self.compile_expr(inner)?;
                 let target_ty = self.llvm_type_for_type_expr(ty);
-                self.compile_cast(val, target_ty, source_is_unsigned)
+                let casted = self.compile_cast(val, target_ty, source_is_unsigned)?;
+                // `x as Refined` enforces the refinement predicate at runtime
+                // (phase-9 step 5c). The cast value is already the base
+                // layout; a false predicate aborts with a contract fault.
+                if let TypeKind::Path(p) = &ty.kind {
+                    if let Some(name) = p.segments.first() {
+                        if self.refinement_predicates.contains_key(name) {
+                            let name = name.clone();
+                            self.emit_refinement_assert(&name, casted)?;
+                        }
+                    }
+                }
+                Ok(casted)
             }
             ExprKind::Match { scrutinee, arms } => self.compile_match(scrutinee, arms),
             ExprKind::For {

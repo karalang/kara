@@ -26151,4 +26151,114 @@ fn main() {
             assert_eq!(out.trim(), "6");
         }
     }
+
+    // ── Refinement runtime predicate emission (phase-9 step 5c) ──
+
+    #[test]
+    fn test_e2e_refinement_as_cast_predicate_holds() {
+        // `4 as Even` passes `self % 2 == 0`, so the value flows through and
+        // execution continues normally (no fault).
+        let out = run_program(
+            r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 4 as Even;
+    println(e);
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4");
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_as_cast_violation_aborts() {
+        // `3 as Even` fails the predicate: codegen emits a contract-violation
+        // abort, and code after the cast does not run.
+        let captured = run_program_capturing(
+            r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    let e = 3 as Even;
+    println(e);
+    println(42);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated") && c.stdout.contains("Even"),
+                "expected a contract-violation abort naming Even, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+            assert!(
+                !c.stdout.contains("42"),
+                "code after a violated refinement cast must not run"
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_as_cast_string_method_predicate_aborts() {
+        // A method-form predicate (`self.len() > 0`) over a String base is
+        // compiled and enforced: an empty string fails and aborts.
+        let captured = run_program_capturing(
+            r#"
+type NonEmpty = String where self.len() > 0;
+fn main() {
+    let s = "" as NonEmpty;
+    println(s);
+}
+"#,
+        );
+        if let Some(c) = captured {
+            assert!(
+                c.stdout.contains("contract violated") && c.stdout.contains("NonEmpty"),
+                "expected NonEmpty contract abort, got stdout={:?} stderr={:?}",
+                c.stdout,
+                c.stderr
+            );
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_try_from_ok_branch() {
+        // `Even.try_from(4)` builds `Ok(4)` at runtime; the match prints it.
+        let out = run_program(
+            r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(4) {
+        Ok(v) => println(v),
+        Err(_) => println(-1),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "4");
+        }
+    }
+
+    #[test]
+    fn test_e2e_refinement_try_from_err_branch() {
+        // `Even.try_from(3)` builds `Err(...)`; the match takes the Err arm
+        // (no abort — try_from is the recoverable construction form).
+        let out = run_program(
+            r#"
+type Even = i64 where self % 2 == 0;
+fn main() {
+    match Even.try_from(3) {
+        Ok(v) => println(v),
+        Err(_) => println(-1),
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            assert_eq!(out.trim(), "-1");
+        }
+    }
 }

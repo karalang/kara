@@ -55,6 +55,7 @@ mod par_blocks;
 mod pattern_binding;
 mod provider;
 mod reduce;
+mod refinement;
 mod runtime;
 mod state;
 mod stmts;
@@ -457,6 +458,13 @@ pub(super) struct Codegen<'ctx> {
     /// layout-identical to its base (no runtime tag), so this is a pure
     /// alias resolution.
     pub(crate) refinement_bases: HashMap<String, crate::ast::TypeExpr>,
+    /// Refinement name → its predicate `Expr` (`type Even = i64 where
+    /// self % 2 == 0` → the `self % 2 == 0` expression). Populated from
+    /// `Item::TypeAlias.refinement`, parallel to `refinement_bases`. Drives
+    /// the runtime predicate check emitted at `x as Refined` cast sites and
+    /// `Refined.try_from(x)` calls (phase-9 step 5c): the predicate is
+    /// compiled with `self` bound to the candidate value, then branched on.
+    pub(crate) refinement_predicates: HashMap<String, crate::ast::Expr>,
     /// Set of top-level Atomic[T]-typed bindings whose inner T is `bool`.
     /// The slot itself is widened to `i8` (LLVM atomics reject `i1`); this
     /// set drives the `.load` trunc-to-i1 and `.store` zext-to-i8 wrapping
@@ -2922,6 +2930,7 @@ impl<'ctx> Codegen<'ctx> {
             variables: HashMap::new(),
             var_type_names: HashMap::new(),
             refinement_bases: HashMap::new(),
+            refinement_predicates: HashMap::new(),
             atomic_var_inner_is_bool: HashSet::new(),
             current_fn: None,
             printf_fn,
@@ -3390,8 +3399,10 @@ impl<'ctx> Codegen<'ctx> {
         // carries no runtime tag — it is layout-identical to its base.
         for item in &program.items {
             if let Item::TypeAlias(t) = item {
-                if t.refinement.is_some() {
+                if let Some(pred) = &t.refinement {
                     self.refinement_bases.insert(t.name.clone(), t.ty.clone());
+                    self.refinement_predicates
+                        .insert(t.name.clone(), pred.clone());
                 }
             }
         }

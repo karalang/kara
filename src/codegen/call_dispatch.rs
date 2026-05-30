@@ -87,6 +87,24 @@ impl<'ctx> super::Codegen<'ctx> {
         };
         self.emit_branch_cancel_check("call", callee_key.as_deref());
 
+        // `Refined.try_from(x)` — emit a runtime predicate check producing a
+        // `Result[Refined, String]` (phase-9 step 5c). Parses as a 2-segment
+        // Path call (uppercase head roots a Path). The synthetic `try_from`
+        // impl the typechecker registers has no AST body, so this intercept
+        // is the only place the predicate runs on the codegen path; a
+        // non-refinement head returns `None` and falls through.
+        if let ExprKind::Path { segments, .. } = &callee.kind {
+            if segments.len() == 2 && segments[1] == "try_from" {
+                if let Some(arg) = args.first() {
+                    if let Some(v) =
+                        self.compile_refinement_try_from(&segments[0], &arg.value, call_span)?
+                    {
+                        return Ok(v);
+                    }
+                }
+            }
+        }
+
         // Theme 6 sub-step 3: `with_provider[R](provider, ||body)`.
         // Recognize the call shape before the generic dispatch below — the
         // callee is an `Index` expression which would otherwise fall through
