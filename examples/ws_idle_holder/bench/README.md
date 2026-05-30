@@ -62,6 +62,47 @@ cargo build -p karac-runtime --release
 ./target/release/ws-idle-holder-bench --addr 127.0.0.1:8443 --server-pid 12345 -n 100
 ```
 
+### EC2 1M rig — `scripts/`
+
+The canonical N=1M c=64 idle-hold run lives in `scripts/`:
+
+- **`scripts/ec2_setup.sh`** — sysctl bumps (`somaxconn`,
+  `tcp_max_syn_backlog`, `ip_local_port_range`, `tcp_rmem` / `wmem`),
+  loopback aliases `127.0.0.2..28`, `/etc/security/limits.d/`
+  `nofile = 1250000`. Linux-only; needs `sudo`; idempotent. Captures
+  the tunings discovered during the 2026-05-29 Kāra 1M verification.
+- **`scripts/run_1m.sh <server-bin> [output.json]`** — wraps the
+  harness with the canonical flags (`-n 1000000 --concurrency 64
+  --churn-rounds 0 --connect-timeout-ms 30000 --source-ips 127.0.0.2..28`)
+  so Kāra and Rust-comparator runs are guaranteed identical. Sets
+  `ulimit -n 1250000` inline; tails `dmesg` post-run for SYN-flood
+  signals.
+
+End-to-end EC2 flow:
+
+```sh
+# On a fresh r8g.4xlarge (or equivalent), Ubuntu 24.04 arm64:
+git clone <repo> && cd kara
+sudo bash examples/ws_idle_holder/bench/scripts/ec2_setup.sh
+
+# Build everything once:
+cargo build --features llvm --release            # karac compiler
+cargo build -p karac-runtime --release           # runtime lib
+( cd examples/ws_idle_holder
+  KARAC_RUNTIME="$PWD/../../target/release/libkarac_runtime.a" \
+    ../../target/release/karac build )           # Kāra demo
+( cd examples/ws_idle_holder/rust && cargo build --release )   # Rust comparator
+( cd examples/ws_idle_holder/bench && cargo build --release )  # bench harness
+
+# Run both at 1M, save JSONs:
+bash examples/ws_idle_holder/bench/scripts/run_1m.sh \
+    examples/ws_idle_holder/ws_idle_holder \
+    kara-1m.json
+bash examples/ws_idle_holder/bench/scripts/run_1m.sh \
+    examples/ws_idle_holder/rust/target/release/ws-idle-holder-rust \
+    rust-1m.json
+```
+
 Key flags (`--help` for all): `-n/--connections`, `--concurrency`
 (in-flight handshake cap), `--churn-rounds` (0 = off), `--churn-fraction`,
 `--hold-secs`, `--connect-timeout-ms` (per-connection deadline so a stuck
