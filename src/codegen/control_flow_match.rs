@@ -735,24 +735,36 @@ impl<'ctx> super::Codegen<'ctx> {
                 .first()
                 .copied()
                 .unwrap_or_else(|| i64_t.const_int(0, false));
-            // Bool-payload narrowing: variant payload words are i64
-            // in the word stream, but a `Json.Bool(b) => b` arm binding
-            // `b: bool` needs the value as i1 to match the function
-            // return type / downstream bool semantics. The typechecker
-            // records `"bool"` in `pattern_binding_types` for these
-            // sites; without the trunc, the LLVM verifier rejects
-            // `ret i64 %b` from a `fn -> bool`.
+            // Sub-64-bit payload narrowing: variant payload words are
+            // uniformly i64 in the word stream, but a binding whose
+            // surface type is narrower than 64 bits needs a trunc back
+            // to its real LLVM width. Two motivating shapes:
+            //   - `Json.Bool(b) => b` binding `b: bool` needs i1 so the
+            //     `fn -> bool` return path doesn't trip the verifier on
+            //     `ret i64 %b`.
+            //   - `Vec[u8].pop()`'s `Some(b) => b == other_u8` binds
+            //     `b: u8` (i8); without the trunc the comparison emits
+            //     `icmp i64 %b, i8 …` and module verification fails with
+            //     "Both operands to ICmp instruction are not of the same
+            //     type!".
+            // The typechecker records the canonical surface name
+            // (`"bool"`, `"u8"`, `"i32"`, `"char"`, …) in
+            // `pattern_binding_types`; `llvm_type_for_name` maps it back
+            // to the LLVM int type, and any width < 64 gets truncated.
+            // Width-64 names (`i64`/`u64`/`usize`) and non-int surfaces
+            // resolve to a 64-bit or non-`IntType`, so they pass through
+            // untouched.
             let key = (sub_pat.span.offset, sub_pat.span.length);
-            if matches!(
-                self.pattern_binding_types.get(&key).map(|s| s.as_str()),
-                Some("bool")
-            ) {
-                let bool_ty = self.context.bool_type();
-                let narrowed = self
-                    .builder
-                    .build_int_truncate(w, bool_ty, "pat.bool.tr")
-                    .unwrap();
-                return Ok(narrowed.into());
+            if let Some(name) = self.pattern_binding_types.get(&key).cloned() {
+                if let BasicTypeEnum::IntType(it) = self.llvm_type_for_name(&name) {
+                    if it.get_bit_width() < 64 {
+                        let narrowed = self
+                            .builder
+                            .build_int_truncate(w, it, "pat.int.tr")
+                            .unwrap();
+                        return Ok(narrowed.into());
+                    }
+                }
             }
             return Ok(w.into());
         }

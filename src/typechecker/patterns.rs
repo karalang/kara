@@ -21,6 +21,27 @@ use super::types::{
 };
 use super::TypeErrorKind;
 
+/// Canonical surface name for a sub-64-bit integer / `char` payload
+/// binding, or `None` for everything else (width-64 ints, floats,
+/// aggregates, named types). Recorded in `pattern_binding_types` so
+/// codegen's `reconstruct_payload_value` narrows the i64 payload word
+/// back to the binding's real width — the integer analogue of the
+/// `bool` → i1 narrowing. Width-64 ints (`i64`/`u64`/`usize`) and the
+/// 128-bit widths are intentionally excluded: the former need no trunc
+/// from the i64 word, and the latter aren't single-word payloads.
+fn narrow_int_surface_name(ty: &Type) -> Option<String> {
+    match ty {
+        Type::Int(IntSize::I8) => Some("i8".to_string()),
+        Type::Int(IntSize::I16) => Some("i16".to_string()),
+        Type::Int(IntSize::I32) => Some("i32".to_string()),
+        Type::UInt(UIntSize::U8) => Some("u8".to_string()),
+        Type::UInt(UIntSize::U16) => Some("u16".to_string()),
+        Type::UInt(UIntSize::U32) => Some("u32".to_string()),
+        Type::Char => Some("char".to_string()),
+        _ => None,
+    }
+}
+
 impl<'a> super::TypeChecker<'a> {
     /// Check-mode form of `if`. Threads `expected` into both branches so
     /// closures and other check-sensitive shapes inside arms see the
@@ -402,6 +423,14 @@ impl<'a> super::TypeChecker<'a> {
                     // held across a yield point.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_display(expected));
+                } else if let Some(narrow) = narrow_int_surface_name(expected) {
+                    // Match-arm parallel to the `bind_pattern_types`
+                    // narrow-int case — record `u8` / `i32` / `char` /
+                    // … so codegen narrows the i64 payload word back to
+                    // the binding's real width (e.g. `Vec[u8].pop()`'s
+                    // `Some(b) => b == other_u8`).
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), narrow);
                 }
                 // PB sibling slice (2026-05-09): mirror
                 // `bind_pattern_types`'s sibling-table write so direct
@@ -965,6 +994,14 @@ impl<'a> super::TypeChecker<'a> {
                     // ignores this entry; raw-pointer layout is fixed.
                     self.pattern_binding_types
                         .insert(SpanKey::from_span(&pattern.span), type_display(ty));
+                } else if let Some(narrow) = narrow_int_surface_name(ty) {
+                    // Sub-64-bit int / `char` payload binding (e.g.
+                    // `let Some(b) = vec_u8.pop()`): record the surface
+                    // name so `reconstruct_payload_value` truncates the
+                    // i64 payload word back to the binding's real width.
+                    // Match-arm parallel lives in `check_pattern_against`.
+                    self.pattern_binding_types
+                        .insert(SpanKey::from_span(&pattern.span), narrow);
                 }
                 // PB sibling slice (2026-05-09): record the inner element
                 // type for `Vec[T]` / `Slice[T]` bindings so codegen can

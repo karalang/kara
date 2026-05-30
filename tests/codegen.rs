@@ -5081,6 +5081,70 @@ fn main() {
     }
 
     #[test]
+    fn test_e2e_option_narrow_int_payload_narrows_to_surface_width() {
+        // Regression: `Vec[u8].pop()` returns `Option[u8]`, whose payload
+        // word is i64 in the variant word stream. The `Some(top)` binding
+        // must narrow that word back to i8 (u8's LLVM width) — otherwise
+        // `top == b` (b: u8 → i8) emits `icmp i64, i8` and module
+        // verification fails with "Both operands to ICmp instruction are
+        // not of the same type!". Exercises the valid-parentheses stack
+        // shape (LeetCode #20) that surfaced the bug: push the matching
+        // closer, pop + compare on a closer. Also covers `char` (i32) and
+        // `u32` to confirm the narrowing keys off the recorded surface
+        // width, not just u8.
+        let out = run_program(
+            r#"
+fn is_valid(s: ref String) -> bool {
+    let bytes = s.bytes();
+    let n = bytes.len();
+    let mut stack: Vec[u8] = Vec.new();
+    let mut i = 0i64;
+    while i < n {
+        let b = bytes[i];
+        if b == b'(' or b == b'[' or b == b'{' {
+            if b == b'(' { stack.push(b')'); }
+            else if b == b'[' { stack.push(b']'); }
+            else { stack.push(b'}'); }
+        } else {
+            match stack.pop() {
+                Some(top) => { if top != b { return false; } }
+                None => { return false; }
+            }
+        }
+        i = i + 1i64;
+    }
+    stack.is_empty()
+}
+
+fn main() {
+    if is_valid("([{}])") { println(1); } else { println(0); }
+    if is_valid("(]") { println(1); } else { println(0); }
+
+    // char payload (i32) narrowed from the i64 word.
+    let mut cs: Vec[char] = Vec.new();
+    cs.push('x');
+    match cs.pop() {
+        Some(c) => { if c == 'x' { println(2); } else { println(0); } }
+        None => { println(0); }
+    }
+
+    // u32 payload narrowed from the i64 word.
+    let mut ns: Vec[u32] = Vec.new();
+    ns.push(7u32);
+    if let Some(v) = ns.pop() {
+        let w: u32 = 7u32;
+        if v == w { println(3); }
+    }
+}
+"#,
+        );
+        if let Some(out) = out {
+            let lines: Vec<&str> = out.trim().lines().collect();
+            assert_eq!(lines, vec!["1", "0", "2", "3"]);
+        }
+    }
+
+    #[test]
     fn test_e2e_vec_deque_pop_front_returns_option_with_tuple_payload() {
         // The LeetCode 3629 kata's blocking shape: VecDeque[(i64, i64)]
         // BFS frontier with `pop_front()` returning `Option[(i64,i64)]`.
