@@ -654,6 +654,18 @@ impl<'ctx> super::Codegen<'ctx> {
             // no-op for non-shared Option[T] params (no entry in
             // `var_option_shared_heap`).
             self.share_option_shared_ref_for_arg(&a.value);
+            // Companion for a FieldAccess arg reading an `Option[shared T]`
+            // field of an Identifier/`self`-bound shared struct (`merge(n1.next,
+            // l2)` in the recursive merge-two-sorted-lists). The niche field
+            // read (`niche_load_option_field`) just LOADS the pointer — no inc —
+            // so without this the callee's param `RcDecOption` decrements an
+            // uncounted ref and frees the sub-list mid-recursion. Inc the loaded
+            // inner so the callee holds an independent +1; the caller's heap
+            // field still owns its own ref. Call-like objects (`get().next`) go
+            // through `compile_field_access`'s call-chain branch which already
+            // incs, so they are excluded (the object must match
+            // `shared_type_for_expr`, i.e. an Identifier/self binding).
+            self.share_option_shared_field_ref_for_arg(&a.value, val);
             compiled_args.push(BasicMetadataValueEnum::from(val));
         }
 
@@ -904,6 +916,132 @@ impl<'ctx> super::Codegen<'ctx> {
     /// cleanup's `cap > 0` guard skips the free; the loaded return
     /// struct retains the original cap, and the caller's own
     /// scope-exit cleanup frees the buffer exactly once.
+    /// Compensating inc for a function whose tail is a *branch construct*
+    /// (`if` / `if let` / `match`) every leaf of which returns an aliasing
+    /// `Option[shared T]` value — a bound `Option[shared]` binding (`l1` /
+    /// `l2`), `Some(<bound node>)`, or `None`.
+    ///
+    /// `suppress_cleanup_for_tail_return` only rebalances a *direct*
+    /// Identifier / `var.field` tail (via `share_option_shared_ref_for_arg` /
+    /// `suppress_tail_field_option_dec`). When the move-out is buried in
+    /// branch arms, the returned binding's slot is still live at the merge
+    /// block, so its scope-exit `RcDecOption` consumes the only ref and the
+    /// caller receives a freed node — the `pick(l1,l2){ if let Some(_)=l1 {l1}
+    /// else {l2} }` / recursive merge-two-sorted-lists UAF.
+    ///
+    /// Branch-independent fix: inc the *returned value's* inner ptr once. The
+    /// `result` SSA register holds whichever arm's Option was produced, so a
+    /// single inc on its inner pointer exactly compensates the scope-exit dec
+    /// of whichever binding aliased it — no need to know the taken arm. Gated
+    /// on every leaf being aliasing (`Some(ListNode { … })`, a call move-out,
+    /// or a fresh `Some(<literal>)` would already own a +1, so a mix is
+    /// skipped — `emit_option_inner_rc_inc_for_loaded`'s Some-tag + null guard
+    /// makes a `None` leaf harmless).
+    pub(super) fn inc_branch_buried_option_arg_return(
+        &self,
+        body: &Block,
+        result: BasicValueEnum<'ctx>,
+        return_type: &Option<TypeExpr>,
+    ) {
+        let Some(tail) = body.final_expr.as_deref() else {
+            return;
+        };
+        // Only branch constructs — a direct Identifier / field tail is the
+        // existing path's job and would double-inc here.
+        if !matches!(
+            &tail.kind,
+            ExprKind::If { .. } | ExprKind::IfLet { .. } | ExprKind::Match { .. }
+        ) {
+            return;
+        }
+        let Some(te) = return_type.as_ref() else {
+            return;
+        };
+        let Some((_, info)) = self.option_inner_shared_type_for_type_expr(te) else {
+            return;
+        };
+        let (any_fresh, any_alias) = self.option_tail_classify(tail);
+        if any_fresh || !any_alias {
+            return;
+        }
+        self.emit_option_inner_rc_inc_for_loaded(result, info.heap_type);
+    }
+
+    /// Recursive leaf classifier for `inc_branch_buried_option_arg_return`.
+    /// Returns `(any_fresh, any_alias)` over every branch leaf:
+    ///   - aliasing: a bare `Option[shared]` binding (in
+    ///     `var_option_shared_heap`) or `Some(<identifier>)` (the payload is
+    ///     a bound node alias, not a fresh construction).
+    ///   - fresh: `Some(<struct-literal/call>)`, a bare Call/MethodCall
+    ///     move-out, a FieldAccess (its read already balanced), or any
+    ///     unrecognized shape (conservative — suppresses the inc).
+    ///   - neutral: a `None` leaf contributes to neither.
+    ///
+    /// A single merge-block result-inc is only sound when every leaf is
+    /// aliasing (plus optional `None`s), so the caller skips on `any_fresh`.
+    fn option_tail_classify(&self, expr: &Expr) -> (bool, bool) {
+        match &expr.kind {
+            ExprKind::Block(b) | ExprKind::Unsafe(b) | ExprKind::LabeledBlock { body: b, .. } => b
+                .final_expr
+                .as_deref()
+                .map(|e| self.option_tail_classify(e))
+                .unwrap_or((true, false)),
+            ExprKind::If {
+                then_block,
+                else_branch,
+                ..
+            }
+            | ExprKind::IfLet {
+                then_block,
+                else_branch,
+                ..
+            } => {
+                let t = then_block
+                    .final_expr
+                    .as_deref()
+                    .map(|e| self.option_tail_classify(e))
+                    .unwrap_or((true, false));
+                let e = else_branch
+                    .as_deref()
+                    .map(|e| self.option_tail_classify(e))
+                    .unwrap_or((true, false));
+                (t.0 || e.0, t.1 || e.1)
+            }
+            ExprKind::Match { arms, .. } => {
+                if arms.is_empty() {
+                    return (true, false);
+                }
+                arms.iter()
+                    .map(|a| self.option_tail_classify(&a.body))
+                    .fold((false, false), |acc, x| (acc.0 || x.0, acc.1 || x.1))
+            }
+            // `None` leaf — neutral (null inner, the inc is guarded).
+            ExprKind::Identifier(n) if n == "None" => (false, false),
+            // Bare `Option[shared]` binding return (`l1`) — aliasing.
+            ExprKind::Identifier(n) if self.var_option_shared_heap.contains_key(n.as_str()) => {
+                (false, true)
+            }
+            // `Some(x)` / any variant constructor — classified FRESH. The
+            // constructor already inc'd a shared payload at build time
+            // (`try_compile_enum_variant` → `suppress_source_vec_cleanup_for_arg`),
+            // so a `Some(<alias>)` tail must NOT also get the result-inc.
+            //
+            // The consequence: a function whose tails MIX `Some(<alias>)` with
+            // bare-arg returns (the recursive merge-two-sorted-lists:
+            // `if … { Some(n1) } else { l1 }`) sets `any_fresh` and is skipped
+            // here — a single merge-block result-inc can't serve both a
+            // Some-tail (needs none) and a bare-arg tail (needs +1); that case
+            // needs per-branch (flow-sensitive) compensation, tracked
+            // separately. Pure-bare-arg-tail functions (`pick`, the merge base
+            // cases in isolation) are unaffected and correctly compensated.
+            //
+            // Everything else (real Call/MethodCall move-out, FieldAccess
+            // whose read already balanced, StructLiteral, …) is also fresh —
+            // conservative, suppresses the inc.
+            _ => (true, false),
+        }
+    }
+
     pub(super) fn suppress_cleanup_for_tail_return(&mut self, body: &Block) {
         // Walk the tail of the body: if the final expression of the
         // block (or the value of the last `return expr;` statement)
@@ -1255,6 +1393,49 @@ impl<'ctx> super::Codegen<'ctx> {
     /// `track_rc_option_var` at the let-stmt and param-binding
     /// sites) as the single source of truth for "is this binding
     /// an Option[shared T]".
+    /// FieldAccess companion to `share_option_shared_ref_for_arg`: when the
+    /// call arg is `obj.field` whose static type is `Option[shared T]` and
+    /// `obj` is an Identifier/`self`-bound shared struct, inc the inner of the
+    /// already-loaded value `val`. The niche field read for such objects
+    /// (`compile_field_access`'s `shared_type_for_expr` branch →
+    /// `niche_load_option_field`) only LOADS the pointer without inc'ing, so
+    /// passing it by value to a callee whose param queues an `RcDecOption`
+    /// would over-decrement and free the sub-chain (recursive
+    /// merge-two-sorted-lists `merge(n1.next, l2)`). Call-like objects
+    /// (`get().next`) are excluded — their read goes through the call-chain
+    /// branch that already incs — by requiring `shared_type_for_expr(obj)`.
+    pub(super) fn share_option_shared_field_ref_for_arg(
+        &self,
+        arg_expr: &Expr,
+        val: BasicValueEnum<'ctx>,
+    ) {
+        let ExprKind::FieldAccess { object, field } = &arg_expr.kind else {
+            return;
+        };
+        let Some((type_name, _)) = self.shared_type_for_expr(object) else {
+            return;
+        };
+        let Some(idx) = self
+            .struct_field_names
+            .get(&type_name)
+            .and_then(|names| names.iter().position(|n| n == field))
+        else {
+            return;
+        };
+        let Some(field_te) = self
+            .struct_field_type_exprs
+            .get(&type_name)
+            .and_then(|v| v.get(idx))
+            .cloned()
+        else {
+            return;
+        };
+        let Some((_, inner_info)) = self.option_inner_shared_type_for_type_expr(&field_te) else {
+            return;
+        };
+        self.emit_option_inner_rc_inc_for_loaded(val, inner_info.heap_type);
+    }
+
     pub(super) fn share_option_shared_ref_for_arg(&self, arg_expr: &Expr) {
         let var_name = match &arg_expr.kind {
             ExprKind::Identifier(n) => n.as_str(),

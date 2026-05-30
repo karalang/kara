@@ -969,3 +969,24 @@ The items below land from the v62 brainstorm on interpreter perf and binary size
   **Why deferred.** (1) The only observed "impact" was a synthetic fixed-input microbench — real code rarely calls a pure fn with a fully loop-invariant arg 10M times and discards the variation; per [[optimize-for-production-not-kata]] this is a kata artifact, not a production signal. (2) High effort + risk: needs interprocedural purity analysis + LICM/partial-eval across call boundaries, a large surface with real miscompile exposure. Cost/benefit is poor.
 
   **Reopen trigger.** A production-shaped workload where a provably-pure call with loop-invariant args is a measured hot path that LLVM doesn't already hoist (verify via disassembly first — LLVM's own LICM handles many cases once the callee is inlined). See [`docs/investigations/roman_kata_codegen.md`](../investigations/roman_kata_codegen.md) § parse-only diagnostic.
+
+- [ ] **`Option[shared T]` branch-buried return: per-branch (flow-sensitive) refcount compensation for MIXED tails.** **Filed 2026-05-30.** A function whose tail is an `if` / `if let` / `match` that MIXES a bare-arg `Option[shared]` return (`l1` / `l2` — needs a compensating inner inc, because returning the param moves it out while its scope-exit `RcDecOption` still fires) with a `Some(<alias>)` return (needs NO inc — `try_compile_enum_variant` already inc'd the payload) cannot be balanced by the single merge-block result-inc that `inc_branch_buried_option_arg_return` emits. The canonical case is the idiomatic recursive **merge-two-sorted-lists** (LeetCode #21):
+
+  ```
+  fn merge(l1, l2) -> Option[ListNode] {
+      if let Some(n1) = l1 {
+          if let Some(n2) = l2 {
+              if n1.val <= n2.val { n1.next = merge(n1.next, l2); Some(n1) }   // Some-tail: no inc
+              else { n2.next = merge(l1, n2.next); Some(n2) }
+          } else { l1 }                                                        // bare-arg tail: needs inc
+      } else { l2 }                                                            // bare-arg tail: needs inc
+  }
+  ```
+
+  A single exit-block inc serves all leaves: it over-counts the `Some` leaves (→ leak) or, if suppressed, under-counts the bare-arg leaves (→ UAF). `kara-katas/leetcode/1-100/21-merge-two-sorted-lists/recursive.kara` is interpreter-correct but `karac build` either leaks (~one list/iter) or SIGSEGVs depending on which way the classifier is tuned.
+
+  **What landed (companion commit).** Three sibling fixes that DO compose and are stress-leak-verified ship now: (1) `let mut a = l1;` registering `a` as `Option[shared]` when the RHS aliases another Option-shared binding (`compile_stmt` case (d) — the iterative merge UAF, the primary kata); (2) `inc_branch_buried_option_arg_return` for PURE-bare-arg-tail functions (`pick(l1,l2){ if let Some(_)=l1 {l1} else {l2} }`); (3) `share_option_shared_field_ref_for_arg` — inc a FieldAccess `Option[shared]` arg (`merge(n1.next, l2)`) whose niche read doesn't inc. The classifier in `option_tail_classify` intentionally treats every `Some(...)` tail as fresh, so mixed-tail functions are SKIPPED here (left at their pre-existing behavior) rather than mis-compensated.
+
+  **The fix.** Per-branch compensation: emit the bare-arg-tail inner inc inside the specific branch block that returns it (so only the taken arm pays), not once at the merge block. Needs a tail-position signal threaded through `compile_block` → `compile_if_let` / `compile_match` so each branch knows its final expr is the function's return value, plus the sibling let-site gap (`let x = if c { l1 } else { l2 };` would need the same per-branch inc + `x` registered as `Option[shared]` with a scope-dec to balance it). Verify with `KARAC_RC_TRACE`-style refcount tracing AND a 500k-iter RSS stress (the suite has no leak coverage — a refcount bug passes `cargo test` green; only stress-RSS catches it).
+
+  **Reopen trigger.** Closing kata #21's recursive variant (it is staged interpreter-only). Until then the iterative variant is the shipped/benchmarked form.

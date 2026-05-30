@@ -1102,6 +1102,15 @@ impl<'ctx> super::Codegen<'ctx> {
                 // add_two_numbers(...)` leaked one 100-node chain per
                 // iter at K=500_000).
                 let mut shared_option_info: Option<(String, SharedTypeInfo<'ctx>)> = None;
+                // Set by case (d) below: the RHS aliases an existing
+                // `Option[shared T]` binding, so the new binding is a second
+                // owner of the same chain and must inc the inner ref (the
+                // scope-exit `RcDecOption` queued by `track_rc_option_var`
+                // would otherwise over-decrement). Cases (a)/(b)/(c) don't
+                // set it — annotation/call/field RHS already deliver an owned
+                // or balanced ref (a Call move-out, or the field-read's
+                // balancing inc in `compile_field_access`).
+                let mut option_alias_needs_inner_inc = false;
                 if shared_info.is_none() {
                     if let PatternKind::Binding(var_name) = &pattern.kind {
                         // (a) Explicit annotation.
@@ -1188,6 +1197,66 @@ impl<'ctx> super::Codegen<'ctx> {
                                             }
                                         }
                                     }
+                                }
+                            }
+                        }
+                        // (d) Untyped let aliasing another `Option[shared T]`
+                        //     binding: `let mut a = l1;` where `l1` is a tracked
+                        //     Option[shared] parameter / binding (registered in
+                        //     `var_option_shared_heap`). Without this, `a` is
+                        //     never registered, so the cursor reassignment
+                        //     `a = na.next;` finds no `var_option_shared_heap`
+                        //     entry and performs ZERO refcount management — the
+                        //     node `a` advances onto is never retained and is
+                        //     freed when a later splice (`tail.next = Some(nb)`)
+                        //     overwrites the prior node's `.next` (the niche
+                        //     field store releases the displaced inner). The
+                        //     node is still reachable through `a` but its ref
+                        //     was never counted → use-after-free. This is the
+                        //     merge-two-sorted-lists (LeetCode #21) cursor idiom.
+                        //
+                        //     `a` becomes a second owner of `l1`'s chain, so the
+                        //     inner ref must be inc'd here (flagged); the
+                        //     scope-exit `RcDecOption` `track_rc_option_var`
+                        //     queues for `a` balances it. The reverse-lookup of
+                        //     `shared_types` by `heap_type` only consumes
+                        //     `info.heap_type` (used by `track_rc_option_var`);
+                        //     since structurally-equal anonymous heap layouts
+                        //     compare equal, the resolved `heap_type` is correct
+                        //     regardless of which same-layout name is picked —
+                        //     the same reverse-lookup `track_rc_option_var`
+                        //     itself already relies on via `struct_name_for_heap_type`.
+                        if shared_option_info.is_none() {
+                            if let ExprKind::Identifier(rhs_name) = &value.kind {
+                                if let Some(heap_type) =
+                                    self.var_option_shared_heap.get(rhs_name.as_str()).copied()
+                                {
+                                    if let Some(info) = self
+                                        .shared_types
+                                        .values()
+                                        .find(|i| i.heap_type == heap_type)
+                                        .cloned()
+                                    {
+                                        shared_option_info = Some((var_name.clone(), info));
+                                    }
+                                }
+                            }
+                        }
+                        // Aliasing acquire: when the RHS is an Identifier naming
+                        // an existing `Option[shared T]` binding, the new
+                        // binding is a SECOND owner of that chain and must inc
+                        // the inner ref. Fires for both the annotated path
+                        // (case a, `let a: Option[T] = l1`) and the untyped
+                        // path (case d, `let mut a = l1`). Cases b/c (Call /
+                        // FieldAccess RHS) are excluded by the Identifier check —
+                        // a Call move-out already owns its ref, and the field
+                        // read in `compile_field_access` emits its own balancing
+                        // inc. Gated on `shared_option_info` being resolved so
+                        // the inner heap type is known.
+                        if shared_option_info.is_some() {
+                            if let ExprKind::Identifier(rhs_name) = &value.kind {
+                                if self.var_option_shared_heap.contains_key(rhs_name.as_str()) {
+                                    option_alias_needs_inner_inc = true;
                                 }
                             }
                         }
@@ -1398,6 +1467,19 @@ impl<'ctx> super::Codegen<'ctx> {
                             self.zero_init_option_slot_in_entry_block(slot.ptr, option_ty);
                         }
                         self.track_rc_option_var(var_name, slot.ptr, option_ty, info.heap_type);
+                        // Case (d) aliasing acquire: the new binding is a second
+                        // owner of the RHS binding's chain — inc the inner ref so
+                        // the just-queued scope-exit `RcDecOption` is balanced.
+                        // Load the slot back (it now holds the aliased Option
+                        // value) and inc its inner under the standard Some-tag +
+                        // null guard.
+                        if option_alias_needs_inner_inc {
+                            let loaded = self
+                                .builder
+                                .build_load(option_ty, slot.ptr, "opt.alias.inc.load")
+                                .unwrap();
+                            self.emit_option_inner_rc_inc_for_loaded(loaded, info.heap_type);
+                        }
                     }
                 }
                 // Track Vec variables for scope cleanup.
