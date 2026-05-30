@@ -412,4 +412,48 @@ fn main() with sends(Network) receives(Network) {
             "main should invoke the HttpError drop fn at the Err-arm scope exit; body was:\n{main_body}"
         );
     }
+
+    /// Phase-8 line 39 follow-up — a chained `RequestBuilder` configured
+    /// but never `.send()`-ed and never bound (`c.request(url).header(...);`
+    /// as a discarded statement) is a temporary; Kāra has no general
+    /// temporary-drop, so its `HTTP_BUILDERS` entry would leak. The
+    /// `StmtKind::Expr` arm frees the abandoned handle via
+    /// `karac_runtime_http_builder_free`. A `.send()`-ed (or let-bound)
+    /// chain is consumed / drop-tracked, so it must NOT get the extra free.
+    #[test]
+    fn test_ir_abandoned_request_builder_frees_handle() {
+        let ir = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/api";
+    c.request("GET", url).header("X-Custom", "abc");
+}
+"#,
+        );
+        let main_body = function_body(&ir, "main").expect("main body");
+        assert!(
+            main_body.contains("call void @karac_runtime_http_builder_free("),
+            "an abandoned chained builder must free its handle; body was:\n{main_body}"
+        );
+
+        // A sent chain is consumed by `_builder_send` (which removes the
+        // entry); the `let _r = …send()` binds a `Result`, not a builder,
+        // so no `_builder_free` should be emitted.
+        let ir_sent = ir_for(
+            r#"
+fn main() with sends(Network) receives(Network) {
+    let c = Client.new();
+    let url = "http://127.0.0.1:65535/api";
+    let _r = c.request("GET", url).header("X-Custom", "abc").send();
+}
+"#,
+        );
+        let sent_body = function_body(&ir_sent, "main").expect("main body");
+        assert!(
+            !sent_body.contains("call void @karac_runtime_http_builder_free("),
+            "a sent builder is consumed by _builder_send; no _builder_free expected; \
+             body was:\n{sent_body}"
+        );
+    }
 }

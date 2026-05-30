@@ -1601,7 +1601,12 @@ impl<'ctx> super::Codegen<'ctx> {
                 // they don't reach this fallback.)
             }
             StmtKind::Expr(expr) => {
-                self.compile_expr(expr)?;
+                let val = self.compile_expr(expr)?;
+                // Phase-8 line 39 follow-up — `c.request(url).header(...);`
+                // discards a live RequestBuilder temporary; free its
+                // abandoned HTTP_BUILDERS handle (no-op for non-builder /
+                // already-sent chains).
+                self.free_discarded_request_builder_temp(expr, val);
                 Ok(())
             }
             StmtKind::Assign { target, value } => {
@@ -2114,6 +2119,63 @@ impl<'ctx> super::Codegen<'ctx> {
             }
         }
         None
+    }
+
+    /// Phase-8 line 39 follow-up — does `expr` evaluate to a live
+    /// (un-`send()`-ed) `RequestBuilder` value minted by a `.request(...)`
+    /// chain? A chained builder produced as a *discarded* statement
+    /// (`c.request(url).header(...);` with no `.send()` and no binding) is
+    /// a temporary, and Kāra has no general temporary-drop, so its
+    /// runtime `HTTP_BUILDERS` entry would leak until process exit. When
+    /// this returns true the `StmtKind::Expr` / wildcard-`let _` arms free
+    /// the handle off the discarded value via
+    /// `karac_runtime_http_builder_free`.
+    ///
+    /// A chain ending in `.send()` yields a `Result` (and the runtime
+    /// already removed the entry), so it returns false. An `Identifier`
+    /// root (a let-bound builder) is excluded — those are drop-tracked by
+    /// their own `StructDrop`; only the unbound `.request(...)`-rooted
+    /// method chain is a leaking temporary.
+    pub(super) fn expr_is_live_request_builder_temp(expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::MethodCall { object, method, .. } => match method.as_str() {
+                // `Client.request(method, url)` mints a fresh builder.
+                "request" => true,
+                // The owned-self setters return the same live builder.
+                "header" | "body" | "timeout" => Self::expr_is_live_request_builder_temp(object),
+                // `send` consumes it into a `Result`; anything else isn't
+                // part of a builder chain.
+                _ => false,
+            },
+            _ => false,
+        }
+    }
+
+    /// Free the abandoned-handle of a discarded live `RequestBuilder`
+    /// temporary (the value `compile_expr` produced for `discarded_expr`).
+    /// No-op unless `discarded_expr` is a `.request(...)`-rooted chain
+    /// that wasn't `.send()`-ed (see `expr_is_live_request_builder_temp`).
+    pub(super) fn free_discarded_request_builder_temp(
+        &self,
+        discarded_expr: &Expr,
+        val: inkwell::values::BasicValueEnum<'ctx>,
+    ) {
+        if !Self::expr_is_live_request_builder_temp(discarded_expr) {
+            return;
+        }
+        let BasicValueEnum::StructValue(sv) = val else {
+            return;
+        };
+        let Ok(handle) = self.builder.build_extract_value(sv, 0, "rb.abandon.handle") else {
+            return;
+        };
+        let free_fn = self
+            .module
+            .get_function("karac_runtime_http_builder_free")
+            .expect("karac_runtime_http_builder_free declared in Codegen::new");
+        let _ = self
+            .builder
+            .build_call(free_fn, &[handle.into_int_value().into()], "");
     }
 }
 
