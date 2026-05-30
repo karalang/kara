@@ -18,9 +18,19 @@
 
 mod common;
 
-use karac::test_main_synth::append_test_main;
+use karac::ast::{Expr, ExprKind};
+use karac::test_main_synth::{append_test_main, ProviderFixture};
+use karac::token::Span;
 
 fn build_and_run_test_fn(src: &str, test_fn_name: &str) -> Option<(i32, String, String)> {
+    build_and_run_test_fn_with_fixtures(src, test_fn_name, &[])
+}
+
+fn build_and_run_test_fn_with_fixtures(
+    src: &str,
+    test_fn_name: &str,
+    fixtures: &[ProviderFixture],
+) -> Option<(i32, String, String)> {
     use karac::codegen::{compile_to_object_with_options, link_executable};
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
@@ -33,14 +43,21 @@ fn build_and_run_test_fn(src: &str, test_fn_name: &str) -> Option<(i32, String, 
         }
         panic!("{}", msg);
     }
+    // The slice c.2 synth point — runs *before* resolve / typecheck so
+    // the synthesized let bindings (one per fixture) flow through the
+    // typechecker's `var_type_names` registration. With synth-after-
+    // typecheck the codegen's `infer_provider_type_name` falls back to
+    // a stale default for the new binding (typically the HTTP `Client`
+    // built-in's name) and rejects the `with_provider` call with a
+    // "no vtable found" error. The same ordering will apply to the
+    // production `cmd_test` cutover in slice c.3 — each test compiles
+    // as its own program, so the parse → synth → resolve → typecheck
+    // → lower → codegen sequence runs per test.
+    append_test_main(&mut parsed.program, test_fn_name, fixtures);
+
     let resolved = karac::resolve(&parsed.program);
     let typed = karac::typecheck(&parsed.program, &resolved);
     karac::lower(&mut parsed.program, &typed);
-
-    // The slice c.2 synth point: append a `main` that calls the
-    // designated test fn. Codegen sees a normal Program with one
-    // entry point afterwards.
-    append_test_main(&mut parsed.program, test_fn_name);
 
     let id = COUNTER.fetch_add(1, Ordering::Relaxed);
     let obj_path = format!("/tmp/karac_synth_{}_{}.o", std::process::id(), id);
@@ -138,6 +155,124 @@ fn test_uses_helper() {
     );
     if let Some((exit, _stdout, stderr)) = r {
         assert_eq!(exit, 0, "expected exit 0; stderr={:?}", stderr);
+    }
+}
+
+/// Build a `Call(Identifier(name), [])` Expr — the no-arg call shape
+/// used by the fixture tests below for provider constructors like
+/// `make_provider()`. Matches the AST the parser produces for the same
+/// surface syntax, so codegen sees an identical shape regardless of
+/// whether the call came from parsed source or synth.
+fn synth_no_arg_call(name: &str) -> Expr {
+    let zero = Span::default();
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Identifier(name.to_string()),
+                span: zero.clone(),
+            }),
+            args: Vec::new(),
+        },
+        span: zero,
+    }
+}
+
+#[test]
+fn test_synth_single_fixture_wraps_test_fn() {
+    // The test fn calls a resource method (`Greeting.greet()`). Without
+    // a provider frame on the stack, the call would fail at the
+    // runtime's `karac_provider_lookup` step. The synthesized main's
+    // outermost `with_provider[Greeting](make_helper(), || test_fn())`
+    // pushes a frame first, the test fn's `Greeting.greet()` resolves
+    // through the vtable, the assert_eq passes.
+    let src = r#"
+pub trait Counter {
+    fn count(mut ref self) -> i64;
+}
+
+pub effect resource Cnt: Counter;
+
+pub struct Helper {
+    val: i64,
+}
+
+impl Counter for Helper {
+    fn count(mut ref self) -> i64 {
+        self.val
+    }
+}
+
+fn make_helper() -> Helper {
+    Helper { val: 42 }
+}
+
+fn test_resolves_provider() {
+    assert_eq(Cnt.count(), 42);
+}
+"#;
+    let fixtures = vec![ProviderFixture {
+        resource_path: "Cnt".to_string(),
+        constructor: synth_no_arg_call("make_helper"),
+    }];
+    let r = build_and_run_test_fn_with_fixtures(src, "test_resolves_provider", &fixtures);
+    if let Some((exit, stdout, stderr)) = r {
+        assert_eq!(exit, 0, "expected exit 0; stdout={:?} stderr={:?}", stdout, stderr);
+        assert!(
+            !stderr.contains("KARAC_TEST_FAILURE"),
+            "stderr should not contain failure marker; got {:?}",
+            stderr
+        );
+    }
+}
+
+#[test]
+fn test_synth_two_fixtures_nest_in_source_order() {
+    // Both `R1.greet()` and `R2.greet()` resolve through the runtime
+    // provider stack. Source-order fixtures must produce nested
+    // `with_provider[R1](.., || with_provider[R2](.., || test_fn()))`
+    // — if either fixture were missing or ordering were wrong, the
+    // inner test fn's resource lookup would fail and the test would
+    // exit non-zero.
+    let src = r#"
+pub trait Sayer {
+    fn value(mut ref self) -> i64;
+}
+
+pub effect resource R1: Sayer;
+pub effect resource R2: Sayer;
+
+pub struct A { x: i64 }
+pub struct B { y: i64 }
+
+impl Sayer for A {
+    fn value(mut ref self) -> i64 { self.x }
+}
+
+impl Sayer for B {
+    fn value(mut ref self) -> i64 { self.y }
+}
+
+fn make_a() -> A { A { x: 1 } }
+fn make_b() -> B { B { y: 2 } }
+
+fn test_uses_both() {
+    assert_eq(R1.value(), 1);
+    assert_eq(R2.value(), 2);
+}
+"#;
+    let fixtures = vec![
+        ProviderFixture {
+            resource_path: "R1".to_string(),
+            constructor: synth_no_arg_call("make_a"),
+        },
+        ProviderFixture {
+            resource_path: "R2".to_string(),
+            constructor: synth_no_arg_call("make_b"),
+        },
+    ];
+    let r = build_and_run_test_fn_with_fixtures(src, "test_uses_both", &fixtures);
+    if let Some((exit, stdout, stderr)) = r {
+        assert_eq!(exit, 0, "expected exit 0; stdout={:?} stderr={:?}", stdout, stderr);
     }
 }
 
