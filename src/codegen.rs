@@ -234,18 +234,76 @@ pub fn jit_run_main(
 
     let engine = cg
         .module
-        .create_jit_execution_engine(OptimizationLevel::Default)
+        .create_jit_execution_engine(OptimizationLevel::None)
         .map_err(|e| format!("Failed to create JIT engine: {}", e))?;
 
+    // Slice a.2 — explicit symbol bindings for libc functions our IR
+    // calls. MCJIT on macOS arm64 (LLVM 18 + inkwell 0.9) fails to
+    // resolve external symbols via the default RTDyldMemoryManager;
+    // unresolved calls land at PC=0 and the thread hangs (sample
+    // confirms — see wip-always-jit.md § slice (a) close-out).
+    // `add_global_mapping` bypasses RTDyld's lookup by binding LLVM
+    // FunctionValues to in-process addresses directly.
+    jit_bind_libc_symbols(&engine, &cg.module);
+
     // LLVM `main` signature is `i32 ()` — see `functions.rs:61`.
+    //
+    // Bypass `engine.get_function`'s `JitFunction` wrapper — its
+    // `transmute_copy` path appears to lose the address on this inkwell
+    // 0.9 / LLVM 18 / arm64-darwin combination (jit_probe_main_address
+    // shows `get_function_address` returns a valid `0x...`, but calling
+    // through `JitFunction.call()` lands at PC=0). Direct transmute of
+    // the usize → fn pointer skips the wrapper.
+    // Bypass `engine.get_function`'s `JitFunction` wrapper. On
+    // macOS arm64 / inkwell 0.9 / LLVM 18, modules that call any
+    // external symbol (malloc, free, printf, runtime fns) JIT to a
+    // valid `get_function_address` but the JITted code jumps to PC=0
+    // shortly after entry — sample-confirmed; see wip-always-jit.md
+    // § slice (a) close-out. Pure-internal modules (arithmetic, control
+    // flow, helper-fn calls) run correctly through this path.
+    let addr = engine
+        .get_function_address("main")
+        .map_err(|e| format!("Failed to look up main: {}", e))?;
     type MainFn = unsafe extern "C" fn() -> i32;
-    let result = unsafe {
-        let main_fn = engine
-            .get_function::<MainFn>("main")
-            .map_err(|e| format!("Failed to look up main: {}", e))?;
-        main_fn.call()
-    };
+    let main_fn: MainFn = unsafe { std::mem::transmute(addr) };
+    let result = unsafe { main_fn() };
     Ok(result)
+}
+
+/// Bind every libc symbol that karac codegen may emit `declare` lines for
+/// to its in-process address. Skips any symbol the current module doesn't
+/// reference — `module.get_function(name)` returns `None` for symbols not
+/// declared, and we just move on.
+#[cfg(feature = "mcjit_prototype")]
+fn jit_bind_libc_symbols(
+    engine: &inkwell::execution_engine::ExecutionEngine<'_>,
+    module: &Module<'_>,
+) {
+    extern "C" {
+        fn malloc(size: usize) -> *mut std::ffi::c_void;
+        fn free(ptr: *mut std::ffi::c_void);
+        fn printf(fmt: *const i8, ...) -> i32;
+        fn snprintf(s: *mut i8, n: usize, fmt: *const i8, ...) -> i32;
+        fn strlen(s: *const i8) -> usize;
+        fn memcmp(a: *const std::ffi::c_void, b: *const std::ffi::c_void, n: usize) -> i32;
+        fn strcmp(a: *const i8, b: *const i8) -> i32;
+        fn exit(status: i32);
+    }
+    let bindings: &[(&str, usize)] = &[
+        ("malloc", malloc as *const () as usize),
+        ("free", free as *const () as usize),
+        ("printf", printf as *const () as usize),
+        ("snprintf", snprintf as *const () as usize),
+        ("strlen", strlen as *const () as usize),
+        ("memcmp", memcmp as *const () as usize),
+        ("strcmp", strcmp as *const () as usize),
+        ("exit", exit as *const () as usize),
+    ];
+    for (name, addr) in bindings {
+        if let Some(fv) = module.get_function(name) {
+            engine.add_global_mapping(&fv, *addr);
+        }
+    }
 }
 
 // ── Codegen ────────────────────────────────────────────────────
