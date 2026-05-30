@@ -33,6 +33,7 @@
 //!    globals, lands with `std.panic` (separate Phase 8 entry).
 
 mod clone;
+mod emutls;
 pub mod event_loop;
 mod file;
 mod map;
@@ -104,6 +105,12 @@ pub fn __preserve_no_mangle_symbols() -> usize {
         karac_error_trace_push,
         karac_error_trace_clear,
     );
+    // Emulated-TLS dispatch (LLJIT path; see `runtime/src/emutls.rs`).
+    // LLVM-emitted `#[thread_local]` lowering under LLJIT calls
+    // `__emutls_get_address`, which compiler-rt provides on platforms
+    // that need it but isn't in the karac process. The custom impl
+    // here is a `dlsym`-resolvable shim.
+    keep!(emutls::__emutls_get_address);
     // Debugger Contract.
     keep!(
         karac_runtime_get_current_frame,
