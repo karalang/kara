@@ -710,75 +710,73 @@ fn main() {
         })
     }
 
-    /// W3.3 LLJIT dispatch. Mirrors `tests/lljit_e2e.rs::jit_run_program`
-    /// but returns the `CapturedRun` shape (stdout + stderr) the AOT
-    /// path uses, so callers don't need to fork on the dispatch path.
-    /// Stderr is always empty — see comment in the dispatch site.
+    /// W3.4 LLJIT dispatch — **subprocess** helper instead of
+    /// in-process JIT. Writes the codegen-emitted LLVM IR to a tempfile
+    /// and shells out to the `karac_jit_runner` bin target; that helper
+    /// runs the LLJIT compile + executes `main` and exits with main's
+    /// return code (or with `emit_panic`'s `exit(1)` when a runtime
+    /// check fires). `Command::output` via the existing hang-watchdog
+    /// captures stdout + stderr + exit code identically to the AOT path.
+    ///
+    /// **Why subprocess rather than in-process (W3.3 → W3.4).** W3.3 ran
+    /// the JIT in the test runner itself. That works for the 134 tests
+    /// that don't panic, but tests which *intentionally* trip a bounds
+    /// check, map-miss, or runtime abort terminate the runner via
+    /// `exit(1)` / `abort()`, killing the whole `cargo test` invocation.
+    /// Subprocess isolation collapses two known stop-point classes —
+    /// panic-asserting tests **and** stderr-atexit `?`-trace tests (the
+    /// runtime's atexit printer now fires on the child's exit, not on
+    /// test-binary exit) — into a non-issue.
+    ///
+    /// The "always-JIT" promise lives in production (users running
+    /// `karac run foo.kara` get true in-process JIT) and in the direct
+    /// engine-driven tests under `tests/lljit_prototype.rs` /
+    /// `tests/lljit_e2e.rs`. The codegen suite uses subprocess JIT
+    /// only as a test-runner artifact, parallel to how the AOT codegen
+    /// suite uses subprocess-execed binaries.
     #[cfg(feature = "lljit_prototype")]
-    fn jit_dispatch(program: &karac::ast::Program, _filename: Option<&str>) -> Option<CapturedRun> {
-        use karac::codegen::{compile_to_ir, LLJITEngine};
-        use std::io::{Read, Seek, SeekFrom};
-        use std::os::fd::AsRawFd;
+    fn jit_dispatch(program: &karac::ast::Program, filename: Option<&str>) -> Option<CapturedRun> {
+        use karac::codegen::compile_to_ir_with_options;
+        use std::io::Write;
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
 
         let _ = super::force_link_karac_runtime();
 
-        let ir = compile_to_ir(program, None, None).expect("compile_to_ir");
-        let engine = LLJITEngine::new().ok()?;
-        engine.add_ir_module(&ir).expect("jit add_ir_module");
-        let addr = engine.lookup_address("main").expect("jit lookup main");
-
-        let stdout = unsafe {
-            libc::fflush(std::ptr::null_mut());
-            let saved = libc::dup(1);
-            assert!(saved >= 0, "dup(stdout) failed");
-            let mut tmp = jit_tempfile().expect("tempfile");
-            let rc = libc::dup2(tmp.as_raw_fd(), 1);
-            assert!(rc >= 0, "dup2 redirect failed");
-
-            type MainFn = unsafe extern "C" fn() -> i32;
-            let main_fn: MainFn = std::mem::transmute(addr as usize);
-            let _exit = main_fn();
-
-            libc::fflush(std::ptr::null_mut());
-            let rc = libc::dup2(saved, 1);
-            assert!(rc >= 0, "dup2 restore failed");
-            libc::close(saved);
-
-            tmp.seek(SeekFrom::Start(0)).expect("seek");
-            let mut out = String::new();
-            tmp.read_to_string(&mut out).expect("read");
-            out
+        // Codegen failures are programming bugs in the compiler or test
+        // — surface loudly, mirroring the AOT path's `panic!` on
+        // `compile_to_object` failure. `filename` is threaded through
+        // so `?`-propagation traces print `<file>:<line>:<col>`
+        // consistently with the AOT path.
+        let ir = match compile_to_ir_with_options(program, None, None, filename, None) {
+            Ok(ir) => ir,
+            Err(e) => panic!("compile_to_ir failed for JIT dispatch: {}", e),
         };
 
-        Some(CapturedRun {
-            stdout,
-            // Stderr is per-test-empty under the JIT path. The
-            // runtime's `karac_error_trace_push` atexit handler only
-            // fires once per test-binary exit, so trace-dependent
-            // assertions can't run in this dispatch. Tests that check
-            // stderr will see "" and fail their assertions — that's
-            // the W3.3 known limitation, addressed in W3.4+ if needed.
-            stderr: String::new(),
-        })
-    }
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let ir_path = format!("/tmp/karac_jit_ir_{}_{}.ll", std::process::id(), id);
+        {
+            let mut f = std::fs::File::create(&ir_path).expect("create IR tempfile");
+            f.write_all(ir.as_bytes()).expect("write IR");
+        }
 
-    #[cfg(feature = "lljit_prototype")]
-    fn jit_tempfile() -> std::io::Result<std::fs::File> {
-        use std::ffi::{CStr, CString};
-        use std::os::fd::FromRawFd;
-        let template = CString::new("/tmp/karac_jit_codegen_XXXXXX").unwrap();
-        let mut bytes = template.into_bytes_with_nul();
-        let fd = unsafe { libc::mkstemp(bytes.as_mut_ptr() as *mut libc::c_char) };
-        if fd < 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        let path = CStr::from_bytes_with_nul(&bytes).unwrap();
-        unsafe {
-            libc::unlink(path.as_ptr());
-        }
-        Ok(std::fs::File::from(unsafe {
-            std::os::fd::OwnedFd::from_raw_fd(fd)
-        }))
+        // `CARGO_BIN_EXE_<name>` is a cargo-set compile-time env var
+        // resolving to the helper binary's path. Cargo guarantees the
+        // bin target is built before the test crate when both share
+        // the workspace — no runtime path-hunting needed.
+        let runner = env!("CARGO_BIN_EXE_karac_jit_runner");
+        let mut cmd = std::process::Command::new(runner);
+        cmd.arg(&ir_path);
+
+        let output = output_with_hang_watchdog(cmd);
+
+        let _ = std::fs::remove_file(&ir_path);
+
+        let output = output?;
+        Some(CapturedRun {
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        })
     }
 
     /// Like `run_program` but also runs the ownership checker and passes the

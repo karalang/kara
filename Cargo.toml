@@ -32,7 +32,28 @@ mcjit_prototype = ["llvm"]
 # Phase-7 L560 W1+ gate: orc2/LLJIT wrap, calling `llvm-sys::orc2`
 # directly (inkwell does not expose ORC v2). Off by default; promoted
 # to default + integrated into `karac repl`/`karac test` once W6 closes.
-lljit_prototype = ["llvm", "dep:llvm-sys"]
+#
+# W3.4: pulls `karac-runtime` in as a regular optional dep (not just
+# dev-dep) so the `karac_jit_runner` bin target — the subprocess
+# helper that isolates JIT'd panics from `cargo test`'s runner — can
+# link the runtime. Production builds with the default feature set
+# don't activate this dep; the AOT path keeps consuming `libkarac_runtime.a`
+# as a static archive instead.
+lljit_prototype = ["llvm", "dep:llvm-sys", "dep:karac-runtime"]
+
+# Phase-7 L560 W3.4 — subprocess helper for JIT panic isolation. Takes
+# a karac-emitted LLVM IR file on argv, runs it through `LLJITEngine`,
+# exits with the JIT'd `main`'s return code. `tests/codegen.rs::jit_dispatch`
+# shells out to this binary instead of running the JIT in-process, so
+# `exit(1)` from a runtime panic (bounds check, map-miss, slice OOB)
+# terminates only the helper child — `cargo test`'s runner is unaffected,
+# `Command::output` captures stdout/stderr/exit-code identically to the
+# AOT subprocess path. Only built when `lljit_prototype` is on; not
+# shipped in the default karac binary set.
+[[bin]]
+name = "karac_jit_runner"
+path = "src/bin/karac_jit_runner.rs"
+required-features = ["lljit_prototype"]
 
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }
@@ -42,6 +63,15 @@ inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = 
 # don't end up with two LLVM copies. Only activated by `lljit_prototype`
 # feature — the normal `karac build` / AOT path keeps using inkwell-only.
 llvm-sys = { version = "181", features = ["prefer-dynamic"], optional = true }
+# Phase-7 L560 W3.4 (subprocess-helper for panic isolation): when the
+# `lljit_prototype` feature is on, the `karac_jit_runner` bin target
+# (src/bin/karac_jit_runner.rs) links the runtime so JIT'd Kāra
+# programs can resolve `karac_*` symbols at JIT-link time. Optional
+# regular dep (not dev-dep) because `[[bin]]` targets can't see
+# `[dev-dependencies]`. The same crate continues to be statically
+# linked as a `.a` for AOT builds via `link_executable`, untouched
+# by this dep wiring.
+karac-runtime = { path = "runtime", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
 # Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
@@ -75,20 +105,14 @@ ureq = "2"
 rustyline = "18.0.0"
 
 [dev-dependencies]
-# Phase-7 L560 W3: link `karac-runtime` into the test binary so the
-# LLJIT process-symbol-search generator (per W1) can resolve runtime
-# `karac_*` symbols at JIT-link time. Required for `tests/lljit_e2e.rs`
-# to round-trip Kāra programs that use the runtime (par-blocks,
-# error-return traces, etc.). Production builds (the AOT path via
-# `link_executable`) are unaffected — they consume the runtime as
-# a static archive, not an rlib.
-karac-runtime = { path = "runtime" }
 # Phase-7 L560 W3.1: pipe + dup2 + fork-safe fd dance for capturing
-# stdout written by JIT'd Kāra code in `tests/lljit_e2e.rs`. The
-# JIT executes in-process, so we redirect fd 1 around the call.
-# Transitively present via llvm-sys; promoted to a direct dev-dep
-# so the test code can name `libc::dup2` etc. without going through
-# `llvm_sys::__libc` (which isn't re-exported).
+# stdout written by JIT'd Kāra code in `tests/lljit_e2e.rs` /
+# `tests/lljit_prototype.rs` (the direct in-process LLJIT validation
+# tests; `tests/codegen.rs::jit_dispatch` no longer needs libc as of
+# W3.4 — it shells out to `karac_jit_runner` and lets `Command::output`
+# capture stdout/stderr). Transitively present via llvm-sys; promoted
+# to a direct dev-dep so the test code can name `libc::dup2` etc.
+# without going through `llvm_sys::__libc` (which isn't re-exported).
 libc = "0.2"
 
 # Phase-8 std.http HTTPS test client (`tests/http_server.rs` E2E for
