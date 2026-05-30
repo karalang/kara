@@ -22,9 +22,16 @@ COMMANDS:
     init [<name>]     Scaffold a new Kāra project. Bare `karac init`
                       scaffolds into the current directory; `karac init
                       <name>` creates `./<name>/` and scaffolds there.
-                      Flags: --bin (default) or --lib; --force overrides
-                      the abort when kara.toml / src/main.kara /
-                      src/lib.kara already exist in the CWD form.
+                      Flags: --bin (default), --lib, or --backend;
+                      --force overrides the abort when kara.toml /
+                      src/main.kara / src/lib.kara already exist in the
+                      CWD form.
+    new <name>        Create a new Kāra project in `./<name>/`. Mirrors
+                      `cargo new` vs `cargo init`: positional name
+                      required; --backend (default) for HTTP server
+                      skeleton, --lib for library, --cli for command-
+                      line tool. --data reserved for the Kafka pipeline
+                      scaffold (deferred — phase-8 line 63 sub-entry).
     test [<filter>]   Run the project's tests. Walks the project root,
                       discovers `_test.kara` files, and runs every
                       `test \"case name\" {{ body }}` declaration via the
@@ -443,7 +450,7 @@ EXAMPLES:
 karac init - Scaffold a new Kara project
 
 USAGE:
-    karac init [<name>] [--bin | --lib] [--force]
+    karac init [<name>] [--bin | --lib | --backend] [--force]
 
 ARGS:
     <name>    When provided, creates `./<name>/` and scaffolds there.
@@ -453,9 +460,14 @@ ARGS:
               name from the directory basename.
 
 FLAGS:
-    --bin              Binary project (default): writes `src/main.kara`.
+    --bin              Binary project (default): writes `src/main.kara`
+                       with a `Hello, world!` entry point.
     --lib              Library project: writes `src/lib.kara` with a
                        sample `pub fn add`.
+    --backend          Backend HTTP server skeleton: writes `src/main.kara`
+                       with a `std.http` server on 127.0.0.1:8080, a
+                       `/health` endpoint, and manual path-dispatch.
+                       Equivalent to `karac new <name> --backend`.
     --force            In the current-directory form, overwrite an existing
                        `kara.toml`, `src/main.kara`, or `src/lib.kara`.
                        `.gitignore` is never overwritten. Has no effect
@@ -467,6 +479,50 @@ EXAMPLES:
     karac init                Scaffold a binary project in the current dir
     karac init my_app         Create ./my_app/ as a binary project
     karac init my_lib --lib   Create ./my_lib/ as a library project"
+        }
+        "new" => {
+            "\
+karac new - Create a new Kara project in `./<name>/`
+
+USAGE:
+    karac new <name> [--backend | --lib | --cli] [--force]
+
+ARGS:
+    <name>    Project name (required). Creates `./<name>/` and scaffolds
+              into it. Must match `[a-z][a-z0-9_]*` and not be a reserved
+              keyword. The same string is used as the package name.
+
+FLAGS:
+    --backend          Backend HTTP server skeleton (default): `src/main.kara`
+                       binds `std.http`'s `Server.serve` on 127.0.0.1:8080,
+                       dispatches manually on `req.path()`, ships a
+                       `/health` endpoint. Reinforces the v1
+                       \"default-being-backend\" positioning.
+    --lib              Library project: `src/lib.kara` with a sample
+                       `pub fn add`.
+    --cli              Command-line tool: `src/main.kara` with a
+                       `Hello, world!` entry point (same shape as
+                       `karac init --bin`).
+    --data             Reserved for the Kafka pipeline scaffold (consumer +
+                       processor + sink). Currently surfaces a structured
+                       \"deferred\" diagnostic — the underlying Kafka client
+                       surface is not yet shipped. Tracked at phase-8 line 63
+                       sub-entry.
+    --force            No effect for `karac new` — the positional `<name>`
+                       form always targets a fresh directory. Flag accepted
+                       for shape compatibility with `karac init`.
+    -h, --help         Print this message
+
+EXAMPLES:
+    karac new my_api              Create ./my_api/ with the backend skeleton
+    karac new my_lib --lib        Create ./my_lib/ as a library
+    karac new my_cli --cli        Create ./my_cli/ as a CLI tool
+
+NOTES:
+    `karac new` is to `karac init` what `cargo new` is to `cargo init`:
+    `new` creates a fresh directory, `init` initializes the current one.
+    Both share the same scaffolder; the only differences are the default
+    template and the positional-name requirement."
         }
         "repl" => {
             "\

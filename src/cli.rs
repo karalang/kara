@@ -8282,6 +8282,7 @@ fn cmd_init(directory: Option<String>, template: Template, force: bool) {
             let kind = match template {
                 Template::Bin => "binary",
                 Template::Lib => "library",
+                Template::Backend => "backend",
             };
             println!(
                 "Scaffolded {kind} project `{package_name}` in {}",

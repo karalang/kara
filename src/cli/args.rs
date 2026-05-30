@@ -55,6 +55,7 @@ pub fn parse_args(args: &[String]) -> Command {
         "fix" => parse_fix_command(args),
         "migrate" => parse_migrate_command(args),
         "init" => parse_init_command(args),
+        "new" => parse_new_command(args),
         "test" => parse_test_command(args),
         "repl" => parse_repl_command(args),
         "doc" => Command::Doc,
@@ -885,11 +886,17 @@ fn parse_init_command(args: &[String]) -> Command {
     let mut directory: Option<String> = None;
     let mut bin = false;
     let mut lib = false;
+    let mut backend = false;
     let mut force = false;
     for arg in args.iter().skip(2) {
         match arg.as_str() {
             "--bin" => bin = true,
             "--lib" => lib = true,
+            // Phase-8 line 63 — `--backend` extends `karac init`'s
+            // template menu so users who prefer the bare-cwd init
+            // form can opt into the std.http server skeleton too.
+            // `karac new <name>` uses the same template by default.
+            "--backend" => backend = true,
             "--force" => force = true,
             flag if flag.starts_with("--") => {
                 eprintln!("error: unknown flag '{flag}' for `karac init`");
@@ -904,13 +911,104 @@ fn parse_init_command(args: &[String]) -> Command {
             }
         }
     }
-    if bin && lib {
-        eprintln!("error: --bin and --lib are mutually exclusive");
+    // Mutual-exclusion check across all three template flags. The
+    // legacy two-flag pair (`--bin` / `--lib`) used a simple bool
+    // pair; now that there are three, count how many were passed.
+    let flag_count = (bin as u8) + (lib as u8) + (backend as u8);
+    if flag_count > 1 {
+        eprintln!("error: --bin, --lib, and --backend are mutually exclusive");
         process::exit(1);
     }
-    // `--bin` is the default per CR-36 T1. Absence of both flags is the
-    // common case — scaffold a binary project.
-    let template = if lib { Template::Lib } else { Template::Bin };
+    // `--bin` is the default for `karac init` per CR-36 T1 (back-compat
+    // — existing users that ran `karac init` with no template flag must
+    // continue to get the hello-world skeleton). The new `karac new`
+    // command defaults to `--backend` instead.
+    let template = if lib {
+        Template::Lib
+    } else if backend {
+        Template::Backend
+    } else {
+        Template::Bin
+    };
+    Command::Init {
+        directory,
+        template,
+        force,
+    }
+}
+
+/// Phase-8 line 63 — `karac new <name>` (positional name required;
+/// scaffolds into `./<name>/`). Mirrors `cargo new` vs `cargo init`:
+/// `karac init` initializes the current directory, `karac new`
+/// creates a fresh one. Default template is `--backend` (the v1
+/// backend-first positioning); `--lib` / `--cli` select the other
+/// flavors; `--data` reserved for the Kafka pipeline scaffold once
+/// that surface ships (phase-8 deferred, see line 63 sub-entries).
+fn parse_new_command(args: &[String]) -> Command {
+    let mut directory: Option<String> = None;
+    let mut backend = false;
+    let mut lib = false;
+    let mut cli = false;
+    let mut force = false;
+    for arg in args.iter().skip(2) {
+        match arg.as_str() {
+            "--backend" => backend = true,
+            "--lib" => lib = true,
+            // `--cli` is the discoverable name in `karac new` for the
+            // existing `Template::Bin` shape — the source on disk is
+            // unchanged, only the user-facing flag name differs from
+            // `karac init --bin`.
+            "--cli" => cli = true,
+            "--data" => {
+                // Reserved for the Kafka consumer + processor + sink
+                // scaffold per line 63. The runtime has no Kafka client
+                // today; ship the flag in the parser with a structured
+                // diagnostic instead of "unknown flag" so future users
+                // get a "this is planned, just not yet" signal.
+                eprintln!(
+                    "error: `karac new --data` is reserved for the Kafka pipeline scaffold \
+                     (phase-8 line 63 sub-entry); the underlying `std.process` / Kafka client \
+                     surface is not yet shipped. Use `--backend` for the HTTP server skeleton \
+                     today."
+                );
+                process::exit(1);
+            }
+            "--force" => force = true,
+            flag if flag.starts_with("--") => {
+                eprintln!("error: unknown flag '{flag}' for `karac new`");
+                process::exit(1);
+            }
+            name => {
+                if directory.is_some() {
+                    eprintln!("error: `karac new` takes at most one positional argument");
+                    process::exit(1);
+                }
+                directory = Some(name.to_string());
+            }
+        }
+    }
+    if directory.is_none() {
+        eprintln!(
+            "error: `karac new` requires a project name argument \
+             (use `karac init` to scaffold into the current directory)"
+        );
+        process::exit(1);
+    }
+    let flag_count = (backend as u8) + (lib as u8) + (cli as u8);
+    if flag_count > 1 {
+        eprintln!("error: --backend, --lib, and --cli are mutually exclusive");
+        process::exit(1);
+    }
+    // `--backend` is the default per phase-8 line 63's
+    // "default-being-backend reinforces the positioning at the
+    // friction-zero entry point" framing.
+    let template = if lib {
+        Template::Lib
+    } else if cli {
+        Template::Bin
+    } else {
+        Template::Backend
+    };
     Command::Init {
         directory,
         template,
