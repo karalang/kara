@@ -48,7 +48,7 @@ mcjit_prototype = ["llvm"]
 # link the runtime. Production builds with the default feature set
 # don't activate this dep; the AOT path keeps consuming `libkarac_runtime.a`
 # as a static archive instead.
-lljit_prototype = ["llvm", "dep:llvm-sys", "dep:karac-runtime"]
+lljit_prototype = ["llvm", "dep:llvm-sys", "dep:karac-runtime", "dep:libc"]
 
 # Phase-7 L560 W3.4 — subprocess helper for JIT panic isolation. Takes
 # a karac-emitted LLVM IR file on argv, runs it through `LLJITEngine`,
@@ -81,6 +81,12 @@ llvm-sys = { version = "181", features = ["prefer-dynamic"], optional = true }
 # linked as a `.a` for AOT builds via `link_executable`, untouched
 # by this dep wiring.
 karac-runtime = { path = "runtime", optional = true }
+# slice c-repl.B.A: `karac_jit_runner` needs raw libc fds (`dup`, `dup2`,
+# `fflush`) for the per-cell stdout/stderr redirect dance. Promoted from
+# `[dev-dependencies]` (which `[[bin]]` targets can't see) to an optional
+# regular dep activated by `lljit_prototype`. Production builds with the
+# default feature set don't activate this dep.
+libc = { version = "0.2", optional = true }
 toml = { version = "0.8", default-features = false, features = ["parse"] }
 regex = "1"
 # Slice 2 of the PubGrub resolver entry (phase-5 line 813): structured
