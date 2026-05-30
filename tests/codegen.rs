@@ -13298,6 +13298,58 @@ fn main() {
     }
 
     #[test]
+    fn test_with_provider_e2e_owned_self_dispatch() {
+        // Bug surfaced during slice c.2b: `R.method()` on a trait method
+        // declared with owned `self` (not `ref` / `mut ref`) tripped
+        // `Call parameter type does not match function signature!` from
+        // the LLVM module verifier. Root cause: `try_compile_provider_dispatch`
+        // unconditionally passed the provider's data-pointer as the
+        // first arg, but the impl method's lowered signature takes
+        // `Self` by value for owned `self` — `ptr` vs `{ struct fields }`.
+        // Fix: branch on the self-param's LLVM type; load the struct
+        // from `data_ptr` for owned, pass the ptr directly for ref /
+        // mut ref. This E2E asserts the loaded value comes through
+        // intact end-to-end.
+        let src = "pub trait Counter { fn count(self) -> i64; }\n\
+            pub struct H { val: i64 }\n\
+            impl Counter for H { fn count(self) -> i64 { self.val } }\n\
+            pub effect resource Cnt: Counter;\n\
+            fn main() {\n\
+              let p = H { val: 42 };\n\
+              with_provider[Cnt](p, || { println(Cnt.count()); });\n\
+            }";
+        let Some(out) = run_program(src) else {
+            eprintln!("skipping with_provider owned-self e2e: runtime/linker unavailable");
+            return;
+        };
+        assert_eq!(
+            out.trim(),
+            "42",
+            "expected owned-self dispatch to read self.val (42)"
+        );
+    }
+
+    #[test]
+    fn test_with_provider_e2e_owned_self_with_extra_args() {
+        // Owned-self dispatch with additional method args. The fix's
+        // self-arg construction sits ahead of the user-args loop; this
+        // pins that the trailing args still thread through correctly.
+        let src = "pub trait Adder { fn add(self, x: i64) -> i64; }\n\
+            pub struct H { base: i64 }\n\
+            impl Adder for H { fn add(self, x: i64) -> i64 { self.base + x } }\n\
+            pub effect resource A: Adder;\n\
+            fn main() {\n\
+              let p = H { base: 10 };\n\
+              with_provider[A](p, || { println(A.add(5)); });\n\
+            }";
+        let Some(out) = run_program(src) else {
+            eprintln!("skipping with_provider owned-self+args e2e: runtime/linker unavailable");
+            return;
+        };
+        assert_eq!(out.trim(), "15");
+    }
+
+    #[test]
     fn test_provider_dispatch_skipped_for_non_resource_path() {
         // `Vec::new()` style 2-segment paths must continue routing to
         // compile_assoc_call, not the provider dispatch. No call to

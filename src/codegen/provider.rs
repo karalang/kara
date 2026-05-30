@@ -413,9 +413,59 @@ impl<'ctx> super::Codegen<'ctx> {
             .unwrap()
             .into_pointer_value();
 
-        // 3. Build call args: data_ptr first, then user args.
-        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> =
-            vec![BasicMetadataValueEnum::from(data_ptr)];
+        // 3. Build call args: self first (data_ptr OR loaded struct
+        //    value, see below), then user args.
+        //
+        //    The lowered impl method's `self` lowering depends on the
+        //    source mode: `ref self` / `mut ref self` lower to a `ptr`
+        //    param (the provider's storage address), so we pass
+        //    `data_ptr` directly. Owned `self` lowers to a *by-value*
+        //    struct param — the runtime stack only holds the storage
+        //    address, so we must load the struct value from `data_ptr`
+        //    before the call. Without the load the indirect call's
+        //    arg type (`ptr`) mismatches the signature's first param
+        //    (`{ struct fields... }`) and LLVM's module verifier
+        //    rejects the IR with `Call parameter type does not match
+        //    function signature!`. The load is safe — provider data
+        //    outlives `with_provider`'s body by construction (the
+        //    caller's alloca, kept alive by `karac_provider_push`'s
+        //    stack frame and popped only at the matching
+        //    `karac_provider_pop`). Shared-struct providers are
+        //    already handled upstream — `compile_provider_data_ptr`
+        //    materializes the RC heap pointer; the trait method's
+        //    `self` is `ref Self` in that case, so the load branch is
+        //    not taken.
+        let self_param_ty = fn_type
+            .get_param_types()
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                format!(
+                    "R.method dispatch: provider trait method `{}::{}` has no self parameter \
+                     in its lowered signature — codegen bug",
+                    trait_name, method
+                )
+            })?;
+        let self_arg: BasicMetadataValueEnum<'ctx> = match self_param_ty {
+            inkwell::types::BasicMetadataTypeEnum::PointerType(_) => {
+                BasicMetadataValueEnum::from(data_ptr)
+            }
+            inkwell::types::BasicMetadataTypeEnum::StructType(st) => {
+                let loaded = self
+                    .builder
+                    .build_load(st, data_ptr, "wp.self.owned")
+                    .unwrap();
+                BasicMetadataValueEnum::from(loaded)
+            }
+            other => {
+                return Err(format!(
+                    "R.method dispatch: unexpected self-param lowering `{:?}` for `{}::{}` — \
+                     expected ptr (ref self / mut ref self / shared) or struct (owned self)",
+                    other, trait_name, method
+                ));
+            }
+        };
+        let mut call_args: Vec<BasicMetadataValueEnum<'ctx>> = vec![self_arg];
         for a in args {
             let v = self.compile_expr(&a.value)?;
             call_args.push(BasicMetadataValueEnum::from(v));
