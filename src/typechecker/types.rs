@@ -440,6 +440,11 @@ pub(super) fn impl_table_key(ty: &Type) -> Option<(String, Vec<Type>)> {
         Type::Char => Some(("char".to_string(), Vec::new())),
         Type::Str => Some(("String".to_string(), Vec::new())),
         Type::Named { name, args } => Some((name.clone(), args.clone())),
+        // A refinement keys its own inherent / trait impls under its
+        // nominal name (`impl Positive { ... }`), distinct from the base's
+        // impls. Method resolution consults this first, then the base
+        // (phase-9 step 2, §1C). Non-generic at v1, so no args.
+        Type::Refinement { name, .. } => Some((name.clone(), Vec::new())),
         Type::Ref(inner) | Type::MutRef(inner) => impl_table_key(inner),
         _ => None,
     }
@@ -1245,16 +1250,23 @@ pub(super) fn types_compatible(a: &Type, b: &Type) -> bool {
                     .all(|(a, b)| types_compatible(a, b))
                 && types_compatible(a_r, b_r)
         }
-        // Refinement types — strip to the base and recurse. Identical
-        // refinements (same name + base) already short-circuited via the
-        // `a == b` check at the top; this arm covers refined↔base and
-        // refined↔(different refinement of same base). Step 1 keeps both
-        // directions transparent so the new nominal identity does not
-        // regress the previously alias-transparent behavior. Step 2
-        // (phase-9 line 26) tightens the base→refined direction: a bare
-        // base value will require explicit `try_from` / `as` narrowing,
-        // with only refined→base widening surviving here.
-        (Type::Refinement { .. }, _) => types_compatible(strip_refinement(a), b),
+        // Refinement types — one-directional refined→base widening
+        // (design.md § Refinement Types). `types_compatible(target, source)`
+        // here treats `a` as the slot/target and `b` as the value/source.
+        //
+        // Target is a refinement (`a`): only an *identical* refinement is
+        // accepted, and that already short-circuited via the `a == b` fast
+        // path at the top. A bare base value — or a *different* refinement
+        // over the same base — must narrow explicitly through
+        // `try_from` / `as`, so it falls through to `false` here (no
+        // implicit narrowing into a refined slot).
+        (Type::Refinement { .. }, _) => false,
+        // Source is a refinement (`b`) against a non-refinement target:
+        // widen by stripping to the base and re-checking. This is the
+        // refined→base direction — a `Positive` value is accepted wherever
+        // an `i64` is expected, and (via the `Named`/`Tuple`/etc. arms
+        // recursing into element positions) `Vec[Positive]` against a
+        // `Vec[i64]` slot.
         (_, Type::Refinement { .. }) => types_compatible(a, strip_refinement(b)),
         (Type::Shared(a_name), Type::Shared(b_name)) => a_name == b_name,
         (Type::Rc(a_inner), Type::Rc(b_inner)) => types_compatible(a_inner, b_inner),
@@ -1302,21 +1314,30 @@ mod refinement_tests {
     }
 
     #[test]
-    fn refined_and_base_are_compatible_both_directions() {
+    fn refined_widens_to_base_but_not_the_reverse() {
         let pos = refinement("Positive", Type::Int(IntSize::I64));
         let base = Type::Int(IntSize::I64);
-        // Step 1 keeps the refinement transparent in both directions.
-        assert!(types_compatible(&pos, &base));
+        // `types_compatible(target, source)`: a refined *source* widens
+        // into a base *target* (refined→base) ...
         assert!(types_compatible(&base, &pos));
+        // ... but a bare base value does NOT implicitly narrow into a
+        // refined slot — that requires explicit `try_from` / `as`.
+        assert!(!types_compatible(&pos, &base));
     }
 
     #[test]
-    fn distinct_refinements_over_same_base_are_compatible_via_base() {
-        // Two different refinements of the same base widen to that base
-        // (design.md § LUB rule 4) — so they compare compatible here.
+    fn distinct_refinements_over_same_base_do_not_implicitly_coerce() {
+        // A refined target only accepts an identical refinement; a
+        // *different* refinement over the same base must convert
+        // explicitly (no implicit cross-refinement coercion).
         let positive = refinement("Positive", Type::Int(IntSize::I64));
         let nonzero = refinement("NonZero", Type::Int(IntSize::I64));
-        assert!(types_compatible(&positive, &nonzero));
+        assert!(!types_compatible(&positive, &nonzero));
+        assert!(!types_compatible(&nonzero, &positive));
+        // Both still widen to the shared base in the refined→base direction.
+        let base = Type::Int(IntSize::I64);
+        assert!(types_compatible(&base, &positive));
+        assert!(types_compatible(&base, &nonzero));
     }
 
     #[test]

@@ -1385,6 +1385,11 @@ impl<'a> super::TypeChecker<'a> {
             // structs are non-generic at v1 per design.md § Part 5).
             // Sub-item 2 audit miss caught during sub-item 3a.
             Type::Shared(name) => (name.clone(), Vec::new()),
+            // Refinement types: `impl Positive { ... }` registers under the
+            // refinement's nominal name so its own methods are reachable
+            // and take precedence over the base type's during method
+            // resolution (phase-9 step 2, §1C). Non-generic at v1.
+            Type::Refinement { name, .. } => (name.clone(), Vec::new()),
             // Non-path target types (`impl Foo for (i32, i32)` etc.) are
             // unsupported in v1; bail without registering. Matches the
             // pre-Theme-4 behavior of the path-only short-circuit.

@@ -20134,3 +20134,80 @@ fn refinement_deref_rejected() {
     // Dereference is not a pure predicate construct.
     refinement_predicate_rejected("type Bad = i64 where *self == 0;");
 }
+
+// ── Refinement types (phase-9 line 26, step 2) ──────────────────
+//
+// One-directional refined→base widening + the §1C method base-deref
+// (refinement's own methods win, then the base type's). Exercised via
+// refinement-typed *parameters* — construction (`try_from` / `as`) and
+// elision land in later steps, but a parameter annotation is enough to
+// give a binding the refined type.
+
+#[test]
+fn refinement_widens_to_base_at_call_arg() {
+    // A `Even` value is accepted wherever the base `i64` is expected
+    // (refined→base widening).
+    typecheck_ok(
+        "type Even = i64 where self % 2 == 0;
+         fn takes_i64(x: i64) -> i64 { x }
+         fn use_even(n: Even) -> i64 { takes_i64(n) }",
+    );
+}
+
+#[test]
+fn refinement_base_value_rejected_at_refined_slot() {
+    // A bare `i64` does NOT implicitly narrow into an `Even` slot — that
+    // requires explicit `try_from` / `as` (step 3). The mismatch is a
+    // plain type error here.
+    let errors = typecheck_errors(
+        "type Even = i64 where self % 2 == 0;
+         fn takes_even(e: Even) -> i64 { 0 }
+         fn use_i64(x: i64) -> i64 { takes_even(x) }",
+    );
+    assert!(
+        errors.iter().any(|e| e.kind == TypeErrorKind::TypeMismatch),
+        "expected a TypeMismatch for base->refined narrowing, got: {}",
+        errors
+            .iter()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join(" | ")
+    );
+}
+
+#[test]
+fn refinement_method_resolves_on_base() {
+    // `n.get()` is not declared on the refinement `Positive` itself, so
+    // resolution derefs to the base struct `Box` and finds `Box.get`.
+    typecheck_ok(
+        "struct Box { v: i64 }
+         impl Box { fn get(self) -> i64 { self.v } }
+         type Positive = Box where self.v > 0;
+         fn read(n: Positive) -> i64 { n.get() }",
+    );
+}
+
+#[test]
+fn refinement_own_method_wins_over_base() {
+    // `special` is declared on the refinement `Positive` itself; it
+    // resolves there (own methods win over the base's). `get` on the same
+    // receiver still derefs to the base — the decision is per method name.
+    typecheck_ok(
+        "struct Box { v: i64 }
+         impl Box { fn get(self) -> i64 { self.v } }
+         type Positive = Box where self.v > 0;
+         impl Positive { fn special(self) -> i64 { 1 } }
+         fn both(n: Positive) -> i64 { n.special() + n.get() }",
+    );
+}
+
+#[test]
+fn refinement_string_base_method_resolves() {
+    // Base-deref also routes through the String special-case dispatch:
+    // `Name`'s base is `String`, so `n.len()` resolves via the String
+    // method path after the refinement is stripped.
+    typecheck_ok(
+        "type Name = String where self.len() > 0;
+         fn measure(n: Name) { let _ = n.len(); }",
+    );
+}

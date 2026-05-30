@@ -892,12 +892,38 @@ impl<'a> super::TypeChecker<'a> {
             }
         }
 
-        let obj_ty = self.infer_expr(object);
+        let mut obj_ty = self.infer_expr(object);
         if obj_ty == Type::Error {
             for arg in args {
                 self.infer_expr(&arg.value);
             }
             return Type::Error;
+        }
+
+        // Refinement base-deref (§1C — phase-9 step 2). A method call on a
+        // refinement-typed receiver resolves against the refinement's own
+        // inherent / trait impls *first* (design.md § Method Resolution:
+        // "inherent and trait methods on the refined type win over methods
+        // on the base"), then falls through to the base type's methods.
+        //
+        // The decision is per method name: if the refinement declares no
+        // method of this name, strip to the base so every downstream
+        // dispatch path — the String / Vec / Option special cases below
+        // *and* the generic impl-table search — sees the base receiver.
+        // When the refinement *does* declare the method itself, keep the
+        // refined receiver; the generic search keys impls by the
+        // refinement's nominal name (`impl_table_key` / the
+        // `Type::Refinement` arm of the receiver-name match below).
+        if let Type::Refinement { base, name } = &obj_ty {
+            let has_own_method = self
+                .env
+                .impls
+                .iter()
+                .any(|imp| imp.target_type == *name && imp.methods.contains_key(method));
+            if !has_own_method {
+                let base = (**base).clone();
+                obj_ty = base;
+            }
         }
 
         // Cancel-narrowing side-table: record `Type.method` for this call
@@ -1518,8 +1544,11 @@ impl<'a> super::TypeChecker<'a> {
         // here (sub-item 3a of the `Type::Shared` / `Type::Rc` /
         // `Type::Arc` representation work) — `Rc[Foo].method()` and
         // `let s: SharedStruct; s.method()` resolve through the inner
-        // type's methods. Refinement-base candidate (1C) remains
-        // deferred on `Type::Refinement` from phase-9.
+        // type's methods. A `Type::Refinement` receiver only reaches here
+        // when the refinement declares this method itself (the base-deref
+        // above already stripped the no-own-method case); it keeps its
+        // nominal name so the generic search finds the refinement's own
+        // impl (phase-9 step 2, §1C).
         let receiver_for_lookup: Type = receiver_for_method_lookup(&obj_ty);
         // Opaque foreign types have no methods by definition — impl blocks
         // on them are rejected at `E_OPAQUE_TYPE_NO_INHERENT_OR_TRAIT_IMPLS`,
@@ -1551,6 +1580,10 @@ impl<'a> super::TypeChecker<'a> {
         }
         let (type_name, type_args) = match &receiver_for_lookup {
             Type::Named { name, args } => (name.clone(), args.clone()),
+            // A refinement receiver that survived the base-deref above
+            // (i.e. it declares this method itself) resolves under its
+            // nominal name. Non-generic at v1, so no type args.
+            Type::Refinement { name, .. } => (name.clone(), Vec::new()),
             Type::TypeParam(name) if name == "Self" => {
                 // Self-receiver dispatch (slice 3.5 of the method-resolution
                 // CR — `phase-4-interpreter.md` item 8). `self.method()`
