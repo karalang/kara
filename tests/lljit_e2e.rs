@@ -36,6 +36,38 @@ fn force_link_karac_runtime() -> usize {
 #[used]
 static _FORCE_LINK_CALL_SITE: fn() -> usize = force_link_karac_runtime;
 
+// ── KARAC_SPAWN_SITES test-binary stand-ins ──────────────────────────
+// In AOT builds, codegen emits these globals into the user program's
+// LLVM module; the runtime's `extern KARAC_SPAWN_SITES*` declarations
+// (`runtime/src/lib.rs` ~L1059, `#[cfg(not(test))]`-gated) resolve
+// against them at link time. In the LLJIT integration tests, codegen
+// emits them into each JITted module (visible only inside that
+// module's JITDylib), so the test binary's static link of the runtime
+// rlib has no satisfier for these references.
+//
+// We provide neutral stand-ins here:
+//   - `_ENABLED = 0` so `karac_runtime_has_debug_metadata` returns
+//     false and the slice-4/5 introspection paths short-circuit;
+//   - `_LEN = 0` so any iteration over the table is a no-op;
+//   - `KARAC_SPAWN_SITES` is a 32-byte zero placeholder (alignment 8
+//     to match `KaracSpawnSiteEntry`'s pointer-field alignment).
+// JITted user code reads its OWN KARAC_SPAWN_SITES from its module's
+// definitions — these stand-ins only satisfy the test binary's runtime
+// link, not the user program's runtime behavior.
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_ENABLED: u8 = 0;
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES_LEN: u32 = 0;
+#[no_mangle]
+#[allow(non_upper_case_globals)]
+pub static KARAC_SPAWN_SITES: KaracSpawnSitesPad = KaracSpawnSitesPad([0; 4]);
+
+#[repr(C, align(8))]
+pub struct KaracSpawnSitesPad([u64; 4]);
+unsafe impl Sync for KaracSpawnSitesPad {}
+
 /// JIT-route a Kāra program through `LLJITEngine` and capture its
 /// stdout. Mirrors `tests/codegen.rs::codegen_tests::run_program`'s
 /// return type (`Option<String>`) so individual tests adopting this
@@ -108,6 +140,56 @@ fn jit_run_program(src: &str) -> Option<String> {
     };
 
     Some(captured)
+}
+
+/// Captured stdout + the JIT'd `main`'s C-ABI exit code. Mirrors what
+/// the AOT path's `Output` exposes via `Command::output()`; tests that
+/// need to assert on non-zero exit codes (panics, error returns, etc.)
+/// use this variant instead of `jit_run_program`. W3.2c.
+fn jit_run_program_capturing(src: &str) -> Option<(String, i32)> {
+    let _ = force_link_karac_runtime();
+    let mut parsed = karac::parse(src);
+    if !parsed.errors.is_empty() {
+        let mut msg = String::from("test source failed to parse:\n");
+        for e in &parsed.errors {
+            msg.push_str(&format!("  {:?}\n", e));
+        }
+        panic!("{}", msg);
+    }
+    let resolved = karac::resolve(&parsed.program);
+    let typed = karac::typecheck(&parsed.program, &resolved);
+    karac::lower(&mut parsed.program, &typed);
+
+    let ir = compile_to_ir(&parsed.program, None, None).expect("compile_to_ir");
+
+    let engine = LLJITEngine::new().ok()?;
+    engine.add_ir_module(&ir).expect("add_ir_module");
+    let addr = engine.lookup_address("main").expect("lookup main");
+
+    let (captured, exit_code) = unsafe {
+        libc::fflush(std::ptr::null_mut());
+        let saved_stdout = libc::dup(1);
+        assert!(saved_stdout >= 0, "dup(stdout) failed");
+        let mut tmpfile = tempfile().expect("create tempfile");
+        let rc = libc::dup2(tmpfile.as_raw_fd(), 1);
+        assert!(rc >= 0, "dup2 failed");
+
+        type MainFn = unsafe extern "C" fn() -> i32;
+        let main_fn: MainFn = std::mem::transmute(addr as usize);
+        let exit = main_fn();
+
+        libc::fflush(std::ptr::null_mut());
+        let rc = libc::dup2(saved_stdout, 1);
+        assert!(rc >= 0, "dup2 restore failed");
+        libc::close(saved_stdout);
+
+        tmpfile.seek(SeekFrom::Start(0)).expect("seek");
+        let mut out = String::new();
+        tmpfile.read_to_string(&mut out).expect("read");
+        (out, exit)
+    };
+
+    Some((captured, exit_code))
 }
 
 /// Create a fresh unnamed temp file (O_RDWR). Stays open via the
@@ -206,4 +288,83 @@ fn jit_e2e_fstring_interpolation() {
     let src = "fn main() { let x: i64 = 7; println(f\"x = {x}\"); }";
     let out = jit_run_program(src).expect("jit");
     assert_eq!(out, "x = 7\n");
+}
+
+// ── W3.2 surface ─────────────────────────────────────────────────────
+// par-blocks, `?` on Result, and other surface that depends on runtime
+// symbols beyond the libc/Vec/Map base. The W3.2a finding (KARAC_SPAWN_SITES
+// stand-ins above) was needed before this could link at all.
+
+#[test]
+fn jit_e2e_question_mark_happy_path() {
+    // `?` propagates an Ok through to the surrounding Result. Happy
+    // path: `add_ten(true)` returns Ok(52), main prints 52. Exercises
+    // codegen's `?` lowering + the runtime's karac_error_trace_clear
+    // at startup (which the force-link list covers).
+    let src = r#"
+fn parse_int(flag: bool) -> Result[i64, i64] {
+    if flag { Ok(42_i64) } else { Err(99_i64) }
+}
+fn add_ten(flag: bool) -> Result[i64, i64] {
+    let x = parse_int(flag)?;
+    Ok(x + 10)
+}
+fn main() {
+    match add_ten(true) {
+        Ok(n) => println(n),
+        Err(_) => println(0),
+    }
+}
+"#;
+    let out = jit_run_program(src).expect("jit");
+    assert_eq!(out, "52\n");
+}
+
+#[test]
+fn jit_e2e_question_mark_err_path() {
+    // `?` propagates Err. Codegen emits karac_error_trace_push at the
+    // failure block; runtime's atexit handler prints the trace to
+    // stderr. Stdout only carries the println output from main.
+    let src = r#"
+fn parse_int(flag: bool) -> Result[i64, i64] {
+    if flag { Ok(42_i64) } else { Err(99_i64) }
+}
+fn add_ten(flag: bool) -> Result[i64, i64] {
+    let x = parse_int(flag)?;
+    Ok(x + 10)
+}
+fn main() {
+    match add_ten(false) {
+        Ok(_) => println(0),
+        Err(e) => println(e),
+    }
+}
+"#;
+    let out = jit_run_program(src).expect("jit");
+    assert_eq!(out, "99\n");
+}
+
+#[test]
+fn jit_e2e_exit_code_zero_on_clean_run() {
+    // A clean main exits 0; `jit_run_program_capturing` exposes that
+    // explicitly. Sanity check the variant before pivoting to non-zero
+    // exit code tests (which would need codegen to lower a non-zero
+    // exit from a top-level `Err(_)` — out of scope for W3.2, but the
+    // capturing variant is the right shape for when that lands).
+    let (out, exit) = jit_run_program_capturing("fn main() { println(42); }").expect("jit");
+    assert_eq!(out, "42\n");
+    assert_eq!(exit, 0);
+}
+
+#[test]
+fn jit_e2e_par_block_two_spawns() {
+    // Two arms running in parallel inside a `par {}` block. The block
+    // joins before returning, so both prints complete before main
+    // exits. Print order itself is non-deterministic (worker thread
+    // scheduling), so we sort the lines before comparison.
+    let src = "fn main() {\n  par {\n    println(1);\n    println(2);\n  }\n}";
+    let out = jit_run_program(src).expect("jit");
+    let mut lines: Vec<&str> = out.lines().collect();
+    lines.sort();
+    assert_eq!(lines, vec!["1", "2"]);
 }

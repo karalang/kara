@@ -72,6 +72,37 @@ pub fn __preserve_no_mangle_symbols() -> usize {
     acc = acc.wrapping_add(black_box(map::karac_map_iter_new as *const () as usize));
     acc = acc.wrapping_add(black_box(map::karac_map_iter_next as *const () as usize));
     acc = acc.wrapping_add(black_box(map::karac_map_iter_free as *const () as usize));
+    // par-block + reduce (this lib.rs module — already in scope).
+    acc = acc.wrapping_add(black_box(karac_par_run as *const () as usize));
+    acc = acc.wrapping_add(black_box(karac_par_reduce as *const () as usize));
+    // Error-return trace (`?` propagation).
+    acc = acc.wrapping_add(black_box(karac_error_trace_push as *const () as usize));
+    acc = acc.wrapping_add(black_box(karac_error_trace_clear as *const () as usize));
+    // Debugger Contract — these are reachable from any module that
+    // declares the KARAC_SPAWN_SITES globals (i.e. all karac modules).
+    acc = acc.wrapping_add(black_box(
+        karac_runtime_get_current_frame as *const () as usize,
+    ));
+    acc = acc.wrapping_add(black_box(
+        karac_runtime_for_each_active_frame as *const () as usize,
+    ));
+    acc = acc.wrapping_add(black_box(
+        karac_runtime_has_debug_metadata as *const () as usize,
+    ));
+    acc = acc.wrapping_add(black_box(
+        karac_runtime_list_par_blocks_into as *const () as usize,
+    ));
+    // Providers (Feature 2 § Provider-Rooted Resources). Reachable
+    // from `with_provider {}` codegen.
+    acc = acc.wrapping_add(black_box(karac_provider_push as *const () as usize));
+    acc = acc.wrapping_add(black_box(karac_provider_pop as *const () as usize));
+    acc = acc.wrapping_add(black_box(karac_provider_lookup as *const () as usize));
+    acc = acc.wrapping_add(black_box(
+        karac_provider_set_stack_head as *const () as usize,
+    ));
+    acc = acc.wrapping_add(black_box(
+        karac_provider_get_stack_head as *const () as usize,
+    ));
     acc
 }
 
