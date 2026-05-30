@@ -42,7 +42,25 @@ use rustyline::DefaultEditor;
 use crate::interpreter::Value;
 
 mod display;
+#[cfg(feature = "lljit_prototype")]
+mod jit_runner_client;
 mod util;
+
+/// Slice c-repl.B.B: split a runner-captured stdout byte slice into
+/// the `Vec<String>` shape `WrapperOutcome` expects. The interpreter
+/// populates `captured_output` one line at a time; the JIT runner
+/// returns the raw bytes from a tempfile, so we split on `\n` and
+/// drop the trailing empty string a `\n`-terminated buffer would
+/// produce.
+#[cfg(feature = "lljit_prototype")]
+fn bytes_to_stdout_lines(bytes: &[u8]) -> Vec<String> {
+    let text = String::from_utf8_lossy(bytes);
+    let mut lines: Vec<String> = text.split('\n').map(|s| s.to_string()).collect();
+    if lines.last().map(|s| s.is_empty()).unwrap_or(false) {
+        lines.pop();
+    }
+    lines
+}
 pub use display::{render_display, render_text_plain, DisplayBundle};
 use util::*;
 
@@ -500,6 +518,26 @@ pub struct Session {
     /// snapshot (they don't run main). Rolled back in lockstep with
     /// `cell_history` on diagnostic-side failure.
     cell_effect_history: Vec<CellEffectSnapshot>,
+
+    /// Slice c-repl.B.B: persistent `karac_jit_runner --repl-mode`
+    /// subprocess client, lazily spawned on the first cell when JIT
+    /// mode is on (`KARAC_REPL_JIT=1` at session construction).
+    /// Re-spawned after a cell-induced `exit(1)` terminates the
+    /// runner. `None` either when JIT mode is off or after a death
+    /// + before the next cell.
+    #[cfg(feature = "lljit_prototype")]
+    jit_client: Option<jit_runner_client::ReplRunnerClient>,
+    /// Slice c-repl.B.B: snapshot of `KARAC_REPL_JIT=1` at session
+    /// construction. Env var is read once so a mid-session flip can't
+    /// half-route cells.
+    #[cfg(feature = "lljit_prototype")]
+    jit_enabled: bool,
+    /// Slice c-repl.B.B: monotonic cell id for the JIT subprocess
+    /// protocol framing. The runner echoes the id back on `result`
+    /// lines so framing-integrity drift surfaces as a `RunnerDied`
+    /// classification at the client.
+    #[cfg(feature = "lljit_prototype")]
+    jit_next_cell_id: u64,
 }
 
 /// Per-cell structured effect snapshot used by the line 773 cross-cell
@@ -577,6 +615,12 @@ impl Session {
             persistent_let_provider_scope: Vec::new(),
             pruned_provider_lets: Vec::new(),
             cell_effect_history: Vec::new(),
+            #[cfg(feature = "lljit_prototype")]
+            jit_client: None,
+            #[cfg(feature = "lljit_prototype")]
+            jit_enabled: std::env::var("KARAC_REPL_JIT").as_deref() == Ok("1"),
+            #[cfg(feature = "lljit_prototype")]
+            jit_next_cell_id: 0,
         }
     }
 
@@ -1159,6 +1203,24 @@ impl Session {
         self.auto_clone
     }
 
+    /// Slice c-repl.B.B test hook: flip the JIT-dispatch mode without
+    /// relying on the `KARAC_REPL_JIT=1` env var read at construction.
+    /// `Session::new` reads the env once; tests want explicit control
+    /// without poking shared process state (which Rust 2024 made
+    /// `unsafe`). Production callers should set the env var instead.
+    #[cfg(feature = "lljit_prototype")]
+    pub fn set_jit_enabled_for_tests(&mut self, enabled: bool) {
+        self.jit_enabled = enabled;
+    }
+
+    /// Slice c-repl.B.B inspector: reports whether JIT-dispatch mode
+    /// is active for this session. Used by integration tests to
+    /// confirm the env-var read and by future status meta-commands.
+    #[cfg(feature = "lljit_prototype")]
+    pub fn jit_enabled(&self) -> bool {
+        self.jit_enabled
+    }
+
     /// Inspector for the accumulated `let`-statement replay buffer. Used by
     /// integration tests and by a future `:show lets` meta-command.
     pub fn persistent_lets(&self) -> &[String] {
@@ -1551,6 +1613,20 @@ impl Session {
 
             crate::lower(&mut parsed.program, &typed);
 
+            // Slice c-repl.B.B: when `KARAC_REPL_JIT=1` was set at
+            // session construction, route the cell through the
+            // persistent `karac_jit_runner --repl-mode` subprocess
+            // (slice B.A) instead of the in-process tree-walk
+            // interpreter. The branch returns directly with a
+            // WrapperOutcome so the interpreter-specific snapshot
+            // replay / watch-name setup below is skipped — the JIT
+            // path doesn't yet implement value-snapshot semantics
+            // (filed as slice c-repl.B.4).
+            #[cfg(feature = "lljit_prototype")]
+            if self.jit_enabled {
+                return Ok(self.run_cell_via_jit(&parsed.program, capture, notes));
+            }
+
             let mut interp = crate::interpreter::Interpreter::new(&parsed.program, &typed);
             if capture {
                 interp.captured_output = Some(Vec::new());
@@ -1783,6 +1859,114 @@ impl Session {
     /// Render resolver errors with REPL-aware enrichment for the
     /// "binding declared inside a now-closed `:provide` scope" case.
     /// When the resolver reports `undefined name 'X'` and `X` matches
+    /// Slice c-repl.B.B: run the just-typechecked program through the
+    /// persistent `karac_jit_runner --repl-mode` subprocess. Lazily
+    /// spawns the runner on the first cell; re-spawns after a cell-
+    /// induced exit (`emit_panic`'s `exit(1)`, runtime panics)
+    /// terminates it. Each cell increments `jit_next_cell_id` so the
+    /// runner's echoed `result <id>` line cross-checks framing
+    /// integrity.
+    ///
+    /// Currently does NOT implement value-snapshot semantics (the
+    /// interpreter's `let_value_overrides` cache) — a `let x =
+    /// expensive();` in cell N has its RHS re-evaluated every
+    /// subsequent cell that replays it. Filed as c-repl.B.4 +
+    /// follow-on. For the typical small-cell REPL flow the
+    /// regression is invisible; users with expensive `let` RHS
+    /// should define them as `fn` instead.
+    #[cfg(feature = "lljit_prototype")]
+    fn run_cell_via_jit(
+        &mut self,
+        program: &crate::ast::Program,
+        capture: bool,
+        notes: Vec<String>,
+    ) -> WrapperOutcome {
+        use jit_runner_client::{CellResult, ReplRunnerClient};
+
+        let ir =
+            match crate::codegen::compile_to_ir_with_options(program, None, None, None, None) {
+                Ok(s) => s,
+                Err(e) => {
+                    return WrapperOutcome::errors(vec![format!("JIT codegen failed: {e}")], notes);
+                }
+            };
+
+        if self.jit_client.is_none() {
+            match ReplRunnerClient::spawn() {
+                Ok(c) => self.jit_client = Some(c),
+                Err(e) => {
+                    return WrapperOutcome::errors(
+                        vec![format!("JIT runner spawn failed: {e}")],
+                        notes,
+                    );
+                }
+            }
+        }
+        let client = self.jit_client.as_mut().expect("jit_client just initialized");
+
+        self.jit_next_cell_id += 1;
+        let cell_id = self.jit_next_cell_id;
+        let result = client.run_cell(cell_id, &ir);
+
+        match result {
+            CellResult::Completed {
+                exit,
+                stdout,
+                stderr,
+            } => {
+                let mut errors: Vec<String> = Vec::new();
+                if exit != 0 {
+                    errors.push(format!("cell exited with code {exit}"));
+                    let stderr_str = String::from_utf8_lossy(&stderr);
+                    for line in stderr_str.lines() {
+                        if !line.is_empty() {
+                            errors.push(line.to_string());
+                        }
+                    }
+                }
+                WrapperOutcome {
+                    stdout: if capture {
+                        bytes_to_stdout_lines(&stdout)
+                    } else {
+                        Vec::new()
+                    },
+                    errors,
+                    notes,
+                }
+            }
+            CellResult::RunnerDied {
+                partial_stdout,
+                runner_stderr,
+                wait_status,
+            } => {
+                // Drop the dead client; the next cell re-spawns.
+                self.jit_client = None;
+                let exit_code = wait_status.and_then(|s| s.code());
+                let mut errors = vec![format!(
+                    "JIT runner subprocess died mid-cell (exit code {:?}); \
+                     the cell's code likely tripped emit_panic's exit(1). \
+                     A fresh runner will spawn on the next cell.",
+                    exit_code
+                )];
+                let runner_stderr_text = String::from_utf8_lossy(&runner_stderr);
+                for line in runner_stderr_text.lines() {
+                    if !line.is_empty() {
+                        errors.push(format!("runner stderr: {line}"));
+                    }
+                }
+                WrapperOutcome {
+                    stdout: if capture {
+                        bytes_to_stdout_lines(&partial_stdout)
+                    } else {
+                        Vec::new()
+                    },
+                    errors,
+                    notes,
+                }
+            }
+        }
+    }
+
     /// an entry in `pruned_provider_lets`, append a notebook-aware
     /// tail naming the provider scope that closed and the cell where
     /// `X` was originally declared (design.md § Cross-Cell Providers
@@ -1921,9 +2105,19 @@ impl Session {
                 self.capture_new_lets(trimmed);
                 let (snapshot, effect_footer) = self.compute_cell_effect_summary(trimmed);
                 self.cell_effect_history.push(snapshot);
+                // Slice c-repl.B.B: pre-cutover the interpreter path
+                // never populated `out.errors` on the `Ok` arm
+                // (runtime errors flowed into `runtime_errors` inside
+                // the interpreter and surfaced as test-runner side
+                // outcomes, not via this channel). The JIT path
+                // (`run_cell_via_jit`) does populate `errors` when a
+                // cell exits non-zero or the runner dies — propagate
+                // those so the user sees diagnostics. Interpreter
+                // path keeps its existing behavior (out.errors is
+                // empty there).
                 EvaluatedCell {
                     stdout: out.stdout.join(""),
-                    errors: Vec::new(),
+                    errors: out.errors,
                     notes: out.notes,
                     effect_footer,
                 }
