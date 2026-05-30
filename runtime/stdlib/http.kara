@@ -272,11 +272,17 @@ impl Server {
     // loop — `tests/http_server.rs` reads this back to know which
     // port to GET against.
     //
-    // **Fallback for v1.** This is the locked design (b) entry. Once
-    // free-fn fn-ptr-as-arg codegen lands (a Phase 7 follow-up), this
-    // entry is joined by `Server.serve(handler)` taking a
-    // `fn(Request) -> Response` argument; `serve_static` then becomes
-    // a thin wrapper over the handler form.
+    // **`#[unstable]` at v1 (phase-8 line 64 freeze list).** This
+    // fixed-body responder predates `Server.serve(handler)` (it existed
+    // because fn-ptr-as-arg codegen hadn't landed yet); now that
+    // `serve(handler)` ships, `serve_static` is a strict subset of it and
+    // matches no reference API (Go / hyper / Node). It carries no v1
+    // stability commitment — kept behind `#[unstable]` as a marginal
+    // convenience for trivial fixed-response servers (health stubs, mocks)
+    // and removable without semver concern. Callers opt in via
+    // `#[allow(unstable_api)]` or `[lints].allow_unstable_api = true`. To be
+    // revisited for removal at the v1 lock if nothing has adopted it.
+    #[unstable = "serve_static is a fixed-body convenience subsumed by Server.serve(handler); use serve(handler) for real servers"]
     #[compiler_builtin]
     fn serve_static(addr: String, body: String) -> Result[Unit, HttpError] {
         Err(HttpError { message: "" })
