@@ -5069,6 +5069,82 @@ fn http_network_effect_resolution_does_not_taint_same_named_methods() {
 }
 
 #[test]
+fn tcp_tls_ws_network_effects_propagate_to_callers() {
+    // Companion to `http_network_effects_propagate_to_callers`: the same
+    // baked-stdlib propagation gap (a `with sends(Network) receives(Network)`
+    // clause in the stdlib `.kara` is not consumed for caller propagation —
+    // the effect must be hand-seeded in `seed_builtin_effects`) applies to the
+    // whole TCP / TLS / WebSocket network surface, not just `std.http`. Every
+    // method below carries the network effect in its stdlib signature; a caller
+    // must inherit `sends(Network)` + `receives(Network)` so the surface is
+    // visible to conflict analysis, `karac explain` / `query effects`, and the
+    // effect-routed task-parking transform (phase-6 line 17). These types have
+    // no hardcoded typechecker dispatch arm — they resolve through the normal
+    // resolved-method path, which records `method_callee_types`, so the precise
+    // `MethodCall` resolution added for `std.http` reaches them once seeded.
+    let src = r#"
+        fn tcp_accept_caller() -> i64 {
+            let l = TcpListener.bind("127.0.0.1:0");
+            let s = l.accept();
+            0
+        }
+        fn tcp_io_caller() -> i64 {
+            let l = TcpListener.bind("127.0.0.1:0");
+            let s = l.accept();
+            let mut buf: Array[u8, 16] = [0u8; 16];
+            let r = s.read(mut buf);
+            let w = s.write(buf.as_slice());
+            0
+        }
+        fn tls_accept_caller() -> i64 {
+            let l = TlsListener.bind_tls("127.0.0.1:0", "cert", "key");
+            let s = l.accept();
+            0
+        }
+        fn tls_connect_caller() -> i64 {
+            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots");
+            0
+        }
+        fn tls_io_caller() -> i64 {
+            let s = TlsStream.connect("127.0.0.1:8443", "localhost", "roots");
+            let mut buf: Array[u8, 16] = [0u8; 16];
+            let r = s.read(mut buf);
+            let w = s.write(buf.as_slice());
+            0
+        }
+        fn ws_accept_caller() -> i64 {
+            let l = TcpListener.bind("127.0.0.1:0");
+            let ws = WebSocket.accept(l);
+            0
+        }
+        fn ws_io_caller() -> i64 {
+            let l = TcpListener.bind("127.0.0.1:0");
+            let ws = WebSocket.accept(l);
+            let mut buf: Array[u8, 16] = [0u8; 16];
+            let r = ws.recv_text(mut buf);
+            let w = ws.send_text(buf.as_slice());
+            0
+        }
+    "#;
+    let result = effectcheck_full_pipeline(src);
+    for fn_name in [
+        "tcp_accept_caller",
+        "tcp_io_caller",
+        "tls_accept_caller",
+        "tls_connect_caller",
+        "tls_io_caller",
+        "ws_accept_caller",
+        "ws_io_caller",
+    ] {
+        assert!(
+            caller_has_network_pair(&result, fn_name),
+            "{fn_name} must propagate sends+receives(Network): {:?}",
+            result.inferred_effects.get(fn_name).map(|s| &s.effects),
+        );
+    }
+}
+
+#[test]
 fn network_yield_table_excludes_receiver_recv_suspends() {
     // `Receiver.recv` carries `suspends` (no Network resource). The spec at
     // phase-6 line 26 explicitly excludes `suspends` from the

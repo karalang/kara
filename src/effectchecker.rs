@@ -575,23 +575,27 @@ impl<'a> EffectChecker<'a> {
             self.inferred_effects
                 .insert("Receiver.recv".to_string(), set);
         }
-        // `std.http` network surface: every method that performs network
-        // I/O carries sends(Network) + receives(Network). Seeding the
-        // qualified key is the only path that propagates these effects to
-        // callers' inferred sets — baked-stdlib `with` clauses (on
-        // `Server.serve` / `serve_tls`) are NOT consumed for propagation
-        // (mirrors the File.* hand-seeding rationale below), so the
-        // declarations in `runtime/stdlib/http.kara` are documentation, not
-        // the propagation mechanism. The client instance methods
-        // (`Client.get` / `Client.post` / `RequestBuilder.send`) reach this
-        // seed through the typechecker's precise `method_callee_types`
+        // Network surface (`std.http` + `std.tcp` + `std.tls` + WebSocket):
+        // every method that performs network I/O carries sends(Network) +
+        // receives(Network). Seeding the qualified key is the only path that
+        // propagates these effects to callers' inferred sets — baked-stdlib
+        // `with` clauses (declared on `Server.serve` / `TlsStream.read` /
+        // `WebSocket.recv_text` / etc.) are NOT consumed for propagation
+        // (mirrors the File.* hand-seeding rationale below), so those
+        // declarations in `runtime/stdlib/{http,tcp,tls,ws}.kara` are
+        // documentation, not the propagation mechanism. Instance methods
+        // (`Client.get` / `TlsStream.read` / `WebSocket.send_text` / …) reach
+        // this seed through the typechecker's precise `method_callee_types`
         // resolution in `collect_calls_in_expr`'s `MethodCall` arm; the
-        // `Server.*` static calls resolve by qualified path directly (like
-        // `File.open`). Without these, the entire HTTP surface is invisible
-        // to network-effect conflict analysis, `karac explain` /
-        // `query effects`, and the effect-routed task-parking transform
-        // (phase-6 line 17), which keys off
-        // `sends(Network)`/`receives(Network)`.
+        // static calls (`Server.*`, `TlsStream.connect`, `WebSocket.accept` /
+        // `accept_tls`) resolve by qualified path directly (like `File.open`).
+        // Without these, the whole network surface is invisible to
+        // network-effect conflict analysis, `karac explain` / `query effects`,
+        // and the effect-routed task-parking transform (phase-6 line 17),
+        // which keys off `sends(Network)`/`receives(Network)`. The seed list
+        // is the set of methods that declare `with sends(Network)
+        // receives(Network)` in stdlib (bind/from_fd are local — no network
+        // round-trip — and are intentionally excluded).
         {
             let sends_network = Effect {
                 verb: EffectVerbKind::Sends,
@@ -602,12 +606,33 @@ impl<'a> EffectChecker<'a> {
                 resource: "Network".to_string(),
             };
             for fn_name in [
+                // std.http client + server
                 "Client.get",
                 "Client.post",
                 "RequestBuilder.send",
                 "Server.serve",
                 "Server.serve_tls",
                 "Server.serve_static",
+                // std.tcp
+                "TcpListener.accept",
+                "TcpStream.read",
+                "TcpStream.write",
+                "TcpStream.write_all",
+                // std.tls
+                "TlsListener.accept",
+                "TlsStream.connect",
+                "TlsStream.read",
+                "TlsStream.write",
+                "TlsStream.write_all",
+                // WebSocket
+                "WebSocket.accept",
+                "WebSocket.accept_tls",
+                "WebSocket.recv_text",
+                "WebSocket.send_text",
+                "WebSocket.recv_binary",
+                "WebSocket.send_binary",
+                "WebSocket.send_text_masked",
+                "WebSocket.send_binary_masked",
             ] {
                 let mut set = EffectSet::new();
                 set.add(
