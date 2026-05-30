@@ -25,6 +25,10 @@ license = "MIT OR Apache-2.0"
 [features]
 default = []
 llvm = ["inkwell"]
+# Throwaway prototype gate for phase-7 L558 sub-step (a): inkwell-MCJIT
+# round-trip of representative Kāra modules. Off by default; not shipped
+# in the normal karac binary. Removed when the orc2 wrap (L560) lands.
+mcjit_prototype = ["llvm"]
 
 [dependencies]
 inkwell = { version = "0.9", features = ["llvm18-1-prefer-dynamic"], optional = true }

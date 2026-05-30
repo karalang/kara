@@ -201,6 +201,53 @@ pub fn compile_to_object_with_hot_swap(
         .map_err(|e| format!("Failed to write object file: {}", e))
 }
 
+/// Phase-7 L558 sub-step (a): MCJIT sanity-check prototype.
+///
+/// Compile `program` through the existing codegen pipeline, load the
+/// resulting module into inkwell's MCJIT `ExecutionEngine`, look up
+/// `main`, and invoke it. Returns the i32 exit code that the user's
+/// `main` produced (LLVM-side `main` always returns i32 per
+/// `functions.rs:61`).
+///
+/// **Throwaway prototype, not a shipping vehicle.** The orc2/LLJIT
+/// wrap lives at phase-7 L560 and that entry's W1–W6 milestones are
+/// what eventually backs `karac repl` / `karac test`. This entry
+/// only validates that LLVM-JIT round-trips a Kāra module at all
+/// before the orc2 effort starts.
+#[cfg(feature = "mcjit_prototype")]
+pub fn jit_run_main(
+    program: &Program,
+    ownership: Option<&OwnershipCheckResult>,
+    concurrency: Option<&ConcurrencyAnalysis>,
+) -> Result<i32, String> {
+    use inkwell::targets::{InitializationConfig, Target};
+    use inkwell::OptimizationLevel;
+
+    Target::initialize_native(&InitializationConfig::default())
+        .map_err(|e| format!("Failed to initialize native target: {}", e))?;
+
+    let context = Context::create();
+    let mut cg = Codegen::new(&context, "karac_module");
+    cg.load_rc_fallback(ownership);
+    cg.load_concurrency_analysis(concurrency);
+    cg.compile_program(program)?;
+
+    let engine = cg
+        .module
+        .create_jit_execution_engine(OptimizationLevel::Default)
+        .map_err(|e| format!("Failed to create JIT engine: {}", e))?;
+
+    // LLVM `main` signature is `i32 ()` — see `functions.rs:61`.
+    type MainFn = unsafe extern "C" fn() -> i32;
+    let result = unsafe {
+        let main_fn = engine
+            .get_function::<MainFn>("main")
+            .map_err(|e| format!("Failed to look up main: {}", e))?;
+        main_fn.call()
+    };
+    Ok(result)
+}
+
 // ── Codegen ────────────────────────────────────────────────────
 
 pub(super) struct Codegen<'ctx> {
