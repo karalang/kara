@@ -23,6 +23,24 @@ impl<'ctx> super::Codegen<'ctx> {
             .iter()
             .map(|e| self.compile_expr(e))
             .collect::<Result<_, _>>()?;
+        // Move-aware: tuple construction takes ownership of each
+        // element. For Vec / String / shared-RC / Vec-bearing-struct
+        // elements that arrive as identifiers, suppress the source
+        // binding's scope-exit cleanup the same way function-call
+        // arg passing does (`suppress_source_vec_cleanup_for_arg`,
+        // `call_dispatch.rs:1033`). Without this, a Vec passed into a
+        // tuple keeps its cap word non-zero — the original binding's
+        // `CleanupAction::FreeVecBuffer` fires at scope exit and
+        // free()s the same buffer that the *consumer* of the tuple
+        // (enum payload, destructure binding, helper function) now
+        // owns. Surfaces under LLJIT as `_BUG_IN_CLIENT_OF_LIBMALLOC_
+        // POINTER_BEING_FREED_WAS_NOT_ALLOCATED` (bug 2 of N from
+        // phase-7 L560 W3.3 routing); AOT masks via post-codegen O2
+        // passes that elide the redundant free, but the bug is real
+        // and a future codegen perturbation would re-expose it.
+        for elem_expr in elems {
+            self.suppress_source_vec_cleanup_for_arg(elem_expr);
+        }
         let types: Vec<BasicTypeEnum<'ctx>> = vals.iter().map(|v| v.get_type()).collect();
         let st = self.context.struct_type(&types, false);
         let mut agg = st.get_undef();
